@@ -1,14 +1,21 @@
-[package]
-name = "koko"
-description = "Self-hosted media server."
-license = "AGPL-3.0-only"
-version = "0.0.0"
+[workspace]
+members = [
+    "crates/server",
+    # "crates/common",
+    # "crates/clients-*",
+]
+resolver = "2"
+
+# Workspace-wide metadata
+[workspace.package]
 authors = ["LizardByte"]
 edition = "2021"
 readme = "docs/README.md"
 documentation = "https://github.com/LizardByte/Koko/blob/master/README.md"
 homepage = "https://app.lizardbyte.dev"
 repository = "https://github.com/LizardByte/Koko.git"
+license = ""
+version = "0.0.0"
 categories = [
     "multimedia",
     "multimedia::audio",
@@ -21,48 +28,11 @@ keywords = [
     "self-hosted",
 ]
 publish = false  # disable publishing to crates.io
-build = "build.rs"
 
-include = [
-    "/assets",
-    "/src",
-    "/tests",
-    "/README.md",
-    "/LICENSE",
-]
-
-[lib]
-name = "koko"
-path = "src/lib.rs"
-
-[[bin]]
-name = "koko"
-path = "src/main.rs"
-
-[dependencies]
+# workspace-level dependencies to ensure consistent versions
+[workspace.dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
-cargo_metadata = "0.19.1"
-chrono = "0.4.39"
-fern = { version = "0.7.1", features = ["colored"] }
-image = "0.25.5"
-log = "0.4.25"
-regex = "1.11.1"
-rocket = "0.5.1"
-rocket_okapi = { version = "0.9.0", features = ["swagger", "rapidoc"] }
-schemars = "0.8.1"
-serde = "1.0.217"
-tao = "0.31.1"
-tray-icon = "0.19.2"
-webbrowser = "1.0.3"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-core-foundation = "0.3.0"
-
-[dev-dependencies]
-
-[package.metadata.ci]
-cargo-run-bin = "1.7.4"
-
-[package.metadata.bin]
-cargo-edit = { version = "0.13.1" }
-cargo-tarpaulin = { version = "0.31.5" }
+async-std = { version = "1.13.0", features = ["attributes", "tokio1"] }
+rstest = "0.25.0"
+serial_test = "3.2.0"
+tokio = "1.43.0"

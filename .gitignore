@@ -26,3 +26,9 @@ Cargo.lock
 # coverage results
 cobertura.xml
 tarpaulin-report.json
+
+# temporary files
+build_rs_cov.profraw
+
+# unit tests
+test_data/

@@ -39,7 +39,7 @@ jobs:
 
       - name: Setup Release
         id: setup_release
-        uses: LizardByte/setup-release-action@v2025.612.120948
+        uses: LizardByte/actions/actions/release_setup@v2025.715.25226
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -56,7 +56,7 @@ jobs:
           #  os: ubuntu-latest
           #  container: alpine:latest
           #  shell: sh
-            cargo_env: "source $HOME/.cargo/env"
+          #   cargo_env: "source $HOME/.cargo/env"
           - target: aarch64-unknown-linux-gnu  # Debian
             os: ubuntu-24.04-arm
             shell: bash
@@ -104,18 +104,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ./target
-          key: ${{ matrix.target }}-${{ github.sha }}
-          restore-keys: |
-            ${{ matrix.target }}-${{ github.sha }}
-            ${{ matrix.target }}-
 
       - name: Setup cross compiling (Debian)
         id: cross_compile
@@ -268,7 +256,6 @@ jobs:
             libayatana-appindicator-dev \
             musl-dev \
             openssl-dev \
-            rustup \
             xdotool-dev \
               pango-dev \
               harfbuzz-dev \
@@ -279,28 +266,28 @@ jobs:
               gettext-dev
           echo "::endgroup::"
 
-          echo "::group::rustup"
-          rustup-init -y
-          echo "::endgroup::"
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1.13.0
+        with:
+          target: ${{ matrix.target }}
+          components: 'clippy'
+          cache: true
+          cache-on-failure: false
 
-      - name: Install cargo dependencies
+      # TODO: it may be possible to use cargo-bin in the future to install cargo dependencies,
+      # but right now it doesn't work without a lock file
+      # https://github.com/dustinblackman/cargo-run-bin/issues/27
+      #  cargo install cargo-run-bin
+      #  cargo-bin --install
+      - name: Install cargo packages
         run: |
-          # cargo-bin --install doesn't work without a lock file
-          # https://github.com/dustinblackman/cargo-run-bin/issues/27
-          # cargo install cargo-run-bin
-          # cargo-bin --install
-
-          cargo install cargo-edit
-          cargo install cargo-tarpaulin
+          cargo install \
+            cargo-edit \
+            cargo-tarpaulin
 
       - name: Update Version
         if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
         run: cargo set-version ${{ needs.setup_release.outputs.release_version }}
-
-      - name: Install toolchain
-        run: |
-          ${{ matrix.cargo_env }}
-          rustup target add ${{ matrix.target }}
 
       - name: Test
         id: test
@@ -370,9 +357,9 @@ jobs:
           path: artifacts
 
       - name: Create/Update GitHub Release
-        if: false
+        if: false  # TODO: move release to separate job
         # if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
-        uses: LizardByte/create-release-action@v2025.612.13419
+        uses: LizardByte/actions/actions/release_create@v2025.715.25226
         with:
           allowUpdates: true
           body: ${{ needs.setup_release.outputs.release_body }}

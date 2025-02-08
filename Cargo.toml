@@ -41,16 +41,29 @@ path = "src/main.rs"
 
 [dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
+base64 = "0.22.1"
+bcrypt = "0.17.0"
 cargo_metadata = "0.19.1"
 chrono = "0.4.39"
+config = "0.15.7"
+diesel = { version = "2.2.7", features = ["sqlite"] }
+diesel_migrations = "2.2.0"
+dirs = "6.0.0"
 fern = { version = "0.7.1", features = ["colored"] }
 image = "0.25.5"
+jsonwebtoken = "9.3.1"
+libsqlite3-sys = { version = "0.31", features = ["bundled"] }  # this is needed for proper linking
 log = "0.4.25"
+once_cell = "1.20.3"
+rand = "0.9.0"
+rcgen = "0.13.2"
 regex = "1.11.1"
-rocket = "0.5.1"
+rocket = { version = "0.5.1", features = ["tls"] }
 rocket_okapi = { version = "0.9.0", features = ["swagger", "rapidoc"] }
+rocket_sync_db_pools = { version = "0.1.0", features = ["diesel_sqlite_pool"] }
 schemars = "0.8.1"
 serde = "1.0.217"
+serde_json = "1.0.138"
 tao = "0.31.1"
 tray-icon = "0.19.2"
 webbrowser = "1.0.3"

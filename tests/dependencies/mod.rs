@@ -26,11 +26,22 @@ fn is_license_compatible_with_agplv3(license: &str) -> bool {
     compatible_licenses.iter().any(|&l| license.contains(l))
 }
 
+/// Deps that are allowed to have incompatible licenses.
+fn dependency_exceptions() -> Vec<&'static str> {
+    vec![
+        "ring", // https://github.com/briansmith/ring/blob/main/LICENSE
+    ]
+}
+
 #[test]
 fn test_dependencies_licenses() {
     let dependencies = get_dependencies().unwrap();
 
     for package in dependencies {
+        if dependency_exceptions().contains(&package.name.as_str()) {
+            continue;
+        }
+
         let license = package.license.as_deref().unwrap_or("");
         assert!(
             is_license_compatible_with_agplv3(license),

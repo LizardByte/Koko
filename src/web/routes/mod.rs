@@ -13,6 +13,7 @@ pub fn all_routes() -> Vec<rocket::Route> {
         common::index,
         auth::login,
         auth::logout,
+        auth::protected,
         dependencies::get_dependencies,
     ]
 }

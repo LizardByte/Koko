@@ -74,15 +74,16 @@ This list is not all-inclusive, and just meant to be a very high level for the i
 - [x] Unit Testing
   - [ ] doc tests
   - [x] Coverage
-- [ ] Settings/Config
+- [x] Settings/Config
 - [ ] Notification System
   - [ ] System Notifications
   - [ ] Discord
   - [ ] Webhooks
-- [ ] Database
+- [x] Database
 - [ ] Backend
-  - [ ] Authentication
+  - [x] Authentication
   - [ ] API
+  - [x] Certs/SSL
   - [ ] Media Scanner
   - [ ] Media Player
   - [x] Legal/Licensing info on dependencies

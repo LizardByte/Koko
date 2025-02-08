@@ -11,7 +11,7 @@ use tray_icon::{
 };
 
 // local imports
-use crate::{GLOBAL_APP_NAME, GLOBAL_BASE_URL, GLOBAL_ICON_ICO_PATH};
+use crate::globals;
 
 #[derive(Debug)]
 enum UserEvent {
@@ -21,7 +21,7 @@ enum UserEvent {
 
 /// Launch the tray icon and event loop.
 pub fn launch() {
-    let path = std::path::Path::new(GLOBAL_ICON_ICO_PATH);
+    let path = std::path::Path::new(globals::GLOBAL_ICON_ICO_PATH);
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
 
@@ -44,11 +44,11 @@ pub fn launch() {
     let tray_menu = Menu::new();
 
     // top level items
-    let open_i = MenuItem::new(format!("Open {}", GLOBAL_APP_NAME), true, None);
+    let open_i = MenuItem::new(format!("Open {}", globals::GLOBAL_APP_NAME), true, None);
     let about_i = PredefinedMenuItem::about(
         None,
         Some(AboutMetadata {
-            name: Some(GLOBAL_APP_NAME.to_string()),
+            name: Some(globals::GLOBAL_APP_NAME.to_string()),
             copyright: Some("© LizardByte".to_string()),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
             ..Default::default()
@@ -118,7 +118,7 @@ pub fn launch() {
                     TrayIconBuilder::new()
                         .with_icon(icon)
                         .with_menu(Box::new(tray_menu.clone()))
-                        .with_tooltip(GLOBAL_APP_NAME)
+                        .with_tooltip(globals::GLOBAL_APP_NAME)
                         .build()
                         .unwrap(),
                 );
@@ -150,7 +150,9 @@ pub fn launch() {
                         // TODO: adjust application config first
                         tray_icon.as_mut().unwrap().set_visible(false).unwrap();
                     }
-                    id if id == open_i.id() => webbrowser::open(GLOBAL_BASE_URL).unwrap(),
+                    id if id == open_i.id() => {
+                        webbrowser::open(globals::get_server_url().as_str()).unwrap()
+                    }
                     id if id == donate_github_i.id() => {
                         webbrowser::open("https://github.com/sponsors/LizardByte").unwrap()
                     }
@@ -161,13 +163,15 @@ pub fn launch() {
                         webbrowser::open("https://www.paypal.com/paypalme/ReenigneArcher").unwrap()
                     }
                     id if id == options_settings_i.id() => {
-                        webbrowser::open(&format!("{}/settings", GLOBAL_BASE_URL)).unwrap()
+                        webbrowser::open(&format!("{}/settings", globals::get_server_url()))
+                            .unwrap()
                     }
                     id if id == api_rapidoc_i.id() => {
-                        webbrowser::open(&format!("{}/rapidoc", GLOBAL_BASE_URL)).unwrap()
+                        webbrowser::open(&format!("{}/rapidoc", globals::get_server_url())).unwrap()
                     }
                     id if id == api_swagger_i.id() => {
-                        webbrowser::open(&format!("{}/swagger-ui", GLOBAL_BASE_URL)).unwrap()
+                        webbrowser::open(&format!("{}/swagger-ui", globals::get_server_url()))
+                            .unwrap()
                     }
                     _ => {
                         log::error!("Unknown menu event: {:?}", event);

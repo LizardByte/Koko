@@ -5,10 +5,10 @@ use rocket::get;
 use rocket_okapi::openapi;
 
 // local imports
-use crate::GLOBAL_APP_NAME;
+use crate::globals;
 
 #[openapi(tag = "Index")]
 #[get("/")]
 pub fn index() -> String {
-    format!("Welcome to {}!", GLOBAL_APP_NAME)
+    format!("Welcome to {}!", globals::GLOBAL_APP_NAME)
 }

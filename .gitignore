@@ -26,3 +26,6 @@ Cargo.lock
 # coverage results
 cobertura.xml
 tarpaulin-report.json
+
+# config
+config/

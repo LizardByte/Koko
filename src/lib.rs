@@ -4,18 +4,18 @@
 #![deny(missing_docs)]
 
 // modules
+pub mod auth;
+pub mod certs;
+pub mod config;
+pub mod db;
 pub mod dependencies;
+pub mod globals;
 mod logging;
 pub mod tray;
 pub mod web;
 
 // standard imports
 use std::thread;
-
-// global constants and variables
-static GLOBAL_APP_NAME: &str = "Koko";
-static GLOBAL_ICON_ICO_PATH: &str = "assets/icon.ico";
-static GLOBAL_BASE_URL: &str = "http://localhost:8000"; // TODO: get this dynamically
 
 /// Main entry point for the application.
 /// Initializes logging, the web server, and tray icon.

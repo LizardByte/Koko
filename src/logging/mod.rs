@@ -8,6 +8,9 @@ use fern::colors::{Color, ColoredLevelConfig};
 use log::LevelFilter;
 use regex::Regex;
 
+// local imports
+use crate::config::GLOBAL_SETTINGS;
+
 #[derive(Clone)]
 struct Logger {
     time_format: &'static str,
@@ -80,7 +83,7 @@ impl Logger {
         });
 
         if to_file {
-            Ok(dispatch.chain(fern::log_file("output.log")?))
+            Ok(dispatch.chain(fern::log_file(GLOBAL_SETTINGS.general.log_path.clone())?))
         } else {
             Ok(dispatch.chain(io::stdout()))
         }

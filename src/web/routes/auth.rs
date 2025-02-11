@@ -4,6 +4,8 @@
 use rocket::get;
 use rocket_okapi::openapi;
 
+use crate::auth::Claims;
+
 #[openapi(tag = "Auth")]
 #[get("/login")]
 pub fn login() -> &'static str {
@@ -14,4 +16,10 @@ pub fn login() -> &'static str {
 #[get("/logout")]
 pub fn logout() -> &'static str {
     "Logout Page"
+}
+
+#[openapi(tag = "Auth")]
+#[get("/protected")]
+pub fn protected(_claims: Claims) -> &'static str {
+    "Protected Page"
 }

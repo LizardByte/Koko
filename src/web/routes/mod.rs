@@ -14,7 +14,8 @@ pub fn all_routes() -> Vec<rocket::Route> {
         common::index,
         auth::login,
         auth::logout,
-        auth::protected,
+        auth::jwt_test,
+        auth::admin_test,
         dependencies::get_dependencies,
         user::create_user,
     ]

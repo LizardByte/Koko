@@ -1,5 +1,6 @@
 #![doc = "Database utilities for the application."]
 
+pub(crate) mod models;
 pub(crate) mod schema;
 
 // lib imports

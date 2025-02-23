@@ -2,20 +2,74 @@
 
 // lib imports
 use base64::{engine::general_purpose, Engine as _};
-use bcrypt::{hash, DEFAULT_COST};
+use bcrypt::{hash, verify, DEFAULT_COST};
+use diesel::{QueryDsl, RunQueryDsl};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use once_cell::sync::Lazy;
-use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::Rng;
+use rocket::http::Status;
 use rocket::outcome::Outcome;
 use rocket::request::{self, FromRequest, Request};
 use rocket_okapi::request::{OpenApiFromRequest, RequestHeaderInput};
 use serde::{Deserialize, Serialize};
 
+// local imports
+use crate::db::DbConn;
+
+/// Guard for admin routes.
+pub struct AdminGuard(Claims);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AdminGuard {
+    type Error = ();
+
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let claims = match request.guard::<Claims>().await {
+            Outcome::Success(claims) => claims,
+            _ => return Outcome::Error((Status::Unauthorized, ())),
+        };
+
+        let db = match request.guard::<DbConn>().await {
+            Outcome::Success(db) => db,
+            _ => return Outcome::Error((Status::InternalServerError, ())),
+        };
+
+        let user_id: i32 = match claims.sub.parse() {
+            Ok(id) => id,
+            Err(_) => return Outcome::Error((Status::Unauthorized, ())),
+        };
+
+        let is_admin = db
+            .run(move |conn| {
+                use crate::db::schema::users::dsl::*;
+                users.find(user_id).select(admin).first::<bool>(conn)
+            })
+            .await
+            .unwrap_or(false);
+
+        if is_admin {
+            Outcome::Success(AdminGuard(claims))
+        } else {
+            Outcome::Error((Status::Forbidden, ()))
+        }
+    }
+}
+
+#[rocket::async_trait]
+impl OpenApiFromRequest<'_> for AdminGuard {
+    fn from_request_input(
+        _gen: &mut rocket_okapi::gen::OpenApiGenerator,
+        _name: String,
+        _required: bool,
+    ) -> rocket_okapi::Result<RequestHeaderInput> {
+        Ok(RequestHeaderInput::None)
+    }
+}
+
 /// Claims for the JWT.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    sub: String,
+    pub(crate) sub: String,
     exp: usize,
 }
 
@@ -96,22 +150,17 @@ static JWT_SECRET: Lazy<String> = Lazy::new(|| {
     general_purpose::STANDARD.encode(random_bytes)
 });
 
-fn get_jwt_secret() -> &'static str {
+pub(crate) fn get_jwt_secret() -> &'static str {
     &JWT_SECRET
 }
 
-pub(crate) fn generate_salt() -> String {
-    rng()
-        .sample_iter(&Alphanumeric)
-        .take(16)
-        .map(char::from)
-        .collect()
+pub(crate) fn hash_password(password: &str) -> String {
+    hash(password, DEFAULT_COST).unwrap()
 }
 
-pub(crate) fn hash_with_salt(
-    salt: String,
-    string: &str,
-) -> String {
-    let salted_input = format!("{}{}", salt, string);
-    hash(salted_input, DEFAULT_COST).unwrap()
+pub(crate) fn verify_password(
+    password: &str,
+    hash: &str,
+) -> bool {
+    verify(password, hash).unwrap_or(false)
 }

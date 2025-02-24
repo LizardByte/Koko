@@ -19,6 +19,13 @@ use crate::db::DbConn;
 /// Guard for admin routes.
 pub struct AdminGuard(Claims);
 
+impl AdminGuard {
+    /// Get the claims contained in this guard
+    pub fn claims(&self) -> &Claims {
+        &self.0
+    }
+}
+
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for AdminGuard {
     type Error = ();

@@ -72,6 +72,10 @@ webbrowser = "1.0.3"
 objc2-core-foundation = "0.3.0"
 
 [dev-dependencies]
+async-std = { version = "1.13.0", features = ["attributes", "tokio1"] }
+rstest = "0.24.0"
+serial_test = "3.2.0"
+tokio = "1.43.0"
 
 [package.metadata.ci]
 cargo-run-bin = "1.7.4"

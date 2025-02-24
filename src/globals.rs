@@ -10,6 +10,31 @@ use crate::config::GLOBAL_SETTINGS;
 pub(crate) static GLOBAL_APP_NAME: &str = "Koko";
 pub(crate) static GLOBAL_ICON_ICO_PATH: &str = "assets/icon.ico";
 
+/// Environment type for the application
+#[derive(Clone, Copy, PartialEq)]
+pub enum Environment {
+    /// Production environment.
+    Production,
+    /// Test environment.
+    Test,
+}
+
+/// Implement the From trait for converting a usize to an Environment.
+impl Environment {
+    /// Convert a usize to an Environment.
+    pub fn from_usize(value: usize) -> Self {
+        match value {
+            0 => Environment::Production,
+            1 => Environment::Test,
+            _ => Environment::Production,
+        }
+    }
+}
+
+/// Atomic variable for the current environment.
+pub static CURRENT_ENV: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(Environment::Production as usize);
+
 /// Paths used by the application.
 #[derive(Default)]
 pub struct AppPaths {
@@ -22,9 +47,12 @@ pub struct AppPaths {
 impl AppPaths {
     /// Create a new AppPaths instance.
     pub fn new() -> Self {
-        let base_dir = GLOBAL_SETTINGS.general.data_dir.clone();
+        let env = Environment::from_usize(CURRENT_ENV.load(std::sync::atomic::Ordering::Relaxed));
+        let base_dir = match env {
+            Environment::Test => String::from("./test_data"),
+            Environment::Production => GLOBAL_SETTINGS.general.data_dir.clone(),
+        };
 
-        // create the base directory if it doesn't exist
         std::fs::create_dir_all(&base_dir).unwrap();
 
         AppPaths {

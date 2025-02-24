@@ -1,8 +1,9 @@
 mod routes;
 
 use koko::web;
-use rocket::http::{Header, Status};
-use rocket::local::asynchronous::Client;
+use rocket::http::{ContentType, Header, Status};
+use rocket::local::asynchronous::{Client, LocalResponse};
+use serde_json::Value;
 
 pub struct TestResponse {
     pub status: Status,
@@ -20,19 +21,38 @@ pub async fn test_route(
         .expect("Failed to launch web server");
 
     let response = client.get(path).dispatch().await;
+    create_test_response(response, expected_status).await
+}
 
+pub async fn test_post_json(
+    client: &Client,
+    path: &'static str,
+    json: Value,
+    expected_status: Status,
+) -> TestResponse {
+    let response = client
+        .post(path)
+        .header(ContentType::JSON)
+        .body(json.to_string())
+        .dispatch()
+        .await;
+
+    create_test_response(response, expected_status).await
+}
+
+async fn create_test_response(
+    response: LocalResponse<'_>,
+    expected_status: Status,
+) -> TestResponse {
     assert_eq!(response.status(), expected_status);
 
     let status = response.status();
-
-    // Extract headers before moving `response`
     let headers: Vec<Header<'static>> = response
         .headers()
         .iter()
-        .map(|h| Header::new(h.name().to_string(), h.value().to_string())) // Convert to owned Header
+        .map(|h| Header::new(h.name().to_string(), h.value().to_string()))
         .collect();
-
-    let body = response.into_string().await.unwrap_or_default(); // Move response
+    let body = response.into_string().await.unwrap_or_default();
 
     TestResponse {
         status,

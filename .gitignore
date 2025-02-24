@@ -26,3 +26,6 @@ Cargo.lock
 # coverage results
 cobertura.xml
 tarpaulin-report.json
+
+# unit tests
+test_data/

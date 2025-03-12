@@ -4,7 +4,7 @@ use serde_json::json;
 use serial_test::serial;
 
 use crate::fixtures;
-use crate::web::test_post_json;
+use crate::test_web::test_post_json;
 
 #[rstest]
 #[serial(db)]

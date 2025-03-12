@@ -1,4 +1,4 @@
-use crate::web::test_route;
+use crate::test_web::test_route;
 
 use rocket::http::Status;
 use rocket::serde::json::{serde_json, Value};

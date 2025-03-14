@@ -11,32 +11,41 @@ pub struct TestResponse {
     pub headers: Vec<Header<'static>>,
 }
 
-pub async fn test_route(
+pub async fn test_request(
+    method: &str,
     path: &'static str,
+    json: Option<Value>,
     expected_status: Status,
+    client: Option<&Client>,
 ) -> TestResponse {
-    let rocket = web::rocket();
-    let client = Client::tracked(rocket)
-        .await
-        .expect("Failed to launch web server");
+    let client = match client {
+        Some(c) => c.to_owned(),
+        None => {
+            let rocket = web::rocket();
+            &Client::tracked(rocket)
+                .await
+                .expect("Failed to launch web server")
+        }
+    };
 
-    let response = client.get(path).dispatch().await;
-    create_test_response(response, expected_status).await
-}
+    let request = match method.to_lowercase().as_str() {
+        "get" => client.get(path),
+        "post" => client.post(path),
+        "put" => client.put(path),
+        "delete" => client.delete(path),
+        "patch" => client.patch(path),
+        _ => panic!("Unsupported HTTP method: {}", method),
+    };
 
-pub async fn test_post_json(
-    client: &Client,
-    path: &'static str,
-    json: Value,
-    expected_status: Status,
-) -> TestResponse {
-    let response = client
-        .post(path)
-        .header(ContentType::JSON)
-        .body(json.to_string())
-        .dispatch()
-        .await;
+    let request = if let Some(json_value) = json {
+        request
+            .header(ContentType::JSON)
+            .body(json_value.to_string())
+    } else {
+        request
+    };
 
+    let response = request.dispatch().await;
     create_test_response(response, expected_status).await
 }
 
@@ -63,15 +72,15 @@ async fn create_test_response(
 
 #[rocket::async_test]
 async fn test_swagger_ui_route() {
-    test_route("/swagger-ui/", Status::SeeOther).await;
+    test_request("get", "/swagger-ui/", None, Status::SeeOther, None).await;
 }
 
 #[rocket::async_test]
 async fn test_rapidoc_route() {
-    test_route("/rapidoc/", Status::SeeOther).await;
+    test_request("get", "/rapidoc/", None, Status::SeeOther, None).await;
 }
 
 #[rocket::async_test]
 async fn test_non_existent_route() {
-    test_route("/non-existent", Status::NotFound).await;
+    test_request("get", "/non-existent", None, Status::NotFound, None).await;
 }

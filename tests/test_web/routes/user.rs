@@ -4,7 +4,7 @@ use serde_json::json;
 use serial_test::serial;
 
 use crate::fixtures;
-use crate::test_web::test_post_json;
+use crate::test_web::test_request;
 
 #[rstest]
 #[serial(db)]
@@ -23,16 +23,17 @@ async fn test_create_first_user(
     let db = db_future.await;
     let client = &db.client;
 
-    let response = test_post_json(
-        client,
+    let response = test_request(
+        "post",
         "/create_user",
-        json!({
+        Some(json!({
             "username": username,
             "password": password,
             "pin": pin,
             "admin": admin
-        }),
+        })),
         expected_status,
+        Some(client),
     )
     .await;
 
@@ -56,28 +57,30 @@ async fn test_create_subsequent_user_requires_auth(
     let client = &db.client;
 
     // Create first user
-    test_post_json(
-        client,
+    test_request(
+        "post",
         "/create_user",
-        json!({
+        Some(json!({
             "username": "user1",
             "password": "password123",
             "admin": true
-        }),
+        })),
         Status::Ok,
+        Some(client),
     )
     .await;
 
     // Try to create second user without auth
-    test_post_json(
-        client,
+    test_request(
+        "post",
         "/create_user",
-        json!({
+        Some(json!({
             "username": username,
             "password": password,
             "admin": admin
-        }),
+        })),
         expected_status,
+        Some(client),
     )
     .await;
 }

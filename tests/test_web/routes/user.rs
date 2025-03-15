@@ -1,43 +1,25 @@
+// lib imports
 use rocket::http::Status;
 use rstest::rstest;
 use serde_json::json;
 use serial_test::serial;
 
+// test imports
 use crate::fixtures;
 use crate::test_web::test_request;
 
 #[rstest]
 #[serial(db)]
 #[tokio::test]
-#[case::create_user_success("testuser", "password123", "1234", true, Status::Ok)]
 async fn test_create_first_user(
     #[future]
     #[from(fixtures::db_fixture)]
-    db_future: fixtures::TestDb,
-    #[case] username: &str,
-    #[case] password: &str,
-    #[case] pin: &str,
-    #[case] admin: bool,
-    #[case] expected_status: Status,
+    #[with(true)]
+    db_future: fixtures::TestDb
 ) {
-    let db = db_future.await;
-    let client = &db.client;
+    db_future.await;
 
-    let response = test_request(
-        "post",
-        "/create_user",
-        Some(json!({
-            "username": username,
-            "password": password,
-            "pin": pin,
-            "admin": admin
-        })),
-        expected_status,
-        Some(client),
-    )
-    .await;
-
-    assert_eq!(response.body, "User created");
+    // nothing to do, the fixture handles creating the first user
 }
 
 #[rstest]
@@ -47,6 +29,7 @@ async fn test_create_first_user(
 async fn test_create_subsequent_user_requires_auth(
     #[future]
     #[from(fixtures::db_fixture)]
+    #[with(true)]
     db_future: fixtures::TestDb,
     #[case] username: &str,
     #[case] password: &str,
@@ -54,21 +37,6 @@ async fn test_create_subsequent_user_requires_auth(
     #[case] expected_status: Status,
 ) {
     let db = db_future.await;
-    let client = &db.client;
-
-    // Create first user
-    test_request(
-        "post",
-        "/create_user",
-        Some(json!({
-            "username": "user1",
-            "password": "password123",
-            "admin": true
-        })),
-        Status::Ok,
-        Some(client),
-    )
-    .await;
 
     // Try to create second user without auth
     test_request(
@@ -80,7 +48,7 @@ async fn test_create_subsequent_user_requires_auth(
             "admin": admin
         })),
         expected_status,
-        Some(client),
+        Some(&db.client),
     )
     .await;
 }

@@ -1,15 +1,24 @@
-use diesel::sqlite::SqliteConnection;
-use diesel::Connection;
-use diesel_migrations::MigrationHarness;
-use koko::globals::CURRENT_ENV;
-use koko::web::rocket;
-use once_cell::sync::Lazy;
-use rocket::local::asynchronous::Client;
-use rstest::fixture;
+// standard imports
 use std::fs;
 use std::path::Path;
 
+// lib imports
+use diesel::sqlite::SqliteConnection;
+use diesel::Connection;
+use diesel_migrations::MigrationHarness;
+use once_cell::sync::Lazy;
+use rocket::http::Status;
+use rocket::local::asynchronous::Client;
+use rstest::fixture;
+use serde_json::json;
+
+// local imports
 use koko::db::MIGRATIONS;
+use koko::globals::CURRENT_ENV;
+use koko::web::rocket;
+
+// test imports
+use crate::test_web::test_request;
 
 // constants
 static DB_PATH: Lazy<&'static Path> = Lazy::new(|| Path::new("./test_data/koko.db"));
@@ -29,7 +38,7 @@ impl Drop for TestDb {
 }
 
 #[fixture]
-pub async fn db_fixture() -> TestDb {
+pub async fn db_fixture(#[default(false)] base_user: bool) -> TestDb {
     CURRENT_ENV.store(1, std::sync::atomic::Ordering::SeqCst);
 
     if let Some(parent) = DB_PATH.parent() {
@@ -46,6 +55,24 @@ pub async fn db_fixture() -> TestDb {
     let client = Client::tracked(rocket)
         .await
         .expect("Failed to launch web server");
+
+    if base_user {
+        let response = test_request(
+            "post",
+            "/create_user",
+            Some(json!({
+                "username": "admin",
+                "password": "password123",
+                "pin": "1234",
+                "admin": true,
+            })),
+            Status::Ok,
+            Some(&client),
+        )
+        .await;
+
+        assert_eq!(response.body, "User created");
+    }
 
     TestDb { client }
 }

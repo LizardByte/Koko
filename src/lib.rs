@@ -19,6 +19,7 @@ use std::thread;
 
 /// Main entry point for the application.
 /// Initializes logging, the web server, and tray icon.
+#[cfg(not(tarpaulin_include))]
 pub fn main() {
     logging::init().expect("Failed to initialize logging");
 

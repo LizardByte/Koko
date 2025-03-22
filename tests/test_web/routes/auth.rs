@@ -12,7 +12,8 @@ use crate::test_web::test_request;
 #[serial(db)]
 #[tokio::test]
 #[case::login_success("admin", "password123", Status::Ok)]
-#[case::login_invalid("nonexistent", "wrong", Status::Unauthorized)]
+#[case::login_wrong_password("admin", "wrong", Status::Unauthorized)]
+#[case::login_non_existent_user("nonexistent", "wrong", Status::Unauthorized)]
 async fn test_login(
     #[future]
     #[from(fixtures::db_fixture)]

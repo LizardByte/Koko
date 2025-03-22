@@ -290,6 +290,7 @@ jobs:
           # cargo install cargo-run-bin
           # cargo-bin --install
 
+          rustup update stable
           cargo install cargo-edit
           cargo install cargo-tarpaulin
 

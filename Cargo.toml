@@ -39,6 +39,9 @@ path = "src/lib.rs"
 name = "koko"
 path = "src/main.rs"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin_include)"] }
+
 [dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
 base64 = "0.22.1"

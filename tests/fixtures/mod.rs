@@ -33,6 +33,15 @@ impl Drop for TestDb {
             if let Ok(mut conn) = SqliteConnection::establish(DB_PATH.to_str().unwrap()) {
                 let _ = conn.revert_all_migrations(MIGRATIONS);
             }
+
+            // Sleep to try to all the processes to release the database file
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
+            // Delete the database file
+            match fs::remove_file(DB_PATH.clone()) {
+                Ok(_) => (),
+                Err(e) => eprintln!("Warning: Failed to delete test database: {}", e),
+            }
         }
     }
 }

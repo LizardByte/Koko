@@ -17,7 +17,7 @@ build:
   jobs:
     build:
       html:
-        - cargo doc --no-deps --verbose --color always
+        - cargo doc --no-deps --workspace --verbose --color always
         - mkdir -p ${READTHEDOCS_OUTPUT}html
         - cp -r target/doc/. ${READTHEDOCS_OUTPUT}html/
         # redirect index.html to html/koko/index.html

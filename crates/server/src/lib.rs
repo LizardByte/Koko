@@ -1,6 +1,6 @@
 #![doc(html_favicon_url = "../assets/icon.ico")]
 #![doc(html_logo_url = "../assets/icon.png")]
-#![doc = include_str!("../docs/README.md")]
+#![doc = include_str!("../../../docs/README.md")]
 #![deny(missing_docs)]
 
 // modules

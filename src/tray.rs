@@ -126,11 +126,10 @@ pub fn launch() {
                 // We have to request a redraw here to have the icon actually show up.
                 // Tao only exposes a redraw method on the Window so we use core-foundation directly.
                 #[cfg(target_os = "macos")]
-                unsafe {
-                    use objc2_core_foundation::{CFRunLoopGetMain, CFRunLoopWakeUp};
-
-                    let rl = CFRunLoopGetMain().unwrap();
-                    CFRunLoopWakeUp(&rl);
+                {
+                    use objc2_core_foundation::CFRunLoop;
+                    let rl = CFRunLoop::main().unwrap();
+                    rl.wake_up();
                 }
             }
 

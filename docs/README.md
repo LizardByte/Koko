@@ -32,7 +32,7 @@ If you are interested in this project, please leave a star and watch the reposit
 
 If you would like to contribute, please reach out on our [discord](https://app.lizardbyte.dev/discord) server.
 
-## Configuration
+## ⚙️ Configuration
 
 Koko uses a YAML configuration file to set up the server.
 

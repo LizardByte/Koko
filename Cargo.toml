@@ -15,6 +15,7 @@ documentation = "https://github.com/LizardByte/Koko/blob/master/README.md"
 homepage = "https://app.lizardbyte.dev"
 repository = "https://github.com/LizardByte/Koko.git"
 license = "AGPL-3.0-only"
+license-file = "LICENSE"
 version = "0.0.0"
 categories = [
     "multimedia",

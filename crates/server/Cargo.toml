@@ -2,6 +2,7 @@
 name = "koko"
 description = "Self-hosted media server."
 license.workspace = true
+license-file.workspace = true
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

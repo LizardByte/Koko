@@ -45,7 +45,7 @@ fn test_dependencies_licenses() {
         let license = package.license.as_deref().unwrap_or("");
         assert!(
             is_license_compatible_with_agplv3(license),
-            "License {} of package {} is not compatible with AGPLv3",
+            "License '{}' of package {} is not compatible with AGPLv3",
             license,
             package.name
         );

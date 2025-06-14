@@ -24,7 +24,7 @@ pub struct PackageResponse {
 impl From<Package> for PackageResponse {
     fn from(pkg: Package) -> Self {
         PackageResponse {
-            name: pkg.name,
+            name: pkg.name.to_string(),
             version: pkg.version.to_string(),
             license: pkg.license,
         }

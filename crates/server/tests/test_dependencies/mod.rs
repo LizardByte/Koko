@@ -29,7 +29,8 @@ fn is_license_compatible_with_agplv3(license: &str) -> bool {
 /// Deps that are allowed to have incompatible licenses.
 fn dependency_exceptions() -> Vec<&'static str> {
     vec![
-        "ring", // https://github.com/briansmith/ring/blob/main/LICENSE
+        "dlopen2_derive", // https://github.com/OpenByteDev/dlopen2/issues/20
+        "ring",           // https://github.com/briansmith/ring/blob/main/LICENSE
     ]
 }
 

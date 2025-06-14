@@ -278,33 +278,43 @@ jobs:
               gettext-dev
           echo "::endgroup::"
 
-      - name: Setup Rust (Unix)
-        if: ${{ !contains(matrix.os, 'windows') }}
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
+      - name: Setup Rust
+        uses: ReenigneArcher/setup-rust-toolchain@feat/install-cargo-packages
+        with:
+          target: ${{ matrix.target }}
+          components: 'clippy'
+          cargo-packages: 'cargo-edit,cargo-tarpaulin'
+          cache: true
+          cache-on-failure: false
+          cache-key: ${{ matrix.target }}-${{ github.sha }}
 
-          # print rust version
-          rustc --version
+#      - name: Setup Rust (Unix)
+#        if: ${{ !contains(matrix.os, 'windows') }}
+#        run: |
+#          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+#          source $HOME/.cargo/env
+#
+#          # print rust version
+#          rustc --version
 
-      - name: Install cargo dependencies
-        run: |
-          # cargo-bin --install doesn't work without a lock file
-          # https://github.com/dustinblackman/cargo-run-bin/issues/27
-          # cargo install cargo-run-bin
-          # cargo-bin --install
-
-          cargo install cargo-edit
-          cargo install cargo-tarpaulin
+#      - name: Install cargo dependencies
+#        run: |
+#          # cargo-bin --install doesn't work without a lock file
+#          # https://github.com/dustinblackman/cargo-run-bin/issues/27
+#          # cargo install cargo-run-bin
+#          # cargo-bin --install
+#
+#          cargo install cargo-edit
+#          cargo install cargo-tarpaulin
 
       - name: Update Version
         if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
         run: cargo set-version ${{ needs.setup_release.outputs.release_version }}
 
-      - name: Install toolchain
-        run: |
-          ${{ matrix.cargo_env }}
-          rustup target add ${{ matrix.target }}
+#      - name: Install toolchain
+#        run: |
+#          ${{ matrix.cargo_env }}
+#          rustup target add ${{ matrix.target }}
 
       - name: Test
         id: test

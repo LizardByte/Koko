@@ -27,3 +27,7 @@ linker = "arm-linux-gnueabihf-gcc"
 
 [target.arm-unknown-linux-musleabihf]
 linker = "arm-linux-gnueabihf-gcc"
+
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\msys2\\ucrt64\\bin\\gcc.exe"
+ar = "C:\\msys2\\ucrt64\\bin\\ar.exe"

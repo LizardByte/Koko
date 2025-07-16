@@ -11,4 +11,5 @@ normalize_doc_attributes = true
 reorder_impl_items = true
 single_line_if_else_max_width = 100
 single_line_let_else_max_width = 100
+style_edition = "2021"
 wrap_comments = true

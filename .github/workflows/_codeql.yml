@@ -26,5 +26,5 @@ concurrency:
 jobs:
   call-codeql:
     name: CodeQL
-    uses: LizardByte/.github/.github/workflows/__call-codeql.yml@master
+    uses: LizardByte/.github/.github/workflows/__call-codeql.yml@feat/codeql/add-rust-analysis
     if: ${{ github.repository != 'LizardByte/.github' }}

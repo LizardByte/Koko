@@ -1,4 +1,4 @@
-#![doc = "Miscellaneous utilities for the application."]
+//! Miscellaneous utilities for the application.
 
 // lib imports
 use once_cell::sync::Lazy;

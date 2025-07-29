@@ -1,4 +1,4 @@
-#![doc = "Configuration module for the application."]
+//! Configuration module for the application.
 
 // lib imports
 use config::{Config, ConfigError, Environment, File};
@@ -81,7 +81,8 @@ impl Default for ServerSettings {
 impl Settings {
     /// Create a new instance of `Settings`.
     pub fn new() -> Result<Self, ConfigError> {
-        // Start with defaults provided via set_default and then merge in any provided config file or environment variables.
+        // Start with defaults provided via set_default and then merge in any provided config file
+        // or environment variables.
         let config = Config::builder()
             .set_default("general.data_dir", GeneralSettings::default().data_dir)?
             .set_default("server.use_https", ServerSettings::default().use_https)?

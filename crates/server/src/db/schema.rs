@@ -1,4 +1,4 @@
-#![doc = "Database schema for the application."]
+//! Database schema for the application.
 
 // lib imports
 use diesel::table;

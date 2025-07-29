@@ -1,18 +1,18 @@
-#![doc = "Routes for the web server."]
+//! Routes for the web server.
 
 // lib imports
 use diesel::QueryDsl;
 use diesel::RunQueryDsl;
 use diesel::{ExpressionMethods, SelectableHelper};
 use rocket::http::Status;
-use rocket::serde::{json::Json, Deserialize, Serialize};
+use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket::{get, post};
-use rocket_okapi::{openapi, JsonSchema};
+use rocket_okapi::{JsonSchema, openapi};
 
 // local imports
 use crate::auth::{AdminGuard, Claims};
-use crate::db::models::User;
 use crate::db::DbConn;
+use crate::db::models::User;
 
 #[derive(Deserialize, JsonSchema)]
 pub struct LoginForm {

@@ -1,10 +1,10 @@
-#![doc = "Authentication utilities for the application."]
+//! Authentication utilities for the application.
 
 // lib imports
-use base64::{engine::general_purpose, Engine as _};
-use bcrypt::{hash, verify, DEFAULT_COST};
+use base64::{Engine as _, engine::general_purpose};
+use bcrypt::{DEFAULT_COST, hash, verify};
 use diesel::{QueryDsl, RunQueryDsl};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rocket::http::Status;

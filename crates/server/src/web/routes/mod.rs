@@ -1,4 +1,4 @@
-#![doc = "Common routes module for the web server."]
+//! Common routes module for the web server.
 
 // modules
 mod auth;

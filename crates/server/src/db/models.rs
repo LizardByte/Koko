@@ -1,4 +1,4 @@
-#![doc = "Database models for the application."]
+//! Database models for the application.
 
 // lib imports
 use diesel::prelude::*;

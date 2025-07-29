@@ -3,8 +3,8 @@ use std::fs;
 use std::path::Path;
 
 // lib imports
-use diesel::sqlite::SqliteConnection;
 use diesel::Connection;
+use diesel::sqlite::SqliteConnection;
 use diesel_migrations::MigrationHarness;
 use once_cell::sync::Lazy;
 use rocket::http::Status;

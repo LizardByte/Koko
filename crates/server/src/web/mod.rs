@@ -1,4 +1,4 @@
-#![doc = "Web server utilities for the application."]
+//! Web server utilities for the application.
 
 // modules
 mod routes;

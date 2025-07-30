@@ -1,4 +1,4 @@
-#![doc = "Module for everything related to dependencies."]
+//! Module for everything related to dependencies.
 
 use cargo_metadata::{MetadataCommand, Package};
 use std::error::Error;

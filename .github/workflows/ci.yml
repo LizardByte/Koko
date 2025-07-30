@@ -50,16 +50,20 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu  # Debian
             os: ubuntu-latest
+            container: ''
             shell: bash
+            cargo_env: ''
           # TODO: Fix compiling for musl
           # - target: x86_64-unknown-linux-musl  # Alpine
           #  os: ubuntu-latest
           #  container: alpine:latest
           #  shell: sh
-          #   cargo_env: "source $HOME/.cargo/env"
+          #  cargo_env: "source $HOME/.cargo/env"
           - target: aarch64-unknown-linux-gnu  # Debian
             os: ubuntu-24.04-arm
+            container: ''
             shell: bash
+            cargo_env: ''
           # TODO: Fix cross compiling for the below targets
           # - target: aarch64-unknown-linux-musl  # Alpine
           #  os: ubuntu-24.04-arm
@@ -84,13 +88,19 @@ jobs:
           #  cargo_env: "source $HOME/.cargo/env"
           - target: x86_64-apple-darwin  # macOS/Intel
             os: macos-latest
+            container: ''
             shell: bash
+            cargo_env: ''
           - target: aarch64-apple-darwin  # macOS/Apple Silicon
             os: macos-latest
+            container: ''
             shell: bash
+            cargo_env: ''
           - target: x86_64-pc-windows-msvc  # Windows
             os: windows-latest
+            container: ''
             shell: bash
+            cargo_env: ''
     name: Build (${{ matrix.target }})
     needs: setup_release
     runs-on: ${{ matrix.os }}

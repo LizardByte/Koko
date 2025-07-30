@@ -1,13 +1,14 @@
-#![doc = "Database utilities for the application."]
+//! Database utilities for the application.
 
 pub(crate) mod models;
 pub(crate) mod schema;
 
 // lib imports
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use rocket::{
+    Build,
+    Rocket,
     fairing::{Fairing, Info, Kind},
-    Build, Rocket,
 };
 use rocket_sync_db_pools::{database, diesel};
 

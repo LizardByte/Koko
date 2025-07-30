@@ -1,4 +1,4 @@
-#![doc = "Routes for dependencies."]
+//! Routes for dependencies.
 
 // lib imports
 use cargo_metadata::Package;

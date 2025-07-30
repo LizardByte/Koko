@@ -1,4 +1,4 @@
-#![doc = "Tray icon utilities for the application."]
+//! Tray icon utilities for the application.
 
 // lib imports
 use tao::{
@@ -6,8 +6,9 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
 };
 use tray_icon::{
+    TrayIconBuilder,
+    TrayIconEvent,
     menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
-    TrayIconBuilder, TrayIconEvent,
 };
 
 // local imports
@@ -124,7 +125,8 @@ pub fn launch() {
                 );
 
                 // We have to request a redraw here to have the icon actually show up.
-                // Tao only exposes a redraw method on the Window so we use core-foundation directly.
+                // Tao only exposes a redraw method on the Window so we use core-foundation
+                // directly.
                 #[cfg(target_os = "macos")]
                 {
                     use objc2_core_foundation::CFRunLoop;

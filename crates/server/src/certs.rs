@@ -1,11 +1,11 @@
-#![doc = "Certificate utilities for the application."]
+//! Certificate utilities for the application.
 
 // standard imports
 use std::fs;
 use std::path::Path;
 
 // lib imports
-use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rcgen::{CertifiedKey, generate_simple_self_signed};
 
 /// Ensure that the certificates exist at the given paths.
 pub fn ensure_certificates_exist(

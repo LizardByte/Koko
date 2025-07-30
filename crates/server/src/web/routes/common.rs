@@ -1,4 +1,4 @@
-#![doc = "Routes for the web server."]
+//! Routes for the web server.
 
 // lib imports
 use rocket::get;

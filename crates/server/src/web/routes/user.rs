@@ -2,14 +2,14 @@
 use diesel::{QueryDsl, RunQueryDsl};
 use rocket::http::Status;
 use rocket::post;
-use rocket::serde::{json::Json, Deserialize};
-use rocket_okapi::openapi;
+use rocket::serde::{Deserialize, json::Json};
 use rocket_okapi::JsonSchema;
+use rocket_okapi::openapi;
 
 // local imports
 use crate::auth::AdminGuard;
-use crate::db::models::User;
 use crate::db::DbConn;
+use crate::db::models::User;
 
 #[derive(Deserialize, JsonSchema)]
 pub struct CreateUserForm {

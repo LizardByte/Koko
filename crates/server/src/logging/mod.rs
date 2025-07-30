@@ -1,4 +1,4 @@
-#![doc = "Logging utilities for the application."]
+//! Logging utilities for the application.
 
 // standard imports
 use std::io;

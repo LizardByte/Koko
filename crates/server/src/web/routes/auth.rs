@@ -55,12 +55,21 @@ pub async fn login(
     // debug print user info from db
     println!("Found user in db: {:?}", user);
 
+    // Verify password using BCrypt
     if !crate::auth::verify_password(&form.password, &user.password) {
         println!("Password verification failed");
         return Err(Status::Unauthorized);
     }
 
-    let token = crate::auth::create_token(&user.id.to_string(), crate::auth::get_jwt_secret());
+    let token = match crate::auth::create_token(&user.id.to_string(), crate::auth::get_jwt_secret())
+    {
+        Ok(token) => token,
+        Err(e) => {
+            println!("Failed to create token: {}", e);
+            return Err(Status::InternalServerError);
+        }
+    };
+
     Ok(Json(TokenResponse { token }))
 }
 

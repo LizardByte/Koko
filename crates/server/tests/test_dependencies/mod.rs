@@ -1,4 +1,41 @@
+// lib imports
+use rstest::rstest;
+
+// local imports
 use koko::dependencies::get_dependencies;
+
+#[rstest]
+#[case("Apache-2.0")]
+#[case("BSD-2-Clause")]
+#[case("BSD-3-Clause")]
+#[case("CC0-1.0")]
+#[case("ISC")]
+#[case("MIT")]
+#[case("MPL-2.0")]
+#[case("NCSA")]
+#[case("Unicode-3.0")]
+#[case("Unlicense")]
+#[case("Zlib")]
+fn test_individual_license_compatibility(#[case] license: &str) {
+    assert!(
+        is_license_compatible(license),
+        "License '{}' should be compatible",
+        license
+    );
+}
+
+#[rstest]
+#[case("GPL-3.0")]
+#[case("AGPL-3.0")]
+#[case("Custom License")]
+#[case("Proprietary")]
+fn test_individual_license_incompatibility(#[case] license: &str) {
+    assert!(
+        !is_license_compatible(license),
+        "License '{}' should be incompatible",
+        license
+    );
+}
 
 fn is_license_compatible(license: &str) -> bool {
     let compatible_licenses = vec![

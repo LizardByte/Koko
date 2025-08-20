@@ -1,12 +1,11 @@
 // standard imports
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
 // lib imports
 use diesel::Connection;
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::MigrationHarness;
-use once_cell::sync::Lazy;
 use rocket::http::Status;
 use rocket::local::asynchronous::Client;
 use rstest::fixture;
@@ -18,27 +17,25 @@ use koko::globals::CURRENT_ENV;
 use koko::web::rocket;
 
 // test imports
-use crate::test_web::test_request;
-
-// constants
-static DB_PATH: Lazy<&'static Path> = Lazy::new(|| Path::new("./test_data/koko.db"));
+use crate::test_utils::{TestResponse, make_request};
 
 pub struct TestDb {
     pub client: Client,
+    db_path: PathBuf,
 }
 
 impl Drop for TestDb {
     fn drop(&mut self) {
-        if DB_PATH.exists() {
-            if let Ok(mut conn) = SqliteConnection::establish(DB_PATH.to_str().unwrap()) {
+        if self.db_path.exists() {
+            if let Ok(mut conn) = SqliteConnection::establish(self.db_path.to_str().unwrap()) {
                 let _ = conn.revert_all_migrations(MIGRATIONS);
             }
 
-            // Sleep to try to all the processes to release the database file
+            // Sleep to allow processes to release the database file
             std::thread::sleep(std::time::Duration::from_secs(1));
 
             // Delete the database file
-            match fs::remove_file(DB_PATH.clone()) {
+            match fs::remove_file(&self.db_path) {
                 Ok(_) => (),
                 Err(e) => eprintln!("Warning: Failed to delete test database: {}", e),
             }
@@ -50,23 +47,36 @@ impl Drop for TestDb {
 pub async fn db_fixture(#[default(false)] base_user: bool) -> TestDb {
     CURRENT_ENV.store(1, std::sync::atomic::Ordering::SeqCst);
 
-    if let Some(parent) = DB_PATH.parent() {
-        fs::create_dir_all(parent).expect("Failed to create test_data directory");
+    // Create a unique database file for this test
+    let test_id = std::thread::current().id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let db_path = PathBuf::from(format!(
+        "./test_data/test_{}_{}.db",
+        timestamp,
+        format!("{:?}", test_id)
+            .replace("ThreadId(", "")
+            .replace(")", "")
+    ));
+
+    // Ensure test_data directory exists
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).expect("Failed to create test_data directory");
     }
 
-    // Initialize database with migrations
-    if let Ok(mut conn) = SqliteConnection::establish(DB_PATH.to_str().unwrap()) {
-        conn.run_pending_migrations(MIGRATIONS)
-            .expect("Failed to run migrations");
-    }
+    // Set the database URL for this test
+    std::env::set_var("DATABASE_URL", format!("sqlite:{}", db_path.display()));
 
-    let rocket = rocket();
-    let client = Client::tracked(rocket)
+    let rocket_instance = rocket();
+    let client = Client::tracked(rocket_instance)
         .await
-        .expect("Failed to launch web server");
+        .expect("Failed to launch rocket for test");
 
     if base_user {
-        let response = test_request(
+        let response: TestResponse = make_request(
+            Some(&client),
             "post",
             "/create_user",
             Some(json!({
@@ -75,13 +85,14 @@ pub async fn db_fixture(#[default(false)] base_user: bool) -> TestDb {
                 "pin": "1234",
                 "admin": true,
             })),
-            Status::Ok,
-            Some(&client),
+            None,
+            Some(Status::Ok),
+            Some(false),
         )
         .await;
 
         assert_eq!(response.body, "User created");
     }
 
-    TestDb { client }
+    TestDb { client, db_path }
 }

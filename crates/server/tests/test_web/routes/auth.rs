@@ -1,49 +1,96 @@
 // lib imports
 use rocket::http::Status;
-use rstest::rstest;
 use serde_json::json;
-use serial_test::serial;
 
 // test imports
-use crate::fixtures;
-use crate::test_web::test_request;
+use crate::test_utils::{
+    create_and_login_user,
+    create_test_client,
+    create_test_user,
+    make_request,
+};
 
-#[rstest]
-#[serial(db)]
-#[tokio::test]
-#[case::login_success("admin", "password123", Status::Ok)]
-#[case::login_wrong_password("admin", "wrong", Status::Unauthorized)]
-#[case::login_non_existent_user("nonexistent", "wrong", Status::Unauthorized)]
-async fn test_login(
-    #[future]
-    #[from(fixtures::db_fixture)]
-    #[with(true)]
-    db_future: fixtures::TestDb,
-    #[case] username: &str,
-    #[case] password: &str,
-    #[case] expected_status: Status,
-) {
-    let db = db_future.await;
+#[rocket::async_test]
+async fn test_login_success() {
+    let client = create_test_client(Some("auth_routes_login_success")).await;
 
-    // Test login
-    let response = test_request(
-        "post",
-        "/login",
-        Some(json!({
-            "username": username,
-            "password": password,
-        })),
-        expected_status,
-        Some(&db.client),
+    // Create and login user using the helper function
+    let token = create_and_login_user(&client, "admin", "password123", true, Some("1234"))
+        .await
+        .expect("Should create and login user successfully");
+
+    // Verify we got a valid token
+    assert!(!token.is_empty());
+}
+
+#[rocket::async_test]
+async fn test_login_wrong_password() {
+    let client = create_test_client(Some("auth_routes_wrong_password")).await;
+
+    // Create a user
+    let (_status, _) = create_test_user(
+        &client,
+        "admin",
+        "password123",
+        true,
+        Some("1234"),
+        Some(Status::Ok),
     )
     .await;
 
-    if expected_status == Status::Ok {
-        assert!(response.body.contains("token"));
-    }
+    // Test login with the wrong password
+    let login_data = json!({
+        "username": "admin",
+        "password": "wrong"
+    });
+
+    let _response = make_request(
+        Some(&client),
+        "post",
+        "/login",
+        Some(login_data),
+        None,
+        Some(Status::Unauthorized),
+        Some(false),
+    )
+    .await;
+}
+
+#[rocket::async_test]
+async fn test_login_non_existent_user() {
+    let client = create_test_client(Some("auth_routes_non_existent")).await;
+
+    // Test login with a non-existent user (no users created)
+    let login_data = json!({
+        "username": "nonexistent",
+        "password": "wrong"
+    });
+
+    let _response = make_request(
+        Some(&client),
+        "post",
+        "/login",
+        Some(login_data),
+        None,
+        Some(Status::Unauthorized),
+        Some(false),
+    )
+    .await;
 }
 
 #[rocket::async_test]
 async fn test_logout_route() {
-    test_request("get", "/logout", None, Status::Ok, None).await;
+    let client = create_test_client(Some("auth_routes_logout")).await;
+
+    let response = make_request(
+        Some(&client),
+        "get",
+        "/logout",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    assert_eq!(response.body, "Logout Page");
 }

@@ -16,18 +16,54 @@ use serde::{Deserialize, Serialize};
 // local imports
 use crate::db::DbConn;
 
-/// Guard for admin routes.
-pub struct AdminGuard(Claims);
+/// Enum defining different authorization roles
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Any authenticated user
+    User,
+    /// Administrator role
+    Admin,
+}
 
-impl AdminGuard {
-    /// Get the claims contained in this guard
-    pub fn claims(&self) -> &Claims {
-        &self.0
+impl Role {
+    /// Get the scope string for OpenAPI documentation
+    fn scope(&self) -> Vec<String> {
+        match self {
+            Role::User => vec![],
+            Role::Admin => vec!["admin".to_owned()],
+        }
     }
 }
 
+/// Generic authorization guard that can handle different roles
+pub struct AuthGuard<const ROLE: u8> {
+    claims: Claims,
+}
+
+impl<const ROLE: u8> AuthGuard<ROLE> {
+    /// Get the claims contained in this guard
+    pub fn claims(&self) -> &Claims {
+        &self.claims
+    }
+
+    /// Get the role for this guard
+    pub fn role() -> Role {
+        match ROLE {
+            0 => Role::User,
+            1 => Role::Admin,
+            _ => panic!("Invalid role constant"),
+        }
+    }
+}
+
+// Type aliases for convenience
+/// Guard for any authenticated user
+pub type UserGuard = AuthGuard<0>;
+/// Guard for admin users only
+pub type AdminGuard = AuthGuard<1>;
+
 #[rocket::async_trait]
-impl<'r> FromRequest<'r> for AdminGuard {
+impl<'r, const ROLE: u8> FromRequest<'r> for AuthGuard<ROLE> {
     type Error = ();
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
@@ -36,6 +72,14 @@ impl<'r> FromRequest<'r> for AdminGuard {
             _ => return Outcome::Error((Status::Unauthorized, ())),
         };
 
+        let role = Self::role();
+
+        // For User role, just having valid claims is enough
+        if role == Role::User {
+            return Outcome::Success(AuthGuard { claims });
+        }
+
+        // For other roles, we need to check additional permissions
         let db = match request.guard::<DbConn>().await {
             Outcome::Success(db) => db,
             _ => return Outcome::Error((Status::InternalServerError, ())),
@@ -46,35 +90,62 @@ impl<'r> FromRequest<'r> for AdminGuard {
             Err(_) => return Outcome::Error((Status::Unauthorized, ())),
         };
 
-        let is_admin = db
-            .run(move |conn| {
-                use crate::db::schema::users::dsl::*;
-                users.find(user_id).select(admin).first::<bool>(conn)
-            })
-            .await
-            .unwrap_or(false);
+        let has_permission = match role {
+            Role::Admin => db
+                .run(move |conn| {
+                    use crate::db::schema::users::dsl::*;
+                    users.find(user_id).select(admin).first::<bool>(conn)
+                })
+                .await
+                .unwrap_or(false),
+            Role::User => true, // Already handled above
+        };
 
-        if is_admin {
-            Outcome::Success(AdminGuard(claims))
+        if has_permission {
+            Outcome::Success(AuthGuard { claims })
         } else {
             Outcome::Error((Status::Forbidden, ()))
         }
     }
 }
 
-#[rocket::async_trait]
-impl OpenApiFromRequest<'_> for AdminGuard {
+/// Helper function to create Bearer token security configuration for OpenAPI
+fn create_bearer_auth_security(scopes: Vec<String>) -> rocket_okapi::Result<RequestHeaderInput> {
+    use rocket_okapi::okapi::Map;
+    use rocket_okapi::okapi::openapi3::{SecurityRequirement, SecurityScheme, SecuritySchemeData};
+
+    let security_scheme = SecurityScheme {
+        data: SecuritySchemeData::Http {
+            scheme: "bearer".to_string(),
+            bearer_format: Some("JWT".to_string()),
+        },
+        description: Some("JWT Bearer token authentication".to_string()),
+        extensions: Map::new(),
+    };
+
+    let mut security_req = SecurityRequirement::new();
+    security_req.insert("BearerAuth".to_owned(), scopes);
+
+    Ok(RequestHeaderInput::Security(
+        "BearerAuth".to_owned(),
+        security_scheme,
+        security_req,
+    ))
+}
+
+impl<const ROLE: u8> OpenApiFromRequest<'_> for AuthGuard<ROLE> {
     fn from_request_input(
         _gen: &mut rocket_okapi::gen::OpenApiGenerator,
         _name: String,
         _required: bool,
     ) -> rocket_okapi::Result<RequestHeaderInput> {
-        Ok(RequestHeaderInput::None)
+        let role = Self::role();
+        create_bearer_auth_security(role.scope())
     }
 }
 
 /// Claims for the JWT.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     /// Subject (user ID) of the JWT
     pub sub: String,
@@ -140,16 +211,6 @@ impl<'r> FromRequest<'r> for Claims {
             Ok(claims) => Outcome::Success(claims),
             Err(_) => Outcome::Error((rocket::http::Status::Unauthorized, ())),
         }
-    }
-}
-
-impl OpenApiFromRequest<'_> for Claims {
-    fn from_request_input(
-        _gen: &mut rocket_okapi::gen::OpenApiGenerator,
-        _name: String,
-        _required: bool,
-    ) -> rocket_okapi::Result<RequestHeaderInput> {
-        Ok(RequestHeaderInput::None)
     }
 }
 

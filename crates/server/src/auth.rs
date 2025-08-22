@@ -76,8 +76,10 @@ impl OpenApiFromRequest<'_> for AdminGuard {
 /// Claims for the JWT.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub(crate) sub: String,
-    exp: usize,
+    /// Subject (user ID) of the JWT
+    pub sub: String,
+    /// Expiration time as Unix timestamp
+    pub exp: usize,
 }
 
 const BEARER: &str = "Bearer ";
@@ -86,9 +88,9 @@ const BEARER: &str = "Bearer ";
 pub fn create_token(
     user_id: &str,
     secret: &str,
-) -> String {
+) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::seconds(60))
+        .checked_add_signed(chrono::Duration::hours(24))
         .expect("valid timestamp")
         .timestamp();
 
@@ -102,7 +104,6 @@ pub fn create_token(
         &claims,
         &EncodingKey::from_secret(secret.as_ref()),
     )
-    .unwrap()
 }
 
 /// Decode a JWT token.
@@ -161,11 +162,13 @@ pub(crate) fn get_jwt_secret() -> &'static str {
     &JWT_SECRET
 }
 
-pub(crate) fn hash_password(password: &str) -> String {
-    hash(password, DEFAULT_COST).unwrap()
+/// Hash a password using BCrypt (handles salting internally)
+pub fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
+    hash(password, DEFAULT_COST)
 }
 
-pub(crate) fn verify_password(
+/// Verify a password against a BCrypt hash
+pub fn verify_password(
     password: &str,
     hash: &str,
 ) -> bool {

@@ -8,9 +8,7 @@ table! {
         id -> Integer,
         username -> Text,
         password -> Text,
-        password_salt -> Text,
         pin -> Nullable<Text>,
-        pin_salt -> Nullable<Text>,
         admin -> Bool,
     }
 }

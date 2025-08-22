@@ -1,13 +1,24 @@
-use crate::test_web::test_request;
-
+// lib imports
 use rocket::http::Status;
 use rocket::serde::json::{Value, serde_json};
 
+// test imports
+use crate::test_utils::{TestResponse, make_request};
+
 #[rocket::async_test]
 async fn test_get_dependencies_route() {
-    let response = test_request("get", "/dependencies", None, Status::Ok, None).await;
+    let response: TestResponse = make_request(
+        None,
+        "get",
+        "/dependencies",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(true),
+    )
+    .await;
 
-    // ensure response is a json list of dictionaries, and each dictionary has the keys name,
+    // ensure the response is a JSON list of dictionaries, and each dictionary has the key name,
     // version, and license
     let body = response.body;
     let json: Value = serde_json::from_str(&body).unwrap();

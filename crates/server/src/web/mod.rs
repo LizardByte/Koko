@@ -18,6 +18,11 @@ use crate::globals;
 
 /// Build the web server.
 pub fn rocket() -> rocket::Rocket<rocket::Build> {
+    rocket_with_db_path(None)
+}
+
+/// Build the web server with a custom database path (primarily for testing).
+pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<rocket::Build> {
     // the cert path changes depending on if the user wants to use custom certs
     let (cert_path, key_path);
     if !GLOBAL_SETTINGS.server.use_custom_certs {
@@ -32,12 +37,15 @@ pub fn rocket() -> rocket::Rocket<rocket::Build> {
         certs::ensure_certificates_exist(cert_path.clone(), key_path.clone());
     }
 
+    // Use custom database path for tests, or default for production
+    let db_path = custom_db_path.unwrap_or_else(|| globals::APP_PATHS.db_path.clone());
+
     let figment = Figment::from(Config::default())
         .merge((
             "databases",
             rocket::figment::map! {
                 "sqlite_db" => rocket::figment::map! {
-                    "url" => format!("sqlite://{}", globals::APP_PATHS.db_path),
+                    "url" => format!("sqlite://{}", db_path),
                 }
             },
         ))

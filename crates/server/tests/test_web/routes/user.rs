@@ -1,54 +1,55 @@
 // lib imports
 use rocket::http::Status;
 use rstest::rstest;
-use serde_json::json;
-use serial_test::serial;
 
 // test imports
-use crate::fixtures;
-use crate::test_web::test_request;
+use crate::test_utils::{create_test_client, create_test_user};
 
 #[rstest]
-#[serial(db)]
-#[tokio::test]
-async fn test_create_first_user(
-    #[future]
-    #[from(fixtures::db_fixture)]
-    #[with(true)]
-    db_future: fixtures::TestDb
-) {
-    db_future.await;
-
-    // nothing to do, the fixture handles creating the first user
-}
-
-#[rstest]
-#[serial(db)]
-#[tokio::test]
-#[case::create_user_requires_auth("testuser", "password123", false, Status::Unauthorized)]
-async fn test_create_subsequent_user_requires_auth(
-    #[future]
-    #[from(fixtures::db_fixture)]
-    #[with(true)]
-    db_future: fixtures::TestDb,
+#[case("admin", "password123", true, Some("1234"))]
+#[case("user", "userpass456", false, None)]
+#[case("power-user", "complex!Pass@789", false, Some("9876"))]
+async fn test_create_first_user_scenarios(
     #[case] username: &str,
     #[case] password: &str,
     #[case] admin: bool,
-    #[case] expected_status: Status,
+    #[case] pin: Option<&str>,
 ) {
-    let db = db_future.await;
+    let client = create_test_client(Some(&format!("user_routes_first_{}", username))).await;
 
-    // Try to create second user without auth
-    test_request(
-        "post",
-        "/create_user",
-        Some(json!({
-            "username": username,
-            "password": password,
-            "admin": admin
-        })),
-        expected_status,
-        Some(&db.client),
+    // Create the first user (should not require authentication)
+    let (status, body) =
+        create_test_user(&client, username, password, admin, pin, Some(Status::Ok)).await;
+
+    assert_eq!(status, Status::Ok);
+    assert_eq!(body, "User created");
+}
+
+#[rocket::async_test]
+async fn test_create_user_requires_auth() {
+    let client = create_test_client(Some("user_routes_requires_auth")).await;
+
+    // First, create a user to populate the database
+    let (status, _) = create_test_user(
+        &client,
+        "admin",
+        "password123",
+        true,
+        Some("1234"),
+        Some(Status::Ok),
     )
     .await;
+    assert_eq!(status, Status::Ok);
+
+    // Try to create a second user without auth (should fail)
+    let (status, _) = create_test_user(
+        &client,
+        "test_user",
+        "password123",
+        false,
+        None,
+        Some(Status::Unauthorized),
+    )
+    .await;
+    assert_eq!(status, Status::Unauthorized);
 }

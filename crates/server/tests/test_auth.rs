@@ -5,7 +5,15 @@ use chrono::{Duration, Utc};
 use rstest::rstest;
 
 // local imports
-use koko::auth::{create_token, decode_token, hash_password, verify_password};
+use koko::auth::{
+    AdminGuard,
+    AuthGuard,
+    UserGuard,
+    create_token,
+    decode_token,
+    hash_password,
+    verify_password,
+};
 
 #[rstest]
 #[case("123", "user with numeric ID")]
@@ -142,4 +150,19 @@ fn test_bcrypt_salt_uniqueness(#[case] password: &str) {
     // But both should verify correctly
     assert!(verify_password(password, &hash1));
     assert!(verify_password(password, &hash2));
+}
+
+#[test]
+fn test_auth_guard_role_constants() {
+    // Test valid role constants
+    assert_eq!(UserGuard::role(), koko::auth::Role::User);
+    assert_eq!(AdminGuard::role(), koko::auth::Role::Admin);
+}
+
+#[test]
+#[should_panic(expected = "Invalid role constant")]
+fn test_auth_guard_invalid_role_constant() {
+    // This should panic because role constant 99 is not valid
+    // We test the panic by calling the role() method with an invalid const generic
+    let _ = AuthGuard::<99>::role();
 }

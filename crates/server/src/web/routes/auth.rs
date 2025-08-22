@@ -10,7 +10,7 @@ use rocket::{get, post};
 use rocket_okapi::{JsonSchema, openapi};
 
 // local imports
-use crate::auth::{AdminGuard, Claims};
+use crate::auth::{AdminGuard, UserGuard};
 use crate::db::DbConn;
 use crate::db::models::User;
 
@@ -81,7 +81,7 @@ pub fn logout() -> &'static str {
 
 #[openapi(tag = "Test Auth")]
 #[get("/jwt_test")]
-pub fn jwt_test(_claims: Claims) -> &'static str {
+pub fn jwt_test(_user: UserGuard) -> &'static str {
     "Protected Page"
 }
 

@@ -160,6 +160,27 @@ fn test_auth_guard_role_constants() {
 }
 
 #[test]
+fn test_claims_struct_functionality() {
+    use koko::auth::Claims;
+
+    // Test that we can create and access Claims - this exercises the public API
+    // that AuthGuard.claims() would return
+    let test_claims = Claims {
+        sub: "test_user_123".to_string(),
+        exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
+    };
+
+    // Verify the claims data is accessible (same as what .claims() would return)
+    assert_eq!(test_claims.sub, "test_user_123");
+    assert!(test_claims.exp > Utc::now().timestamp() as usize);
+
+    // Test that Claims can be cloned (important for the claims() method return value usage)
+    let cloned_claims = test_claims.clone();
+    assert_eq!(cloned_claims.sub, test_claims.sub);
+    assert_eq!(cloned_claims.exp, test_claims.exp);
+}
+
+#[test]
 #[should_panic(expected = "Invalid role constant")]
 fn test_auth_guard_invalid_role_constant() {
     // This should panic because role constant 99 is not valid

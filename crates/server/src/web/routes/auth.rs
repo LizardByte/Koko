@@ -8,6 +8,7 @@ use rocket::http::Status;
 use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket::{get, post};
 use rocket_okapi::{JsonSchema, openapi};
+use serde_json::json;
 
 // local imports
 use crate::auth::{AdminGuard, UserGuard};
@@ -89,4 +90,14 @@ pub fn jwt_test(_user: UserGuard) -> &'static str {
 #[get("/admin_test")]
 pub fn admin_test(_admin: AdminGuard) -> &'static str {
     "Admin only content"
+}
+
+#[openapi(tag = "Test Auth")]
+#[get("/user_info")]
+pub fn user_info(user: UserGuard) -> Json<serde_json::Value> {
+    let claims = user.claims();
+    Json(json!({
+        "user_id": claims.sub,
+        "expires_at": claims.exp
+    }))
 }

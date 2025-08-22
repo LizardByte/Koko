@@ -94,3 +94,39 @@ async fn test_logout_route() {
     .await;
     assert_eq!(response.body, "Logout Page");
 }
+
+#[rocket::async_test]
+async fn test_user_info_endpoint() {
+    let client = create_test_client(Some("auth_user_info_test")).await;
+
+    // Create and login a user to get a token
+    let token = create_and_login_user(&client, "testuser", "password123", false, None)
+        .await
+        .expect("Should create and login user successfully");
+
+    // Call the user_info endpoint with the token - this will exercise the claims() method
+    let response = make_request(
+        Some(&client),
+        "get",
+        "/user_info",
+        None,
+        Some(format!("Bearer {}", token)),
+        Some(Status::Ok),
+        Some(true),
+    )
+    .await;
+
+    // Parse the response and verify it contains the expected user information
+    let user_info: serde_json::Value =
+        serde_json::from_str(&response.body).expect("Response should be valid JSON");
+
+    // Verify the response contains user_id and expires_at from the claims
+    assert!(user_info.get("user_id").is_some());
+    assert!(user_info.get("expires_at").is_some());
+
+    // The user_id should be a string (from claims.sub)
+    assert!(user_info["user_id"].is_string());
+
+    // The expires_at should be a number (from claims.exp)
+    assert!(user_info["expires_at"].is_number());
+}

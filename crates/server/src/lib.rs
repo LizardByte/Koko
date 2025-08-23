@@ -11,11 +11,9 @@ pub mod db;
 pub mod dependencies;
 pub mod globals;
 mod logging;
+pub mod signal_handler;
 pub mod tray;
 pub mod web;
-
-// standard imports
-use std::thread;
 
 /// Main entry point for the application.
 /// Initializes logging, the web server, and tray icon.
@@ -23,11 +21,29 @@ use std::thread;
 pub fn main() {
     logging::init().expect("Failed to initialize logging");
 
-    let web_handle = thread::spawn(|| {
-        web::launch();
+    // Create a shutdown coordinator to manage all threads
+    let mut coordinator = signal_handler::ShutdownCoordinator::new();
+
+    // Register the web server thread
+    coordinator.register_async_thread("web-server", |shutdown_signal| async move {
+        web::launch_with_shutdown(shutdown_signal).await;
+        log::info!("Web server thread completed");
     });
 
-    tray::launch();
+    // Start the monitoring system
+    coordinator.start_monitor();
 
-    web_handle.join().expect("Web server thread panicked");
+    // Run tray on main thread - this will block until tray exits
+    // The tray gets the main shutdown signal to coordinate with other threads
+    tray::launch_with_shutdown(coordinator.signal());
+
+    log::info!("Tray has exited, initiating coordinated shutdown");
+
+    // Trigger shutdown of all threads
+    coordinator.shutdown();
+
+    // Wait for all threads to complete
+    coordinator.wait_for_completion();
+
+    log::info!("Application shutdown complete");
 }

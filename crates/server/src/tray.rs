@@ -13,6 +13,7 @@ use tray_icon::{
 
 // local imports
 use crate::globals;
+use crate::signal_handler::ShutdownSignal;
 
 #[derive(Debug)]
 enum UserEvent {
@@ -20,8 +21,8 @@ enum UserEvent {
     MenuEvent(MenuEvent),
 }
 
-/// Launch the tray icon and event loop.
-pub fn launch() {
+/// Launch the tray icon and event loop with graceful shutdown support.
+pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
     let path = std::path::Path::new(globals::GLOBAL_ICON_ICO_PATH);
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -107,7 +108,17 @@ pub fn launch() {
     let mut tray_icon = None;
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        // Always check for shutdown signal first and exit immediately
+        if shutdown_signal.is_shutdown() {
+            log::info!("Tray received shutdown signal, exiting immediately");
+            tray_icon.take();
+            std::process::exit(0);
+        }
+
+        // Use Poll with a short timeout to check shutdown frequently
+        *control_flow = ControlFlow::WaitUntil(
+            std::time::Instant::now() + std::time::Duration::from_millis(50),
+        );
 
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
@@ -144,8 +155,9 @@ pub fn launch() {
 
                 match event.id {
                     id if id == quit_i.id() => {
+                        log::info!("Quit requested from tray menu");
                         tray_icon.take();
-                        *control_flow = ControlFlow::Exit;
+                        std::process::exit(0);
                     }
                     id if id == options_disable_tray_i.id() => {
                         // TODO: adjust application config first
@@ -180,7 +192,15 @@ pub fn launch() {
                 }
             }
 
-            _ => {}
+            // Check for shutdown in all event types
+            _ => {
+                // Check shutdown signal on any event
+                if shutdown_signal.is_shutdown() {
+                    log::info!("Tray event - shutdown detected, exiting immediately");
+                    tray_icon.take();
+                    std::process::exit(0);
+                }
+            }
         }
     })
 }
@@ -196,4 +216,9 @@ pub fn load_icon(path: &std::path::Path) -> tray_icon::Icon {
         (rgba, width, height)
     };
     tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+}
+
+/// Launch the tray icon and event loop.
+pub fn launch() {
+    launch_with_shutdown(ShutdownSignal::new())
 }

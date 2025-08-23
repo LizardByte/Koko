@@ -15,6 +15,7 @@ use crate::certs;
 use crate::config::GLOBAL_SETTINGS;
 use crate::db::{DbConn, Migrate};
 use crate::globals;
+use crate::signal_handler::ShutdownSignal;
 
 /// Build the web server.
 pub fn rocket() -> rocket::Rocket<rocket::Build> {
@@ -89,6 +90,40 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                 ..Default::default()
             }),
         )
+}
+
+/// Launch the web server with graceful shutdown support.
+pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
+    let rocket = rocket().ignite().await.expect("Failed to ignite rocket");
+
+    // Start the rocket server
+    let rocket_handle = rocket.launch();
+
+    // Clone the shutdown signal for the future
+    let shutdown_signal_clone = shutdown_signal.clone();
+
+    // Create a future that completes when shutdown is signaled
+    let shutdown_future = async move {
+        while !shutdown_signal_clone.is_shutdown() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        log::info!("Web server received shutdown signal");
+    };
+
+    // Race between the server and shutdown signal
+    tokio::select! {
+        result = rocket_handle => {
+            log::info!("Rocket server has shut down");
+            // Rocket shut down (likely due to SIGINT), signal other components to shut down
+            shutdown_signal.shutdown();
+            if let Err(e) = result {
+                log::error!("Web server error: {}", e);
+            }
+        }
+        _ = shutdown_future => {
+            log::info!("Web server shutting down gracefully");
+        }
+    }
 }
 
 /// Launch the web server.

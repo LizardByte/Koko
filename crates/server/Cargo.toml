@@ -50,6 +50,7 @@ bcrypt = "0.17.0"
 cargo_metadata = "0.23.0"
 chrono = "0.4.39"
 config = "0.15.7"
+ctrlc = "3.4.4"
 diesel = { version = "2.2.7", features = ["sqlite"] }
 diesel_migrations = "2.2.0"
 dirs = "6.0.0"
@@ -69,6 +70,7 @@ schemars = "0.8.1"
 serde = "1.0.217"
 serde_json = "1.0.138"
 tao = "0.31.1"
+tokio = { version = "1.0", features = ["full"] }
 tray-icon = "0.21.1"
 webbrowser = "1.0.3"
 # common = { path = "../common" }

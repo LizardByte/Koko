@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+// For graceful testing on Windows
+static FORCE_EXIT_DISABLED: AtomicBool = AtomicBool::new(false);
+
 /// A thread-safe shutdown signal that can be shared across threads.
 #[derive(Clone)]
 pub struct ShutdownSignal {
@@ -237,6 +240,16 @@ impl ShutdownCoordinator {
                         "Application did not exit within {:?}, forcing exit",
                         timeout
                     );
+
+                    // Avoid hard exit during tests to prevent coverage issues on Windows
+                    if FORCE_EXIT_DISABLED.load(Ordering::Relaxed) {
+                        log::warn!(
+                            "Force exit disabled for testing, timeout thread exiting gracefully"
+                        );
+                        break;
+                    }
+
+                    // In production, use the hard exit as a last resort
                     std::process::exit(0);
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -276,6 +289,16 @@ impl ShutdownCoordinator {
     /// Get the number of registered threads.
     pub fn thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Disable force exit for testing (helps with coverage on Windows)
+    pub fn disable_force_exit() {
+        FORCE_EXIT_DISABLED.store(true, Ordering::Relaxed);
+    }
+
+    /// Re-enable force exit (for testing the timeout behavior)
+    pub fn enable_force_exit() {
+        FORCE_EXIT_DISABLED.store(false, Ordering::Relaxed);
     }
 }
 

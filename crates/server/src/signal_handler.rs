@@ -5,9 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-// For graceful testing on Windows
-static FORCE_EXIT_DISABLED: AtomicBool = AtomicBool::new(false);
-
 /// A thread-safe shutdown signal that can be shared across threads.
 #[derive(Clone)]
 pub struct ShutdownSignal {
@@ -95,6 +92,7 @@ pub struct ShutdownCoordinator {
     main_signal: ShutdownSignal,
     threads: Vec<ManagedThread>,
     timeout: Duration,
+    exit_fn: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl ShutdownCoordinator {
@@ -109,6 +107,24 @@ impl ShutdownCoordinator {
             main_signal: ShutdownSignal::new(),
             threads: Vec::new(),
             timeout,
+            exit_fn: Arc::new(|| std::process::exit(0)),
+        }
+    }
+
+    /// Create a new shutdown coordinator with custom timeout and exit function.
+    /// This is primarily used for testing to avoid calling std::process::exit.
+    pub fn with_timeout_and_exit_fn<F>(
+        timeout: Duration,
+        exit_fn: F,
+    ) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        Self {
+            main_signal: ShutdownSignal::new(),
+            threads: Vec::new(),
+            timeout,
+            exit_fn: Arc::new(exit_fn),
         }
     }
 
@@ -221,6 +237,7 @@ impl ShutdownCoordinator {
 
         // Start timeout thread
         let timeout_signal = self.main_signal.clone();
+        let exit_fn = Arc::clone(&self.exit_fn);
         self.register_thread("timeout", move |_| {
             // Wait for shutdown signal to be received first
             while !timeout_signal.is_shutdown() {
@@ -241,16 +258,9 @@ impl ShutdownCoordinator {
                         timeout
                     );
 
-                    // Avoid hard exit during tests to prevent coverage issues on Windows
-                    if FORCE_EXIT_DISABLED.load(Ordering::Relaxed) {
-                        log::warn!(
-                            "Force exit disabled for testing, timeout thread exiting gracefully"
-                        );
-                        break;
-                    }
-
-                    // In production, use the hard exit as a last resort
-                    std::process::exit(0);
+                    // Use the configurable exit function
+                    exit_fn();
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -289,16 +299,6 @@ impl ShutdownCoordinator {
     /// Get the number of registered threads.
     pub fn thread_count(&self) -> usize {
         self.threads.len()
-    }
-
-    /// Disable force exit for testing (helps with coverage on Windows)
-    pub fn disable_force_exit() {
-        FORCE_EXIT_DISABLED.store(true, Ordering::Relaxed);
-    }
-
-    /// Re-enable force exit (for testing the timeout behavior)
-    pub fn enable_force_exit() {
-        FORCE_EXIT_DISABLED.store(false, Ordering::Relaxed);
     }
 }
 

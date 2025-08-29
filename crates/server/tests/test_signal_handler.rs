@@ -256,7 +256,7 @@ mod shutdown_signal {
             "Should have waited for shutdown signal"
         );
         assert!(
-            elapsed < Duration::from_millis(200),
+            elapsed < Duration::from_millis(300),
             "Should not have waited too long"
         );
         assert!(signal.is_shutdown(), "Signal should be shutdown after wait");

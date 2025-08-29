@@ -354,9 +354,15 @@ mod managed_thread {
 mod shutdown_coordinator {
     use super::*;
 
+    // Helper function to create a coordinator with a no-op exit function for testing
+    fn create_test_coordinator() -> ShutdownCoordinator {
+        ShutdownCoordinator::with_timeout_and_exit_fn(Duration::from_millis(200), || {
+            // No-op exit function for testing - prevents std::process::exit
+        })
+    }
+
     #[test]
     fn default_implementation() {
-        ShutdownCoordinator::disable_force_exit();
         let coordinator = ShutdownCoordinator::default();
         assert_eq!(coordinator.thread_count(), 0);
         assert!(!coordinator.signal().is_shutdown());
@@ -364,8 +370,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn shutdown_method() {
-        ShutdownCoordinator::disable_force_exit();
-        let coordinator = ShutdownCoordinator::new();
+        let coordinator = create_test_coordinator();
         let main_signal = coordinator.signal();
 
         // Initially not shutdown
@@ -380,8 +385,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn thread_count_functionality() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
 
         // Initially no threads
         assert_eq!(coordinator.thread_count(), 0);
@@ -408,8 +412,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn wait_for_completion_with_thread_errors() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
 
         // Register a thread that will panic
         coordinator.register_thread("panic-thread", |_| {
@@ -428,8 +431,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn wait_for_completion_all_successful() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
         let counter = Arc::new(AtomicU32::new(0));
 
         // Register several successful threads
@@ -449,8 +451,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn monitor_thread_functionality() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
         let main_signal = coordinator.signal();
         let monitor_triggered = Arc::new(AtomicBool::new(false));
         let monitor_clone = Arc::clone(&monitor_triggered);
@@ -487,8 +488,7 @@ mod shutdown_coordinator {
 
     #[test]
     fn monitor_external_shutdown_signal() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
         let main_signal = coordinator.signal();
 
         let shutdown_received = Arc::new(AtomicBool::new(false));
@@ -532,7 +532,7 @@ mod shutdown_coordinator {
         // runtime creation actually fails in extreme circumstances.
 
         // For now, let's verify that normal async thread creation works fine
-        let mut coordinator = ShutdownCoordinator::new();
+        let mut coordinator = create_test_coordinator();
 
         coordinator.register_async_thread("normal-async", |_| async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -547,20 +547,25 @@ mod shutdown_coordinator {
 
     #[test]
     fn timeout_thread_functionality() {
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::with_timeout(Duration::from_millis(200));
+        let timeout_triggered = Arc::new(AtomicBool::new(false));
+        let timeout_triggered_clone = Arc::clone(&timeout_triggered);
+
+        let mut coordinator =
+            ShutdownCoordinator::with_timeout_and_exit_fn(Duration::from_millis(200), move || {
+                timeout_triggered_clone.store(true, Ordering::Relaxed);
+            });
         let main_signal = coordinator.signal();
 
         // Register a thread that will wait for shutdown
-        let timeout_activated = Arc::new(AtomicBool::new(false));
-        let timeout_clone = Arc::clone(&timeout_activated);
+        let thread_shutdown = Arc::new(AtomicBool::new(false));
+        let thread_clone = Arc::clone(&thread_shutdown);
 
         coordinator.register_thread("timeout-test-thread", move |shutdown_signal| {
             // Wait for shutdown signal
             while !shutdown_signal.is_shutdown() {
                 thread::sleep(Duration::from_millis(10));
             }
-            timeout_clone.store(true, Ordering::Relaxed);
+            thread_clone.store(true, Ordering::Relaxed);
         });
 
         // Start monitor (which also starts timeout thread)
@@ -572,14 +577,21 @@ mod shutdown_coordinator {
         // Wait for completion - timeout thread should handle this gracefully
         coordinator.wait_for_completion();
 
-        assert!(timeout_activated.load(Ordering::Relaxed));
+        assert!(thread_shutdown.load(Ordering::Relaxed));
+        // Note: timeout_triggered may or may not be true depending on timing
+        // The important thing is that the test completes without hanging
     }
 
     #[test]
     fn timeout_thread_graceful_exit_on_windows() {
         // This test specifically checks that timeout thread exits gracefully during tests
-        ShutdownCoordinator::disable_force_exit();
-        let mut coordinator = ShutdownCoordinator::with_timeout(Duration::from_millis(50));
+        let timeout_triggered = Arc::new(AtomicBool::new(false));
+        let timeout_triggered_clone = Arc::clone(&timeout_triggered);
+
+        let mut coordinator =
+            ShutdownCoordinator::with_timeout_and_exit_fn(Duration::from_millis(50), move || {
+                timeout_triggered_clone.store(true, Ordering::Relaxed);
+            });
         let main_signal = coordinator.signal();
 
         // Register a thread that will deliberately take longer than timeout to finish
@@ -601,8 +613,10 @@ mod shutdown_coordinator {
         // Wait for completion - should complete gracefully without process::exit
         coordinator.wait_for_completion();
 
-        // If we reach here, the timeout thread exited gracefully
+        // If we reach here, the timeout thread used our mock function instead of process::exit
         assert!(main_signal.is_shutdown());
+        // The timeout may or may not have triggered depending on exact timing
+        // The important thing is we didn't call std::process::exit
     }
 }
 

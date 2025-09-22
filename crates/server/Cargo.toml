@@ -47,7 +47,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin_include)"] }
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
 base64 = "0.22.1"
 bcrypt = "0.17.0"
-cargo_metadata = "0.20.0"
+cargo_metadata = "0.22.0"
 chrono = "0.4.39"
 config = "0.15.7"
 diesel = { version = "2.2.7", features = ["sqlite"] }

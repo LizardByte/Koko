@@ -33,4 +33,4 @@ publish = false  # disable publishing to crates.io
 [workspace.dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
 async-std = { version = "1.13.0", features = ["attributes", "tokio1"] }
-rstest = "0.25.0"
+rstest = "0.26.1"

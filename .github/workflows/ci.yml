@@ -277,7 +277,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1.15.1
+        uses: actions-rust-lang/setup-rust-toolchain@v1.15.2
         with:
           target: ${{ matrix.target }}
           components: 'clippy'

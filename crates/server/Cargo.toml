@@ -1,6 +1,6 @@
 [package]
 name = "koko"
-description = "Self-hosted media server."
+description = "Ultra-low latency remote desktop server."
 license.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -14,14 +14,14 @@ build = "../../build.rs"
 
 categories = [
     "multimedia",
-    "multimedia::audio",
-    "multimedia::images",
     "multimedia::video",
+    "network-programming",
 ]
 keywords = [
     "koko",
-    "media-server",
-    "self-hosted",
+    "remote-desktop",
+    "streaming",
+    "low-latency",
 ]
 
 include = [
@@ -73,6 +73,18 @@ tokio = { version = "1.0", features = ["full"] }
 tray-icon = "0.21.1"
 webbrowser = "1.0.3"
 # common = { path = "../common" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Remote Desktop Dependencies (Linux only)
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
+x11rb = { version = "0.13", features = ["all-extensions"] }
+xcb = "1.4"
+rdev = "0.5"
+arboard = "3.4"
+futures = "0.3"
+rocket_ws = "0.1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = "0.3.0"

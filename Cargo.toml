@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/server",
+    "crates/client-desktop",
     # "crates/common",
     # "crates/clients-*",
 ]
@@ -17,14 +18,14 @@ repository = "https://github.com/LizardByte/Koko.git"
 license = ""
 version = "0.0.0"
 categories = [
-    "multimedia",
-    "multimedia::audio",
     "multimedia::images",
+    "network-programming",
     "multimedia::video",
 ]
 keywords = [
-    "koko",
-    "media-server",
+    "remote-desktop",
+    "streaming",
+    "low-latency",
     "self-hosted",
 ]
 publish = false  # disable publishing to crates.io

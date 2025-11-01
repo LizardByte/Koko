@@ -1,0 +1,190 @@
+[Unit]
+Description=Koko Remote Desktop Server
+After=network.target graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/%i/.Xauthority"
+ExecStart=/usr/local/bin/koko
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/home/%i/.local/share/koko
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=koko
+
+[Install]
+WantedBy=graphical.target
+# Koko Remote Desktop - Configuration Example
+#
+# This is the main configuration file for Koko Remote Desktop Server.
+# Copy this to ~/.local/share/koko/config.toml and edit as needed.
+
+[general]
+# Data directory where databases, logs, and certificates are stored
+data_dir = "~/.local/share/koko"
+
+[server]
+# Server bind address (0.0.0.0 = all interfaces, 127.0.0.1 = localhost only)
+address = "0.0.0.0"
+
+# Server port
+port = 8080
+
+# Enable HTTPS (strongly recommended)
+use_https = true
+
+# Use custom certificates instead of self-signed
+use_custom_certs = false
+
+# Custom certificate paths (only used if use_custom_certs = true)
+cert_path = "/path/to/cert.pem"
+key_path = "/path/to/key.pem"
+
+[remote_desktop.capture]
+# Target framerate (10-120)
+# Higher = smoother but more bandwidth
+# Recommended: 60 for desktop work, 30 for slow networks
+framerate = 60
+
+# Hardware acceleration mode
+# Options: "auto", "nvenc", "vaapi", "none"
+# - auto: Try hardware encoding, fall back to software
+# - nvenc: Force NVIDIA NVENC (fails if not available)
+# - vaapi: Force AMD/Intel VAAPI (fails if not available)
+# - none: Force software encoding (high CPU usage)
+hw_accel = "auto"
+
+# Video bitrate in kbps (1000-50000)
+# Higher = better quality but more bandwidth
+# Recommended values:
+#   - 1080p @ 60fps: 8000-15000
+#   - 1080p @ 30fps: 5000-10000
+#   - 720p @ 60fps: 5000-8000
+#   - 720p @ 30fps: 3000-5000
+bitrate = 10000
+
+# Encoder preset (affects quality vs CPU usage)
+# Options: "ultrafast", "fast", "medium", "slow"
+# - ultrafast: Lowest latency, highest CPU (recommended for remote desktop)
+# - fast: Good balance
+# - medium: Better quality, higher latency
+# - slow: Best quality, not recommended for real-time
+preset = "ultrafast"
+
+# Monitors to capture (array of monitor indices)
+# Empty array = capture all monitors
+# Examples:
+#   [0] = capture primary monitor only
+#   [0, 1] = capture first two monitors
+#   [] = capture all monitors
+monitors = []
+
+[remote_desktop.streaming]
+# Enable clipboard synchronization
+enable_clipboard = true
+
+# Maximum simultaneous client connections
+max_clients = 10
+
+# Frame buffer size (number of frames to buffer per client)
+# Higher = more memory usage but smoother for slow clients
+frame_buffer_size = 30
+
+[auth]
+# JWT token expiration time in seconds
+# Default: 86400 (24 hours)
+token_expiration = 86400
+
+# Require admin approval for new users
+# If true, admin must approve users after registration
+admin_required = false
+
+# Allow first user to be created without authentication
+# Only applies when database is empty
+# After first user, this setting is ignored
+first_user_setup = true
+
+[logging]
+# Log level: "error", "warn", "info", "debug", "trace"
+level = "info"
+
+# Log file rotation
+# Maximum log file size in MB before rotation
+max_log_size_mb = 10
+
+# Number of rotated log files to keep
+max_log_files = 5
+
+# Enable console logging (in addition to file logging)
+console_logging = true
+
+[performance]
+# Enable performance monitoring
+enable_monitoring = true
+
+# Performance stats update interval in seconds
+stats_interval = 5
+
+# Network optimization
+# Enable TCP_NODELAY for lower latency
+tcp_nodelay = true
+
+# WebSocket ping interval in seconds (0 = disabled)
+# Keeps connections alive through firewalls/proxies
+websocket_ping_interval = 30
+
+[security]
+# Enable rate limiting
+enable_rate_limiting = true
+
+# Maximum login attempts per IP per minute
+max_login_attempts = 5
+
+# Ban duration in seconds after exceeding login attempts
+login_ban_duration = 300
+
+# Allowed CORS origins (comma-separated)
+# Empty = allow all (not recommended for production)
+# Example: "https://app.example.com,https://admin.example.com"
+cors_origins = ""
+
+# Enable HTTP Strict Transport Security (HSTS)
+enable_hsts = true
+
+# HSTS max age in seconds
+hsts_max_age = 31536000
+
+[advanced]
+# GStreamer plugin path (usually auto-detected)
+# Only set if plugins are in non-standard location
+# gstreamer_plugin_path = "/usr/local/lib/gstreamer-1.0"
+
+# X11 display (usually auto-detected)
+# Only set if you need a specific display
+# x11_display = ":0"
+
+# Enable debug features (not for production)
+debug_mode = false
+
+# Custom encoder options (advanced users only)
+# Leave empty for defaults
+# Example for x264: "tune=zerolatency:vbv-bufsize=1000:vbv-maxrate=10000"
+custom_encoder_options = ""
+

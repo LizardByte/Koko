@@ -15,6 +15,16 @@ pub mod signal_handler;
 pub mod tray;
 pub mod web;
 
+// Remote desktop modules (Linux only)
+#[cfg(target_os = "linux")]
+pub mod capture;
+#[cfg(target_os = "linux")]
+pub mod clipboard;
+#[cfg(target_os = "linux")]
+pub mod input;
+#[cfg(target_os = "linux")]
+pub mod streaming;
+
 /// Main entry point for the application.
 /// Initializes logging, the web server, and tray icon.
 #[cfg(not(tarpaulin_include))]

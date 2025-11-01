@@ -1,0 +1,53 @@
+[package]
+name = "koko-client"
+description = "Ultra-low latency remote desktop client."
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+readme.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "koko-client"
+path = "src/main.rs"
+
+[dependencies]
+# UI Framework
+eframe = "0.29"
+egui = "0.29"
+egui_extras = "0.29"
+
+# Networking
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Video decoding
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
+
+# Input handling
+rdev = "0.5"
+
+# Clipboard
+arboard = "3.4"
+
+# Authentication
+base64 = "0.22"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Utilities
+anyhow = "1.0"
+

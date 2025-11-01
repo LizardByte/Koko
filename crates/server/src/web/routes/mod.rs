@@ -4,13 +4,18 @@
 pub mod auth;
 pub mod common;
 pub mod dependencies;
+#[cfg(target_os = "linux")]
+pub mod streaming;
 pub mod user;
 
 // lib imports
 use rocket_okapi::openapi_get_routes; // this is a replacement for the rocket::routes macro
 
+#[cfg(target_os = "linux")]
+use rocket::routes;
+
 pub fn all_routes() -> Vec<rocket::Route> {
-    openapi_get_routes![
+    let mut routes = openapi_get_routes![
         common::index,
         auth::login,
         auth::logout,
@@ -19,5 +24,11 @@ pub fn all_routes() -> Vec<rocket::Route> {
         auth::user_info,
         dependencies::get_dependencies,
         user::create_user,
-    ]
+    ];
+    
+    // Add WebSocket routes (not in OpenAPI) - Linux only
+    #[cfg(target_os = "linux")]
+    routes.extend(routes![streaming::stream]);
+    
+    routes
 }

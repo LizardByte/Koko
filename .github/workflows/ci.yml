@@ -39,7 +39,7 @@ jobs:
 
       - name: Setup Release
         id: setup_release
-        uses: LizardByte/actions/actions/release_setup@v2025.1220.21713
+        uses: LizardByte/actions/actions/release_setup@v2025.1227.191137
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -369,7 +369,7 @@ jobs:
       - name: Create/Update GitHub Release
         if: false  # TODO: move release to separate job
         # if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
-        uses: LizardByte/actions/actions/release_create@v2025.1220.21713
+        uses: LizardByte/actions/actions/release_create@v2025.1227.191137
         with:
           allowUpdates: true
           body: ${{ needs.setup_release.outputs.release_body }}

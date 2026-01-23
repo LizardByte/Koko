@@ -175,7 +175,21 @@ jobs:
             "libayatana-appindicator3-dev:${package_arch}"  # tray icon
             "libglib2.0-dev:${package_arch}"
             "libgtk-3-dev:${package_arch}"
+            "libgstreamer1.0-dev:${package_arch}"
+            "libgstreamer-plugins-base1.0-dev:${package_arch}"
+            "gstreamer1.0-plugins-base:${package_arch}"
+            "gstreamer1.0-plugins-good:${package_arch}"
+            "gstreamer1.0-plugins-bad:${package_arch}"
+            "gstreamer1.0-plugins-ugly:${package_arch}"
+            "gstreamer1.0-libav:${package_arch}"
+            "libgstrtspserver-1.0-dev:${package_arch}"
+            "libges-1.0-dev:${package_arch}"
             "libxdo-dev:${package_arch}"
+            "libx11-dev:${package_arch}"  # X11 for remote desktop
+            "libxrandr-dev:${package_arch}"  # RandR for monitor detection
+            "libxi-dev:${package_arch}"  # X11 input
+            "libxcb1-dev:${package_arch}"  # XCB for x11rb
+            "libxcb-randr0-dev:${package_arch}"  # XCB RandR
           )
           echo "::endgroup::"
 

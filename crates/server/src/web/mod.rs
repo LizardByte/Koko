@@ -17,6 +17,15 @@ use crate::db::{DbConn, Migrate};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 
+#[cfg(target_os = "linux")]
+use crate::capture::{CaptureConfig, CaptureManager};
+#[cfg(target_os = "linux")]
+use crate::clipboard::ClipboardManager;
+#[cfg(target_os = "linux")]
+use crate::streaming::StreamSession;
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
+
 /// Build the web server.
 pub fn rocket() -> rocket::Rocket<rocket::Build> {
     rocket_with_db_path(None)
@@ -61,10 +70,37 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
             },
         ));
 
-    rocket::custom(figment)
+    #[cfg(target_os = "linux")]
+    let rocket_builder = {
+        // Initialize remote desktop components
+        let capture_config = CaptureConfig::default();
+        let capture_manager = Arc::new(CaptureManager::new(capture_config));
+
+        let clipboard_manager =
+            Arc::new(ClipboardManager::new().expect("Failed to initialize clipboard manager"));
+
+        // Start clipboard monitoring
+        clipboard_manager.start_monitoring();
+
+        let stream_session = Arc::new(StreamSession::new(
+            capture_manager.clone(),
+            clipboard_manager.clone(),
+        ));
+
+        rocket::custom(figment)
+            .attach(DbConn::fairing())
+            .attach(Migrate)
+            .manage(stream_session)
+            .mount("/", routes::all_routes())
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let rocket_builder = rocket::custom(figment)
         .attach(DbConn::fairing())
         .attach(Migrate)
-        .mount("/", routes::all_routes())
+        .mount("/", routes::all_routes());
+
+    rocket_builder
         .mount(
             "/swagger-ui/",
             make_swagger_ui(&SwaggerUIConfig {
@@ -95,6 +131,17 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
 /// Launch the web server with graceful shutdown support.
 pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
     let rocket = rocket().ignite().await.expect("Failed to ignite rocket");
+
+    // Start screen capture (Linux only)
+    #[cfg(target_os = "linux")]
+    if let Some(stream_session) = rocket.state::<Arc<StreamSession>>() {
+        let capture_manager = stream_session.capture_manager.clone();
+        tokio::spawn(async move {
+            if let Err(e) = capture_manager.start().await {
+                log::error!("Failed to start screen capture: {}", e);
+            }
+        });
+    }
 
     // Start the rocket server
     let rocket_handle = rocket.launch();

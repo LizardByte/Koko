@@ -1,7 +1,6 @@
 ---
 name: CI
-permissions:
-  contents: read
+permissions: {}
 
 on:
   pull_request:
@@ -103,6 +102,8 @@ jobs:
             cargo_env: ''
     name: Build (${{ matrix.target }})
     needs: setup_release
+    permissions:
+      contents: read
     runs-on: ${{ matrix.os }}
     container:
       image: ${{ matrix.container }}
@@ -222,19 +223,21 @@ jobs:
 
           echo "::group::output"
           echo "CROSS_COMPILE=${cross_compile}"
-          echo "CROSS_COMPILE=${cross_compile}" >> $GITHUB_OUTPUT
-
           echo "DEPENDENCIES=${dependencies[@]}"
-          echo "DEPENDENCIES=${dependencies[@]}" >> $GITHUB_OUTPUT
-
           echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
-          echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}" >> $GITHUB_ENV
-
           echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
-          echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig" >> $GITHUB_ENV
-
           echo "QEMU_COMMAND=${qemu_command}"
-          echo "QEMU_COMMAND=${qemu_command}" >> $GITHUB_OUTPUT
+
+          {
+            echo "CROSS_COMPILE=${cross_compile}"
+            echo "DEPENDENCIES=${dependencies[@]}"
+            echo "QEMU_COMMAND=${qemu_command}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
+            echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
+          } >> "${GITHUB_ENV}"
           echo "::endgroup::"
 
       - name: Install system dependencies (Debian)
@@ -351,7 +354,7 @@ jobs:
           mkdir -p artifacts
 
           extension=""
-          if [[ ${{ matrix.target }} == *"windows"* ]]; then
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             extension=".exe"
           fi
 
@@ -367,12 +370,12 @@ jobs:
           path: artifacts
 
       - name: Create/Update GitHub Release
-        if: false  # TODO: move release to separate job
-        # if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
+        if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
         uses: LizardByte/actions/actions/release_create@9bf3ef783775e17fe6b8dde3585d94ec570b93c2  # v2026.212.22356
         with:
           allowUpdates: true
           body: ${{ needs.setup_release.outputs.release_body }}
+          draft: true
           generateReleaseNotes: ${{ needs.setup_release.outputs.release_generate_release_notes }}
           name: ${{ needs.setup_release.outputs.release_tag }}
           prerelease: true

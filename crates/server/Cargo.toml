@@ -70,7 +70,7 @@ serde = "1.0.217"
 serde_json = "1.0.138"
 tao = "0.31.1"
 tokio = { version = "1.0", features = ["full"] }
-tray-icon = "0.21.1"
+tray-icon = "0.22.0"
 webbrowser = "1.0.3"
 # common = { path = "../common" }
 

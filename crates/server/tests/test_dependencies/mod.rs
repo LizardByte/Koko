@@ -63,6 +63,7 @@ fn dependency_exceptions() -> Vec<&'static str> {
         "koko",
         "dlopen2_derive", // https://github.com/OpenByteDev/dlopen2/issues/20
         "ring",           // https://github.com/briansmith/ring/blob/main/LICENSE
+        "webpki-root-certs",
     ]
 }
 

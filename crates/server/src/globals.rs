@@ -4,7 +4,7 @@
 use once_cell::sync::Lazy;
 
 // local imports
-use crate::config::GLOBAL_SETTINGS;
+use crate::config::current_settings;
 
 // global constants and variables
 pub(crate) static GLOBAL_APP_NAME: &str = "Koko";
@@ -50,7 +50,7 @@ impl AppPaths {
         let env = Environment::from_usize(CURRENT_ENV.load(std::sync::atomic::Ordering::Relaxed));
         let base_dir = match env {
             Environment::Test => String::from("./test_data"),
-            Environment::Production => GLOBAL_SETTINGS.general.data_dir.clone(),
+            Environment::Production => current_settings().general.data_dir,
         };
 
         std::fs::create_dir_all(&base_dir).unwrap();
@@ -64,10 +64,11 @@ impl AppPaths {
 
 /// Get the server URL based on the global settings.
 pub fn get_server_url() -> String {
-    let schema = if GLOBAL_SETTINGS.server.use_https { "https" } else { "http" };
+    let settings = current_settings();
+    let schema = if settings.server.use_https { "https" } else { "http" };
     format!(
         "{}://{}:{}",
-        schema, GLOBAL_SETTINGS.server.address, GLOBAL_SETTINGS.server.port
+        schema, settings.server.address, settings.server.port
     )
 }
 

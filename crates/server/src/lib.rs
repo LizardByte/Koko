@@ -11,6 +11,8 @@ pub mod db;
 pub mod dependencies;
 pub mod globals;
 mod logging;
+pub mod media;
+pub mod metadata;
 pub mod signal_handler;
 pub mod tray;
 pub mod web;

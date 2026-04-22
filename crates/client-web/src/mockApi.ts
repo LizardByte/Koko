@@ -1,0 +1,1051 @@
+import type {
+  AppBootstrapResponse,
+  BootstrapUser,
+  CreateUserRequest,
+  ItemMetadataMatch,
+  ItemMetadataResponse,
+  LoginRequest,
+  LinkMetadataRequest,
+  MediaCollectionSummary,
+  MediaHome,
+  MediaItemDetail,
+  MediaItemSummary,
+  MediaLibrary,
+  MediaLibrarySettings,
+  MetadataProviderStatus,
+  MetadataSearchResult,
+  LogEntriesResponse,
+  PlaybackDecision,
+  PlaybackProgressRequest,
+  ServerCapabilities,
+  SettingsResponse,
+  SettingsSnapshot,
+  SystemActivity,
+  SystemActivitiesResponse,
+  TokenResponse,
+} from './api';
+
+let nextLibraryId = 4;
+let nextUserId = 2;
+const AUTH_TOKEN_STORAGE_KEY = 'koko-client-web-auth-token';
+
+interface MockUserRecord extends BootstrapUser {
+  password: string;
+  pin?: string;
+}
+
+const libraries: MediaLibrary[] = [
+  {
+    id: 1,
+    name: 'Movies',
+    path: 'C:/Media/Movies',
+    paths: ['C:/Media/Movies', 'D:/Overflow/Movies'],
+    recursive: true,
+    kind: 'movies',
+    status: 'available',
+    scan_revision: 6,
+    last_scanned_at: 1760923200,
+    total_files: 2,
+    video_files: 2,
+    audio_files: 0,
+    image_files: 0,
+    book_files: 0,
+    other_files: 0,
+    metadata_refresh_total: 0,
+    metadata_refresh_pending: 0,
+    metadata_refresh_completed: 0,
+    metadata_refresh_failed: 0,
+  },
+  {
+    id: 2,
+    name: 'Shows',
+    path: 'C:/Media/Shows',
+    paths: ['C:/Media/Shows'],
+    recursive: true,
+    kind: 'shows',
+    status: 'available',
+    scan_revision: 5,
+    last_scanned_at: 1760923150,
+    total_files: 1,
+    video_files: 1,
+    audio_files: 0,
+    image_files: 0,
+    book_files: 0,
+    other_files: 0,
+    metadata_refresh_total: 0,
+    metadata_refresh_pending: 0,
+    metadata_refresh_completed: 0,
+    metadata_refresh_failed: 0,
+  },
+  {
+    id: 3,
+    name: 'Music',
+    path: 'C:/Media/Music',
+    paths: ['C:/Media/Music'],
+    recursive: true,
+    kind: 'music',
+    status: 'available',
+    scan_revision: 4,
+    last_scanned_at: 1760923100,
+    total_files: 2,
+    video_files: 0,
+    audio_files: 2,
+    image_files: 0,
+    book_files: 0,
+    other_files: 0,
+    metadata_refresh_total: 0,
+    metadata_refresh_pending: 0,
+    metadata_refresh_completed: 0,
+    metadata_refresh_failed: 0,
+  },
+];
+
+const items: MediaItemDetail[] = [
+  {
+    id: 101,
+    library_id: 1,
+    item_type: 'movie',
+    display_title: 'Mock Movie',
+    relative_path: 'Action/mock-movie.mp4',
+    media_kind: 'video',
+    playable: true,
+    child_count: 0,
+    duration_ms: 5_400_000,
+    width: 1920,
+    height: 1080,
+    modified_at: 1760923200,
+    file_size: 1_610_612_736,
+    container: 'mp4',
+    bit_rate: 2_400_000,
+    video_codec: 'h264',
+    audio_codec: 'aac',
+    metadata_json: JSON.stringify({ format: { format_name: 'mp4', duration: '5400.0' } }, null, 2),
+    metadata_updated_at: 1760923200,
+    poster_url: '/api/v1/items/101/artwork?kind=poster',
+    backdrop_url: '/api/v1/items/101/artwork?kind=backdrop',
+    theme_song_url: '/api/v1/items/101/theme',
+    theme_song_youtube_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI',
+    tagline: 'Welcome to the real world.',
+    overview: 'A computer hacker learns the true nature of reality and his role in the war against its controllers.',
+    genres: ['Action', 'Science Fiction'],
+    release_year: 1999,
+    linked_media_type: 'movie',
+    has_metadata: true,
+    metadata_refresh_state: 'fresh',
+    artwork_updated_at: 1760923200,
+    trailer_title: 'Official Trailer',
+    trailer_url: 'https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0',
+    subtitle_tracks: [
+      {
+        index: 0,
+        label: 'EN',
+        format: 'SRT',
+        url: '/api/v1/items/101/subtitles/0',
+      },
+    ],
+    hierarchy: [],
+    children: [],
+  },
+  {
+    id: 201,
+    library_id: 2,
+    item_type: 'show',
+    display_title: 'Mock Show',
+    relative_path: 'Mock Show',
+    media_kind: 'video',
+    playable: false,
+    child_count: 1,
+    duration_ms: 2_700_000,
+    modified_at: 1760923150,
+    genres: ['Drama', 'Fantasy'],
+    has_metadata: true,
+    metadata_refresh_state: 'fresh',
+    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    subtitle_tracks: [],
+    hierarchy: [],
+    children: [
+      {
+        id: 202,
+        library_id: 2,
+        parent_id: 201,
+        item_type: 'season',
+        display_title: 'Season 1',
+        relative_path: 'Mock Show/Season 1',
+        media_kind: 'video',
+        playable: false,
+        child_count: 1,
+        season_number: 1,
+        duration_ms: 2_700_000,
+        genres: ['Drama', 'Fantasy'],
+        modified_at: 1760923150,
+      },
+    ],
+  },
+  {
+    id: 202,
+    library_id: 2,
+    parent_id: 201,
+    item_type: 'season',
+    display_title: 'Season 1',
+    relative_path: 'Mock Show/Season 1',
+    media_kind: 'video',
+    playable: false,
+    child_count: 1,
+    season_number: 1,
+    duration_ms: 2_700_000,
+    modified_at: 1760923150,
+    genres: ['Drama', 'Fantasy'],
+    has_metadata: true,
+    metadata_refresh_state: 'fresh',
+    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    subtitle_tracks: [],
+    hierarchy: [
+      {
+        id: 201,
+        library_id: 2,
+        item_type: 'show',
+        display_title: 'Mock Show',
+        relative_path: 'Mock Show',
+        media_kind: 'video',
+        playable: false,
+        child_count: 1,
+        duration_ms: 2_700_000,
+        genres: ['Drama', 'Fantasy'],
+        modified_at: 1760923150,
+      },
+    ],
+    children: [
+      {
+        id: 203,
+        library_id: 2,
+        parent_id: 202,
+        item_type: 'episode',
+        display_title: 'Mock Episode',
+        relative_path: 'Mock Show/Season 1/episode-01.mp4',
+        media_kind: 'video',
+        playable: true,
+        child_count: 0,
+        season_number: 1,
+        episode_number: 1,
+        duration_ms: 2_700_000,
+        width: 1280,
+        height: 720,
+        genres: ['Drama', 'Fantasy'],
+        modified_at: 1760923100,
+      },
+    ],
+  },
+  {
+    id: 203,
+    library_id: 2,
+    parent_id: 202,
+    item_type: 'episode',
+    display_title: 'Mock Episode',
+    relative_path: 'Mock Show/Season 1/episode-01.mp4',
+    media_kind: 'video',
+    playable: true,
+    child_count: 0,
+    season_number: 1,
+    episode_number: 1,
+    duration_ms: 2_700_000,
+    width: 1280,
+    height: 720,
+    modified_at: 1760923100,
+    file_size: 810_612_736,
+    container: 'mp4',
+    bit_rate: 1_800_000,
+    video_codec: 'h264',
+    audio_codec: 'aac',
+    metadata_json: JSON.stringify({ format: { format_name: 'mp4', duration: '2700.0' } }, null, 2),
+    metadata_updated_at: 1760923100,
+    poster_url: '/api/v1/items/203/artwork?kind=poster',
+    tagline: 'Winter is coming.',
+    overview: 'A major fantasy series entry used as mock TV metadata for the browser client.',
+    genres: ['Drama', 'Fantasy'],
+    release_year: 2011,
+    linked_media_type: 'tv',
+    has_metadata: true,
+    metadata_refresh_state: 'fresh',
+    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    subtitle_tracks: [],
+    hierarchy: [
+      {
+        id: 201,
+        library_id: 2,
+        item_type: 'show',
+        display_title: 'Mock Show',
+        relative_path: 'Mock Show',
+        media_kind: 'video',
+        playable: false,
+        child_count: 1,
+        duration_ms: 2_700_000,
+        genres: ['Drama', 'Fantasy'],
+        modified_at: 1760923150,
+      },
+      {
+        id: 202,
+        library_id: 2,
+        parent_id: 201,
+        item_type: 'season',
+        display_title: 'Season 1',
+        relative_path: 'Mock Show/Season 1',
+        media_kind: 'video',
+        playable: false,
+        child_count: 1,
+        season_number: 1,
+        duration_ms: 2_700_000,
+        genres: ['Drama', 'Fantasy'],
+        modified_at: 1760923150,
+      },
+    ],
+    children: [],
+  },
+  {
+    id: 103,
+    library_id: 3,
+    item_type: 'track',
+    display_title: 'Mock Song',
+    relative_path: 'mock-artist/mock-song.flac',
+    media_kind: 'audio',
+    playable: true,
+    child_count: 0,
+    duration_ms: 215_000,
+    modified_at: 1760923000,
+    file_size: 35_610_736,
+    container: 'flac',
+    bit_rate: 970_000,
+    audio_codec: 'flac',
+    metadata_json: JSON.stringify({ format: { format_name: 'flac', duration: '215.0' } }, null, 2),
+    metadata_updated_at: 1760923000,
+    genres: [],
+    subtitle_tracks: [],
+    hierarchy: [],
+    children: [],
+  },
+  {
+    id: 104,
+    library_id: 3,
+    item_type: 'track',
+    display_title: 'Roadtrip Mix',
+    relative_path: 'mock-artist/roadtrip-mix.mp3',
+    media_kind: 'audio',
+    playable: true,
+    child_count: 0,
+    duration_ms: 198_000,
+    modified_at: 1760922900,
+    file_size: 8_610_736,
+    container: 'mp3',
+    bit_rate: 320_000,
+    audio_codec: 'mp3',
+    metadata_json: JSON.stringify({ format: { format_name: 'mp3', duration: '198.0' } }, null, 2),
+    metadata_updated_at: 1760922900,
+    genres: [],
+    subtitle_tracks: [],
+    hierarchy: [],
+    children: [],
+  },
+];
+
+const metadataProviders: MetadataProviderStatus[] = [
+  {
+    id: 'tmdb',
+    display_name: 'TheMovieDB',
+    description: 'Primary movie and television metadata provider for Koko.',
+    supported_kinds: ['movies', 'shows'],
+    requires_api_key: true,
+    implemented: true,
+    enabled: true,
+    configured: true,
+    language: 'en-US',
+  },
+  {
+    id: 'musicbrainz',
+    display_name: 'MusicBrainz',
+    description: 'Planned music metadata provider for albums, artists, and tracks.',
+    supported_kinds: ['music'],
+    requires_api_key: false,
+    implemented: false,
+    enabled: false,
+    configured: true,
+    language: 'en-US',
+  },
+];
+
+const metadataSearchResults: Record<number, MetadataSearchResult[]> = {
+  101: [
+    {
+      provider_id: 'tmdb',
+      external_id: '603',
+      media_type: 'movie',
+      title: 'The Matrix',
+      overview: 'A computer hacker learns the true nature of reality and his role in the war against its controllers.',
+      artwork_url: 'https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+      backdrop_url: 'https://image.tmdb.org/t/p/w1280/icmmSD4vTTDKOq2vvdulafOGw93.jpg',
+      release_year: 1999,
+    },
+  ],
+  203: [
+    {
+      provider_id: 'tmdb',
+      external_id: '1399',
+      media_type: 'tv',
+      title: 'Game of Thrones',
+      overview: 'Nine noble families wage war against each other in order to gain control over the mythical land of Westeros.',
+      artwork_url: 'https://image.tmdb.org/t/p/w500/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg',
+      backdrop_url: 'https://image.tmdb.org/t/p/w1280/suopoADq0k8YZr4dQXcU6pToj6s.jpg',
+      release_year: 2011,
+    },
+  ],
+};
+
+const users: MockUserRecord[] = [
+  {
+    id: 1,
+    username: 'admin',
+    password: 'adminpass',
+    admin: true,
+  },
+];
+
+function activeMockUserId(): number | undefined {
+  const token = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim();
+  if (!token?.startsWith('mock-token-')) {
+    return undefined;
+  }
+
+  const parsed = Number(token.slice('mock-token-'.length));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+const itemMetadata: Record<number, ItemMetadataResponse> = {
+  101: {
+    item_id: 101,
+    providers: metadataProviders,
+    matches: [
+      {
+        id: 1,
+        provider_id: 'tmdb',
+        external_id: '603',
+        title: 'The Matrix',
+        overview: 'A computer hacker learns the true nature of reality and his role in the war against its controllers.',
+        artwork_url: 'https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+        backdrop_url: 'https://image.tmdb.org/t/p/w1280/icmmSD4vTTDKOq2vvdulafOGw93.jpg',
+        release_year: 1999,
+        media_type: 'movie',
+        match_state: 'linked',
+        provider_payload_json: JSON.stringify({
+          videos: {
+            results: [
+              {
+                site: 'YouTube',
+                type: 'Trailer',
+                official: true,
+                name: 'Official Trailer',
+                key: 'vKQi3bBA1y8',
+              },
+              {
+                site: 'YouTube',
+                type: 'Teaser',
+                official: false,
+                name: 'Legacy Teaser',
+                key: 'm8e-FF8MsqU',
+              },
+            ],
+          },
+        }),
+        refresh_state: 'fresh',
+        last_refreshed_at: 1760923200,
+        updated_at: 1760923200,
+      },
+    ],
+  },
+  201: {
+    item_id: 201,
+    providers: metadataProviders,
+    matches: [],
+  },
+  202: {
+    item_id: 202,
+    providers: metadataProviders,
+    matches: [],
+  },
+  203: {
+    item_id: 203,
+    providers: metadataProviders,
+    matches: [],
+  },
+  103: {
+    item_id: 103,
+    providers: metadataProviders,
+    matches: [],
+  },
+  104: {
+    item_id: 104,
+    providers: metadataProviders,
+    matches: [],
+  },
+};
+
+const playbackProgress = new Map<string, PlaybackProgressRequest>();
+playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false });
+playbackProgress.set('1:103', { position_ms: 74_000, duration_ms: 215_000, completed: false });
+
+const collections: MediaCollectionSummary[] = [
+  {
+    id: 'tmdb:2344',
+    provider_id: 'tmdb',
+    external_id: '2344',
+    name: 'The Matrix Collection',
+    overview: 'A cyberpunk science-fiction collection centered around Neo, Zion, and the war against the machines.',
+    artwork_url: 'https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
+    backdrop_url: 'https://image.tmdb.org/t/p/w1280/icmmSD4vTTDKOq2vvdulafOGw93.jpg',
+    item_ids: [101],
+    item_count: 1,
+  },
+];
+
+let settings: SettingsSnapshot = {
+  general: {
+    data_dir: 'C:/Users/Mock/AppData/Local/Koko/data',
+  },
+  media: {
+    libraries: [
+      {
+        name: 'Movies',
+        path: 'C:/Media/Movies',
+        paths: ['C:/Media/Movies', 'D:/Overflow/Movies'],
+        recursive: true,
+        kind: 'movies',
+        metadata_providers: ['tmdb'],
+      },
+      {
+        name: 'Shows',
+        path: 'C:/Media/Shows',
+        paths: ['C:/Media/Shows'],
+        recursive: true,
+        kind: 'shows',
+        metadata_providers: ['tmdb'],
+      },
+      {
+        name: 'Music',
+        path: 'C:/Media/Music',
+        paths: ['C:/Media/Music'],
+        recursive: true,
+        kind: 'music',
+        metadata_providers: [],
+      },
+    ],
+  },
+  metadata: {
+    providers: [
+      {
+        id: 'tmdb',
+        enabled: true,
+        api_key: 'mock-key',
+        language: 'en-US',
+        rate_limit_per_second: 4,
+        retry_attempts: 3,
+        retry_backoff_ms: 1000,
+      },
+    ],
+  },
+  server: {
+    use_https: false,
+    address: '127.0.0.1',
+    port: 9191,
+    cert_path: 'cert.pem',
+    key_path: 'key.pem',
+    use_custom_certs: false,
+  },
+  ffmpeg: {
+    strategy: 'external_binaries',
+    ffmpeg_path: 'ffmpeg',
+    ffprobe_path: 'ffprobe',
+  },
+};
+
+export function getMockCapabilities(): ServerCapabilities {
+  return {
+    app_name: 'Koko',
+    version: '0.0.0-dev',
+    server_url: 'http://127.0.0.1:9191',
+    https_enabled: false,
+    libraries_configured: libraries.length,
+    ffmpeg_strategy: 'external_binaries',
+    api_versions: ['v1'],
+    transcoding: {
+      ffmpeg: {
+        available: true,
+        version: 'ffmpeg mock build',
+      },
+      ffprobe: {
+        available: true,
+        version: 'ffprobe mock build',
+      },
+    },
+  };
+}
+
+export function getMockBootstrap(): AppBootstrapResponse {
+  const currentUser = users.find((user) => user.id === activeMockUserId());
+  return {
+    has_users: users.length > 0,
+    current_user: currentUser ? { id: currentUser.id, username: currentUser.username, admin: currentUser.admin } : undefined,
+  };
+}
+
+export function loginMockUser(request: LoginRequest): TokenResponse {
+  const user = users.find((candidate) => {
+    return candidate.username === request.username && candidate.password === request.password;
+  });
+  if (!user) {
+    throw new Error('401 Unauthorized');
+  }
+  return { token: `mock-token-${user.id}` };
+}
+
+export function createMockUser(request: CreateUserRequest): string {
+  const currentUser = users.find((user) => user.id === activeMockUserId());
+  if (users.length > 0 && currentUser === undefined) {
+    throw new Error('401 Unauthorized');
+  }
+
+  if (users.length > 0 && !currentUser?.admin) {
+    throw new Error('403 Forbidden');
+  }
+
+  if (users.some((user) => user.username.toLowerCase() === request.username.trim().toLowerCase())) {
+    throw new Error('409 Conflict');
+  }
+
+  users.push({
+    id: nextUserId,
+    username: request.username.trim(),
+    password: request.password,
+    pin: request.pin,
+    admin: users.length === 0 || request.admin,
+  });
+  nextUserId += 1;
+  return 'User created';
+}
+
+export function getMockUsers(): BootstrapUser[] {
+  return users.map(({ id, username, admin }) => ({ id, username, admin }));
+}
+
+export function getMockLibraries(): MediaLibrary[] {
+  syncAllMockLibraryRefreshProgress();
+  return [...libraries];
+}
+
+function syncMockLibraryRefreshProgress(libraryId: number): void {
+  const library = libraries.find((candidate) => candidate.id === libraryId);
+  if (!library) {
+    return;
+  }
+
+  const refreshableItems = items.filter((item) => item.library_id === libraryId && item.has_metadata);
+  library.metadata_refresh_total = refreshableItems.length;
+  library.metadata_refresh_pending = refreshableItems.filter((item) => item.metadata_refresh_state === 'pending').length;
+  library.metadata_refresh_failed = refreshableItems.filter((item) => item.metadata_refresh_state === 'error').length;
+  library.metadata_refresh_completed = Math.max(0, library.metadata_refresh_total - library.metadata_refresh_pending);
+}
+
+function syncAllMockLibraryRefreshProgress(): void {
+  libraries.forEach((library) => {
+    syncMockLibraryRefreshProgress(library.id);
+  });
+}
+
+export function getMockMetadataProviders(): MetadataProviderStatus[] {
+  return metadataProviders.map((provider) => ({ ...provider }));
+}
+
+export function getMockSystemActivities(): SystemActivitiesResponse {
+  const now = Math.floor(Date.now() / 1000);
+  const activities = libraries.reduce<SystemActivity[]>((entries, library) => {
+      const pendingItems = items.filter((item) => item.library_id === library.id && item.metadata_refresh_state === 'pending');
+      if (!pendingItems.length) {
+        return entries;
+      }
+
+      entries.push({
+        id: `mock-activity-library-${library.id}`,
+        category: 'metadata_refresh',
+        scope: 'library',
+        source: 'mock_refresh',
+        state: 'running',
+        label: `Refresh metadata for ${library.name}`,
+        provider_id: 'tmdb',
+        library_id: library.id,
+        item_ids: pendingItems.map((item) => item.id),
+        total_items: pendingItems.length,
+        completed_items: 0,
+        failed_items: 0,
+        queued_at: now,
+        started_at: now,
+        updated_at: now,
+      });
+
+      return entries;
+    }, []);
+
+  return {
+    generated_at: now,
+    activities,
+  };
+}
+
+export function getMockLogs(
+  level?: string,
+  moduleFilter?: string,
+  search?: string,
+  since?: string,
+  until?: string,
+  limit = 200,
+): LogEntriesResponse {
+  const sinceTime = since ? new Date(since).getTime() : Number.NaN;
+  const untilTime = until ? new Date(until).getTime() : Number.NaN;
+  const entries = [
+    {
+      timestamp: '2026-04-22T09:12:35.853-04:00',
+      level: 'INFO',
+      module: 'koko::web::routes::media',
+      source_file_path: 'src/web/routes/media.rs',
+      line_number: 540,
+      message: 'Completed TMDB metadata refresh for media item 201 "Mock Show" (show) in library 2 [Mock Show]',
+    },
+    {
+      timestamp: '2026-04-22T09:12:00.810-04:00',
+      level: 'WARN',
+      module: 'koko::web::routes::media',
+      source_file_path: 'src/web/routes/media.rs',
+      line_number: 589,
+      message: 'Failed to fetch refreshed TMDB metadata snapshot for media item 417 "Season 1" (season) in library 2 [The Simpsons/Season 1] using target tv:456:season:1 (tv_season): TMDB season lookup failed with status 404 Not Found',
+    },
+    {
+      timestamp: '2026-04-22T09:10:49.079-04:00',
+      level: 'DEBUG',
+      module: 'reqwest::connect',
+      source_file_path: 'src/connect.rs',
+      line_number: 118,
+      message: 'starting new connection: https://api.themoviedb.org/',
+    },
+  ].filter((entry) => {
+    const levelMatches = level ? entry.level.toLowerCase() === level.toLowerCase() : true;
+    const moduleMatches = moduleFilter ? entry.module.toLowerCase().includes(moduleFilter.toLowerCase()) : true;
+    const searchMatches = search
+      ? `${entry.message} ${entry.module} ${entry.source_file_path}`.toLowerCase().includes(search.toLowerCase())
+      : true;
+    const timestamp = new Date(entry.timestamp).getTime();
+    const sinceMatches = Number.isNaN(sinceTime) || timestamp >= sinceTime;
+    const untilMatches = Number.isNaN(untilTime) || timestamp <= untilTime;
+    return levelMatches && moduleMatches && searchMatches && sinceMatches && untilMatches;
+  });
+
+  return {
+    log_path: 'C:/Users/Mock/AppData/Local/Koko/data/koko.log',
+    entries: entries.slice(0, Math.max(1, limit)),
+  };
+}
+
+export function getMockItem(itemId: number): MediaItemDetail | undefined {
+  return items.find((item) => item.id === itemId);
+}
+
+export function getMockItemMetadata(itemId: number): ItemMetadataResponse | undefined {
+  return itemMetadata[itemId];
+}
+
+export function searchMockItemMetadata(itemId: number, query?: string): MetadataSearchResult[] {
+  const results = metadataSearchResults[itemId] ?? [];
+  const normalized = query?.trim().toLowerCase();
+  if (!normalized) {
+    return [...results];
+  }
+
+  return results.filter((result) => {
+    return result.title.toLowerCase().includes(normalized)
+      || result.overview?.toLowerCase().includes(normalized);
+  });
+}
+
+export function getMockPlayback(itemId: number): PlaybackDecision {
+  const item = getMockItem(itemId);
+  if (!item) {
+    throw new Error('404 Not Found');
+  }
+
+  if (!item.playable) {
+    return {
+      item_id: itemId,
+      can_direct_play: false,
+      transcode_required: false,
+      reason: 'This item is a container and cannot be played directly.',
+      stream_url: undefined,
+      mime_type: undefined,
+    };
+  }
+
+  const canDirectPlay = item.container === 'mp4' || item.container === 'mp3' || item.container === 'flac';
+  return {
+    item_id: itemId,
+    can_direct_play: canDirectPlay,
+    transcode_required: !canDirectPlay,
+    reason: canDirectPlay
+      ? 'Browser direct play is supported for this item.'
+      : 'A future FFmpeg-backed transcode path will be required for browser playback.',
+    stream_url: canDirectPlay ? `/api/v1/items/${itemId}/stream` : undefined,
+    mime_type: item.media_kind === 'video' ? 'video/mp4' : 'audio/mpeg',
+  };
+}
+
+export function getMockHome(libraryId?: number): MediaHome {
+  const filteredItems = getMockItems(libraryId);
+  const continueWatching = filteredItems.filter((item) => {
+    const userId = activeMockUserId();
+    const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
+    return Boolean(progress && !progress.completed && progress.position_ms > 0);
+  });
+  const recentlyAdded = [...filteredItems].sort((left, right) => (right.modified_at ?? 0) - (left.modified_at ?? 0));
+  const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
+
+  return {
+    library_id: libraryId,
+    shelves: [
+      { id: 'continue_watching', title: 'Continue watching', items: continueWatching.slice(0, 12) },
+      { id: 'recently_added', title: 'Recently added', items: recentlyAdded.slice(0, 12) },
+      { id: 'recommended', title: 'Recommended', items: recommended.slice(0, 12) },
+    ],
+    collections: collections.filter((collection) => collection.item_ids.some((itemId) => filteredItems.some((item) => item.id === itemId))),
+  };
+}
+
+export function getMockItems(libraryId?: number): MediaItemSummary[] {
+  return items
+    .filter((item) => (typeof libraryId === 'number' ? item.library_id === libraryId : true))
+    .map(({ file_size: _fileSize, container: _container, bit_rate: _bitRate, video_codec: _videoCodec, audio_codec: _audioCodec, metadata_json: _metadataJson, metadata_updated_at: _metadataUpdatedAt, ...summary }) => summary);
+}
+
+export function searchMockItems(query: string, libraryId?: number): MediaItemSummary[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return getMockItems(libraryId).filter((item) => {
+    return item.display_title.toLowerCase().includes(normalizedQuery)
+      || item.relative_path.toLowerCase().includes(normalizedQuery)
+      || item.media_kind.toLowerCase().includes(normalizedQuery);
+  });
+}
+
+export function getMockSettings(): SettingsResponse {
+  return {
+    settings: structuredClone(settings),
+    settings_path: 'C:/Users/Mock/AppData/Local/Koko/settings.yml',
+  };
+}
+
+export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResponse {
+  settings = structuredClone(nextSettings);
+  return getMockSettings();
+}
+
+export function addMockLibrary(request: { library: MediaLibrarySettings }): SettingsResponse {
+  const normalizedLibrary = structuredClone(request.library);
+  normalizedLibrary.paths = normalizedLibrary.paths.length ? normalizedLibrary.paths : [normalizedLibrary.path].filter(Boolean);
+  normalizedLibrary.path = normalizedLibrary.paths[0] ?? normalizedLibrary.path;
+  settings.media.libraries.push(normalizedLibrary);
+  libraries.push({
+    id: nextLibraryId,
+    name: normalizedLibrary.name,
+    path: normalizedLibrary.path,
+    paths: [...normalizedLibrary.paths],
+    recursive: normalizedLibrary.recursive,
+    kind: normalizedLibrary.kind,
+    status: 'available',
+    scan_revision: 1,
+    last_scanned_at: Math.floor(Date.now() / 1000),
+    total_files: 0,
+    video_files: 0,
+    audio_files: 0,
+    image_files: 0,
+    book_files: 0,
+    other_files: 0,
+    metadata_refresh_total: 0,
+    metadata_refresh_pending: 0,
+    metadata_refresh_completed: 0,
+    metadata_refresh_failed: 0,
+  });
+  nextLibraryId += 1;
+  return getMockSettings();
+}
+
+export function removeMockLibrary(libraryIndex: number): SettingsResponse {
+  if (libraryIndex < 0 || libraryIndex >= settings.media.libraries.length) {
+    throw new Error('404 Not Found');
+  }
+
+  const [removedLibrary] = settings.media.libraries.splice(libraryIndex, 1);
+  const libraryMatchIndex = libraries.findIndex((library) => {
+    return library.name === removedLibrary.name && library.path === removedLibrary.path;
+  });
+  if (libraryMatchIndex >= 0) {
+    libraries.splice(libraryMatchIndex, 1);
+  }
+
+  return getMockSettings();
+}
+
+export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProgressRequest): void {
+  const userId = activeMockUserId();
+  if (userId !== undefined) {
+    playbackProgress.set(`${userId}:${itemId}`, payload);
+  }
+}
+
+export function linkMockItemMetadata(itemId: number, request: LinkMetadataRequest): ItemMetadataMatch {
+  const candidate = (metadataSearchResults[itemId] ?? []).find((result) => {
+    return result.provider_id === request.provider_id
+      && result.external_id === request.external_id
+      && result.media_type === request.media_type;
+  });
+  if (!candidate) {
+    throw new Error('404 Not Found');
+  }
+
+  const linkedMatch: ItemMetadataMatch = {
+    id: Date.now(),
+    provider_id: candidate.provider_id,
+    external_id: candidate.external_id,
+    title: candidate.title,
+    overview: candidate.overview,
+    artwork_url: candidate.artwork_url,
+    backdrop_url: candidate.backdrop_url,
+    release_year: candidate.release_year,
+    media_type: candidate.media_type,
+    match_state: 'linked',
+    provider_payload_json: JSON.stringify(candidate, null, 2),
+    updated_at: Math.floor(Date.now() / 1000),
+  };
+
+  itemMetadata[itemId] = {
+    item_id: itemId,
+    providers: metadataProviders,
+    matches: [linkedMatch],
+  };
+  const item = items.find((candidate) => candidate.id === itemId);
+  if (item) {
+    item.display_title = candidate.title;
+  }
+
+  return linkedMatch;
+}
+
+export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
+  const response = itemMetadata[itemId];
+  const existingMatch = response?.matches[0];
+  if (!existingMatch) {
+    throw new Error('404 Not Found');
+  }
+
+  const pendingMatch: ItemMetadataMatch = {
+    ...existingMatch,
+    refresh_state: 'pending',
+    updated_at: Math.floor(Date.now() / 1000),
+  };
+
+  itemMetadata[itemId] = {
+    ...response,
+    matches: [pendingMatch],
+  };
+
+  const item = items.find((candidate) => candidate.id === itemId);
+  if (item) {
+    item.metadata_refresh_state = 'pending';
+    syncMockLibraryRefreshProgress(item.library_id);
+
+    window.setTimeout(() => {
+      const source = (metadataSearchResults[itemId] ?? []).find((candidate) => {
+        return candidate.provider_id === existingMatch.provider_id
+          && candidate.external_id === existingMatch.external_id
+          && candidate.media_type === existingMatch.media_type;
+      });
+      const refreshedAt = Math.floor(Date.now() / 1000);
+      const refreshedMatch: ItemMetadataMatch = {
+        ...pendingMatch,
+        title: source?.title ?? existingMatch.title,
+        overview: source?.overview ?? existingMatch.overview,
+        artwork_url: source?.artwork_url ?? existingMatch.artwork_url,
+        backdrop_url: source?.backdrop_url ?? existingMatch.backdrop_url,
+        release_year: source?.release_year ?? existingMatch.release_year,
+        refresh_state: 'fresh',
+        updated_at: refreshedAt,
+      };
+
+      itemMetadata[itemId] = {
+        ...response,
+        matches: [refreshedMatch],
+      };
+      item.display_title = refreshedMatch.title ?? item.display_title;
+      item.overview = refreshedMatch.overview ?? item.overview;
+      item.release_year = refreshedMatch.release_year ?? item.release_year;
+      item.linked_media_type = refreshedMatch.media_type ?? item.linked_media_type;
+      item.metadata_refresh_state = 'fresh';
+      item.artwork_updated_at = refreshedAt;
+      syncMockLibraryRefreshProgress(item.library_id);
+    }, 900);
+  }
+
+  return pendingMatch;
+}
+
+export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
+  const library = libraries.find((candidate) => candidate.id === libraryId);
+  if (!library) {
+    throw new Error('404 Not Found');
+  }
+
+  const refreshableItems = items.filter((item) => item.library_id === libraryId && item.has_metadata);
+  refreshableItems.forEach((item) => {
+    item.metadata_refresh_state = 'pending';
+    const response = itemMetadata[item.id];
+    const existingMatch = response?.matches[0];
+    if (existingMatch && response) {
+      itemMetadata[item.id] = {
+        ...response,
+        matches: [{
+          ...existingMatch,
+          refresh_state: 'pending',
+          updated_at: Math.floor(Date.now() / 1000),
+        }],
+      };
+    }
+  });
+  syncMockLibraryRefreshProgress(libraryId);
+
+  window.setTimeout(() => {
+    const refreshedAt = Math.floor(Date.now() / 1000);
+    refreshableItems.forEach((item) => {
+      item.metadata_refresh_state = 'fresh';
+      item.artwork_updated_at = refreshedAt;
+      const response = itemMetadata[item.id];
+      const existingMatch = response?.matches[0];
+      if (existingMatch && response) {
+        itemMetadata[item.id] = {
+          ...response,
+          matches: [{
+            ...existingMatch,
+            refresh_state: 'fresh',
+            updated_at: refreshedAt,
+          }],
+        };
+      }
+    });
+    syncMockLibraryRefreshProgress(libraryId);
+  }, 1200);
+
+  return { ...library };
+}
+

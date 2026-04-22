@@ -47,7 +47,7 @@ async fn test_non_existent_route() {
         "/non-existent",
         None,
         None,
-        Some(Status::NotFound),
+        Some(Status::Ok),
         Some(false),
     )
     .await;

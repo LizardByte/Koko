@@ -12,7 +12,7 @@ use rocket_okapi::{rapidoc::*, swagger_ui::*};
 
 // local imports
 use crate::certs;
-use crate::config::GLOBAL_SETTINGS;
+use crate::config::current_settings;
 use crate::db::{DbConn, Migrate};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
@@ -24,17 +24,19 @@ pub fn rocket() -> rocket::Rocket<rocket::Build> {
 
 /// Build the web server with a custom database path (primarily for testing).
 pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<rocket::Build> {
+    let settings = current_settings();
+
     // the cert path changes depending on if the user wants to use custom certs
     let (cert_path, key_path);
-    if !GLOBAL_SETTINGS.server.use_custom_certs {
-        cert_path = format!("{}/cert.pem", GLOBAL_SETTINGS.general.data_dir);
-        key_path = format!("{}/key.pem", GLOBAL_SETTINGS.general.data_dir);
+    if !settings.server.use_custom_certs {
+        cert_path = format!("{}/cert.pem", settings.general.data_dir);
+        key_path = format!("{}/key.pem", settings.general.data_dir);
     } else {
-        cert_path = GLOBAL_SETTINGS.server.cert_path.clone();
-        key_path = GLOBAL_SETTINGS.server.key_path.clone();
+        cert_path = settings.server.cert_path.clone();
+        key_path = settings.server.key_path.clone();
     }
 
-    if GLOBAL_SETTINGS.server.use_https {
+    if settings.server.use_https {
         certs::ensure_certificates_exist(cert_path.clone(), key_path.clone());
     }
 
@@ -50,11 +52,11 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                 }
             },
         ))
-        .merge(("address", GLOBAL_SETTINGS.server.address.clone()))
-        .merge(("port", GLOBAL_SETTINGS.server.port))
+        .merge(("address", settings.server.address.clone()))
+        .merge(("port", settings.server.port))
         .merge((
             "tls",
-            if GLOBAL_SETTINGS.server.use_https {
+            if settings.server.use_https {
                 Some(TlsConfig::from_paths(cert_path, key_path))
             } else {
                 None
@@ -64,7 +66,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
     rocket::custom(figment)
         .attach(DbConn::fairing())
         .attach(Migrate)
-        .mount("/", routes::all_routes())
+        .mount("/", routes::api_routes())
         .mount(
             "/swagger-ui/",
             make_swagger_ui(&SwaggerUIConfig {
@@ -90,6 +92,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                 ..Default::default()
             }),
         )
+        .mount("/", routes::spa_routes())
 }
 
 /// Launch the web server with graceful shutdown support.

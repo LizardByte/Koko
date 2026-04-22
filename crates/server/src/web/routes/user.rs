@@ -1,13 +1,14 @@
 // lib imports
-use diesel::{QueryDsl, RunQueryDsl};
+use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper};
+use rocket::get;
 use rocket::http::Status;
 use rocket::post;
-use rocket::serde::{Deserialize, json::Json};
+use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket_okapi::JsonSchema;
 use rocket_okapi::openapi;
 
 // local imports
-use crate::auth::AdminGuard;
+use crate::auth::{AdminGuard, UserGuard};
 use crate::db::DbConn;
 use crate::db::models::User;
 
@@ -17,6 +18,91 @@ pub struct CreateUserForm {
     pub password: String,
     pub pin: Option<String>,
     pub admin: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct UserSummary {
+    pub id: i32,
+    pub username: String,
+    pub admin: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct BootstrapResponse {
+    pub has_users: bool,
+    pub current_user: Option<UserSummary>,
+}
+
+#[openapi(tag = "Users")]
+#[get("/api/v1/bootstrap")]
+pub async fn get_bootstrap(
+    db: DbConn,
+    user_guard: Option<UserGuard>,
+) -> Result<Json<BootstrapResponse>, Status> {
+    use crate::db::schema::users::dsl::*;
+
+    let has_users = db
+        .run(|conn| users.count().get_result::<i64>(conn))
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        > 0;
+
+    let current_user = if let Some(user_guard) = user_guard {
+        let user_id = user_guard
+            .claims()
+            .sub
+            .parse::<i32>()
+            .map_err(|_| Status::Unauthorized)?;
+        db.run(move |conn| {
+            users
+                .filter(id.eq(user_id))
+                .select(User::as_select())
+                .first::<User>(conn)
+                .optional()
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        .map(|user| UserSummary {
+            id: user.id,
+            username: user.username,
+            admin: user.admin,
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(BootstrapResponse {
+        has_users,
+        current_user,
+    }))
+}
+
+#[openapi(tag = "Users")]
+#[get("/api/v1/users")]
+pub async fn list_users(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+) -> Result<Json<Vec<UserSummary>>, Status> {
+    use crate::db::schema::users::dsl::*;
+
+    let users_list = db
+        .run(|conn| {
+            users
+                .order(username.asc())
+                .select(User::as_select())
+                .load::<User>(conn)
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+
+    Ok(Json(users_list
+        .into_iter()
+        .map(|user| UserSummary {
+            id: user.id,
+            username: user.username,
+            admin: user.admin,
+        })
+        .collect()))
 }
 
 #[openapi(tag = "Users")]
@@ -68,7 +154,7 @@ pub async fn create_user(
         username: form.username,
         password: hashed_password,
         pin: hashed_pin,
-        admin: form.admin,
+        admin: existing_count == 0 || form.admin,
     };
 
     // Insert new user

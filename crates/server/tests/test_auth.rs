@@ -6,13 +6,7 @@ use rstest::rstest;
 
 // local imports
 use koko::auth::{
-    AdminGuard,
-    AuthGuard,
-    UserGuard,
-    create_token,
-    decode_token,
-    hash_password,
-    verify_password,
+    AdminGuard, AuthGuard, UserGuard, create_token, decode_token, hash_password, verify_password,
 };
 
 #[rstest]

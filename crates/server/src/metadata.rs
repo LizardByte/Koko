@@ -1,13 +1,17 @@
 //! Metadata-provider registry and persistence helpers.
 
 // standard imports
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 // lib imports
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection};
+use diesel::{
+    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection,
+};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::StatusCode;
@@ -30,6 +34,7 @@ use crate::db::models::{
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
+const DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
@@ -37,7 +42,8 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .build()
         .expect("Failed to build shared HTTP client")
 });
-static TMDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> = Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
+static TMDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
+    Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
 
 /// High-level descriptor for a metadata provider.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -218,10 +224,10 @@ struct ParsedMovieName {
 }
 
 static BRACED_TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{([^}]*)}").unwrap());
-static YEAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(19\d{2}|20\d{2}|21\d{2})\b").unwrap());
-static SPLIT_SUFFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\s*[-–]\s*(cd|disc|disk|dvd|part|pt)\s*\d+\s*$").unwrap()
-});
+static YEAR_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(19\d{2}|20\d{2}|21\d{2})\b").unwrap());
+static SPLIT_SUFFIX_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\s*[-–]\s*(cd|disc|disk|dvd|part|pt)\s*\d+\s*$").unwrap());
 static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|hdr|dv|webrip|web[- ]dl|bluray|brrip|dvdrip|remux|proper|repack|extended|unrated|criterion|aac|dts|truehd|atmos)\b",
@@ -255,7 +261,10 @@ impl MetadataRegistry {
 
     /// Return all built-in provider descriptors.
     pub fn descriptors(&self) -> Vec<MetadataProviderDescriptor> {
-        self.providers.iter().map(|provider| provider.descriptor()).collect()
+        self.providers
+            .iter()
+            .map(|provider| provider.descriptor())
+            .collect()
     }
 }
 
@@ -267,7 +276,10 @@ impl Default for MetadataRegistry {
 
 /// Return provider statuses after applying the current settings.
 pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProviderStatus> {
-    let configured_settings: std::collections::HashMap<MetadataProviderId, MetadataProviderSettings> = settings
+    let configured_settings: std::collections::HashMap<
+        MetadataProviderId,
+        MetadataProviderSettings,
+    > = settings
         .providers
         .iter()
         .cloned()
@@ -279,7 +291,10 @@ pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProvid
         .into_iter()
         .map(|descriptor| {
             let setting = configured_settings.get(&descriptor.id).cloned();
-            let enabled = setting.as_ref().map(|provider| provider.enabled).unwrap_or(false);
+            let enabled = setting
+                .as_ref()
+                .map(|provider| provider.enabled)
+                .unwrap_or(false);
             let language = setting
                 .as_ref()
                 .map(|provider| provider.language.clone())
@@ -324,6 +339,38 @@ pub fn get_item_metadata_summaries(
     Ok(rows.into_iter().map(to_item_metadata_summary).collect())
 }
 
+/// Return primary metadata links that were left pending without an active in-memory worker.
+pub fn list_pending_item_metadata_links(
+    conn: &mut SqliteConnection
+) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+
+    metadata_links_dsl::item_metadata_links
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::refresh_state.eq("pending"))
+        .order(metadata_links_dsl::updated_at.asc())
+        .select(ItemMetadataLink::as_select())
+        .load::<ItemMetadataLink>(conn)
+}
+
+/// Return primary metadata links whose automatic refresh interval has elapsed.
+pub fn list_due_item_metadata_links(
+    conn: &mut SqliteConnection,
+    now: i64,
+    limit: i64,
+) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+
+    metadata_links_dsl::item_metadata_links
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::refresh_state.ne("pending"))
+        .filter(metadata_links_dsl::next_refresh_at.le(now))
+        .order(metadata_links_dsl::next_refresh_at.asc())
+        .limit(limit)
+        .select(ItemMetadataLink::as_select())
+        .load::<ItemMetadataLink>(conn)
+}
+
 /// Search TMDB for metadata candidates using the current provider configuration.
 pub async fn search_tmdb(
     settings: &MetadataSettings,
@@ -354,7 +401,9 @@ pub async fn search_tmdb(
                 title,
                 overview: item.overview,
                 artwork_url: item.poster_path.map(|path| tmdb_image_url(&path, "w500")),
-                backdrop_url: item.backdrop_path.map(|path| tmdb_image_url(&path, "w1280")),
+                backdrop_url: item
+                    .backdrop_path
+                    .map(|path| tmdb_image_url(&path, "w1280")),
                 release_year: extract_release_year(item.release_date.or(item.first_air_date)),
             })
         })
@@ -507,7 +556,10 @@ pub async fn fetch_tmdb_season_metadata_snapshot(
         provider_id: MetadataProviderId::Tmdb,
         external_id: tmdb_season_external_id(show_external_id, season_number),
         media_type: Some("tv_season".into()),
-        title: parsed.get("name").and_then(Value::as_str).map(ToOwned::to_owned),
+        title: parsed
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         overview: parsed
             .get("overview")
             .and_then(Value::as_str)
@@ -554,7 +606,10 @@ pub async fn fetch_tmdb_episode_metadata_snapshot(
         provider_id: MetadataProviderId::Tmdb,
         external_id: tmdb_episode_external_id(show_external_id, season_number, episode_number),
         media_type: Some("tv_episode".into()),
-        title: parsed.get("name").and_then(Value::as_str).map(ToOwned::to_owned),
+        title: parsed
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         overview: parsed
             .get("overview")
             .and_then(Value::as_str)
@@ -580,7 +635,19 @@ pub async fn fetch_themerr_youtube_theme_url(
     tmdb_media_type: &str,
     external_id: &str,
 ) -> Result<Option<String>, String> {
+    fetch_themerr_youtube_theme_url_for_database(tmdb_media_type, "themoviedb", external_id).await
+}
+
+/// Resolve a ThemerrDB YouTube theme-song URL for one media item using a specific external id database.
+pub async fn fetch_themerr_youtube_theme_url_for_database(
+    tmdb_media_type: &str,
+    database_id: &str,
+    external_id: &str,
+) -> Result<Option<String>, String> {
     let Some(database_path) = themerr_database_path_for_tmdb_media_type(tmdb_media_type) else {
+        return Ok(None);
+    };
+    let Some(database_id) = themerr_database_id(database_id) else {
         return Ok(None);
     };
     let normalized_external_id = external_id.trim();
@@ -590,8 +657,8 @@ pub async fn fetch_themerr_youtube_theme_url(
 
     let response = reqwest::Client::new()
         .get(format!(
-            "{}/{}/{}.json",
-            THEMERR_API_BASE, database_path, normalized_external_id
+            "{}/{}/{}/{}.json",
+            THEMERR_API_BASE, database_path, database_id, normalized_external_id
         ))
         .send()
         .await
@@ -617,6 +684,21 @@ pub fn upsert_item_metadata_snapshot(
     item_id: i32,
     snapshot: &StoredMetadataSnapshot,
 ) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    upsert_item_metadata_snapshot_with_refresh_interval(
+        conn,
+        item_id,
+        snapshot,
+        Some(DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS),
+    )
+}
+
+/// Upsert a stored metadata snapshot using an explicit automatic refresh interval.
+pub fn upsert_item_metadata_snapshot_with_refresh_interval(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    snapshot: &StoredMetadataSnapshot,
+    refresh_interval_seconds: Option<i64>,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
     configure_sqlite_connection(conn)?;
     retry_sqlite_write(|| {
@@ -626,6 +708,32 @@ pub fn upsert_item_metadata_snapshot(
             .select(ItemMetadataLink::as_select())
             .first(conn)
             .optional()?;
+        let keep_cached_artwork = existing
+            .as_ref()
+            .map(
+                |row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    ) && row.artwork_url == snapshot.artwork_url
+                },
+            )
+            .unwrap_or(false);
+        let keep_cached_backdrop = existing
+            .as_ref()
+            .map(
+                |row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    ) && row.backdrop_url == snapshot.backdrop_url
+                },
+            )
+            .unwrap_or(false);
 
         let payload = NewItemMetadataLink {
             media_item_id: item_id,
@@ -637,7 +745,12 @@ pub fn upsert_item_metadata_snapshot(
                 .provider_payload_json
                 .as_deref()
                 .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
-                .and_then(|payload| payload.get("tagline").and_then(Value::as_str).map(str::to_string)),
+                .and_then(|payload| {
+                    payload
+                        .get("tagline")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                }),
             artwork_url: snapshot.artwork_url.clone(),
             backdrop_url: snapshot.backdrop_url.clone(),
             release_year: snapshot.release_year,
@@ -645,20 +758,36 @@ pub fn upsert_item_metadata_snapshot(
             relation_kind: "primary".into(),
             match_state: "linked".into(),
             provider_payload_json: snapshot.provider_payload_json.clone(),
-            cached_artwork_path: existing.as_ref().and_then(|row| row.cached_artwork_path.clone()),
-            cached_backdrop_path: existing.as_ref().and_then(|row| row.cached_backdrop_path.clone()),
+            cached_artwork_path: if keep_cached_artwork {
+                existing
+                    .as_ref()
+                    .and_then(|row| row.cached_artwork_path.clone())
+            } else {
+                None
+            },
+            cached_backdrop_path: if keep_cached_backdrop {
+                existing
+                    .as_ref()
+                    .and_then(|row| row.cached_backdrop_path.clone())
+            } else {
+                None
+            },
             refresh_state: "fresh".into(),
-            refresh_interval_seconds: 7 * 24 * 60 * 60,
+            refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
             last_refreshed_at: Some(current_timestamp()),
-            next_refresh_at: Some(current_timestamp() + (7 * 24 * 60 * 60)),
+            next_refresh_at: refresh_interval_seconds
+                .map(|interval| current_timestamp() + interval),
             refresh_error: None,
             updated_at: Some(current_timestamp()),
         };
 
         if let Some(existing) = existing {
-            diesel::update(metadata_links_dsl::item_metadata_links.filter(metadata_links_dsl::id.eq(existing.id)))
-                .set(&payload)
-                .execute(conn)?;
+            diesel::update(
+                metadata_links_dsl::item_metadata_links
+                    .filter(metadata_links_dsl::id.eq(existing.id)),
+            )
+            .set(&payload)
+            .execute(conn)?;
         } else {
             diesel::insert_into(metadata_links_dsl::item_metadata_links)
                 .values(&payload)
@@ -696,6 +825,19 @@ pub fn set_item_metadata_refresh_state(
             .select(ItemMetadataLink::as_select())
             .first(conn)
             .optional()?;
+        let keep_cached_paths = existing
+            .as_ref()
+            .map(
+                |row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        provider_id.as_storage_value(),
+                        external_id,
+                        media_type,
+                    )
+                },
+            )
+            .unwrap_or(false);
 
         let payload = NewItemMetadataLink {
             media_item_id: item_id,
@@ -718,14 +860,28 @@ pub fn set_item_metadata_refresh_state(
                 .as_ref()
                 .map(|row| row.match_state.clone())
                 .unwrap_or_else(|| "linked".into()),
-            provider_payload_json: existing.as_ref().and_then(|row| row.provider_payload_json.clone()),
-            cached_artwork_path: existing.as_ref().and_then(|row| row.cached_artwork_path.clone()),
-            cached_backdrop_path: existing.as_ref().and_then(|row| row.cached_backdrop_path.clone()),
+            provider_payload_json: existing
+                .as_ref()
+                .and_then(|row| row.provider_payload_json.clone()),
+            cached_artwork_path: if keep_cached_paths {
+                existing
+                    .as_ref()
+                    .and_then(|row| row.cached_artwork_path.clone())
+            } else {
+                None
+            },
+            cached_backdrop_path: if keep_cached_paths {
+                existing
+                    .as_ref()
+                    .and_then(|row| row.cached_backdrop_path.clone())
+            } else {
+                None
+            },
             refresh_state: refresh_state.to_string(),
             refresh_interval_seconds: existing
                 .as_ref()
                 .map(|row| row.refresh_interval_seconds)
-                .unwrap_or(7 * 24 * 60 * 60),
+                .unwrap_or(DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS),
             last_refreshed_at: existing.as_ref().and_then(|row| row.last_refreshed_at),
             next_refresh_at: existing.as_ref().and_then(|row| row.next_refresh_at),
             refresh_error: refresh_error.map(str::to_string),
@@ -733,9 +889,12 @@ pub fn set_item_metadata_refresh_state(
         };
 
         if let Some(existing) = existing {
-            diesel::update(metadata_links_dsl::item_metadata_links.filter(metadata_links_dsl::id.eq(existing.id)))
-                .set(&payload)
-                .execute(conn)?;
+            diesel::update(
+                metadata_links_dsl::item_metadata_links
+                    .filter(metadata_links_dsl::id.eq(existing.id)),
+            )
+            .set(&payload)
+            .execute(conn)?;
         } else {
             diesel::insert_into(metadata_links_dsl::item_metadata_links)
                 .values(&payload)
@@ -752,6 +911,17 @@ pub fn set_item_metadata_refresh_state(
     })
 }
 
+fn metadata_refresh_target_changed(
+    existing: &ItemMetadataLink,
+    provider_id: &str,
+    external_id: &str,
+    media_type: Option<&str>,
+) -> bool {
+    existing.provider_id != provider_id
+        || existing.external_id != external_id
+        || existing.media_type.as_deref() != media_type
+}
+
 /// Return collection summaries derived from stored metadata for the requested library scope.
 pub fn list_metadata_collection_summaries(
     conn: &mut SqliteConnection,
@@ -765,7 +935,9 @@ pub fn list_metadata_collection_summaries(
     if let Some(library_id) = library_id {
         item_query = item_query.filter(media_items_dsl::library_id.eq(library_id));
     }
-    let items = item_query.select(MediaItem::as_select()).load::<MediaItem>(conn)?;
+    let items = item_query
+        .select(MediaItem::as_select())
+        .load::<MediaItem>(conn)?;
     if items.is_empty() {
         return Ok(Vec::new());
     }
@@ -788,7 +960,10 @@ pub fn list_metadata_collection_summaries(
         .map(|link| (link.id, link))
         .collect::<HashMap<_, _>>();
     let collection_rows = collection_dsl::item_metadata_collections
-        .filter(collection_dsl::metadata_link_id.eq_any(links_by_id.keys().copied().collect::<Vec<_>>()))
+        .filter(
+            collection_dsl::metadata_link_id
+                .eq_any(links_by_id.keys().copied().collect::<Vec<_>>()),
+        )
         .select(ItemMetadataCollection::as_select())
         .load::<ItemMetadataCollection>(conn)?;
 
@@ -802,7 +977,10 @@ pub fn list_metadata_collection_summaries(
         };
 
         grouped
-            .entry(format!("{}:{}", collection.provider_id, collection.external_id))
+            .entry(format!(
+                "{}:{}",
+                collection.provider_id, collection.external_id
+            ))
             .and_modify(|(_, item_ids)| {
                 item_ids.insert(root_id);
             })
@@ -844,6 +1022,7 @@ pub fn get_primary_item_metadata_link(
 
     metadata_links_dsl::item_metadata_links
         .filter(metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
         .order(metadata_links_dsl::updated_at.desc())
         .select(ItemMetadataLink::as_select())
         .first(conn)
@@ -943,7 +1122,12 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         trailer_url: parsed_payload
             .as_ref()
             .and_then(tmdb_trailer_entry)
-            .and_then(|entry| entry.get("site").and_then(Value::as_str).zip(entry.get("key").and_then(Value::as_str)))
+            .and_then(|entry| {
+                entry
+                    .get("site")
+                    .and_then(Value::as_str)
+                    .zip(entry.get("key").and_then(Value::as_str))
+            })
             .and_then(|(site, key)| youtube_embed_url(site, key)),
     }
 }
@@ -959,27 +1143,32 @@ pub async fn persist_item_metadata_assets(
 
     if let Some(payload_json) = &snapshot.provider_payload_json {
         let metadata_file_name = format!("{}.json", snapshot.provider_id.as_storage_value());
-        fs::write(item_dir.join(metadata_file_name), payload_json).map_err(|error| error.to_string())?;
+        fs::write(item_dir.join(metadata_file_name), payload_json)
+            .map_err(|error| error.to_string())?;
     }
 
+    let poster_cache_key = format!("{}_poster", snapshot.provider_id.as_storage_value());
     let poster_path = if let Some(url) = &snapshot.artwork_url {
         try_cache_item_artwork(
             url,
             &item_dir,
-            &format!("{}_poster", snapshot.provider_id.as_storage_value()),
+            &poster_cache_key,
         )
         .await
     } else {
+        purge_stale_cached_artwork_files(&item_dir, &poster_cache_key, None)?;
         None
     };
+    let backdrop_cache_key = format!("{}_backdrop", snapshot.provider_id.as_storage_value());
     let backdrop_path = if let Some(url) = &snapshot.backdrop_url {
         try_cache_item_artwork(
             url,
             &item_dir,
-            &format!("{}_backdrop", snapshot.provider_id.as_storage_value()),
+            &backdrop_cache_key,
         )
         .await
     } else {
+        purge_stale_cached_artwork_files(&item_dir, &backdrop_cache_key, None)?;
         None
     };
 
@@ -998,14 +1187,26 @@ pub fn update_cached_artwork_path(
     retry_sqlite_write(|| {
         match kind {
             ArtworkKind::Poster => {
-                diesel::update(metadata_links_dsl::item_metadata_links.filter(metadata_links_dsl::id.eq(link_id)))
-                    .set(metadata_links_dsl::cached_artwork_path.eq(cache_path.to_string_lossy().to_string()))
-                    .execute(conn)?;
+                diesel::update(
+                    metadata_links_dsl::item_metadata_links
+                        .filter(metadata_links_dsl::id.eq(link_id)),
+                )
+                .set(
+                    metadata_links_dsl::cached_artwork_path
+                        .eq(cache_path.to_string_lossy().to_string()),
+                )
+                .execute(conn)?;
             }
             ArtworkKind::Backdrop => {
-                diesel::update(metadata_links_dsl::item_metadata_links.filter(metadata_links_dsl::id.eq(link_id)))
-                    .set(metadata_links_dsl::cached_backdrop_path.eq(cache_path.to_string_lossy().to_string()))
-                    .execute(conn)?;
+                diesel::update(
+                    metadata_links_dsl::item_metadata_links
+                        .filter(metadata_links_dsl::id.eq(link_id)),
+                )
+                .set(
+                    metadata_links_dsl::cached_backdrop_path
+                        .eq(cache_path.to_string_lossy().to_string()),
+                )
+                .execute(conn)?;
             }
         }
 
@@ -1040,12 +1241,13 @@ pub async fn cache_artwork(
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
 
-    let extension = Path::new(url)
-        .extension()
+    let cache_path = expected_artwork_cache_path(url, cache_dir, cache_key);
+    let file_name = cache_path
+        .file_name()
         .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("jpg");
-    let cache_path = cache_dir.join(format!("{}.{}", sanitize_cache_key(cache_key), extension));
+        .ok_or_else(|| "Invalid artwork cache file name".to_string())?
+        .to_string();
+    purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
     if cache_path.is_file() {
         return Ok(cache_path);
     }
@@ -1061,6 +1263,21 @@ pub async fn cache_artwork(
     Ok(cache_path)
 }
 
+/// Return the deterministic on-disk path for a cached artwork URL.
+pub fn expected_artwork_cache_path(
+    url: &str,
+    cache_dir: &Path,
+    cache_key: &str,
+) -> PathBuf {
+    let cache_file_name = format!(
+        "{}-{:016x}.{}",
+        sanitize_cache_key(cache_key),
+        stable_artwork_url_hash(url),
+        artwork_url_extension(url)
+    );
+    cache_dir.join(cache_file_name)
+}
+
 struct TmdbMetadataProvider;
 struct MusicBrainzMetadataProvider;
 struct OpenLibraryMetadataProvider;
@@ -1072,7 +1289,10 @@ impl MetadataProvider for TmdbMetadataProvider {
             id: MetadataProviderId::Tmdb,
             display_name: "TheMovieDB".into(),
             description: "Primary movie and television metadata provider for Koko.".into(),
-            supported_kinds: vec![MediaLibraryKind::Movies, MediaLibraryKind::Shows],
+            supported_kinds: vec![
+                MediaLibraryKind::Movies,
+                MediaLibraryKind::Shows,
+            ],
             requires_api_key: true,
             implemented: true,
         }
@@ -1214,8 +1434,11 @@ async fn tmdb_get_text(
                 let retryable = rate_limited || status.is_server_error();
                 if retryable && attempt < retry_attempts {
                     let attempt_number = attempt + 1;
-                    let multiplier = 1_u32.checked_shl(u32::try_from(attempt).unwrap_or(0)).unwrap_or(u32::MAX);
-                    let backoff = retry_after.unwrap_or_else(|| base_backoff.saturating_mul(multiplier));
+                    let multiplier = 1_u32
+                        .checked_shl(u32::try_from(attempt).unwrap_or(0))
+                        .unwrap_or(u32::MAX);
+                    let backoff =
+                        retry_after.unwrap_or_else(|| base_backoff.saturating_mul(multiplier));
                     log::warn!(
                         "TMDB request retry scheduled for {} after status {}{}{} (attempt {}/{} in {} ms)",
                         context,
@@ -1241,7 +1464,9 @@ async fn tmdb_get_text(
             Err(error) => {
                 if attempt < retry_attempts {
                     let attempt_number = attempt + 1;
-                    let multiplier = 1_u32.checked_shl(u32::try_from(attempt).unwrap_or(0)).unwrap_or(u32::MAX);
+                    let multiplier = 1_u32
+                        .checked_shl(u32::try_from(attempt).unwrap_or(0))
+                        .unwrap_or(u32::MAX);
                     let backoff = base_backoff.saturating_mul(multiplier);
                     log::warn!(
                         "TMDB request retry scheduled for {} after transport error: {} (attempt {}/{} in {} ms)",
@@ -1273,7 +1498,8 @@ where
     T: serde::de::DeserializeOwned,
 {
     let payload = tmdb_get_text(provider, path, query, context).await?;
-    serde_json::from_str::<T>(&payload).map_err(|error| format!("TMDB {} returned invalid JSON: {}", context, error))
+    serde_json::from_str::<T>(&payload)
+        .map_err(|error| format!("TMDB {} returned invalid JSON: {}", context, error))
 }
 
 fn parse_retry_after_seconds(value: &str) -> Option<u64> {
@@ -1315,8 +1541,14 @@ where
 
 fn is_sqlite_locked_error(error: &diesel::result::Error) -> bool {
     match error {
-        diesel::result::Error::DatabaseError(_, info) => info.message().to_ascii_lowercase().contains("database is locked"),
-        _ => error.to_string().to_ascii_lowercase().contains("database is locked"),
+        diesel::result::Error::DatabaseError(_, info) => info
+            .message()
+            .to_ascii_lowercase()
+            .contains("database is locked"),
+        _ => error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("database is locked"),
     }
 }
 
@@ -1354,28 +1586,48 @@ fn tmdb_trailer_entry(payload: &Value) -> Option<&Value> {
         .find(|entry| {
             entry.get("site").and_then(Value::as_str) == Some("YouTube")
                 && entry.get("type").and_then(Value::as_str) == Some("Trailer")
-                && entry.get("official").and_then(Value::as_bool).unwrap_or(false)
+                && entry
+                    .get("official")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
         })
         .or_else(|| {
             results.iter().find(|entry| {
                 entry.get("site").and_then(Value::as_str) == Some("YouTube")
-                    && matches!(entry.get("type").and_then(Value::as_str), Some("Trailer" | "Teaser"))
+                    && matches!(
+                        entry.get("type").and_then(Value::as_str),
+                        Some("Trailer" | "Teaser")
+                    )
             })
         })
 }
 
-fn youtube_embed_url(site: &str, key: &str) -> Option<String> {
+fn youtube_embed_url(
+    site: &str,
+    key: &str,
+) -> Option<String> {
     if site != "YouTube" || key.trim().is_empty() {
         return None;
     }
 
-    Some(format!("https://www.youtube.com/embed/{}?autoplay=1&rel=0", key.trim()))
+    Some(format!(
+        "https://www.youtube.com/embed/{}?autoplay=1&rel=0",
+        key.trim()
+    ))
 }
 
 fn themerr_database_path_for_tmdb_media_type(tmdb_media_type: &str) -> Option<&'static str> {
     match tmdb_media_type.trim() {
         "movie" => Some("movies/themoviedb"),
         "tv" => Some("tv_shows/themoviedb"),
+        _ => None,
+    }
+}
+
+fn themerr_database_id(database_id: &str) -> Option<&'static str> {
+    match database_id.trim() {
+        "themoviedb" => Some("themoviedb"),
+        "imdb" => Some("imdb"),
         _ => None,
     }
 }
@@ -1406,10 +1658,16 @@ fn stored_snapshot_from_link(link: ItemMetadataLink) -> Option<StoredMetadataSna
     })
 }
 
-fn managed_item_asset_dir(data_dir: &str, item_id: i32) -> PathBuf {
+fn managed_item_asset_dir(
+    data_dir: &str,
+    item_id: i32,
+) -> PathBuf {
     let item_hex = format!("{:08x}", item_id.max(0));
     let shard = &item_hex[0..2];
-    Path::new(data_dir).join("item_assets").join(shard).join(item_hex)
+    Path::new(data_dir)
+        .join("item_assets")
+        .join(shard)
+        .join(item_hex)
 }
 
 async fn try_cache_item_artwork(
@@ -1420,21 +1678,40 @@ async fn try_cache_item_artwork(
     match cache_artwork(url, item_dir, cache_key).await {
         Ok(path) => Some(path),
         Err(error) => {
-            log::warn!("Failed to cache managed artwork asset from {}: {}", url, error);
+            log::warn!(
+                "Failed to cache managed artwork asset from {}: {}",
+                url,
+                error
+            );
             None
         }
     }
 }
 
-fn tmdb_image_url(path: &str, size: &str) -> String {
-    format!("{}/{}/{}", TMDB_IMAGE_BASE, size, path.trim_start_matches('/'))
+fn tmdb_image_url(
+    path: &str,
+    size: &str,
+) -> String {
+    format!(
+        "{}/{}/{}",
+        TMDB_IMAGE_BASE,
+        size,
+        path.trim_start_matches('/')
+    )
 }
 
-fn tmdb_season_external_id(show_external_id: &str, season_number: i32) -> String {
+fn tmdb_season_external_id(
+    show_external_id: &str,
+    season_number: i32,
+) -> String {
     format!("tv:{show_external_id}:season:{season_number}")
 }
 
-fn tmdb_episode_external_id(show_external_id: &str, season_number: i32, episode_number: i32) -> String {
+fn tmdb_episode_external_id(
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+) -> String {
     format!("tv:{show_external_id}:season:{season_number}:episode:{episode_number}")
 }
 
@@ -1445,7 +1722,10 @@ fn extract_release_year(value: Option<String>) -> Option<i32> {
         .and_then(|value| value.parse::<i32>().ok())
 }
 
-fn parse_movie_name(relative_path: &str, display_title: &str) -> ParsedMovieName {
+fn parse_movie_name(
+    relative_path: &str,
+    display_title: &str,
+) -> ParsedMovieName {
     let relative_path = relative_path.replace('\\', "/");
     let path = Path::new(&relative_path);
     let file_stem = path
@@ -1458,11 +1738,12 @@ fn parse_movie_name(relative_path: &str, display_title: &str) -> ParsedMovieName
         .and_then(|value| value.to_str())
         .unwrap_or_default();
 
-    let preferred_source = if parent_name.eq_ignore_ascii_case(file_stem) || YEAR_REGEX.is_match(parent_name) {
-        parent_name
-    } else {
-        file_stem
-    };
+    let preferred_source =
+        if parent_name.eq_ignore_ascii_case(file_stem) || YEAR_REGEX.is_match(parent_name) {
+            parent_name
+        } else {
+            file_stem
+        };
 
     let tmdb_id = BRACED_TAG_REGEX
         .captures_iter(preferred_source)
@@ -1489,7 +1770,10 @@ fn parse_movie_name(relative_path: &str, display_title: &str) -> ParsedMovieName
     }
 }
 
-fn show_search_query(relative_path: &str, display_title: &str) -> String {
+fn show_search_query(
+    relative_path: &str,
+    display_title: &str,
+) -> String {
     let normalized_path = relative_path.replace('\\', "/");
     let first_segment = normalized_path
         .split('/')
@@ -1502,11 +1786,15 @@ fn show_search_query(relative_path: &str, display_title: &str) -> String {
         .unwrap_or_default()
         .to_string();
 
-    [display_title.to_string(), first_segment, folder_name]
-        .into_iter()
-        .map(|value| cleanup_movie_title(&value))
-        .find(|value| !value.trim().is_empty())
-        .unwrap_or_default()
+    [
+        display_title.to_string(),
+        first_segment,
+        folder_name,
+    ]
+    .into_iter()
+    .map(|value| cleanup_movie_title(&value))
+    .find(|value| !value.trim().is_empty())
+    .unwrap_or_default()
 }
 
 fn cleanup_movie_title(value: &str) -> String {
@@ -1526,7 +1814,10 @@ fn cleanup_movie_title(value: &str) -> String {
         .to_string()
 }
 
-fn movie_match_score(parsed: &ParsedMovieName, result: &MetadataSearchResult) -> f64 {
+fn movie_match_score(
+    parsed: &ParsedMovieName,
+    result: &MetadataSearchResult,
+) -> f64 {
     let candidate_title = cleanup_movie_title(&result.title);
     if candidate_title.is_empty() || parsed.title.is_empty() {
         return 0.0;
@@ -1563,7 +1854,59 @@ fn sanitize_cache_key(value: &str) -> String {
         .collect()
 }
 
-fn root_media_item_id(item_id: i32, items_by_id: &HashMap<i32, MediaItem>) -> Option<i32> {
+fn artwork_url_extension(url: &str) -> String {
+    let normalized = url.split(['?', '#']).next().unwrap_or(url);
+    Path::new(normalized)
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("jpg")
+        .to_ascii_lowercase()
+}
+
+fn stable_artwork_url_hash(url: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn purge_stale_cached_artwork_files(
+    cache_dir: &Path,
+    cache_key: &str,
+    keep_file_name: Option<&str>,
+) -> Result<(), String> {
+    if !cache_dir.is_dir() {
+        return Ok(());
+    }
+
+    let prefix = sanitize_cache_key(cache_key);
+    for entry in fs::read_dir(cache_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with(&prefix) {
+            continue;
+        }
+        if keep_file_name == Some(file_name) {
+            continue;
+        }
+
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn root_media_item_id(
+    item_id: i32,
+    items_by_id: &HashMap<i32, MediaItem>,
+) -> Option<i32> {
     let mut current_id = item_id;
     let mut seen = HashSet::new();
 
@@ -1717,7 +2060,9 @@ mod tests {
             ..matching_year.clone()
         };
 
-        assert!(movie_match_score(&parsed, &matching_year) > movie_match_score(&parsed, &wrong_year));
+        assert!(
+            movie_match_score(&parsed, &matching_year) > movie_match_score(&parsed, &wrong_year)
+        );
     }
 
     #[test]
@@ -1746,4 +2091,3 @@ mod tests {
         assert_eq!(parse_themerr_youtube_theme_url(&payload), None);
     }
 }
-

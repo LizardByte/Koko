@@ -12,6 +12,8 @@ use std::time::UNIX_EPOCH;
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection,
 };
+use once_cell::sync::Lazy;
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -486,11 +488,13 @@ pub fn inspect_transcoding_capability(settings: &FfmpegSettings) -> TranscodingC
 
 /// Return the number of persisted media libraries.
 pub fn count_persisted_libraries(
-    conn: &mut SqliteConnection,
+    conn: &mut SqliteConnection
 ) -> Result<i64, diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
-    media_libraries_dsl::media_libraries.count().get_result(conn)
+    media_libraries_dsl::media_libraries
+        .count()
+        .get_result(conn)
 }
 
 /// Ensure legacy library settings are imported into the database when needed.
@@ -523,7 +527,10 @@ pub fn list_library_settings(
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
 
-    Ok(rows.into_iter().map(media_library_settings_from_row).collect())
+    Ok(rows
+        .into_iter()
+        .map(media_library_settings_from_row)
+        .collect())
 }
 
 /// Replace the persisted media-library settings stored in the database.
@@ -548,7 +555,8 @@ pub fn replace_library_settings(
 
     for stale_library in existing.into_iter().skip(libraries.len()) {
         diesel::delete(
-            media_libraries_dsl::media_libraries.filter(media_libraries_dsl::id.eq(stale_library.id)),
+            media_libraries_dsl::media_libraries
+                .filter(media_libraries_dsl::id.eq(stale_library.id)),
         )
         .execute(conn)?;
     }
@@ -604,8 +612,8 @@ pub fn get_persisted_library_summaries(
     legacy_libraries: &[MediaLibrarySettings],
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
-    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
+    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
     use crate::db::schema::scan_state::dsl as scan_state_dsl;
 
     migrate_legacy_library_settings(conn, legacy_libraries)?;
@@ -624,7 +632,14 @@ pub fn get_persisted_library_summaries(
         HashMap::new()
     } else {
         media_items_dsl::media_items
-            .filter(media_items_dsl::library_id.eq_any(libraries.iter().map(|library| library.id).collect::<Vec<_>>()))
+            .filter(
+                media_items_dsl::library_id.eq_any(
+                    libraries
+                        .iter()
+                        .map(|library| library.id)
+                        .collect::<Vec<_>>(),
+                ),
+            )
             .select(MediaItem::as_select())
             .load::<MediaItem>(conn)?
             .into_iter()
@@ -635,29 +650,36 @@ pub fn get_persisted_library_summaries(
         HashMap::new()
     } else {
         item_metadata_links_dsl::item_metadata_links
-            .filter(item_metadata_links_dsl::media_item_id.eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()))
+            .filter(
+                item_metadata_links_dsl::media_item_id
+                    .eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()),
+            )
             .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
             .select(ItemMetadataLink::as_select())
             .load::<ItemMetadataLink>(conn)?
             .into_iter()
-            .fold(HashMap::<i32, LibraryMetadataRefreshCounts>::new(), |mut grouped, link| {
-                let Some(library_id) = item_library_ids.get(&link.media_item_id).copied() else {
-                    return grouped;
-                };
+            .fold(
+                HashMap::<i32, LibraryMetadataRefreshCounts>::new(),
+                |mut grouped, link| {
+                    let Some(library_id) = item_library_ids.get(&link.media_item_id).copied()
+                    else {
+                        return grouped;
+                    };
 
-                let counts = grouped.entry(library_id).or_default();
-                counts.total_items += 1;
-                if link.refresh_state == "pending" {
-                    counts.pending_items += 1;
-                } else {
-                    counts.completed_items += 1;
-                    if link.refresh_state == "error" {
-                        counts.failed_items += 1;
+                    let counts = grouped.entry(library_id).or_default();
+                    counts.total_items += 1;
+                    if link.refresh_state == "pending" {
+                        counts.pending_items += 1;
+                    } else {
+                        counts.completed_items += 1;
+                        if link.refresh_state == "error" {
+                            counts.failed_items += 1;
+                        }
                     }
-                }
 
-                grouped
-            })
+                    grouped
+                },
+            )
     };
 
     Ok(libraries
@@ -724,7 +746,8 @@ pub fn sync_library_catalog(
         let library_values = NewMediaLibrary {
             name: inspection.summary.name.clone(),
             path: inspection.summary.path.clone(),
-            paths_json: serde_json::to_string(&inspection.summary.paths).unwrap_or_else(|_| "[]".into()),
+            paths_json: serde_json::to_string(&inspection.summary.paths)
+                .unwrap_or_else(|_| "[]".into()),
             kind: inspection.summary.kind.as_storage_value(),
             recursive: inspection.summary.recursive,
             metadata_providers_json: serde_json::to_string(
@@ -802,7 +825,9 @@ pub fn sync_library_catalog(
             let existing_file = existing_files_by_path.remove(&inventory_key);
             let should_refresh_title = existing_file
                 .as_ref()
-                .map(|file| file.display_title.as_deref() != Some(discovered_file.default_title.as_str()))
+                .map(|file| {
+                    file.display_title.as_deref() != Some(discovered_file.default_title.as_str())
+                })
                 .unwrap_or(true);
             let should_refresh_metadata = existing_file
                 .as_ref()
@@ -832,7 +857,9 @@ pub fn sync_library_catalog(
             );
 
             if let Some(existing_file) = existing_file {
-                if existing_file.fingerprint_seed != discovered_file.fingerprint_seed || should_refresh_title {
+                if existing_file.fingerprint_seed != discovered_file.fingerprint_seed
+                    || should_refresh_title
+                {
                     diesel::update(
                         media_files_dsl::media_files
                             .filter(media_files_dsl::id.eq(existing_file.id)),
@@ -919,7 +946,10 @@ pub fn sync_library_catalog(
         .collect::<Vec<_>>();
 
     if !stale_library_rows.is_empty() {
-        let stale_library_ids = stale_library_rows.iter().map(|library| library.id).collect::<Vec<_>>();
+        let stale_library_ids = stale_library_rows
+            .iter()
+            .map(|library| library.id)
+            .collect::<Vec<_>>();
         let stale_media_file_ids = media_files_dsl::media_files
             .filter(media_files_dsl::library_id.eq_any(&stale_library_ids))
             .select(media_files_dsl::id)
@@ -937,15 +967,22 @@ pub fn sync_library_catalog(
             )
             .execute(conn)?;
             diesel::delete(
-                media_files_dsl::media_files.filter(media_files_dsl::id.eq_any(&stale_media_file_ids)),
+                media_files_dsl::media_files
+                    .filter(media_files_dsl::id.eq_any(&stale_media_file_ids)),
             )
             .execute(conn)?;
         }
 
-        diesel::delete(scan_state_dsl::scan_state.filter(scan_state_dsl::library_id.eq_any(&stale_library_ids)))
-            .execute(conn)?;
-        diesel::delete(media_libraries_dsl::media_libraries.filter(media_libraries_dsl::id.eq_any(stale_library_ids)))
-            .execute(conn)?;
+        diesel::delete(
+            scan_state_dsl::scan_state
+                .filter(scan_state_dsl::library_id.eq_any(&stale_library_ids)),
+        )
+        .execute(conn)?;
+        diesel::delete(
+            media_libraries_dsl::media_libraries
+                .filter(media_libraries_dsl::id.eq_any(stale_library_ids)),
+        )
+        .execute(conn)?;
     }
 
     Ok(persisted)
@@ -987,7 +1024,11 @@ fn sync_logical_media_items_for_library(
         .collect::<HashMap<_, _>>();
     let mut item_ids_by_key = HashMap::new();
 
-    for plan in planned.items.iter().filter(|item| item.parent_identity_key.is_none()) {
+    for plan in planned
+        .items
+        .iter()
+        .filter(|item| item.parent_identity_key.is_none())
+    {
         upsert_planned_media_item(
             conn,
             library.id,
@@ -999,7 +1040,11 @@ fn sync_logical_media_items_for_library(
         )?;
     }
 
-    for plan in planned.items.iter().filter(|item| item.parent_identity_key.is_some()) {
+    for plan in planned
+        .items
+        .iter()
+        .filter(|item| item.parent_identity_key.is_some())
+    {
         let parent_id = plan
             .parent_identity_key
             .as_ref()
@@ -1071,9 +1116,10 @@ fn upsert_planned_media_item(
         updated_at: Some(current_timestamp()),
     };
 
-    let target = existing_by_key
-        .remove(&plan.identity_key)
-        .or_else(|| plan.explicit_id.and_then(|id| existing_by_id.get(&id).cloned()));
+    let target = existing_by_key.remove(&plan.identity_key).or_else(|| {
+        plan.explicit_id
+            .and_then(|id| existing_by_id.get(&id).cloned())
+    });
 
     let item_id = if let Some(existing) = target {
         diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq(existing.id)))
@@ -1232,12 +1278,20 @@ fn plan_library_media_items(
         }
     }
     for item in items_by_key.values_mut() {
-        item.child_count = child_counts.get(&item.identity_key).copied().unwrap_or_default();
+        item.child_count = child_counts
+            .get(&item.identity_key)
+            .copied()
+            .unwrap_or_default();
     }
 
     let depth_by_key = items_by_key
         .keys()
-        .map(|identity_key| (identity_key.clone(), item_depth(identity_key, &items_by_key)))
+        .map(|identity_key| {
+            (
+                identity_key.clone(),
+                item_depth(identity_key, &items_by_key),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let mut items = items_by_key.into_values().collect::<Vec<_>>();
     items.sort_by(|left, right| {
@@ -1306,7 +1360,10 @@ fn item_depth(
     depth
 }
 
-fn parent_relative_path(relative_path: &str, depth: usize) -> Option<String> {
+fn parent_relative_path(
+    relative_path: &str,
+    depth: usize,
+) -> Option<String> {
     let parts = relative_path
         .replace('\\', "/")
         .split('/')
@@ -1317,7 +1374,10 @@ fn parent_relative_path(relative_path: &str, depth: usize) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-fn parse_show_path(relative_path: &str, fallback_title: &str) -> ParsedShowPath {
+fn parse_show_path(
+    relative_path: &str,
+    fallback_title: &str,
+) -> ParsedShowPath {
     let normalized = relative_path.replace('\\', "/");
     let parts = normalized
         .split('/')
@@ -1330,16 +1390,13 @@ fn parse_show_path(relative_path: &str, fallback_title: &str) -> ParsedShowPath 
         .unwrap_or(fallback_title)
         .trim()
         .to_string();
-    let season_source = if parts.len() >= 2 {
-        parts[parts.len().saturating_sub(2)]
-    } else {
-        fallback_title
-    };
-    let season_number = detect_season_number(season_source)
-        .or_else(|| detect_season_number(fallback_title))
+    let season_source =
+        if parts.len() >= 2 { parts[parts.len().saturating_sub(2)] } else { fallback_title };
+    let season_number = infer_season_number(season_source)
+        .or_else(|| infer_season_number(fallback_title))
         .filter(|value| *value > 0);
-    let episode_number = detect_episode_number(fallback_title)
-        .or_else(|| detect_episode_number(parts.last().copied().unwrap_or_default()))
+    let episode_number = infer_episode_number(fallback_title)
+        .or_else(|| infer_episode_number(parts.last().copied().unwrap_or_default()))
         .filter(|value| *value > 0);
     let episode_title = cleaned_episode_title(fallback_title, episode_number)
         .or_else(|| Some(fallback_title.trim().to_string()))
@@ -1377,49 +1434,55 @@ fn parse_show_path(relative_path: &str, fallback_title: &str) -> ParsedShowPath 
     }
 }
 
-fn detect_season_number(value: &str) -> Option<i32> {
-    let lower = value.to_ascii_lowercase();
-    for marker in ["season ", "series ", "s"] {
-        if let Some(index) = lower.find(marker) {
-            let digits = lower[index + marker.len()..]
-                .chars()
-                .take_while(|character| character.is_ascii_digit())
-                .collect::<String>();
-            if let Ok(number) = digits.parse::<i32>() {
-                return Some(number);
-            }
-        }
-    }
-    None
+/// Infer a season number from common folder or filename patterns.
+pub fn infer_season_number(value: &str) -> Option<i32> {
+    static SEASON_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+        vec![
+            Regex::new(r"(?i)(?:^|[^a-z0-9])season\s*(\d{1,3})(?:[^0-9]|$)").unwrap(),
+            Regex::new(r"(?i)(?:^|[^a-z0-9])series\s*(\d{1,3})(?:[^0-9]|$)").unwrap(),
+            Regex::new(r"(?i)(?:^|[^a-z0-9])s(\d{1,3})(?:\s*e\d{1,3}|[^0-9]|$)").unwrap(),
+        ]
+    });
+
+    first_pattern_number(value, &SEASON_PATTERNS)
 }
 
-fn detect_episode_number(value: &str) -> Option<i32> {
-    let lower = value.to_ascii_lowercase();
-    if let Some(season_index) = lower.find('e') {
-        let digits = lower[season_index + 1..]
-            .chars()
-            .take_while(|character| character.is_ascii_digit())
-            .collect::<String>();
-        if let Ok(number) = digits.parse::<i32>() {
-            return Some(number);
-        }
-    }
-    if let Some(x_index) = lower.find('x') {
-        let digits = lower[x_index + 1..]
-            .chars()
-            .take_while(|character| character.is_ascii_digit())
-            .collect::<String>();
-        if let Ok(number) = digits.parse::<i32>() {
-            return Some(number);
-        }
-    }
-    None
+/// Infer an episode number from common filename patterns such as `S03E01` or `3x01`.
+pub fn infer_episode_number(value: &str) -> Option<i32> {
+    static EPISODE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+        vec![
+            Regex::new(r"(?i)(?:^|[^a-z0-9])s\d{1,3}\s*e(\d{1,3})(?:[^0-9]|$)").unwrap(),
+            Regex::new(r"(?i)(?:^|[^a-z0-9])\d{1,3}x(\d{1,3})(?:[^0-9]|$)").unwrap(),
+            Regex::new(r"(?i)(?:^|[^a-z0-9])e(\d{1,3})(?:[^0-9]|$)").unwrap(),
+        ]
+    });
+
+    first_pattern_number(value, &EPISODE_PATTERNS)
 }
 
-fn cleaned_episode_title(value: &str, episode_number: Option<i32>) -> Option<String> {
+fn first_pattern_number(
+    value: &str,
+    patterns: &[Regex],
+) -> Option<i32> {
+    patterns.iter().find_map(|pattern| {
+        pattern
+            .captures(value)
+            .and_then(|captures| captures.get(1))
+            .and_then(|matched| matched.as_str().parse::<i32>().ok())
+    })
+}
+
+fn cleaned_episode_title(
+    value: &str,
+    episode_number: Option<i32>,
+) -> Option<String> {
     let mut cleaned = value.replace(['.', '_'], " ");
     if let Some(number) = episode_number {
-        let markers = [format!("E{:02}", number), format!("e{:02}", number), format!("x{:02}", number)];
+        let markers = [
+            format!("E{:02}", number),
+            format!("e{:02}", number),
+            format!("x{:02}", number),
+        ];
         for marker in markers {
             cleaned = cleaned.replace(&marker, " ");
         }
@@ -1431,13 +1494,11 @@ fn cleaned_episode_title(value: &str, episode_number: Option<i32>) -> Option<Str
 fn normalize_identity_segment(value: &str) -> String {
     value
         .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
+        .map(
+            |character| {
+                if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' }
+            },
+        )
         .collect::<String>()
         .split('-')
         .filter(|segment| !segment.is_empty())
@@ -1496,9 +1557,19 @@ pub fn list_media_items(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
+    let metadata_links = primary_metadata_links_by_item_id(
+        conn,
+        &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+    )?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        items.push(media_item_summary_with_preferred_title(conn, row)?);
+        let mut summary = to_media_item_summary(row);
+        let summary_id = summary.id;
+        apply_primary_metadata_link(
+            &mut summary,
+            metadata_links.get(&summary_id),
+        );
+        items.push(summary);
     }
 
     Ok(items)
@@ -1522,6 +1593,7 @@ pub fn list_automatic_metadata_candidates(
         .map(|library| (library.id, library))
         .collect::<HashMap<_, _>>();
     let linked_item_ids = item_metadata_links_dsl::item_metadata_links
+        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
         .select(item_metadata_links_dsl::media_item_id)
         .load::<i32>(conn)?
         .into_iter()
@@ -1537,7 +1609,11 @@ pub fn list_automatic_metadata_candidates(
 
     let mut candidates = Vec::new();
     for row in rows {
-        if linked_item_ids.contains(&row.id) || row.metadata_match_attempted_at.is_some() {
+        let Some(media_item_id) = row.media_item_id else {
+            continue;
+        };
+
+        if linked_item_ids.contains(&media_item_id) || row.metadata_match_attempted_at.is_some() {
             continue;
         }
         if row.media_kind != "video" {
@@ -1560,7 +1636,7 @@ pub fn list_automatic_metadata_candidates(
         }
 
         candidates.push(AutomaticMetadataCandidate {
-            item_id: row.id,
+            item_id: media_item_id,
             relative_path: row.relative_path.clone(),
             display_title: row
                 .display_title
@@ -1624,7 +1700,7 @@ pub fn mark_metadata_match_attempted(
 ) -> Result<(), diesel::result::Error> {
     use crate::db::schema::media_files::dsl as media_files_dsl;
 
-    diesel::update(media_files_dsl::media_files.filter(media_files_dsl::id.eq(item_id)))
+    diesel::update(media_files_dsl::media_files.filter(media_files_dsl::media_item_id.eq(item_id)))
         .set(media_files_dsl::metadata_match_attempted_at.eq(attempted_at))
         .execute(conn)?;
     Ok(())
@@ -1653,8 +1729,13 @@ pub fn get_media_item(
     detail.hierarchy = load_media_item_hierarchy(conn, &item)?;
     detail.children = list_media_item_children(conn, item.id)?;
 
-    if let Some(link) = get_primary_item_metadata_link(conn, item_id)? {
-        if let Some(title) = link.title.as_deref().map(str::trim).filter(|title| !title.is_empty()) {
+    if let Some(link) = get_preferred_item_metadata_link(conn, item_id)? {
+        if let Some(title) = link
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
             detail.display_title = title.to_string();
         }
         let presentation = presentation_from_metadata_link(&link);
@@ -1798,7 +1879,8 @@ pub fn get_playback_decision(
             reason: if can_direct_play {
                 "Browser direct play is supported for this item.".into()
             } else {
-                "A future FFmpeg-backed transcode path will be required for browser playback.".into()
+                "A future FFmpeg-backed transcode path will be required for browser playback."
+                    .into()
             },
             stream_url: can_direct_play.then(|| format!("/api/v1/items/{}/stream", item_id)),
             mime_type,
@@ -1820,12 +1902,40 @@ pub fn resolve_media_item_source_path(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<PathBuf>, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
+    let item = media_items_dsl::media_items
+        .filter(media_items_dsl::id.eq(item_id))
+        .select(MediaItem::as_select())
+        .first(conn)
+        .optional()?;
     let media_file = load_backing_media_file(conn, item_id)?;
     let Some(media_file) = media_file else {
+        if let Some(item) = item.filter(|item| item.playable) {
+            log::warn!(
+                "Playable media item {} ({}) is missing a backing media_files link",
+                item.id,
+                item.relative_path.as_deref().unwrap_or_default()
+            );
+        }
         return Ok(None);
     };
+    if let Some(item_relative_path) = item
+        .as_ref()
+        .and_then(|item| item.relative_path.as_deref())
+        .filter(|value| !value.trim().is_empty())
+    {
+        if item_relative_path != media_file.relative_path {
+            log::warn!(
+                "Ignoring mismatched backing media file for item {}: item path {:?}, media file path {:?}",
+                item_id,
+                item_relative_path,
+                media_file.relative_path
+            );
+            return Ok(None);
+        }
+    }
 
     let library = media_libraries_dsl::media_libraries
         .filter(media_libraries_dsl::id.eq(media_file.library_id))
@@ -1865,6 +1975,17 @@ pub fn get_item_theme_song_themerr_reference(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<(String, String)>, diesel::result::Error> {
+    Ok(get_item_theme_song_themerr_references(conn, item_id)?
+        .into_iter()
+        .next()
+        .map(|(media_type, _database_id, external_id)| (media_type, external_id)))
+}
+
+/// Return ordered ThemerrDB lookup candidates for a media item.
+pub fn get_item_theme_song_themerr_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let mut current_id = Some(item_id);
@@ -1879,7 +2000,21 @@ pub fn get_item_theme_song_themerr_reference(
             if link.provider_id == MetadataProviderId::Tmdb.as_storage_value() {
                 if let Some(media_type) = link.media_type.as_deref() {
                     if matches!(media_type, "movie" | "tv") {
-                        return Ok(Some((media_type.to_string(), link.external_id)));
+                        let mut references = vec![(
+                            media_type.to_string(),
+                            "themoviedb".to_string(),
+                            link.external_id.clone(),
+                        )];
+                        if media_type == "movie" {
+                            if let Some(imdb_id) = themerr_imdb_id_from_payload(&link) {
+                                references.push((
+                                    media_type.to_string(),
+                                    "imdb".to_string(),
+                                    imdb_id,
+                                ));
+                            }
+                        }
+                        return Ok(references);
                     }
                 }
             }
@@ -1893,7 +2028,17 @@ pub fn get_item_theme_song_themerr_reference(
             .flatten();
     }
 
-    Ok(None)
+    Ok(Vec::new())
+}
+
+fn themerr_imdb_id_from_payload(link: &ItemMetadataLink) -> Option<String> {
+    let value = serde_json::from_str::<Value>(link.provider_payload_json.as_ref()?).ok()?;
+    value
+        .get("imdb_id")?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| value.starts_with("tt"))
+        .map(ToOwned::to_owned)
 }
 
 /// Resolve a local subtitle asset path for a media item by track index.
@@ -1959,9 +2104,12 @@ pub fn upsert_playback_progress(
     };
 
     if let Some(existing) = existing {
-        diesel::update(playback_progress_dsl::playback_progress.filter(playback_progress_dsl::id.eq(existing.id)))
-            .set(&progress)
-            .execute(conn)?;
+        diesel::update(
+            playback_progress_dsl::playback_progress
+                .filter(playback_progress_dsl::id.eq(existing.id)),
+        )
+        .set(&progress)
+        .execute(conn)?;
     } else {
         diesel::insert_into(playback_progress_dsl::playback_progress)
             .values(&progress)
@@ -2056,12 +2204,13 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
         entries.push((modified_at, representative));
     }
 
-    entries.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.display_title.cmp(&right.1.display_title)));
-    entries
-        .into_iter()
-        .map(|(_, item)| item)
-        .take(12)
-        .collect()
+    entries.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.display_title.cmp(&right.1.display_title))
+    });
+    entries.into_iter().map(|(_, item)| item).take(12).collect()
 }
 
 fn root_show_item_id(
@@ -2108,15 +2257,7 @@ pub fn get_media_item_summary(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
-    use crate::db::schema::media_items::dsl as media_items_dsl;
-
-    let row = media_items_dsl::media_items
-        .filter(media_items_dsl::id.eq(item_id))
-        .select(MediaItem::as_select())
-        .first(conn)
-        .optional()?;
-
-    match row {
+    match load_media_item_row(conn, item_id)? {
         Some(row) => Ok(Some(media_item_summary_with_preferred_title(conn, row)?)),
         None => Ok(None),
     }
@@ -2130,23 +2271,32 @@ fn is_browser_direct_play(file: &MediaFile) -> bool {
 
     match file.media_kind.as_str() {
         "video" => {
-            let container_supported = matches!(
-                file.container.as_deref(),
-                Some("mp4" | "mov" | "matroska,webm" | "webm")
-            ) || matches!(extension.as_deref(), Some("mp4" | "m4v" | "webm"));
+            let container_supported =
+                matches!(
+                    file.container.as_deref(),
+                    Some("mp4" | "mov" | "matroska,webm" | "webm")
+                ) || matches!(extension.as_deref(), Some("mp4" | "m4v" | "webm"));
             let video_codec_supported = matches!(
                 file.video_codec.as_deref(),
                 Some("h264" | "av1" | "vp8" | "vp9")
             );
             let audio_codec_supported = file.audio_codec.is_none()
-                || matches!(file.audio_codec.as_deref(), Some("aac" | "mp3" | "opus" | "vorbis"));
+                || matches!(
+                    file.audio_codec.as_deref(),
+                    Some("aac" | "mp3" | "opus" | "vorbis")
+                );
 
             container_supported && video_codec_supported && audio_codec_supported
         }
-        "audio" => matches!(
-            extension.as_deref(),
-            Some("mp3" | "m4a" | "wav" | "ogg" | "opus" | "flac")
-        ) || matches!(file.audio_codec.as_deref(), Some("mp3" | "aac" | "opus" | "vorbis" | "flac")),
+        "audio" => {
+            matches!(
+                extension.as_deref(),
+                Some("mp3" | "m4a" | "wav" | "ogg" | "opus" | "flac")
+            ) || matches!(
+                file.audio_codec.as_deref(),
+                Some("mp3" | "aac" | "opus" | "vorbis" | "flac")
+            )
+        }
         _ => false,
     }
 }
@@ -2214,7 +2364,12 @@ fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInsp
             continue;
         }
 
-        match scan_directory(filesystem_path, filesystem_path, library.recursive, &library.kind) {
+        match scan_directory(
+            filesystem_path,
+            filesystem_path,
+            library.recursive,
+            &library.kind,
+        ) {
             Ok((nested, nested_files)) => {
                 counters.total_files += nested.total_files;
                 counters.video_files += nested.video_files;
@@ -2394,9 +2549,11 @@ fn update_media_library(
 ) -> Result<(), diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
-    diesel::update(media_libraries_dsl::media_libraries.filter(media_libraries_dsl::id.eq(library_id)))
-        .set(&media_library_record_values(library))
-        .execute(conn)?;
+    diesel::update(
+        media_libraries_dsl::media_libraries.filter(media_libraries_dsl::id.eq(library_id)),
+    )
+    .set(&media_library_record_values(library))
+    .execute(conn)?;
     Ok(())
 }
 
@@ -2595,27 +2752,239 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
     }
 }
 
+fn load_media_item_row(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Option<MediaItem>, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    media_items_dsl::media_items
+        .filter(media_items_dsl::id.eq(item_id))
+        .select(MediaItem::as_select())
+        .first(conn)
+        .optional()
+}
+
+fn get_media_item_summary_without_metadata(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
+    Ok(load_media_item_row(conn, item_id)?.map(to_media_item_summary))
+}
+
 fn media_item_summary_with_preferred_title(
     conn: &mut SqliteConnection,
     row: MediaItem,
 ) -> Result<MediaItemSummary, diesel::result::Error> {
     let mut summary = to_media_item_summary(row);
-    if let Some(link) = get_primary_item_metadata_link(conn, summary.id)? {
-        if let Some(title) = link.title.as_deref().map(str::trim).filter(|title| !title.is_empty()) {
-            summary.display_title = title.to_string();
-        }
-        let presentation = presentation_from_metadata_link(&link);
-        summary.genres = presentation.genres;
-        summary.has_metadata = true;
-        summary.metadata_refresh_state = Some(link.refresh_state.clone());
-        summary.metadata_refresh_error = link.refresh_error.clone();
-        summary.artwork_updated_at = link.updated_at;
-    }
+    let link = get_preferred_item_metadata_link(conn, summary.id)?;
+    apply_primary_metadata_link(
+        &mut summary,
+        link.as_ref(),
+    );
 
     Ok(summary)
 }
 
-fn to_media_item_detail(item: MediaItem, backing_file: Option<&MediaFile>) -> MediaItemDetail {
+fn apply_primary_metadata_link(
+    summary: &mut MediaItemSummary,
+    link: Option<&ItemMetadataLink>,
+) {
+    let Some(link) = link else {
+        return;
+    };
+
+    if let Some(title) = link
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        summary.display_title = title.to_string();
+    }
+    let presentation = presentation_from_metadata_link(link);
+    summary.genres = presentation.genres;
+    summary.has_metadata = true;
+    summary.metadata_refresh_state = Some(link.refresh_state.clone());
+    summary.metadata_refresh_error = link.refresh_error.clone();
+    summary.artwork_updated_at = link.updated_at;
+}
+
+fn primary_metadata_links_by_item_id(
+    conn: &mut SqliteConnection,
+    item_ids: &[i32],
+) -> Result<HashMap<i32, ItemMetadataLink>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
+
+    if item_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = item_metadata_links_dsl::item_metadata_links
+        .filter(item_metadata_links_dsl::media_item_id.eq_any(item_ids))
+        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+        .order((
+            item_metadata_links_dsl::media_item_id.asc(),
+            item_metadata_links_dsl::updated_at.desc(),
+            item_metadata_links_dsl::id.desc(),
+        ))
+        .select(ItemMetadataLink::as_select())
+        .load::<ItemMetadataLink>(conn)?;
+
+    let mut by_item_id = HashMap::new();
+    for row in rows {
+        by_item_id
+            .entry(row.media_item_id)
+            .or_insert(row);
+    }
+
+    Ok(by_item_id)
+}
+
+/// Return the best metadata link for a media item, preferring links that
+/// structurally match the item's show/season/episode identity.
+pub fn get_preferred_item_metadata_link(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    let Some(item) = get_media_item_summary_without_metadata(conn, item_id)? else {
+        return Ok(None);
+    };
+
+    preferred_item_metadata_link_for_summary(conn, &item)
+}
+
+fn preferred_item_metadata_link_for_summary(
+    conn: &mut SqliteConnection,
+    item: &MediaItemSummary,
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    let mut links = primary_metadata_links_for_item(conn, item.id)?;
+    if links.is_empty() {
+        return Ok(None);
+    }
+
+    let expected_media_type = expected_metadata_media_type(item);
+    if let Some(expected_external_id) = expected_tmdb_external_id_for_item(conn, item)? {
+        if let Some(index) = links
+            .iter()
+            .position(|link| {
+                link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
+                    && link.external_id == expected_external_id
+            })
+        {
+            return Ok(Some(links.swap_remove(index)));
+        }
+
+        if let Some(expected_media_type) = expected_media_type {
+            links.retain(|link| {
+                !(
+                    link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
+                        && link.media_type.as_deref() == Some(expected_media_type)
+                )
+            });
+            if links.is_empty() {
+                return Ok(None);
+            }
+        }
+    }
+
+    if let Some(expected_media_type) = expected_media_type {
+        if let Some(index) = links
+            .iter()
+            .position(|link| link.media_type.as_deref() == Some(expected_media_type))
+        {
+            return Ok(Some(links.swap_remove(index)));
+        }
+    }
+
+    Ok(links.into_iter().next())
+}
+
+fn expected_metadata_media_type(item: &MediaItemSummary) -> Option<&'static str> {
+    match item.item_type.as_str() {
+        "episode" => Some("tv_episode"),
+        "season" => Some("tv_season"),
+        "show" => Some("tv"),
+        "movie" => Some("movie"),
+        _ => None,
+    }
+}
+
+fn expected_tmdb_external_id_for_item(
+    conn: &mut SqliteConnection,
+    item: &MediaItemSummary,
+) -> Result<Option<String>, diesel::result::Error> {
+    match item.item_type.as_str() {
+        "season" => {
+            let Some(show_external_id) = show_tmdb_external_id_for_item(conn, item)? else {
+                return Ok(None);
+            };
+            let Some(season_number) = item.season_number else {
+                return Ok(None);
+            };
+            Ok(Some(format!("tv:{show_external_id}:season:{season_number}")))
+        }
+        "episode" => {
+            let Some(show_external_id) = show_tmdb_external_id_for_item(conn, item)? else {
+                return Ok(None);
+            };
+            let (Some(season_number), Some(episode_number)) = (item.season_number, item.episode_number) else {
+                return Ok(None);
+            };
+            Ok(Some(format!(
+                "tv:{show_external_id}:season:{season_number}:episode:{episode_number}"
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn show_tmdb_external_id_for_item(
+    conn: &mut SqliteConnection,
+    item: &MediaItemSummary,
+) -> Result<Option<String>, diesel::result::Error> {
+    let mut current_parent_id = item.parent_id;
+    while let Some(parent_id) = current_parent_id {
+        let Some(parent) = get_media_item_summary_without_metadata(conn, parent_id)? else {
+            return Ok(None);
+        };
+        if parent.item_type == "show" {
+            let link = preferred_item_metadata_link_for_summary(conn, &parent)?;
+            if let Some(link) = link.filter(|link| {
+                link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
+                    && link.media_type.as_deref() == Some("tv")
+            }) {
+                return Ok(Some(link.external_id));
+            }
+            return Ok(None);
+        }
+        current_parent_id = parent.parent_id;
+    }
+
+    Ok(None)
+}
+
+fn primary_metadata_links_for_item(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
+
+    item_metadata_links_dsl::item_metadata_links
+        .filter(item_metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+        .order((
+            item_metadata_links_dsl::updated_at.desc(),
+            item_metadata_links_dsl::id.desc(),
+        ))
+        .select(ItemMetadataLink::as_select())
+        .load::<ItemMetadataLink>(conn)
+}
+
+fn to_media_item_detail(
+    item: MediaItem,
+    backing_file: Option<&MediaFile>,
+) -> MediaItemDetail {
     let relative_path = item.relative_path.unwrap_or_default();
 
     MediaItemDetail {
@@ -2679,18 +3048,9 @@ fn load_backing_media_file(
 ) -> Result<Option<MediaFile>, diesel::result::Error> {
     use crate::db::schema::media_files::dsl as media_files_dsl;
 
-    let row = media_files_dsl::media_files
+    media_files_dsl::media_files
         .filter(media_files_dsl::media_item_id.eq(item_id))
         .order(media_files_dsl::id.asc())
-        .select(MediaFile::as_select())
-        .first(conn)
-        .optional()?;
-    if row.is_some() {
-        return Ok(row);
-    }
-
-    media_files_dsl::media_files
-        .filter(media_files_dsl::id.eq(item_id))
         .select(MediaFile::as_select())
         .first(conn)
         .optional()
@@ -2741,9 +3101,19 @@ pub fn list_media_item_children(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
+    let metadata_links = primary_metadata_links_by_item_id(
+        conn,
+        &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+    )?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        items.push(media_item_summary_with_preferred_title(conn, row)?);
+        let mut summary = to_media_item_summary(row);
+        let summary_id = summary.id;
+        apply_primary_metadata_link(
+            &mut summary,
+            metadata_links.get(&summary_id),
+        );
+        items.push(summary);
     }
 
     Ok(items)
@@ -2939,12 +3309,13 @@ fn should_include_library_item(
         MediaLibraryKind::Photos => kind == FileKind::Image,
         MediaLibraryKind::Books => kind == FileKind::Book,
         MediaLibraryKind::Mixed => {
-            matches!(kind, FileKind::Video | FileKind::Audio | FileKind::Image | FileKind::Book)
-                && !is_named_theme_asset(path)
+            matches!(
+                kind,
+                FileKind::Video | FileKind::Audio | FileKind::Image | FileKind::Book
+            ) && !is_named_theme_asset(path)
         }
     }
 }
-
 
 fn parse_library_storage_paths(value: &str) -> Vec<String> {
     let trimmed = value.trim();
@@ -3002,7 +3373,10 @@ fn discover_item_assets(
             "cover.jpg",
             "cover.png",
         ],
-        &[source_stem.clone(), format!("{}-poster", source_stem)],
+        &[
+            source_stem.clone(),
+            format!("{}-poster", source_stem),
+        ],
         &["jpg", "jpeg", "png", "webp"],
     );
     let backdrop_path = find_first_existing_asset(
@@ -3020,7 +3394,10 @@ fn discover_item_assets(
             "background.jpg",
             "background.png",
         ],
-        &[format!("{}-backdrop", source_stem), format!("{}-fanart", source_stem)],
+        &[
+            format!("{}-backdrop", source_stem),
+            format!("{}-fanart", source_stem),
+        ],
         &["jpg", "jpeg", "png", "webp"],
     );
     let theme_song_path = find_first_existing_asset(
@@ -3040,7 +3417,13 @@ fn discover_item_assets(
         &[],
     );
 
-    let subtitle_paths = collect_subtitle_assets(&[managed_dir.as_path(), source_dir], &source_stem);
+    let subtitle_paths = collect_subtitle_assets(
+        &[
+            managed_dir.as_path(),
+            source_dir,
+        ],
+        &source_stem,
+    );
 
     ResolvedItemAssets {
         poster_path,
@@ -3050,10 +3433,16 @@ fn discover_item_assets(
     }
 }
 
-fn managed_item_asset_dir(data_dir: &str, item_id: i32) -> PathBuf {
+fn managed_item_asset_dir(
+    data_dir: &str,
+    item_id: i32,
+) -> PathBuf {
     let item_hex = format!("{:08x}", item_id.max(0));
     let shard = &item_hex[0..2];
-    Path::new(data_dir).join("item_assets").join(shard).join(item_hex)
+    Path::new(data_dir)
+        .join("item_assets")
+        .join(shard)
+        .join(item_hex)
 }
 
 fn find_first_existing_asset(
@@ -3083,7 +3472,10 @@ fn find_first_existing_asset(
     None
 }
 
-fn collect_subtitle_assets(directories: &[&Path], source_stem: &str) -> Vec<PathBuf> {
+fn collect_subtitle_assets(
+    directories: &[&Path],
+    source_stem: &str,
+) -> Vec<PathBuf> {
     let mut subtitle_paths = Vec::new();
     let mut seen = HashSet::new();
 
@@ -3118,7 +3510,10 @@ fn collect_subtitle_assets(directories: &[&Path], source_stem: &str) -> Vec<Path
     subtitle_paths
 }
 
-fn subtitle_label_from_path(source_path: &Path, subtitle_path: &Path) -> String {
+fn subtitle_label_from_path(
+    source_path: &Path,
+    subtitle_path: &Path,
+) -> String {
     let source_stem = source_path
         .file_stem()
         .and_then(|value| value.to_str())

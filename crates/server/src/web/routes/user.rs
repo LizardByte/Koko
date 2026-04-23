@@ -3,6 +3,7 @@ use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, Select
 use rocket::get;
 use rocket::http::Status;
 use rocket::post;
+use rocket::put;
 use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket_okapi::JsonSchema;
 use rocket_okapi::openapi;
@@ -18,6 +19,16 @@ pub struct CreateUserForm {
     pub password: String,
     pub pin: Option<String>,
     pub admin: bool,
+    pub birthday: Option<String>,
+    pub profile_image_url: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateUserForm {
+    pub username: String,
+    pub admin: bool,
+    pub birthday: Option<String>,
+    pub profile_image_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -25,6 +36,8 @@ pub struct UserSummary {
     pub id: i32,
     pub username: String,
     pub admin: bool,
+    pub birthday: Option<String>,
+    pub profile_image_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -66,6 +79,8 @@ pub async fn get_bootstrap(
             id: user.id,
             username: user.username,
             admin: user.admin,
+            birthday: user.birthday,
+            profile_image_url: user.profile_image_url,
         })
     } else {
         None
@@ -95,14 +110,95 @@ pub async fn list_users(
         .await
         .map_err(|_| Status::InternalServerError)?;
 
-    Ok(Json(users_list
-        .into_iter()
-        .map(|user| UserSummary {
-            id: user.id,
-            username: user.username,
-            admin: user.admin,
+    Ok(Json(
+        users_list
+            .into_iter()
+            .map(|user| UserSummary {
+                id: user.id,
+                username: user.username,
+                admin: user.admin,
+                birthday: user.birthday,
+                profile_image_url: user.profile_image_url,
+            })
+            .collect(),
+    ))
+}
+
+#[openapi(tag = "Users")]
+#[put(
+    "/api/v1/users/<target_user_id>",
+    format = "json",
+    data = "<user_form>"
+)]
+pub async fn update_user(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+    target_user_id: i32,
+    user_form: Json<UpdateUserForm>,
+) -> Result<Json<UserSummary>, Status> {
+    use crate::db::schema::users::dsl as users_dsl;
+
+    let form = user_form.into_inner();
+    let next_username = form.username.trim().to_string();
+    if next_username.is_empty() {
+        return Err(Status::BadRequest);
+    }
+
+    let next_birthday = form
+        .birthday
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let next_profile_image_url = form
+        .profile_image_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let updated_user = db
+        .run(move |conn| {
+            let existing_user = users_dsl::users
+                .filter(users_dsl::id.eq(target_user_id))
+                .select(User::as_select())
+                .first::<User>(conn)
+                .optional()
+                .map_err(|_| Status::InternalServerError)?
+                .ok_or(Status::NotFound)?;
+
+            if existing_user.admin && !form.admin {
+                let admin_count = users_dsl::users
+                    .filter(users_dsl::admin.eq(true))
+                    .count()
+                    .get_result::<i64>(conn)
+                    .map_err(|_| Status::InternalServerError)?;
+                if admin_count <= 1 {
+                    return Err(Status::BadRequest);
+                }
+            }
+
+            diesel::update(users_dsl::users.filter(users_dsl::id.eq(target_user_id)))
+                .set((
+                    users_dsl::username.eq(next_username),
+                    users_dsl::admin.eq(form.admin),
+                    users_dsl::birthday.eq(next_birthday),
+                    users_dsl::profile_image_url.eq(next_profile_image_url),
+                ))
+                .execute(conn)
+                .map_err(|_| Status::Conflict)?;
+
+            users_dsl::users
+                .filter(users_dsl::id.eq(target_user_id))
+                .select(User::as_select())
+                .first::<User>(conn)
+                .map_err(|_| Status::InternalServerError)
         })
-        .collect()))
+        .await?;
+
+    Ok(Json(UserSummary {
+        id: updated_user.id,
+        username: updated_user.username,
+        admin: updated_user.admin,
+        birthday: updated_user.birthday,
+        profile_image_url: updated_user.profile_image_url,
+    }))
 }
 
 #[openapi(tag = "Users")]
@@ -155,6 +251,14 @@ pub async fn create_user(
         password: hashed_password,
         pin: hashed_pin,
         admin: existing_count == 0 || form.admin,
+        birthday: form
+            .birthday
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        profile_image_url: form
+            .profile_image_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     };
 
     // Insert new user

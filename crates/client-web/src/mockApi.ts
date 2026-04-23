@@ -23,6 +23,7 @@ import type {
   SystemActivity,
   SystemActivitiesResponse,
   TokenResponse,
+  UpdateUserRequest,
 } from './api';
 
 let nextLibraryId = 4;
@@ -404,6 +405,8 @@ const users: MockUserRecord[] = [
     username: 'admin',
     password: 'adminpass',
     admin: true,
+    birthday: '1990-01-01',
+    profile_image_url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=160&h=160&fit=crop',
   },
 ];
 
@@ -548,6 +551,7 @@ let settings: SettingsSnapshot = {
         retry_backoff_ms: 1000,
       },
     ],
+    refresh_interval_days: 30,
   },
   server: {
     use_https: false,
@@ -558,7 +562,6 @@ let settings: SettingsSnapshot = {
     use_custom_certs: false,
   },
   ffmpeg: {
-    strategy: 'external_binaries',
     ffmpeg_path: 'ffmpeg',
     ffprobe_path: 'ffprobe',
   },
@@ -571,7 +574,6 @@ export function getMockCapabilities(): ServerCapabilities {
     server_url: 'http://127.0.0.1:9191',
     https_enabled: false,
     libraries_configured: libraries.length,
-    ffmpeg_strategy: 'external_binaries',
     api_versions: ['v1'],
     transcoding: {
       ffmpeg: {
@@ -590,7 +592,7 @@ export function getMockBootstrap(): AppBootstrapResponse {
   const currentUser = users.find((user) => user.id === activeMockUserId());
   return {
     has_users: users.length > 0,
-    current_user: currentUser ? { id: currentUser.id, username: currentUser.username, admin: currentUser.admin } : undefined,
+    current_user: currentUser ? toUserSummary(currentUser) : undefined,
   };
 }
 
@@ -624,13 +626,57 @@ export function createMockUser(request: CreateUserRequest): string {
     password: request.password,
     pin: request.pin,
     admin: users.length === 0 || request.admin,
+    birthday: request.birthday?.trim() || undefined,
+    profile_image_url: request.profile_image_url?.trim() || undefined,
   });
   nextUserId += 1;
   return 'User created';
 }
 
 export function getMockUsers(): BootstrapUser[] {
-  return users.map(({ id, username, admin }) => ({ id, username, admin }));
+  return users.map(toUserSummary);
+}
+
+export function updateMockUser(userId: number, request: UpdateUserRequest): BootstrapUser {
+  const currentUser = users.find((user) => user.id === activeMockUserId());
+  if (!currentUser) {
+    throw new Error('401 Unauthorized');
+  }
+  if (!currentUser.admin) {
+    throw new Error('403 Forbidden');
+  }
+
+  const user = users.find((candidate) => candidate.id === userId);
+  if (!user) {
+    throw new Error('404 Not Found');
+  }
+
+  const username = request.username.trim();
+  if (!username) {
+    throw new Error('400 Bad Request');
+  }
+  if (users.some((candidate) => candidate.id !== userId && candidate.username.toLowerCase() === username.toLowerCase())) {
+    throw new Error('409 Conflict');
+  }
+  if (user.admin && !request.admin && users.filter((candidate) => candidate.admin).length <= 1) {
+    throw new Error('400 Bad Request');
+  }
+
+  user.username = username;
+  user.admin = request.admin;
+  user.birthday = request.birthday?.trim() || undefined;
+  user.profile_image_url = request.profile_image_url?.trim() || undefined;
+  return toUserSummary(user);
+}
+
+function toUserSummary(user: MockUserRecord): BootstrapUser {
+  return {
+    id: user.id,
+    username: user.username,
+    admin: user.admin,
+    birthday: user.birthday,
+    profile_image_url: user.profile_image_url,
+  };
 }
 
 export function getMockLibraries(): MediaLibrary[] {

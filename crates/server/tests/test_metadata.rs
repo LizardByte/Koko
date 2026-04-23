@@ -3,7 +3,11 @@ use koko::config::{
     MediaLibraryKind, MediaLibrarySettings, MetadataProviderId, MetadataProviderSettings,
     MetadataSettings, Settings, settings_for_persistence,
 };
-use koko::metadata::list_provider_statuses;
+use koko::metadata::{
+    StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
+    persist_item_metadata_assets,
+};
+use std::fs;
 
 #[test]
 fn test_metadata_provider_statuses_include_tmdb() {
@@ -32,6 +36,7 @@ fn test_metadata_provider_statuses_respect_api_key_configuration() {
             retry_attempts: 3,
             retry_backoff_ms: 1_000,
         }],
+        refresh_interval_days: Some(30),
     };
 
     let statuses = list_provider_statuses(&settings);
@@ -51,7 +56,10 @@ fn test_metadata_provider_id_rejects_legacy_musicbrainz_alias() {
 
     assert_eq!(canonical, MetadataProviderId::MusicBrainz);
     assert!(legacy.is_err());
-    assert_eq!(serde_json::to_string(&MetadataProviderId::MusicBrainz).unwrap(), "\"musicbrainz\"");
+    assert_eq!(
+        serde_json::to_string(&MetadataProviderId::MusicBrainz).unwrap(),
+        "\"musicbrainz\""
+    );
 }
 
 #[test]
@@ -70,3 +78,54 @@ fn test_settings_persistence_clears_library_definitions() {
     assert!(persisted.media.libraries.is_empty());
 }
 
+#[test]
+fn test_expected_artwork_cache_path_changes_when_url_changes() {
+    let cache_dir = std::path::Path::new("C:/tmp");
+    let first =
+        expected_artwork_cache_path("https://image.tmdb.org/t/p/w500/alpha.jpg", cache_dir, "tmdb_poster");
+    let second =
+        expected_artwork_cache_path("https://image.tmdb.org/t/p/w500/beta.jpg", cache_dir, "tmdb_poster");
+
+    assert_ne!(first, second);
+}
+
+#[test]
+fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missing() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "koko_metadata_asset_cleanup_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let data_dir = temp_dir.to_string_lossy().to_string();
+    let item_dir = temp_dir.join("item_assets").join("00").join("000000c6");
+    fs::create_dir_all(&item_dir).unwrap();
+    fs::write(item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg"), b"stale").unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(persist_item_metadata_assets(
+            &StoredMetadataSnapshot {
+                provider_id: MetadataProviderId::Tmdb,
+                external_id: "tv:1412:season:1:episode:1".into(),
+                media_type: Some("tv_episode".into()),
+                title: Some("Pilot".into()),
+                overview: None,
+                artwork_url: None,
+                backdrop_url: None,
+                release_year: Some(2012),
+                provider_payload_json: None,
+            },
+            198,
+            &data_dir,
+        ))
+        .unwrap();
+
+    assert!(
+        !item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg").exists(),
+        "Expected stale provider poster to be removed when no artwork URL is present"
+    );
+
+    fs::remove_dir_all(temp_dir).unwrap();
+}

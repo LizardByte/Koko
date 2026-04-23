@@ -177,5 +177,7 @@ table! {
         password -> Text,
         pin -> Nullable<Text>,
         admin -> Bool,
+        birthday -> Nullable<Text>,
+        profile_image_url -> Nullable<Text>,
     }
 }

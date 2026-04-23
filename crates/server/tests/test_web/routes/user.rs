@@ -1,6 +1,6 @@
 // lib imports
 use rocket::http::Status;
-use rocket::serde::json::serde_json;
+use rocket::serde::json::{json, serde_json};
 use rstest::rstest;
 
 // test imports
@@ -110,3 +110,140 @@ async fn test_first_created_user_is_forced_to_admin() {
     assert_eq!(json["current_user"]["admin"], true);
 }
 
+#[rocket::async_test]
+async fn test_user_profile_fields_are_returned() {
+    let client = create_test_client(Some("user_routes_profile_fields")).await;
+
+    let response = make_request(
+        Some(&client),
+        "post",
+        "/create_user",
+        Some(json!({
+            "username": "profileuser",
+            "password": "password123",
+            "admin": true,
+            "birthday": "1984-10-26",
+            "profile_image_url": "https://example.com/profile.jpg"
+        })),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    assert_eq!(response.body, "User created");
+
+    let token = login_user(&client, "profileuser", "password123", Some(Status::Ok))
+        .await
+        .expect("Expected profile user to be able to log in");
+    let response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/bootstrap",
+        None,
+        Some(format!("Bearer {}", token)),
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(json["current_user"]["birthday"], "1984-10-26");
+    assert_eq!(
+        json["current_user"]["profile_image_url"],
+        "https://example.com/profile.jpg"
+    );
+}
+
+#[rocket::async_test]
+async fn test_admin_can_update_existing_user_profile_fields() {
+    let client = create_test_client(Some("user_routes_update_profile")).await;
+
+    let (status, _) = create_test_user(
+        &client,
+        "admin",
+        "password123",
+        true,
+        None,
+        Some(Status::Ok),
+    )
+    .await;
+    assert_eq!(status, Status::Ok);
+
+    let token = login_user(&client, "admin", "password123", Some(Status::Ok))
+        .await
+        .expect("Expected admin to be able to log in");
+    let auth_header = Some(format!("Bearer {}", token));
+
+    make_request(
+        Some(&client),
+        "post",
+        "/create_user",
+        Some(json!({
+            "username": "viewer",
+            "password": "password123",
+            "admin": false
+        })),
+        auth_header.clone(),
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let response = make_request(
+        Some(&client),
+        "put",
+        "/api/v1/users/2",
+        Some(json!({
+            "username": "viewer-updated",
+            "admin": false,
+            "birthday": "2001-02-03",
+            "profile_image_url": "https://example.com/viewer.png"
+        })),
+        auth_header,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(json["username"], "viewer-updated");
+    assert_eq!(json["admin"], false);
+    assert_eq!(json["birthday"], "2001-02-03");
+    assert_eq!(json["profile_image_url"], "https://example.com/viewer.png");
+}
+
+#[rocket::async_test]
+async fn test_cannot_demote_last_admin() {
+    let client = create_test_client(Some("user_routes_last_admin")).await;
+
+    let (status, _) = create_test_user(
+        &client,
+        "admin",
+        "password123",
+        true,
+        None,
+        Some(Status::Ok),
+    )
+    .await;
+    assert_eq!(status, Status::Ok);
+
+    let token = login_user(&client, "admin", "password123", Some(Status::Ok))
+        .await
+        .expect("Expected admin to be able to log in");
+    let response = make_request(
+        Some(&client),
+        "put",
+        "/api/v1/users/1",
+        Some(json!({
+            "username": "admin",
+            "admin": false,
+            "birthday": null,
+            "profile_image_url": null
+        })),
+        Some(format!("Bearer {}", token)),
+        Some(Status::BadRequest),
+        Some(false),
+    )
+    .await;
+    assert_eq!(response.status, Status::BadRequest);
+}

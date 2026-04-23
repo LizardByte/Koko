@@ -28,7 +28,7 @@ async fn test_get_server_capabilities_route() {
     assert!(object.contains_key("server_url"));
     assert!(object.contains_key("https_enabled"));
     assert!(object.contains_key("libraries_configured"));
-    assert!(object.contains_key("ffmpeg_strategy"));
+    assert!(!object.contains_key("ffmpeg_strategy"));
     assert!(object.contains_key("api_versions"));
     assert!(object.contains_key("transcoding"));
 }

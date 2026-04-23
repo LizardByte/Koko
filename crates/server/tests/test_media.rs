@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // lib imports
-use diesel::RunQueryDsl;
 use diesel::Connection;
+use diesel::RunQueryDsl;
 use diesel::SqliteConnection;
 use diesel_migrations::MigrationHarness;
 
@@ -13,15 +13,19 @@ use diesel_migrations::MigrationHarness;
 use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
 use koko::db::MIGRATIONS;
 use koko::media::{
-    LibraryScanStatus, get_library_files, get_media_home, get_media_item,
-    get_persisted_library_summaries,
-    get_item_theme_song_themerr_reference,
-    inspect_libraries, inspect_transcoding_capability, list_automatic_metadata_candidates,
-    list_library_settings, list_media_items, remove_library_setting,
-    replace_library_settings, search_media_items, sync_library_catalog,
+    LibraryScanStatus, get_item_theme_song_themerr_reference,
+    get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
+    get_preferred_item_metadata_link, get_persisted_library_summaries, infer_episode_number,
+    infer_season_number, inspect_libraries, inspect_transcoding_capability,
+    list_automatic_metadata_candidates, list_library_settings, list_media_items,
+    remove_library_setting, replace_library_settings, resolve_local_item_artwork_path,
+    resolve_media_item_source_path, search_media_items, sync_library_catalog,
     upsert_playback_progress,
 };
-use koko::metadata::{StoredMetadataSnapshot, set_item_metadata_refresh_state, upsert_item_metadata_snapshot};
+use koko::metadata::{
+    ArtworkKind, StoredMetadataSnapshot, get_primary_item_metadata_link, set_item_metadata_refresh_state,
+    upsert_item_metadata_snapshot,
+};
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -335,15 +339,22 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
     }];
 
     let (mut connection, db_path) = create_test_connection("shows_library_hierarchy_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
 
     assert_eq!(items.len(), 3);
 
     let show = items.iter().find(|item| item.item_type == "show").unwrap();
-    let season = items.iter().find(|item| item.item_type == "season").unwrap();
-    let episode = items.iter().find(|item| item.item_type == "episode").unwrap();
+    let season = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode")
+        .unwrap();
 
     assert_eq!(show.parent_id, None);
     assert_eq!(show.child_count, 1);
@@ -381,6 +392,22 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
 }
 
 #[test]
+fn test_episode_number_parser_handles_show_titles_before_sxxexx() {
+    assert_eq!(
+        infer_episode_number("Marvel's Agents of S H I E L D (2013) - S03E01 - Laws of Nature.mkv"),
+        Some(1)
+    );
+    assert_eq!(
+        infer_episode_number("Marvel's Agents of S H I E L D (2013) - 3x22 - Ascension.mkv"),
+        Some(22)
+    );
+    assert_eq!(
+        infer_season_number("Marvel's Agents of S H I E L D (2013) - S03E01 - Laws of Nature.mkv"),
+        Some(3)
+    );
+}
+
+#[test]
 fn test_shows_are_included_in_automatic_metadata_candidates() {
     let root = unique_temp_dir("automatic_show_metadata_candidates");
     let season = root.join("Mock Show").join("Season 1");
@@ -397,7 +424,8 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
     }];
 
     let (mut connection, db_path) = create_test_connection("automatic_show_metadata_candidates_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let show = list_media_items(&mut connection, Some(library.id))
         .unwrap()
@@ -432,8 +460,16 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
     fs::write(alpha.join("Alpha Show - S01E01 - Pilot.mkv"), b"video").unwrap();
     fs::write(beta.join("Beta Show - S01E01 - Pilot.mkv"), b"video").unwrap();
     fs::write(beta.join("Beta Show - S01E02 - Second.mkv"), b"video").unwrap();
-    fs::write(gamma_season_1.join("Gamma Show - S01E01 - Pilot.mkv"), b"video").unwrap();
-    fs::write(gamma_season_2.join("Gamma Show - S02E01 - Return.mkv"), b"video").unwrap();
+    fs::write(
+        gamma_season_1.join("Gamma Show - S01E01 - Pilot.mkv"),
+        b"video",
+    )
+    .unwrap();
+    fs::write(
+        gamma_season_2.join("Gamma Show - S02E01 - Return.mkv"),
+        b"video",
+    )
+    .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
         name: "Shows".into(),
@@ -445,7 +481,8 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
     }];
 
     let (mut connection, db_path) = create_test_connection("show_recently_added_collapsed_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let home = get_media_home(&mut connection, None, Some(library.id)).unwrap();
     let recently_added = home
@@ -502,7 +539,8 @@ fn test_home_includes_real_collection_summaries() {
     }];
 
     let (mut connection, db_path) = create_test_connection("home_collection_summaries_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
 
@@ -562,7 +600,8 @@ fn test_sync_restores_file_name_as_display_title() {
     }];
 
     let (mut connection, db_path) = create_test_connection("media_catalog_title_policy_refresh");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
     let movie = items.first().unwrap();
@@ -601,8 +640,10 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         metadata_providers: vec![],
     }];
 
-    let (mut connection, db_path) = create_test_connection("media_catalog_item_detail_linked_metadata");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let (mut connection, db_path) =
+        create_test_connection("media_catalog_item_detail_linked_metadata");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
     let movie = items.first().unwrap();
@@ -647,7 +688,10 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         .expect("Expected linked movie detail to exist");
     let expected_poster_url = format!("/api/v1/items/{}/artwork?kind=poster", movie.id);
     let expected_backdrop_url = format!("/api/v1/items/{}/artwork?kind=backdrop", movie.id);
-    assert_eq!(detail.tagline.as_deref(), Some("Welcome to the real world."));
+    assert_eq!(
+        detail.tagline.as_deref(),
+        Some("Welcome to the real world.")
+    );
     assert_eq!(detail.release_year, Some(1999));
     assert_eq!(detail.genres, vec!["Action", "Science Fiction"]);
     assert!(detail.artwork_updated_at.is_some());
@@ -656,8 +700,311 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         detail.trailer_url.as_deref(),
         Some("https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0")
     );
-    assert_eq!(detail.poster_url.as_deref(), Some(expected_poster_url.as_str()));
-    assert_eq!(detail.backdrop_url.as_deref(), Some(expected_backdrop_url.as_str()));
+    assert_eq!(
+        detail.poster_url.as_deref(),
+        Some(expected_poster_url.as_str())
+    );
+    assert_eq!(
+        detail.backdrop_url.as_deref(),
+        Some(expected_backdrop_url.as_str())
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_item_detail_uses_primary_metadata_link_only() {
+    let root = unique_temp_dir("item_detail_primary_metadata_only");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("media_catalog_item_detail_primary_metadata_only");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let movie = items.first().unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: Some("Primary metadata overview.".into()),
+            artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
+            backdrop_url: None,
+            release_year: Some(1999),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    diesel::sql_query(
+        "INSERT INTO item_metadata_links (\
+            media_item_id, provider_id, external_id, title, overview, tagline, artwork_url, backdrop_url, \
+            release_year, media_type, relation_kind, match_state, provider_payload_json, cached_artwork_path, \
+            cached_backdrop_path, refresh_state, refresh_interval_seconds, last_refreshed_at, next_refresh_at, \
+            refresh_error, updated_at\
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, NULL, NULL, ?)",
+    )
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .bind::<diesel::sql_types::Text, _>("musicbrainz")
+    .bind::<diesel::sql_types::Text, _>("musicbrainz:collection:999")
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "Wrong Collection Title".to_string(),
+    ))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "Wrong collection overview.".to_string(),
+    ))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "https://example.invalid/wrong.jpg".to_string(),
+    ))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "collection".to_string(),
+    ))
+    .bind::<diesel::sql_types::Text, _>("collection")
+    .bind::<diesel::sql_types::Text, _>("linked")
+    .bind::<diesel::sql_types::Text, _>("fresh")
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(Some(i64::MAX - 1))
+    .execute(&mut connection)
+    .unwrap();
+
+    let detail = get_media_item(&mut connection, movie.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected item detail to exist");
+    assert_eq!(detail.display_title, "The Matrix");
+    assert_eq!(
+        detail.overview.as_deref(),
+        Some("Primary metadata overview.")
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
+    let root = unique_temp_dir("metadata_refresh_target_change_clears_cache");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("metadata_refresh_target_change_clears_cache_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let movie = items.first().unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: Some("A hacker discovers reality is a simulation.".into()),
+            artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
+            backdrop_url: Some("https://image.tmdb.org/t/p/w1280/backdrop.jpg".into()),
+            release_year: Some(1999),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+    diesel::sql_query(
+        "UPDATE item_metadata_links SET cached_artwork_path = ?, cached_backdrop_path = ? WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "C:/tmp/old-poster.jpg".to_string(),
+    ))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
+        "C:/tmp/old-backdrop.jpg".to_string(),
+    ))
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .execute(&mut connection)
+    .unwrap();
+
+    set_item_metadata_refresh_state(
+        &mut connection,
+        movie.id,
+        MetadataProviderId::Tmdb,
+        "999",
+        Some("movie"),
+        "pending",
+        None,
+    )
+    .unwrap();
+
+    let link = get_primary_item_metadata_link(&mut connection, movie.id)
+        .unwrap()
+        .expect("Expected metadata link to exist");
+    assert!(
+        link.cached_artwork_path.is_none(),
+        "Expected cached artwork path to clear when metadata target changes"
+    );
+    assert!(
+        link.cached_backdrop_path.is_none(),
+        "Expected cached backdrop path to clear when metadata target changes"
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_external_id() {
+    let root = unique_temp_dir("preferred_episode_metadata_link");
+    let alpha = root.join("Alpha Show").join("Season 1");
+    let beta = root.join("Beta Show").join("Season 1");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+    fs::write(alpha.join("Alpha Show - S01E01.mkv"), b"video").unwrap();
+    fs::write(beta.join("Beta Show - S01E01.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("preferred_episode_metadata_link_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let alpha_show = items
+        .iter()
+        .find(|item| item.item_type == "show" && item.display_title.contains("Alpha"))
+        .unwrap();
+    let alpha_episode = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.relative_path.contains("Alpha Show"))
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        alpha_show.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "111".into(),
+            media_type: Some("tv".into()),
+            title: Some("Alpha Show".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        alpha_episode.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "tv:222:season:1:episode:1".into(),
+            media_type: Some("tv_episode".into()),
+            title: Some("Wrong Episode".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    let preferred = get_preferred_item_metadata_link(&mut connection, alpha_episode.id).unwrap();
+    assert!(
+        preferred.is_none(),
+        "Expected mismatched TMDB episode link to be rejected"
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_resolve_media_item_source_path_rejects_mismatched_backing_file() {
+    let root = unique_temp_dir("reject_mismatched_episode_backing_file");
+    let alpha = root.join("Alpha Show").join("Season 1");
+    let beta = root.join("Beta Show").join("Season 1");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+    fs::write(alpha.join("Alpha Show - S01E01.mkv"), b"video").unwrap();
+    fs::write(beta.join("Beta Show - S01E01.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        metadata_providers: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("reject_mismatched_episode_backing_file_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let alpha_episode = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.relative_path.contains("Alpha Show"))
+        .unwrap();
+    let beta_episode = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.relative_path.contains("Beta Show"))
+        .unwrap();
+
+    diesel::sql_query("UPDATE media_files SET media_item_id = NULL WHERE media_item_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(alpha_episode.id)
+        .execute(&mut connection)
+        .unwrap();
+    diesel::sql_query("UPDATE media_files SET media_item_id = ? WHERE media_item_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(alpha_episode.id)
+        .bind::<diesel::sql_types::Integer, _>(beta_episode.id)
+        .execute(&mut connection)
+        .unwrap();
+
+    let resolved = resolve_media_item_source_path(&mut connection, alpha_episode.id).unwrap();
+    assert!(
+        resolved.is_none(),
+        "Expected no source path when the linked media file path does not match the item path"
+    );
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -680,7 +1027,8 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
     }];
 
     let (mut connection, db_path) = create_test_connection("library_refresh_progress_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
     let movie = items.iter().find(|item| item.item_type == "movie").unwrap();
@@ -694,7 +1042,9 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
             media_type: Some("movie".into()),
             title: Some("The Matrix".into()),
             overview: Some("A hacker discovers reality is a simulation.".into()),
-            artwork_url: Some("https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg".into()),
+            artwork_url: Some(
+                "https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg".into(),
+            ),
             backdrop_url: None,
             release_year: Some(1999),
             provider_payload_json: None,
@@ -750,7 +1100,11 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
     let root = unique_temp_dir("themerr_theme_song_reference_show");
     let season_dir = root.join("Mock Show").join("Season 1");
     fs::create_dir_all(&season_dir).unwrap();
-    fs::write(season_dir.join("Mock Show - S01E01 - Winter Is Coming.mkv"), b"video").unwrap();
+    fs::write(
+        season_dir.join("Mock Show - S01E01 - Winter Is Coming.mkv"),
+        b"video",
+    )
+    .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
         name: "Shows".into(),
@@ -762,12 +1116,19 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
     }];
 
     let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_show_db");
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
     let show = items.iter().find(|item| item.item_type == "show").unwrap();
-    let season = items.iter().find(|item| item.item_type == "season").unwrap();
-    let episode = items.iter().find(|item| item.item_type == "episode").unwrap();
+    let season = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode")
+        .unwrap();
 
     upsert_item_metadata_snapshot(
         &mut connection,
@@ -797,6 +1158,68 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
     assert_eq!(
         get_item_theme_song_themerr_reference(&mut connection, episode.id).unwrap(),
         Some(("tv".into(), "1399".into()))
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
+    let root = unique_temp_dir("themerr_theme_song_reference_movie");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_movie_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let movie = items.iter().find(|item| item.item_type == "movie").unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "title": "The Matrix",
+                    "imdb_id": "tt0133093"
+                })
+                .to_string(),
+            ),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        get_item_theme_song_themerr_references(&mut connection, movie.id).unwrap(),
+        vec![
+            ("movie".into(), "themoviedb".into(), "603".into()),
+            ("movie".into(), "imdb".into(), "tt0133093".into()),
+        ]
+    );
+    assert_eq!(
+        get_item_theme_song_themerr_reference(&mut connection, movie.id).unwrap(),
+        Some(("movie".into(), "603".into()))
     );
 
     drop(connection);
@@ -842,11 +1265,100 @@ fn test_library_settings_are_persisted_in_database() {
     assert_eq!(updated[0].kind, MediaLibraryKind::Shows);
 
     assert!(remove_library_setting(&mut connection, 0).unwrap());
-    assert!(list_library_settings(&mut connection, &[]).unwrap().is_empty());
+    assert!(
+        list_library_settings(&mut connection, &[])
+            .unwrap()
+            .is_empty()
+    );
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(updated_root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
+    let root = unique_temp_dir("episode_artwork_id_collision");
+    let alpha = root.join("Alpha Show").join("Season 1");
+    let beta = root.join("Beta Show").join("Season 1");
+    let gamma = root.join("Gamma Show").join("Season 1");
+    fs::create_dir_all(&alpha).unwrap();
+    fs::create_dir_all(&beta).unwrap();
+    fs::create_dir_all(&gamma).unwrap();
+    fs::write(alpha.join("Alpha Show - S01E01.mkv"), b"video").unwrap();
+    fs::write(beta.join("Beta Show - S01E01.mkv"), b"video").unwrap();
+    fs::write(gamma.join("Gamma Show - S01E01.mkv"), b"video").unwrap();
+    fs::write(gamma.join("poster.jpg"), b"image").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        metadata_providers: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("episode_artwork_id_collision_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let episodes = items
+        .into_iter()
+        .filter(|item| item.item_type == "episode")
+        .collect::<Vec<_>>();
+    let target_episode = episodes
+        .iter()
+        .find(|episode| episode.relative_path.contains("Alpha Show"))
+        .expect("Expected Alpha Show episode to exist");
+    let fallback_episode = episodes
+        .iter()
+        .find(|episode| episode.relative_path.contains("Gamma Show"))
+        .expect("Expected Gamma Show episode to exist");
+
+    diesel::sql_query("UPDATE media_files SET media_item_id = NULL WHERE media_item_id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_episode.id)
+        .execute(&mut connection)
+        .unwrap();
+    diesel::sql_query("DELETE FROM media_files WHERE id = ?")
+        .bind::<diesel::sql_types::Integer, _>(target_episode.id)
+        .execute(&mut connection)
+        .unwrap();
+    diesel::sql_query(
+        "INSERT INTO media_files (\
+            id, library_id, source_root_path, relative_path, file_size, modified_at, media_kind, \
+            fingerprint_seed, display_title, container, duration_ms, bit_rate, width, height, \
+            video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, media_item_id\
+        ) \
+        SELECT \
+            ?, library_id, source_root_path, relative_path, file_size, modified_at, media_kind, \
+            fingerprint_seed, display_title, container, duration_ms, bit_rate, width, height, \
+            video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, ? \
+        FROM media_files WHERE media_item_id = ? LIMIT 1",
+    )
+        .bind::<diesel::sql_types::Integer, _>(target_episode.id)
+        .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
+        .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
+        .execute(&mut connection)
+        .unwrap();
+
+    let resolved = resolve_local_item_artwork_path(
+        &mut connection,
+        target_episode.id,
+        ArtworkKind::Poster,
+        &root.to_string_lossy(),
+    )
+    .unwrap();
+    assert!(
+        resolved.is_none(),
+        "Expected no artwork when an episode has no linked media file, got {:?}",
+        resolved
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();
 }
 
@@ -869,12 +1381,32 @@ fn test_playback_progress_is_scoped_per_user() {
     diesel::sql_query("INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1), ('bob', 'hash', NULL, 0)")
         .execute(&mut connection)
         .unwrap();
-    let persisted = sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
-    let item = list_media_items(&mut connection, Some(library.id)).unwrap().pop().unwrap();
+    let item = list_media_items(&mut connection, Some(library.id))
+        .unwrap()
+        .pop()
+        .unwrap();
 
-    upsert_playback_progress(&mut connection, 1, item.id, 120_000, item.duration_ms, false).unwrap();
-    upsert_playback_progress(&mut connection, 2, item.id, 240_000, item.duration_ms, false).unwrap();
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        item.id,
+        120_000,
+        item.duration_ms,
+        false,
+    )
+    .unwrap();
+    upsert_playback_progress(
+        &mut connection,
+        2,
+        item.id,
+        240_000,
+        item.duration_ms,
+        false,
+    )
+    .unwrap();
 
     let alice_home = get_media_home(&mut connection, Some(1), Some(library.id)).unwrap();
     let bob_home = get_media_home(&mut connection, Some(2), Some(library.id)).unwrap();
@@ -890,4 +1422,3 @@ fn test_playback_progress_is_scoped_per_user() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();
 }
-

@@ -5,8 +5,8 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    item_metadata_collections, item_metadata_links, item_metadata_people, media_files,
-    media_items, media_libraries, playback_progress, scan_state, users,
+    item_metadata_collections, item_metadata_links, item_metadata_people, media_files, media_items,
+    media_libraries, playback_progress, scan_state, users,
 };
 
 #[derive(Queryable, Selectable, Insertable, Debug)]
@@ -18,6 +18,8 @@ pub struct User {
     pub password: String,
     pub pin: Option<String>,
     pub admin: bool,
+    pub birthday: Option<String>,
+    pub profile_image_url: Option<String>,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]

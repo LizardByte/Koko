@@ -43,6 +43,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         settings::remove_library,
         user::get_bootstrap,
         user::list_users,
+        user::update_user,
         user::create_user,
     ]
 }

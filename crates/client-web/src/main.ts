@@ -1,4 +1,5 @@
 import './style.css';
+import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
 import {
   addLibrary,
@@ -33,10 +34,12 @@ import {
   setStoredAuthToken,
   updatePlaybackProgress,
   updateSettings,
+  updateUser,
   type AppBootstrapResponse,
   type ApiMode,
   type BootstrapUser,
   type CreateUserRequest,
+  type UpdateUserRequest,
   type MediaCollectionSummary,
   type ItemMetadataResponse,
   type LoginRequest,
@@ -58,9 +61,10 @@ import {
 type AppRoute =
   | { page: 'home'; libraryId?: number }
   | { page: 'item'; itemId: number }
-  | { page: 'settings' };
+  | { page: 'settings'; section?: SettingsSection };
 
 type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
+type SettingsSection = 'general' | 'libraries' | 'dashboard' | 'logs';
 
 interface BrowseFilter {
   kind: 'category' | 'collection';
@@ -308,8 +312,9 @@ function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
 function parseRoute(): AppRoute {
   const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
 
-  if (normalizedPath === '/settings') {
-    return { page: 'settings' };
+  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|dashboard|logs))?$/);
+  if (settingsMatch) {
+    return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }
 
   const itemMatch = normalizedPath.match(/^\/items\/(\d+)$/);
@@ -360,23 +365,44 @@ function itemIsMetadataPending(item: Pick<MediaItemSummary, 'id' | 'metadata_ref
   return item?.metadata_refresh_state === 'pending' || itemHasActiveMetadataRefresh(item?.id);
 }
 
+function itemPageMetadataRefreshItemIds(): Set<number> {
+  const itemIds = new Set<number>();
+  if (state.route.page !== 'item' || !state.selectedItem) {
+    return itemIds;
+  }
+
+  itemIds.add(state.selectedItem.id);
+  state.selectedItem.children.forEach((child) => itemIds.add(child.id));
+  state.selectedItem.hierarchy.forEach((ancestor) => itemIds.add(ancestor.id));
+  return itemIds;
+}
+
 function librariesHavePendingMetadataRefresh(): boolean {
   return state.libraries.some((library) => library.metadata_refresh_pending > 0);
 }
 
 function shouldAutoRefreshMetadata(): boolean {
+  if (state.route.page === 'settings') {
+    return false;
+  }
+
+  if (state.route.page === 'item') {
+    const itemPageIds = itemPageMetadataRefreshItemIds();
+    const hasActiveItemPageRefresh = activeMetadataRefreshActivities()
+      .some((activity) => activity.item_ids.some((itemId) => itemPageIds.has(itemId)));
+
+    return itemIsMetadataPending(state.selectedItem)
+      || hasActiveItemPageRefresh
+      || Boolean(state.selectedItem?.children.some((child) => itemIsMetadataPending(child)))
+      || Boolean(state.selectedItemMetadata?.matches.some((match) => match.refresh_state === 'pending'));
+  }
+
   if (activeMetadataRefreshActivities().length > 0) {
     return true;
   }
 
   if (librariesHavePendingMetadataRefresh()) {
     return true;
-  }
-
-  if (state.route.page === 'item') {
-    return itemIsMetadataPending(state.selectedItem)
-      || Boolean(state.selectedItem?.children.some((child) => itemIsMetadataPending(child)))
-      || Boolean(state.selectedItemMetadata?.matches.some((match) => match.refresh_state === 'pending'));
   }
 
   const visibleShelfItems = state.home?.shelves.flatMap((shelf) => shelf.items) ?? [];
@@ -883,7 +909,7 @@ function renderAuthShell(title: string, description: string, content: string): s
     <div class="auth-shell">
       <section class="auth-panel panel">
         <div class="auth-header">
-          <div class="brand-mark">${renderIcon('clapperboard', 'brand-icon')}</div>
+          <div class="brand-mark logo-brand-mark"><img class="brand-logo" src="${escapeHtml(kokoLogoUrl)}" alt="" /></div>
           <div>
             <h1>Koko</h1>
             <p class="muted">${escapeHtml(description)}</p>
@@ -908,6 +934,8 @@ function renderWelcomeScreen(): string {
         <label>Username<input name="username" autocomplete="username" required /></label>
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
+        <label>Birthday<input name="birthday" type="date" /></label>
+        <label>Profile image URL<input name="profile_image_url" type="url" placeholder="https://example.com/avatar.jpg" /></label>
         <button type="submit">${renderButtonContent('Create admin account', 'user-plus')}</button>
       </form>
     `,
@@ -934,32 +962,40 @@ function renderUserManagement(): string {
   }
 
   return `
+    <section class="settings-form user-management-form">
+      <div class="section-heading">
+        <h3>Users</h3>
+      </div>
+      <div class="user-list">
+        ${state.users.length
+          ? state.users.map((user) => `
+              <form class="provider-row user-edit-row" data-update-user-id="${user.id}">
+                <div class="user-edit-fields">
+                  <label>Username<input name="username" value="${escapeHtml(user.username)}" required /></label>
+                  <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
+                  <label>Profile image URL<input name="profile_image_url" type="url" value="${escapeHtml(user.profile_image_url ?? '')}" placeholder="https://example.com/avatar.jpg" /></label>
+                  <label class="checkbox-inline"><input name="admin" type="checkbox" ${user.admin ? 'checked' : ''} /> Administrator</label>
+                </div>
+                <div class="provider-tags">
+                  <span class="tag ${user.admin ? 'success' : ''}">${user.admin ? 'Admin' : 'User'}</span>
+                  <button type="submit" class="secondary-button">${renderButtonContent('Save', 'save')}</button>
+                </div>
+              </form>
+            `).join('')
+          : '<div class="empty-state tight">No users found.</div>'}
+      </div>
+    </section>
+
     <form id="create-user-form" class="settings-form user-management-form">
       <section>
-        <div class="section-heading">
-          <h3>Users</h3>
-        </div>
-        <div class="user-list">
-          ${state.users.length
-            ? state.users.map((user) => `
-                <div class="provider-row">
-                  <div>
-                    <strong>${escapeHtml(user.username)}</strong>
-                    <p>${user.admin ? 'Administrator' : 'Standard user'}</p>
-                  </div>
-                  <div class="provider-tags">
-                    <span class="tag ${user.admin ? 'success' : ''}">${user.admin ? 'Admin' : 'User'}</span>
-                  </div>
-                </div>
-              `).join('')
-            : '<div class="empty-state tight">No users found.</div>'}
-        </div>
         <div class="section-heading">
           <h3>Add user</h3>
         </div>
         <label>Username<input name="username" autocomplete="off" required /></label>
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
+        <label>Birthday<input name="birthday" type="date" /></label>
+        <label>Profile image URL<input name="profile_image_url" type="url" placeholder="https://example.com/avatar.jpg" /></label>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>
         <button type="submit">${renderButtonContent('Create user', 'user-plus')}</button>
       </section>
@@ -1594,31 +1630,42 @@ function renderMetadataDashboard(): string {
         </div>
       </form>
       ${filteredItems.length
-        ? `<div class="metadata-dashboard-table">${filteredItems.map((item) => {
+        ? `<div class="table-shell metadata-dashboard-table-shell">
+            <table class="data-table metadata-dashboard-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Library</th>
+                  <th>Refresh state</th>
+                  <th>Artwork updated</th>
+                  <th>Children</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>${filteredItems.map((item) => {
             const library = state.libraries.find((entry) => entry.id === item.library_id);
             const refreshState = metadataDashboardRefreshState(item);
             return `
-              <article class="metadata-dashboard-row">
-                <div class="metadata-dashboard-copy">
-                  <div class="metadata-dashboard-title-row">
+              <tr>
+                <td>
+                  <div class="table-title-cell">
                     <strong>${escapeHtml(item.display_title)}</strong>
-                    <div class="provider-tags">
-                      <span class="tag ${refreshState === 'error' ? 'danger-tag' : refreshState === 'pending' || refreshState === 'stalled' ? 'warning' : refreshState === 'fresh' ? 'success' : ''}">${escapeHtml(metadataDashboardRefreshLabel(item))}</span>
-                      <span class="tag">${escapeHtml(humanizeItemType(item.item_type))}</span>
-                      <span class="tag">${escapeHtml(library?.name ?? `Library ${item.library_id}`)}</span>
-                    </div>
+                    <p class="muted metadata-dashboard-path">${escapeHtml(item.relative_path)}</p>
+                    ${item.metadata_refresh_error ? `<p class="metadata-dashboard-error">${escapeHtml(item.metadata_refresh_error)}</p>` : ''}
                   </div>
-                  <p class="muted metadata-dashboard-path">${escapeHtml(item.relative_path)}</p>
-                  <div class="metadata-dashboard-meta muted">
-                    <span>Artwork updated ${escapeHtml(formatTimestamp(item.artwork_updated_at))}</span>
-                    <span>${escapeHtml(formatChildCount(item))}</span>
-                  </div>
-                  ${item.metadata_refresh_error ? `<p class="metadata-dashboard-error">${escapeHtml(item.metadata_refresh_error)}</p>` : ''}
-                </div>
-                <button type="button" class="secondary-button" data-item-id="${item.id}">${renderButtonContent('Open item', 'arrow-left', 'end')}</button>
-              </article>
+                </td>
+                <td>${escapeHtml(humanizeItemType(item.item_type))}</td>
+                <td>${escapeHtml(library?.name ?? `Library ${item.library_id}`)}</td>
+                <td><span class="tag ${refreshState === 'error' ? 'danger-tag' : refreshState === 'pending' || refreshState === 'stalled' ? 'warning' : refreshState === 'fresh' ? 'success' : ''}">${escapeHtml(metadataDashboardRefreshLabel(item))}</span></td>
+                <td>${escapeHtml(formatTimestamp(item.artwork_updated_at))}</td>
+                <td>${escapeHtml(formatChildCount(item))}</td>
+                <td><button type="button" class="secondary-button" data-item-id="${item.id}">${renderButtonContent('Open item', 'arrow-left', 'end')}</button></td>
+              </tr>
             `;
-          }).join('')}</div>`
+          }).join('')}</tbody>
+            </table>
+          </div>`
         : '<div class="empty-state tight">No items matched the current dashboard filters.</div>'}
     </section>
   `;
@@ -1701,21 +1748,54 @@ function renderLogViewer(): string {
         </div>
       </form>
       ${logEntries.length
-        ? `<div class="log-entry-list">${logEntries.map((entry) => `
-            <article class="log-entry-card">
-              <div class="log-entry-header">
-                <div class="provider-tags">
-                  <span class="tag ${entry.level === 'ERROR' ? 'danger-tag' : entry.level === 'WARN' ? 'warning' : ''}">${escapeHtml(entry.level)}</span>
-                  <span class="tag">${escapeHtml(entry.module)}</span>
-                </div>
-                <span class="muted">${escapeHtml(entry.timestamp)}</span>
-              </div>
-              <p class="log-entry-source muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</p>
-              <pre class="log-entry-message">${escapeHtml(entry.message)}</pre>
-            </article>
-          `).join('')}</div>`
+        ? `<div class="table-shell">
+            <table class="data-table log-entries-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Level</th>
+                  <th>Module</th>
+                  <th>Source</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>${logEntries.map((entry) => `
+                <tr>
+                  <td>${escapeHtml(entry.timestamp)}</td>
+                  <td><span class="tag ${entry.level === 'ERROR' ? 'danger-tag' : entry.level === 'WARN' ? 'warning' : ''}">${escapeHtml(entry.level)}</span></td>
+                  <td>${escapeHtml(entry.module)}</td>
+                  <td class="muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</td>
+                  <td><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
+                </tr>
+              `).join('')}</tbody>
+            </table>
+          </div>`
         : '<div class="empty-state tight">No log entries matched the current filters.</div>'}
     </section>
+  `;
+}
+
+function activeSettingsSection(): SettingsSection {
+  return state.route.page === 'settings' ? state.route.section ?? 'general' : 'general';
+}
+
+function renderSettingsSectionNav(): string {
+  const activeSection = activeSettingsSection();
+  const sections: Array<{ id: SettingsSection; label: string; path: string }> = [
+    { id: 'general', label: 'General', path: '/settings' },
+    { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
+    { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
+    { id: 'logs', label: 'Logs', path: '/settings/logs' },
+  ];
+
+  return `
+    <nav class="settings-section-nav panel page-panel" aria-label="Settings sections">
+      ${sections.map((section) => `
+        <button type="button" class="secondary-button ${activeSection === section.id ? 'active' : ''}" data-settings-section-path="${section.path}">
+          ${escapeHtml(section.label)}
+        </button>
+      `).join('')}
+    </nav>
   `;
 }
 
@@ -1726,10 +1806,6 @@ function renderItemPage(): string {
 
   const posterUrl = state.selectedItem.poster_url
     ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
-    : undefined;
-  const themeSongUrl = state.selectedItem.theme_song_url ? resolveApiUrl(state.selectedItem.theme_song_url) : undefined;
-  const themeSongYouTubeUrl = state.selectedItem.theme_song_youtube_url
-    ? buildYouTubeEmbedUrl(state.selectedItem.theme_song_youtube_url, { autoplay: true, controls: false })
     : undefined;
   const trailerOptions = currentTrailerOptions();
   const preferredTrailer = trailerOptions[0];
@@ -1773,27 +1849,8 @@ function renderItemPage(): string {
     : state.selectedItem.item_type === 'season'
       ? 'Episodes'
       : 'Contained items';
-  const themeSongMarkup = !state.isPlayerOpen && !state.activeTrailer
-    ? themeSongUrl
-      ? `<audio id="theme-song-player" autoplay preload="auto" src="${escapeHtml(themeSongUrl)}"></audio>`
-      : themeSongYouTubeUrl
-        ? `
-          <iframe
-            id="theme-song-youtube-player"
-            class="theme-song-iframe"
-            src="${escapeHtml(themeSongYouTubeUrl)}"
-            title="${escapeHtml(state.selectedItem.display_title)} theme song"
-            allow="autoplay; encrypted-media; picture-in-picture"
-            referrerpolicy="origin"
-            tabindex="-1"
-          ></iframe>
-        `
-        : ''
-    : '';
-
   return `
     <section class="item-page">
-      ${themeSongMarkup}
       ${hierarchy.length ? `
         <nav class="item-breadcrumbs panel page-panel" aria-label="Item hierarchy">
           ${hierarchy.map((item) => `
@@ -1903,12 +1960,25 @@ function renderItemPage(): string {
   `;
 }
 
-function metadataProviderCheckboxes(prefix: string, selectedProviders: string[]): string {
-  const allProviders = ['tmdb', 'musicbrainz', 'open_library', 'local_nfo'];
-  return allProviders
+const metadataProviderKinds: Record<string, string[]> = {
+  tmdb: ['movies', 'shows'],
+  musicbrainz: ['music'],
+  open_library: ['books'],
+  local_nfo: ['movies', 'shows', 'music', 'photos', 'books', 'home_videos'],
+};
+
+function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
+  return Object.keys(metadataProviderKinds)
+    .filter((providerId) => !libraryKind || metadataProviderKinds[providerId].includes(libraryKind))
     .map((providerId) => `
       <label class="checkbox-inline">
-        <input name="${prefix}" type="checkbox" value="${providerId}" ${selectedProviders.includes(providerId) ? 'checked' : ''} />
+        <input
+          name="${prefix}"
+          type="checkbox"
+          value="${providerId}"
+          data-provider-kinds="${metadataProviderKinds[providerId].join(',')}"
+          ${selectedProviders.includes(providerId) ? 'checked' : ''}
+        />
         ${providerId}
       </label>
     `)
@@ -1958,7 +2028,7 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
         </div>
         <fieldset>
           <legend>Metadata sources</legend>
-          <div class="checkbox-row">${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers)}</div>
+          <div class="checkbox-row">${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}</div>
         </fieldset>
       </section>
     `;
@@ -1968,7 +2038,6 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
 
 function libraryKindOptions(selectedKind: string): string {
   return [
-    ['mixed', 'Mixed'],
     ['movies', 'Movies'],
     ['shows', 'Shows'],
     ['music', 'Music'],
@@ -1987,6 +2056,7 @@ function renderSettingsPage(): string {
   }
 
   const tmdb = settings.metadata.providers.find((provider) => provider.id === 'tmdb');
+  const section = activeSettingsSection();
 
   return `
     ${renderPageNavbar(
@@ -1994,6 +2064,8 @@ function renderSettingsPage(): string {
       'Program configuration',
       `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
     )}
+    ${renderSettingsSectionNav()}
+    ${section === 'general' ? `
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
@@ -2016,14 +2088,6 @@ function renderSettingsPage(): string {
         <section>
           <h3>FFmpeg</h3>
           <div class="form-row">
-            <label>Strategy
-              <select name="ffmpeg_strategy">
-                <option value="external_binaries" ${settings.ffmpeg.strategy === 'external_binaries' ? 'selected' : ''}>External binaries</option>
-                <option value="embedded_libraries_planned" ${settings.ffmpeg.strategy === 'embedded_libraries_planned' ? 'selected' : ''}>Embedded libraries planned</option>
-              </select>
-            </label>
-          </div>
-          <div class="form-row">
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
           </div>
@@ -2043,17 +2107,15 @@ function renderSettingsPage(): string {
             <label>TMDB retry attempts<input name="tmdb_retry_attempts" type="number" min="0" value="${tmdb?.retry_attempts ?? 3}" /></label>
           </div>
           <div class="form-row">
-            <label>TMDB retry backoff (ms)<input name="tmdb_retry_backoff_ms" type="number" min="1" step="100" value="${tmdb?.retry_backoff_ms ?? 1000}" /></label>
-          </div>
-        </section>
-
-        <section>
-          <div class="section-heading">
-            <h3>Libraries</h3>
-          </div>
-          <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
-          <div class="settings-library-list">
-            ${renderExistingLibrariesSettings(settings)}
+            <label>TMDB retry backoff (ms)<input name="tmdb_retry_backoff_ms" type="number" min="0" step="100" value="${tmdb?.retry_backoff_ms ?? 1000}" /></label>
+            <label>Automatic refresh
+              <select name="metadata_refresh_interval_days">
+                <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
+                <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
+                <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
+                <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
+              </select>
+            </label>
           </div>
         </section>
 
@@ -2063,34 +2125,55 @@ function renderSettingsPage(): string {
         </div>
       </form>
 
-      <form id="add-library-form" class="settings-form add-library-form">
-        <section>
-          <h3>Add library</h3>
-          <label>Name<input name="library_name" placeholder="Movies" required /></label>
-          <label>Folders
-            <textarea name="library_paths" rows="4" placeholder="C:/Media/Movies&#10;D:/Overflow/Movies" required></textarea>
-          </label>
-          <div class="form-row">
-            <label>Type
-              <select name="library_kind">
-                ${libraryKindOptions('mixed')}
-              </select>
-            </label>
-            <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
-          </div>
-          <fieldset>
-            <legend>Metadata sources</legend>
-            <div class="checkbox-row">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
-          </fieldset>
-        </section>
-        <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
-      </form>
-
       ${renderUserManagement()}
     </section>
-    ${renderMetadataDashboard()}
-    ${renderSystemActivitiesPanel()}
-    ${renderLogViewer()}
+    ` : ''}
+    ${section === 'libraries' ? `
+      <section class="panel page-panel settings-page-panel">
+        <form id="settings-form" class="settings-form">
+          <section>
+            <div class="section-heading">
+              <h3>Libraries</h3>
+            </div>
+            <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+            <div class="settings-library-list">
+              ${renderExistingLibrariesSettings(settings)}
+            </div>
+          </section>
+          <div class="page-actions">
+            <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
+          </div>
+        </form>
+
+        <form id="add-library-form" class="settings-form add-library-form">
+          <section>
+            <h3>Add library</h3>
+            <label>Name<input name="library_name" placeholder="Movies" required /></label>
+            <label>Folders
+              <textarea name="library_paths" rows="4" placeholder="C:/Media/Movies&#10;D:/Overflow/Movies" required></textarea>
+            </label>
+            <div class="form-row">
+              <label>Type
+                <select name="library_kind">
+                  ${libraryKindOptions('movies')}
+                </select>
+              </label>
+              <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
+            </div>
+            <fieldset>
+              <legend>Metadata sources</legend>
+              <div class="checkbox-row" id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
+            </fieldset>
+          </section>
+          <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
+        </form>
+      </section>
+    ` : ''}
+    ${section === 'dashboard' ? `
+      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
+      <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
+    ` : ''}
+    ${section === 'logs' ? `<div id="log-viewer-panel-root">${renderLogViewer()}</div>` : ''}
   `;
 }
 
@@ -2172,10 +2255,10 @@ function renderRail(): string {
     <aside class="library-rail${collapsed ? ' collapsed' : ''}">
       <div class="library-rail-top">
         <div class="brand-block">
-          <div class="brand-mark">${renderIcon('clapperboard', 'brand-icon')}</div>
+          <div class="brand-mark logo-brand-mark"><img class="brand-logo" src="${escapeHtml(kokoLogoUrl)}" alt="" /></div>
           <div>
             <h1>Koko</h1>
-            <p>${escapeHtml(state.apiMode === 'mock' ? 'Mock data' : 'Live server')}</p>
+            ${state.apiMode === 'mock' ? '<p>Mock data</p>' : ''}
           </div>
         </div>
         <nav class="rail-nav">
@@ -2263,7 +2346,7 @@ function render(preserveScroll = true): void {
 
   createIcons({ icons });
   bindEvents();
-  bindThemeSongPlayer();
+  syncThemeSongPlayer();
   if (preserveScroll) {
     window.requestAnimationFrame(() => {
       const shell = document.querySelector<HTMLElement>('.main-shell');
@@ -2274,12 +2357,14 @@ function render(preserveScroll = true): void {
   }
 }
 
-async function refreshData(): Promise<void> {
+async function refreshData(showLoading = true): Promise<void> {
   state.route = parseRoute();
   state.isLoading = true;
   state.error = undefined;
   state.apiMode = getApiMode();
-  render(false);
+  if (showLoading) {
+    render(false);
+  }
 
   try {
     state.bootstrap = await getAppBootstrap().catch(async (error) => {
@@ -2401,6 +2486,12 @@ async function refreshData(): Promise<void> {
   }
 }
 
+function setAuthFormBusy(form: HTMLFormElement, busy: boolean): void {
+  form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach((control) => {
+    control.disabled = busy;
+  });
+}
+
 async function refreshPendingMetadataData(): Promise<void> {
   const route = parseRoute();
   let shouldRender = false;
@@ -2511,6 +2602,7 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
   if (!current) {
     return undefined;
   }
+  const settingsSection = activeSettingsSection();
 
   return {
     general: {
@@ -2518,30 +2610,45 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
     },
     media: {
       libraries: current.media.libraries.map((library, index) => {
-        const paths = parsePathsInput(formData.get(`existing_library_paths_${index}`));
+        const pathsField = `existing_library_paths_${index}`;
+        if (!formData.has(pathsField)) {
+          return library;
+        }
+
+        const paths = parsePathsInput(formData.get(pathsField));
+        const providerField = `existing_library_metadata_provider_${index}`;
         return {
           name: String(formData.get(`existing_library_name_${index}`) ?? library.name),
           path: paths[0] ?? library.path,
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
           kind: String(formData.get(`existing_library_kind_${index}`) ?? library.kind),
-          metadata_providers: formData
-            .getAll(`existing_library_metadata_provider_${index}`)
-            .map((value) => String(value)),
+          metadata_providers: formData.has(providerField)
+            ? formData.getAll(providerField).map((value) => String(value))
+            : library.metadata_providers,
         };
       }),
     },
     metadata: {
+      refresh_interval_days: formData.has('metadata_refresh_interval_days')
+        ? String(formData.get('metadata_refresh_interval_days') ?? '') === 'never'
+          ? null
+          : Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30)
+        : current.metadata.refresh_interval_days,
       providers: current.metadata.providers.map((provider) => {
         if (provider.id !== 'tmdb') {
           return provider;
         }
 
+        if (!formData.has('tmdb_api_key') && !formData.has('tmdb_enabled')) {
+          return provider;
+        }
+
         return {
           ...provider,
-          enabled: formData.get('tmdb_enabled') === 'on',
-          api_key: String(formData.get('tmdb_api_key') ?? ''),
-          language: String(formData.get('tmdb_language') ?? 'en-US'),
+          enabled: settingsSection === 'general' ? formData.get('tmdb_enabled') === 'on' : provider.enabled,
+          api_key: String(formData.get('tmdb_api_key') ?? provider.api_key ?? ''),
+          language: String(formData.get('tmdb_language') ?? provider.language),
           rate_limit_per_second: Math.max(1, Number(formData.get('tmdb_rate_limit_per_second') ?? provider.rate_limit_per_second)),
           retry_attempts: Math.max(0, Number(formData.get('tmdb_retry_attempts') ?? provider.retry_attempts)),
           retry_backoff_ms: Math.max(1, Number(formData.get('tmdb_retry_backoff_ms') ?? provider.retry_backoff_ms)),
@@ -2549,23 +2656,93 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
       }),
     },
     server: {
-      use_https: formData.get('use_https') === 'on',
+      use_https: settingsSection === 'general' ? formData.get('use_https') === 'on' : current.server.use_https,
       address: String(formData.get('address') ?? current.server.address),
       port: Number(formData.get('port') ?? current.server.port),
       cert_path: String(formData.get('cert_path') ?? current.server.cert_path),
       key_path: String(formData.get('key_path') ?? current.server.key_path),
-      use_custom_certs: formData.get('use_custom_certs') === 'on',
+      use_custom_certs: settingsSection === 'general'
+        ? formData.get('use_custom_certs') === 'on'
+        : current.server.use_custom_certs,
     },
     ffmpeg: {
-      strategy: String(formData.get('ffmpeg_strategy') ?? current.ffmpeg.strategy),
       ffmpeg_path: String(formData.get('ffmpeg_path') ?? current.ffmpeg.ffmpeg_path),
       ffprobe_path: String(formData.get('ffprobe_path') ?? current.ffmpeg.ffprobe_path),
     },
   };
 }
 
-function bindThemeSongPlayer(): void {
-  const themePlayer = document.querySelector<HTMLAudioElement>('#theme-song-player');
+function themeSongLayer(): HTMLElement {
+  let layer = document.querySelector<HTMLElement>('#theme-song-layer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'theme-song-layer';
+    document.body.appendChild(layer);
+  }
+
+  return layer;
+}
+
+function currentThemeSongSource(): { kind: 'audio' | 'youtube'; src: string; title: string } | undefined {
+  if (state.route.page !== 'item' || !state.selectedItem || state.isPlayerOpen || state.activeTrailer) {
+    return undefined;
+  }
+
+  if (state.selectedItem.theme_song_url) {
+    return {
+      kind: 'audio',
+      src: resolveApiUrl(state.selectedItem.theme_song_url),
+      title: state.selectedItem.display_title,
+    };
+  }
+
+  const youtubeUrl = state.selectedItem.theme_song_youtube_url
+    ? buildYouTubeEmbedUrl(state.selectedItem.theme_song_youtube_url, { autoplay: true, controls: false })
+    : undefined;
+  if (!youtubeUrl) {
+    return undefined;
+  }
+
+  return {
+    kind: 'youtube',
+    src: youtubeUrl,
+    title: state.selectedItem.display_title,
+  };
+}
+
+function syncThemeSongPlayer(): void {
+  const layer = themeSongLayer();
+  const source = currentThemeSongSource();
+  if (!source) {
+    layer.replaceChildren();
+    delete layer.dataset.themeKind;
+    delete layer.dataset.themeSrc;
+    return;
+  }
+
+  if (layer.hasChildNodes() && layer.dataset.themeKind === source.kind && layer.dataset.themeSrc === source.src) {
+    return;
+  }
+
+  layer.dataset.themeKind = source.kind;
+  layer.dataset.themeSrc = source.src;
+  if (source.kind === 'youtube') {
+    layer.innerHTML = `
+      <iframe
+        id="theme-song-youtube-player"
+        class="theme-song-iframe"
+        src="${escapeHtml(source.src)}"
+        title="${escapeHtml(source.title)} theme song"
+        allow="autoplay; encrypted-media; picture-in-picture"
+        referrerpolicy="origin"
+        tabindex="-1"
+      ></iframe>
+    `;
+    return;
+  }
+
+  layer.innerHTML = `<audio id="theme-song-player" autoplay preload="auto" src="${escapeHtml(source.src)}"></audio>`;
+  const themePlayer = layer.querySelector<HTMLAudioElement>('#theme-song-player');
   if (!themePlayer) {
     return;
   }
@@ -2594,7 +2771,14 @@ async function refreshLogsView(): Promise<void> {
   } catch (error) {
     state.error = error instanceof Error ? error.message : 'Failed to load logs.';
   } finally {
-    render();
+    const root = document.querySelector<HTMLElement>('#log-viewer-panel-root');
+    if (!root) {
+      render();
+      return;
+    }
+    root.innerHTML = renderLogViewer();
+    createIcons({ icons });
+    bindEvents();
   }
 }
 
@@ -2642,14 +2826,18 @@ function bindEvents(): void {
       password: String(formData.get('password') ?? ''),
       pin: String(formData.get('pin') ?? '').trim() || undefined,
       admin: true,
+      birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+      profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
     };
 
     try {
+      setAuthFormBusy(form, true);
       await createUser(request);
       const token = await loginUser({ username: request.username, password: request.password });
       setStoredAuthToken(token.token);
-      await refreshData();
+      await refreshData(false);
     } catch (error) {
+      setAuthFormBusy(form, false);
       state.error = error instanceof Error ? error.message : 'Failed to create the first user.';
       render();
     }
@@ -2669,10 +2857,12 @@ function bindEvents(): void {
     };
 
     try {
+      setAuthFormBusy(form, true);
       const token = await loginUser(request);
       setStoredAuthToken(token.token);
-      await refreshData();
+      await refreshData(false);
     } catch (error) {
+      setAuthFormBusy(form, false);
       clearStoredAuthToken();
       state.error = error instanceof Error ? error.message : 'Failed to sign in.';
       render();
@@ -2702,6 +2892,15 @@ function bindEvents(): void {
 
   document.querySelector<HTMLElement>('[data-nav-settings]')?.addEventListener('click', () => {
     navigateTo('/settings');
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-settings-section-path]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const path = button.dataset.settingsSectionPath;
+      if (path) {
+        navigateTo(path);
+      }
+    });
   });
 
   document.querySelector<HTMLFormElement>('#search-form')?.addEventListener('submit', (event) => {
@@ -3002,7 +3201,14 @@ function bindEvents(): void {
       refreshState: String(formData.get('dashboard_refresh_state') ?? '').trim(),
       search: String(formData.get('dashboard_search') ?? '').trim(),
     };
-    render();
+    const root = document.querySelector<HTMLElement>('#metadata-dashboard-panel-root');
+    if (!root) {
+      render();
+      return;
+    }
+    root.innerHTML = renderMetadataDashboard();
+    createIcons({ icons });
+    bindEvents();
   });
 
   document.querySelector<HTMLButtonElement>('#clear-metadata-dashboard-filters')?.addEventListener('click', () => {
@@ -3012,7 +3218,14 @@ function bindEvents(): void {
       refreshState: '',
       search: '',
     };
-    render();
+    const root = document.querySelector<HTMLElement>('#metadata-dashboard-panel-root');
+    if (!root) {
+      render();
+      return;
+    }
+    root.innerHTML = renderMetadataDashboard();
+    createIcons({ icons });
+    bindEvents();
   });
 
   document.querySelector<HTMLFormElement>('#log-filter-form')?.addEventListener('submit', async (event) => {
@@ -3048,6 +3261,36 @@ function bindEvents(): void {
     await refreshLogsView();
   });
 
+  document.querySelectorAll<HTMLFormElement>('[data-update-user-id]').forEach((form) => {
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const userId = Number(form.dataset.updateUserId);
+      if (!Number.isFinite(userId)) {
+        return;
+      }
+
+      const formData = new FormData(form);
+      const request: UpdateUserRequest = {
+        username: String(formData.get('username') ?? '').trim(),
+        admin: formData.get('admin') === 'on',
+        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+        profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
+      };
+
+      try {
+        const updatedUser = await updateUser(userId, request);
+        state.users = state.users.map((user) => (user.id === updatedUser.id ? updatedUser : user));
+        if (state.bootstrap?.current_user?.id === updatedUser.id) {
+          state.bootstrap.current_user = updatedUser;
+        }
+        render();
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to update the user.';
+        render();
+      }
+    });
+  });
+
   document.querySelector<HTMLFormElement>('#create-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement | null;
@@ -3061,6 +3304,8 @@ function bindEvents(): void {
       password: String(formData.get('password') ?? ''),
       pin: String(formData.get('pin') ?? '').trim() || undefined,
       admin: formData.get('admin') === 'on',
+      birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+      profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
     };
 
     try {
@@ -3129,7 +3374,7 @@ function bindEvents(): void {
       path: paths[0] ?? '',
       paths,
       recursive: formData.get('library_recursive') === 'on',
-      kind: String(formData.get('library_kind') ?? 'mixed'),
+      kind: String(formData.get('library_kind') ?? 'movies'),
       metadata_providers: formData.getAll('library_metadata_provider').map((value) => String(value)),
     };
 
@@ -3143,7 +3388,40 @@ function bindEvents(): void {
     }
   });
 
+  const addLibraryKindSelect = document.querySelector<HTMLSelectElement>('#add-library-form select[name="library_kind"]');
+  addLibraryKindSelect?.addEventListener('change', () => syncAddLibraryProviderOptions());
+  syncAddLibraryProviderOptions();
+
   bindPlayerProgress();
+}
+
+function syncAddLibraryProviderOptions(): void {
+  const form = document.querySelector<HTMLFormElement>('#add-library-form');
+  const kind = form?.querySelector<HTMLSelectElement>('select[name="library_kind"]')?.value;
+  if (!form || !kind) {
+    return;
+  }
+
+  form.querySelectorAll<HTMLInputElement>('input[name="library_metadata_provider"]').forEach((input) => {
+    const supportedKinds = input.dataset.providerKinds?.split(',') ?? [];
+    const supported = supportedKinds.includes(kind);
+    const label = input.closest('label');
+    input.disabled = !supported;
+    if (!supported) {
+      input.checked = false;
+    }
+    label?.classList.toggle('is-hidden', !supported);
+  });
+
+  const visibleCheckedProvider = form.querySelector<HTMLInputElement>(
+    'input[name="library_metadata_provider"]:not(:disabled):checked',
+  );
+  if (!visibleCheckedProvider) {
+    const firstVisibleProvider = form.querySelector<HTMLInputElement>('input[name="library_metadata_provider"]:not(:disabled)');
+    if (firstVisibleProvider) {
+      firstVisibleProvider.checked = true;
+    }
+  }
 }
 
 window.addEventListener('popstate', () => {

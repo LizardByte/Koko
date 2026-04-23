@@ -16,7 +16,9 @@ use rocket_sync_db_pools::{database, diesel};
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
 
 /// Apply SQLite pragmas that improve concurrency and reduce lock contention.
-pub fn configure_sqlite_connection(conn: &mut diesel::SqliteConnection) -> diesel::result::QueryResult<()> {
+pub fn configure_sqlite_connection(
+    conn: &mut diesel::SqliteConnection
+) -> diesel::result::QueryResult<()> {
     conn.batch_execute(
         "PRAGMA foreign_keys = ON;\
          PRAGMA journal_mode = WAL;\

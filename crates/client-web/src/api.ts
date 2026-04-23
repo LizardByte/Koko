@@ -21,9 +21,12 @@ import {
   removeMockLibrary,
   searchMockItemMetadata,
   searchMockItems,
+  updateMockUser,
   updateMockPlaybackProgress,
   updateMockSettings,
 } from './mockApi';
+
+const REQUEST_TIMEOUT_MS = 15000;
 
 export interface ServerCapabilities {
   app_name: string;
@@ -31,7 +34,6 @@ export interface ServerCapabilities {
   server_url: string;
   https_enabled: boolean;
   libraries_configured: number;
-  ffmpeg_strategy?: string;
   api_versions: string[];
   transcoding: {
     ffmpeg: {
@@ -51,6 +53,8 @@ export interface BootstrapUser {
   id: number;
   username: string;
   admin: boolean;
+  birthday?: string;
+  profile_image_url?: string;
 }
 
 export interface AppBootstrapResponse {
@@ -72,6 +76,15 @@ export interface CreateUserRequest {
   password: string;
   pin?: string;
   admin: boolean;
+  birthday?: string;
+  profile_image_url?: string;
+}
+
+export interface UpdateUserRequest {
+  username: string;
+  admin: boolean;
+  birthday?: string;
+  profile_image_url?: string;
 }
 
 export interface MediaLibrary {
@@ -301,6 +314,7 @@ export interface SettingsSnapshot {
   };
   metadata: {
     providers: MetadataProviderSettings[];
+    refresh_interval_days?: number | null;
   };
   server: {
     use_https: boolean;
@@ -311,7 +325,6 @@ export interface SettingsSnapshot {
     use_custom_certs: boolean;
   };
   ffmpeg: {
-    strategy: string;
     ffmpeg_path: string;
     ffprobe_path: string;
   };
@@ -467,6 +480,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
     return updateMockSettings(body as SettingsSnapshot) as T;
   }
 
+  const updateUserMatch = url.pathname.match(/^\/api\/v1\/users\/(\d+)$/);
+  if (method === 'PUT' && updateUserMatch) {
+    return updateMockUser(Number(updateUserMatch[1]), body as UpdateUserRequest) as T;
+  }
+
   if (method === 'POST' && url.pathname === '/login') {
     return loginMockUser(body as LoginRequest) as T;
   }
@@ -515,6 +533,8 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
   }
 
   try {
+    const abortController = new AbortController();
+    const timeoutHandle = window.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
     const response = await fetch(`${getStoredApiBase()}${path}`, {
       method,
       headers: {
@@ -522,6 +542,9 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
         ...(getStoredAuthToken() ? { Authorization: `Bearer ${getStoredAuthToken()}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: abortController.signal,
+    }).finally(() => {
+      window.clearTimeout(timeoutHandle);
     });
     if (!response.ok) {
       if (response.status === 401) {
@@ -546,6 +569,9 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
 
     return undefined as T;
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`);
+    }
     if (import.meta.env.DEV) {
       useMockApi();
       return getMockJsonResponse<T>(method, path, body);
@@ -573,6 +599,10 @@ export function createUser(request: CreateUserRequest): Promise<string> {
 
 export function getUsers(): Promise<BootstrapUser[]> {
   return requestJson<BootstrapUser[]>('GET', '/api/v1/users');
+}
+
+export function updateUser(userId: number, request: UpdateUserRequest): Promise<BootstrapUser> {
+  return requestJson<BootstrapUser>('PUT', `/api/v1/users/${userId}`, request);
 }
 
 export function getLibraries(): Promise<MediaLibrary[]> {

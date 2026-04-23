@@ -43,8 +43,13 @@ impl Logger {
     fn format_message(
         &self,
         message: &str,
+        flatten_newlines: bool,
     ) -> String {
-        let mut msg = message.replace("\r\n", " ↩ ").replace(['\n', '\r'], " ↩ ");
+        let mut msg = if flatten_newlines {
+            message.replace("\r\n", " ↩ ").replace(['\n', '\r'], " ↩ ")
+        } else {
+            message.replace("\r\n", "\n").replace('\r', "\n")
+        };
         for pattern in &self.sensitive_data_patterns {
             msg = pattern.replace_all(&msg, self.replace_str).to_string();
         }
@@ -58,13 +63,16 @@ impl Logger {
         record: &log::Record,
         remove_ansi: bool,
     ) {
-        let mut msg = self.format_message(message);
+        let mut msg = self.format_message(message, false);
         if remove_ansi {
             msg = self.ansi_escape.replace_all(&msg, "").to_string();
         }
         let module = record.module_path().unwrap_or(record.target());
         let file = normalize_log_source_path(record.file().unwrap_or("unknown"));
-        let line = record.line().map(|value| value.to_string()).unwrap_or_else(|| "?".into());
+        let line = record
+            .line()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "?".into());
         out.finish(format_args!(
             "{} [{}] [{}] [{}:{}] {}",
             chrono::Local::now().format(self.time_format),
@@ -111,7 +119,10 @@ fn normalize_path_separators(path: &str) -> String {
     path.trim().replace('\\', "/")
 }
 
-fn shorten_absolute_path(path: &str, segments: usize) -> String {
+fn shorten_absolute_path(
+    path: &str,
+    segments: usize,
+) -> String {
     let parts = path
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -131,14 +142,12 @@ fn workspace_relative_path(path: &str) -> Option<String> {
         .and_then(Path::parent)
         .map(|path| normalize_path_separators(&path.to_string_lossy()))?;
 
-    [repo_root, manifest_dir]
-        .into_iter()
-        .find_map(|prefix| {
-            let normalized_prefix = prefix.trim_end_matches('/');
-            path.strip_prefix(&format!("{normalized_prefix}/"))
-                .map(|value| value.to_string())
-                .or_else(|| (path == normalized_prefix).then(String::new))
-        })
+    [repo_root, manifest_dir].into_iter().find_map(|prefix| {
+        let normalized_prefix = prefix.trim_end_matches('/');
+        path.strip_prefix(&format!("{normalized_prefix}/"))
+            .map(|value| value.to_string())
+            .or_else(|| (path == normalized_prefix).then(String::new))
+    })
 }
 
 pub fn normalize_display_path(path: &str) -> String {

@@ -73,7 +73,10 @@ pub struct LogEntriesResponse {
     pub entries: Vec<LogEntry>,
 }
 
-fn merged_settings_response(settings: Settings, libraries: Vec<MediaLibrarySettings>) -> SettingsResponse {
+fn merged_settings_response(
+    settings: Settings,
+    libraries: Vec<MediaLibrarySettings>,
+) -> SettingsResponse {
     let mut merged = settings;
     merged.media.libraries = libraries;
     SettingsResponse {
@@ -98,10 +101,7 @@ fn parse_log_source(source: &str) -> (String, Option<u32>) {
         return (trimmed.to_string(), None);
     };
 
-    (
-        path.to_string(),
-        line.trim().parse::<u32>().ok(),
-    )
+    (path.to_string(), line.trim().parse::<u32>().ok())
 }
 
 fn parse_log_entry_timestamp(value: &str) -> Option<DateTime<chrono::FixedOffset>> {
@@ -118,7 +118,11 @@ fn parse_log_filter_timestamp(value: Option<&str>) -> Option<DateTime<chrono::Fi
         return Some(parsed);
     }
 
-    for format in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"] {
+    for format in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d",
+    ] {
         if format == "%Y-%m-%d" {
             if let Ok(parsed) = NaiveDate::parse_from_str(value, format) {
                 let Some(naive) = parsed.and_hms_opt(0, 0, 0) else {
@@ -154,9 +158,15 @@ fn read_structured_log_entries(
     limit: usize,
 ) -> Vec<LogEntry> {
     let contents = std::fs::read_to_string(&globals::APP_PATHS.log_path).unwrap_or_default();
-    let level_filter = level.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty());
-    let module_filter = module.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty());
-    let search_filter = search.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty());
+    let level_filter = level
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let module_filter = module
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let search_filter = search
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
     let since_filter = parse_log_filter_timestamp(since);
     let until_filter = parse_log_filter_timestamp(until);
 
@@ -189,16 +199,27 @@ fn read_structured_log_entries(
                 .as_ref()
                 .map(|filter| entry.module.to_ascii_lowercase().contains(filter))
                 .unwrap_or(true);
-            let search_matches = search_filter.as_ref().map(|filter| {
-                entry.message.to_ascii_lowercase().contains(filter)
-                    || entry.module.to_ascii_lowercase().contains(filter)
-                    || entry.source_file_path.to_ascii_lowercase().contains(filter)
-            }).unwrap_or(true);
-            let timestamp_matches = parse_log_entry_timestamp(&entry.timestamp).map(|timestamp| {
-                let after_since = since_filter.as_ref().map(|filter| timestamp >= *filter).unwrap_or(true);
-                let before_until = until_filter.as_ref().map(|filter| timestamp <= *filter).unwrap_or(true);
-                after_since && before_until
-            }).unwrap_or(since_filter.is_none() && until_filter.is_none());
+            let search_matches = search_filter
+                .as_ref()
+                .map(|filter| {
+                    entry.message.to_ascii_lowercase().contains(filter)
+                        || entry.module.to_ascii_lowercase().contains(filter)
+                        || entry.source_file_path.to_ascii_lowercase().contains(filter)
+                })
+                .unwrap_or(true);
+            let timestamp_matches = parse_log_entry_timestamp(&entry.timestamp)
+                .map(|timestamp| {
+                    let after_since = since_filter
+                        .as_ref()
+                        .map(|filter| timestamp >= *filter)
+                        .unwrap_or(true);
+                    let before_until = until_filter
+                        .as_ref()
+                        .map(|filter| timestamp <= *filter)
+                        .unwrap_or(true);
+                    after_since && before_until
+                })
+                .unwrap_or(since_filter.is_none() && until_filter.is_none());
             level_matches && module_matches && search_matches && timestamp_matches
         })
         .collect::<Vec<_>>();
@@ -240,7 +261,14 @@ pub fn get_logs(
 ) -> Json<LogEntriesResponse> {
     Json(LogEntriesResponse {
         log_path: normalize_display_path(&globals::APP_PATHS.log_path),
-        entries: read_structured_log_entries(level, module, search, since, until, limit.unwrap_or(200).clamp(1, 500)),
+        entries: read_structured_log_entries(
+            level,
+            module,
+            search,
+            since,
+            until,
+            limit.unwrap_or(200).clamp(1, 500),
+        ),
     })
 }
 
@@ -263,7 +291,10 @@ pub async fn update_settings(
 
     persist_runtime_settings(settings.clone())?;
 
-    Ok(Json(merged_settings_response(settings, persisted_libraries)))
+    Ok(Json(merged_settings_response(
+        settings,
+        persisted_libraries,
+    )))
 }
 
 /// Append a new library to the persisted media-library settings.
@@ -293,12 +324,19 @@ pub async fn add_library(
 /// Remove one configured library from the database and return the merged settings snapshot.
 #[openapi(tag = "Settings")]
 #[delete("/api/v1/settings/libraries/<library_index>")]
-pub async fn remove_library(db: DbConn, library_index: usize) -> Result<Json<SettingsResponse>, Status> {
+pub async fn remove_library(
+    db: DbConn,
+    library_index: usize,
+) -> Result<Json<SettingsResponse>, Status> {
     let removed = db
         .run(move |conn| remove_library_setting(conn, library_index))
         .await
         .map_err(|error| {
-            log::error!("Failed to remove persisted library at index {}: {}", library_index, error);
+            log::error!(
+                "Failed to remove persisted library at index {}: {}",
+                library_index,
+                error
+            );
             Status::InternalServerError
         })?;
     if !removed {
@@ -310,7 +348,10 @@ pub async fn remove_library(db: DbConn, library_index: usize) -> Result<Json<Set
         .run(|conn| list_library_settings(conn, &[]))
         .await
         .map_err(|error| {
-            log::error!("Failed to reload persisted libraries after removal: {}", error);
+            log::error!(
+                "Failed to reload persisted libraries after removal: {}",
+                error
+            );
             Status::InternalServerError
         })?;
 

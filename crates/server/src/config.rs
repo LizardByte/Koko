@@ -77,6 +77,10 @@ fn default_provider_retry_backoff_ms() -> u32 {
     1_000
 }
 
+fn default_metadata_refresh_interval_days() -> Option<u32> {
+    Some(30)
+}
+
 fn default_library_metadata_providers() -> Vec<MetadataProviderId> {
     vec![MetadataProviderId::Tmdb]
 }
@@ -133,7 +137,10 @@ impl MediaLibrarySettings {
 
     /// Return the first configured filesystem root for this library, when present.
     pub fn primary_path(&self) -> String {
-        self.configured_paths().into_iter().next().unwrap_or_default()
+        self.configured_paths()
+            .into_iter()
+            .next()
+            .unwrap_or_default()
     }
 
     /// Normalize path and provider settings for persistence.
@@ -234,25 +241,14 @@ pub struct MetadataSettings {
     /// Ordered list of enabled and optional providers.
     #[serde(default)]
     pub providers: Vec<MetadataProviderSettings>,
-}
-
-/// FFmpeg integration strategy.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum FfmpegStrategy {
-    /// Use external FFmpeg and ffprobe executables.
-    #[default]
-    ExternalBinaries,
-    /// Reserve room for future embedded-library support if licensing allows.
-    EmbeddedLibrariesPlanned,
+    /// Automatic metadata refresh interval in days. `None` disables automatic refreshes.
+    #[serde(default = "default_metadata_refresh_interval_days")]
+    pub refresh_interval_days: Option<u32>,
 }
 
 /// FFmpeg-related tooling settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct FfmpegSettings {
-    /// Licensing-safe FFmpeg integration strategy.
-    #[serde(default)]
-    pub strategy: FfmpegStrategy,
     /// Path or command name for the FFmpeg executable.
     #[serde(default = "default_ffmpeg_path")]
     pub ffmpeg_path: String,
@@ -334,7 +330,6 @@ impl Default for ServerSettings {
 impl Default for FfmpegSettings {
     fn default() -> Self {
         Self {
-            strategy: FfmpegStrategy::ExternalBinaries,
             ffmpeg_path: default_ffmpeg_path(),
             ffprobe_path: default_ffprobe_path(),
         }
@@ -359,6 +354,7 @@ impl Default for MetadataSettings {
     fn default() -> Self {
         Self {
             providers: vec![MetadataProviderSettings::default()],
+            refresh_interval_days: default_metadata_refresh_interval_days(),
         }
     }
 }
@@ -394,6 +390,13 @@ impl Settings {
 
 /// Normalize settings values before persistence or runtime replacement.
 pub fn normalize_settings(settings: &mut Settings) {
+    if let Some(days) = settings.metadata.refresh_interval_days {
+        settings.metadata.refresh_interval_days = match days {
+            30 | 60 | 90 => Some(days),
+            _ => default_metadata_refresh_interval_days(),
+        };
+    }
+
     for library in &mut settings.media.libraries {
         library.normalize();
     }

@@ -17,29 +17,32 @@ use serde::Serialize;
 
 // local imports
 use crate::auth::UserGuard;
-use crate::config::{FfmpegStrategy, MetadataProviderId, Settings, current_settings};
+use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
+use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_library_files, get_media_home, get_media_item, get_persisted_library_summaries,
-    get_item_theme_song_themerr_reference, get_media_item_summary, get_playback_decision, inspect_transcoding_capability,
-    library_exists, list_media_item_children,
-    list_automatic_metadata_candidates, list_library_settings, list_media_items,
-    mark_metadata_match_attempted, resolve_item_subtitle_path, resolve_item_theme_song_path,
-    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
-    sync_persisted_library_catalog, upsert_playback_progress,
+    get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
+    get_media_item_summary, get_persisted_library_summaries, get_playback_decision,
+    get_preferred_item_metadata_link,
+    infer_episode_number, inspect_transcoding_capability, library_exists,
+    list_automatic_metadata_candidates, list_library_settings, list_media_item_children,
+    list_media_items, mark_metadata_match_attempted, resolve_item_subtitle_path,
+    resolve_item_theme_song_path, resolve_local_item_artwork_path, resolve_media_item_source_path,
+    search_media_items, sync_persisted_library_catalog, upsert_playback_progress,
 };
 use crate::metadata::{
-    ArtworkKind, ItemMetadataSummary, MetadataProviderStatus,
-    MetadataSearchResult, StoredMetadataSnapshot, fetch_themerr_youtube_theme_url,
-    fetch_tmdb_episode_metadata_snapshot,
-    fetch_tmdb_metadata_snapshot, fetch_tmdb_season_metadata_snapshot,
-    get_item_metadata_summaries, get_primary_item_metadata_link, get_stored_metadata_snapshot,
-    guess_tmdb_movie_match, guess_tmdb_show_match, list_provider_statuses,
-    persist_item_metadata_assets, search_tmdb, set_item_metadata_refresh_state, update_cached_artwork_path,
-    upsert_item_metadata_snapshot,
+    ArtworkKind, ItemMetadataSummary, MetadataProviderStatus, MetadataSearchResult,
+    StoredMetadataSnapshot, expected_artwork_cache_path, fetch_themerr_youtube_theme_url_for_database,
+    fetch_tmdb_episode_metadata_snapshot, fetch_tmdb_metadata_snapshot,
+    fetch_tmdb_season_metadata_snapshot, get_item_metadata_summaries,
+    get_primary_item_metadata_link, get_stored_metadata_snapshot, guess_tmdb_movie_match,
+    guess_tmdb_show_match, list_due_item_metadata_links, list_pending_item_metadata_links,
+    list_provider_statuses, persist_item_metadata_assets, search_tmdb,
+    set_item_metadata_refresh_state, update_cached_artwork_path,
+    upsert_item_metadata_snapshot_with_refresh_interval,
 };
 
 /// Capability summary returned to clients during bootstrap.
@@ -55,8 +58,6 @@ pub struct ServerCapabilitiesResponse {
     pub https_enabled: bool,
     /// Number of configured libraries.
     pub libraries_configured: usize,
-    /// Current FFmpeg integration strategy.
-    pub ffmpeg_strategy: String,
     /// Supported API versions.
     pub api_versions: Vec<String>,
     /// Current transcoding-tool capability details.
@@ -144,14 +145,27 @@ pub struct LinkMetadataRequest {
 
 static BACKGROUND_LIBRARY_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static NEXT_SYSTEM_ACTIVITY_ID: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(1));
-static ACTIVE_SYSTEM_ACTIVITIES: Lazy<tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>> =
-    Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
+    tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>,
+> = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_METADATA_REFRESH_ITEMS: Lazy<tokio::sync::RwLock<HashMap<i32, String>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
     activity: SystemActivity,
+}
+
+fn managed_item_asset_dir(
+    data_dir: &str,
+    item_id: i32,
+) -> std::path::PathBuf {
+    let item_hex = format!("{:08x}", item_id.max(0));
+    let shard = &item_hex[0..2];
+    std::path::Path::new(data_dir)
+        .join("item_assets")
+        .join(shard)
+        .join(item_hex)
 }
 
 fn current_timestamp() -> i64 {
@@ -169,51 +183,87 @@ fn next_system_activity_id() -> String {
     )
 }
 
+fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
+    settings
+        .metadata
+        .refresh_interval_days
+        .and_then(|days| i64::from(days).checked_mul(24 * 60 * 60))
+}
+
 async fn persist_snapshot_for_item(
     db: &DbConn,
     item_id: i32,
     snapshot: &StoredMetadataSnapshot,
-    data_dir: &str,
+    settings: &Settings,
 ) -> Result<ItemMetadataSummary, Status> {
-    let (poster_path, backdrop_path) = persist_item_metadata_assets(snapshot, item_id, data_dir)
-        .await
-        .map_err(|error| {
-            log::error!("Failed to persist metadata assets for media item {}: {}", item_id, error);
-            Status::BadGateway
-        })?;
+    let (poster_path, backdrop_path) =
+        persist_item_metadata_assets(snapshot, item_id, &settings.general.data_dir)
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to persist metadata assets for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::BadGateway
+            })?;
 
     let mut summary = db
         .run({
             let snapshot = snapshot.clone();
-            move |conn| upsert_item_metadata_snapshot(conn, item_id, &snapshot)
+            let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
+            move |conn| {
+                upsert_item_metadata_snapshot_with_refresh_interval(
+                    conn,
+                    item_id,
+                    &snapshot,
+                    refresh_interval_seconds,
+                )
+            }
         })
         .await
         .map_err(|error| {
-            log::error!("Failed to persist linked metadata for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to persist linked metadata for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?;
 
     if let Some(poster_path) = poster_path {
         let summary_id = summary.id;
         let poster_path_string = poster_path.to_string_lossy().to_string();
-        db.run(move |conn| update_cached_artwork_path(conn, summary_id, ArtworkKind::Poster, &poster_path))
-            .await
-            .map_err(|error| {
-                log::error!("Failed to store poster cache path for media item {}: {}", item_id, error);
-                Status::InternalServerError
-            })?;
+        db.run(move |conn| {
+            update_cached_artwork_path(conn, summary_id, ArtworkKind::Poster, &poster_path)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to store poster cache path for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
         summary.cached_artwork_path = Some(poster_path_string);
     }
 
     if let Some(backdrop_path) = backdrop_path {
         let summary_id = summary.id;
         let backdrop_path_string = backdrop_path.to_string_lossy().to_string();
-        db.run(move |conn| update_cached_artwork_path(conn, summary_id, ArtworkKind::Backdrop, &backdrop_path))
-            .await
-            .map_err(|error| {
-                log::error!("Failed to store backdrop cache path for media item {}: {}", item_id, error);
-                Status::InternalServerError
-            })?;
+        db.run(move |conn| {
+            update_cached_artwork_path(conn, summary_id, ArtworkKind::Backdrop, &backdrop_path)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to store backdrop cache path for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
         summary.cached_backdrop_path = Some(backdrop_path_string);
     }
 
@@ -348,12 +398,18 @@ async fn cancel_metadata_refresh_activity(activity_id: &str) {
 async fn mark_metadata_refresh_activity_running(activity_id: &str) {
     if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
         record.activity.state = "running".into();
-        record.activity.started_at.get_or_insert_with(current_timestamp);
+        record
+            .activity
+            .started_at
+            .get_or_insert_with(current_timestamp);
         record.activity.updated_at = current_timestamp();
     }
 }
 
-async fn record_metadata_refresh_activity_progress(activity_id: &str, failed: bool) {
+async fn record_metadata_refresh_activity_progress(
+    activity_id: &str,
+    failed: bool,
+) {
     if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
         record.activity.completed_items += 1;
         if failed {
@@ -400,7 +456,10 @@ async fn load_show_descendant_refresh_targets(
         })?;
 
     let mut targets = Vec::new();
-    for season in seasons.into_iter().filter(|item| item.item_type == "season") {
+    for season in seasons
+        .into_iter()
+        .filter(|item| item.item_type == "season")
+    {
         let Some(season_number) = season.season_number else {
             continue;
         };
@@ -431,8 +490,19 @@ async fn load_show_descendant_refresh_targets(
                 Status::InternalServerError
             })?;
 
-        for episode in episodes.into_iter().filter(|item| item.item_type == "episode") {
-            let Some(episode_number) = episode.episode_number else {
+        for episode in episodes
+            .into_iter()
+            .filter(|item| item.item_type == "episode")
+        {
+            let Some(episode_number) = episode.episode_number.or_else(|| {
+                infer_episode_number(&episode.relative_path)
+                    .or_else(|| infer_episode_number(&episode.display_title))
+            }) else {
+                log::warn!(
+                    "Skipping TMDB episode metadata propagation for media item {} because no episode number could be inferred from {:?}",
+                    episode.id,
+                    episode.relative_path
+                );
                 continue;
             };
             targets.push(MetadataRefreshTarget {
@@ -541,12 +611,24 @@ async fn execute_metadata_refresh_target(
     );
     let snapshot_result = match &target.fetch_kind {
         MetadataRefreshFetchKind::Direct => {
-            fetch_tmdb_metadata_snapshot(&settings.metadata, &target.external_id, &target.media_type).await
+            fetch_tmdb_metadata_snapshot(
+                &settings.metadata,
+                &target.external_id,
+                &target.media_type,
+            )
+            .await
         }
         MetadataRefreshFetchKind::ShowSeason {
             show_external_id,
             season_number,
-        } => fetch_tmdb_season_metadata_snapshot(&settings.metadata, show_external_id, *season_number).await,
+        } => {
+            fetch_tmdb_season_metadata_snapshot(
+                &settings.metadata,
+                show_external_id,
+                *season_number,
+            )
+            .await
+        }
         MetadataRefreshFetchKind::ShowEpisode {
             show_external_id,
             season_number,
@@ -564,7 +646,9 @@ async fn execute_metadata_refresh_target(
 
     match snapshot_result {
         Ok(snapshot) => {
-            if let Err(status) = persist_snapshot_for_item(db, target.item_id, &snapshot, &settings.general.data_dir).await {
+            if let Err(status) =
+                persist_snapshot_for_item(db, target.item_id, &snapshot, settings).await
+            {
                 let status_message = format!("{status:?}");
                 log::warn!(
                     "Failed to persist refreshed TMDB metadata snapshot for {}: {}",
@@ -605,6 +689,187 @@ async fn execute_metadata_refresh_targets(
     for target in targets {
         execute_metadata_refresh_target(db, target, settings).await;
     }
+}
+
+fn parse_tmdb_child_external_id(external_id: &str) -> Option<(&str, i32, Option<i32>)> {
+    let parts = external_id.split(':').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [
+            "tv",
+            show_external_id,
+            "season",
+            season_number,
+        ] => Some((*show_external_id, season_number.parse().ok()?, None)),
+        [
+            "tv",
+            show_external_id,
+            "season",
+            season_number,
+            "episode",
+            episode_number,
+        ] => Some((
+            *show_external_id,
+            season_number.parse().ok()?,
+            Some(episode_number.parse().ok()?),
+        )),
+        _ => None,
+    }
+}
+
+fn pending_metadata_refresh_target(
+    item: MediaItemSummary,
+    link: ItemMetadataLink,
+) -> Option<MetadataRefreshTarget> {
+    if link.provider_id != MetadataProviderId::Tmdb.as_storage_value() {
+        return None;
+    }
+
+    let media_type = link.media_type.clone()?;
+    let fetch_kind = match media_type.as_str() {
+        "movie" | "tv" => MetadataRefreshFetchKind::Direct,
+        "tv_season" => {
+            let (show_external_id, season_number, _) =
+                parse_tmdb_child_external_id(&link.external_id)?;
+            MetadataRefreshFetchKind::ShowSeason {
+                show_external_id: show_external_id.to_string(),
+                season_number,
+            }
+        }
+        "tv_episode" => {
+            let (show_external_id, season_number, episode_number) =
+                parse_tmdb_child_external_id(&link.external_id)?;
+            MetadataRefreshFetchKind::ShowEpisode {
+                show_external_id: show_external_id.to_string(),
+                season_number,
+                episode_number: episode_number?,
+            }
+        }
+        _ => return None,
+    };
+
+    Some(MetadataRefreshTarget {
+        item_id: item.id,
+        library_id: item.library_id,
+        item_type: item.item_type,
+        display_title: item.display_title,
+        relative_path: item.relative_path,
+        external_id: link.external_id,
+        media_type,
+        fetch_kind,
+    })
+}
+
+async fn recover_pending_metadata_refreshes(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+) {
+    let links = match db.run(list_pending_item_metadata_links).await {
+        Ok(links) => links,
+        Err(error) => {
+            log::warn!("Failed to load pending metadata refresh links: {}", error);
+            return;
+        }
+    };
+    if links.is_empty() {
+        return;
+    }
+
+    execute_metadata_refresh_links(
+        db,
+        settings,
+        links,
+        "automatic_pending_recovery",
+        "Recover pending metadata refreshes",
+    )
+    .await;
+}
+
+async fn execute_metadata_refresh_links(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+    links: Vec<ItemMetadataLink>,
+    source: &str,
+    label: &str,
+) {
+    let mut targets = Vec::new();
+    for link in links {
+        let item_id = link.media_item_id;
+        let item = match db
+            .run(move |conn| get_media_item_summary(conn, item_id))
+            .await
+        {
+            Ok(Some(item)) => item,
+            Ok(None) => continue,
+            Err(error) => {
+                log::warn!(
+                    "Failed to load pending metadata item {}: {}",
+                    item_id,
+                    error
+                );
+                continue;
+            }
+        };
+
+        if let Some(target) = pending_metadata_refresh_target(item, link) {
+            targets.push(target);
+        }
+    }
+
+    let Some((activity_id, queued_targets)) =
+        register_metadata_refresh_activity("metadata", source, label.into(), None, None, targets)
+            .await
+    else {
+        return;
+    };
+
+    if let Err(status) = mark_metadata_refresh_targets_pending(db, &queued_targets).await {
+        log::warn!(
+            "Failed to mark automatic metadata refresh targets pending: {:?}",
+            status
+        );
+        cancel_metadata_refresh_activity(&activity_id).await;
+        return;
+    }
+
+    mark_metadata_refresh_activity_running(&activity_id).await;
+    for target in queued_targets {
+        let failed = execute_metadata_refresh_target(db, &target, settings).await;
+        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+    }
+    complete_metadata_refresh_activity(&activity_id).await;
+}
+
+async fn run_due_metadata_refreshes(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+) {
+    if settings.metadata.refresh_interval_days.is_none() {
+        return;
+    }
+
+    let now = current_timestamp();
+    let links = match db
+        .run(move |conn| list_due_item_metadata_links(conn, now, 8))
+        .await
+    {
+        Ok(links) => links,
+        Err(error) => {
+            log::warn!("Failed to load due metadata refresh links: {}", error);
+            return;
+        }
+    };
+    if links.is_empty() {
+        return;
+    }
+
+    execute_metadata_refresh_links(
+        db,
+        settings,
+        links,
+        "automatic_interval_refresh",
+        "Refresh stale metadata",
+    )
+    .await;
 }
 
 async fn build_metadata_refresh_job(
@@ -662,7 +927,9 @@ async fn persist_snapshot_tree_for_item(
     snapshot: &StoredMetadataSnapshot,
     settings: &crate::config::Settings,
 ) -> Result<ItemMetadataSummary, Status> {
-    let descendants = if snapshot.provider_id == MetadataProviderId::Tmdb && snapshot.media_type.as_deref() == Some("tv") {
+    let descendants = if snapshot.provider_id == MetadataProviderId::Tmdb
+        && snapshot.media_type.as_deref() == Some("tv")
+    {
         load_show_descendant_refresh_targets(db, item_id, &snapshot.external_id).await?
     } else {
         Vec::new()
@@ -671,7 +938,7 @@ async fn persist_snapshot_tree_for_item(
         mark_metadata_refresh_targets_pending(db, &descendants).await?;
     }
 
-    let summary = persist_snapshot_for_item(db, item_id, snapshot, &settings.general.data_dir).await?;
+    let summary = persist_snapshot_for_item(db, item_id, snapshot, settings).await?;
     if !descendants.is_empty() {
         execute_metadata_refresh_targets(db, &descendants, settings).await;
     }
@@ -680,7 +947,7 @@ async fn persist_snapshot_tree_for_item(
 }
 
 fn linked_shows_needing_descendant_backfill(
-    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection
 ) -> Result<Vec<(i32, String)>, diesel::result::Error> {
     let items = list_media_items(conn, None)?;
     let mut pending = Vec::new();
@@ -689,14 +956,20 @@ fn linked_shows_needing_descendant_backfill(
         let Some(link) = get_primary_item_metadata_link(conn, show.id)? else {
             continue;
         };
-        if link.provider_id != MetadataProviderId::Tmdb.as_storage_value() || link.media_type.as_deref() != Some("tv") {
+        if link.provider_id != MetadataProviderId::Tmdb.as_storage_value()
+            || link.media_type.as_deref() != Some("tv")
+        {
             continue;
         }
 
         let seasons = list_media_item_children(conn, show.id)?;
         let mut needs_backfill = false;
-        for season in seasons.into_iter().filter(|item| item.item_type == "season") {
-            if get_primary_item_metadata_link(conn, season.id)?.is_none() {
+        for season in seasons
+            .into_iter()
+            .filter(|item| item.item_type == "season")
+        {
+            if descendant_metadata_needs_backfill(get_primary_item_metadata_link(conn, season.id)?)
+            {
                 needs_backfill = true;
                 break;
             }
@@ -704,10 +977,11 @@ fn linked_shows_needing_descendant_backfill(
             let episodes = list_media_item_children(conn, season.id)?;
             if episodes.into_iter().any(|episode| {
                 episode.item_type == "episode"
-                    && get_primary_item_metadata_link(conn, episode.id)
-                        .ok()
-                        .flatten()
-                        .is_none()
+                    && descendant_metadata_needs_backfill(
+                        get_primary_item_metadata_link(conn, episode.id)
+                            .ok()
+                            .flatten(),
+                    )
             }) {
                 needs_backfill = true;
                 break;
@@ -722,15 +996,31 @@ fn linked_shows_needing_descendant_backfill(
     Ok(pending)
 }
 
-async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::config::Settings) {
+fn descendant_metadata_needs_backfill(link: Option<ItemMetadataLink>) -> bool {
+    match link {
+        None => true,
+        Some(link) => link.refresh_state == "error",
+    }
+}
+
+#[allow(dead_code)]
+async fn run_automatic_movie_metadata_linking(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+) {
     let tmdb_ready = list_provider_statuses(&settings.metadata)
         .into_iter()
-        .any(|provider| provider.id == MetadataProviderId::Tmdb && provider.enabled && provider.configured);
+        .any(|provider| {
+            provider.id == MetadataProviderId::Tmdb && provider.enabled && provider.configured
+        });
     if !tmdb_ready {
         return;
     }
 
-    let candidates = match db.run(|conn| list_automatic_metadata_candidates(conn, 8)).await {
+    let candidates = match db
+        .run(|conn| list_automatic_metadata_candidates(conn, 8))
+        .await
+    {
         Ok(candidates) => candidates,
         Err(error) => {
             log::warn!("Failed to load automatic metadata candidates: {}", error);
@@ -741,10 +1031,20 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
     for candidate in candidates {
         let guess_result = match candidate.library_kind {
             crate::config::MediaLibraryKind::Shows => {
-                guess_tmdb_show_match(&settings.metadata, &candidate.relative_path, &candidate.display_title).await
+                guess_tmdb_show_match(
+                    &settings.metadata,
+                    &candidate.relative_path,
+                    &candidate.display_title,
+                )
+                .await
             }
             _ => {
-                guess_tmdb_movie_match(&settings.metadata, &candidate.relative_path, &candidate.display_title).await
+                guess_tmdb_movie_match(
+                    &settings.metadata,
+                    &candidate.relative_path,
+                    &candidate.display_title,
+                )
+                .await
             }
         };
         let guess = match guess_result {
@@ -785,9 +1085,18 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
                     error
                 );
             }
-            match fetch_tmdb_metadata_snapshot(&settings.metadata, &result.external_id, &result.media_type).await {
+            match fetch_tmdb_metadata_snapshot(
+                &settings.metadata,
+                &result.external_id,
+                &result.media_type,
+            )
+            .await
+            {
                 Ok(snapshot) => {
-                    if let Err(status) = persist_snapshot_tree_for_item(db, candidate.item_id, &snapshot, settings).await {
+                    if let Err(status) =
+                        persist_snapshot_tree_for_item(db, candidate.item_id, &snapshot, settings)
+                            .await
+                    {
                         log::warn!(
                             "Failed to persist automatic metadata snapshot for item {}: {:?}",
                             candidate.item_id,
@@ -812,13 +1121,21 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
                             })
                             .await
                         {
-                            log::warn!("Failed to record automatic metadata error for item {}: {}", candidate.item_id, error);
+                            log::warn!(
+                                "Failed to record automatic metadata error for item {}: {}",
+                                candidate.item_id,
+                                error
+                            );
                         }
                         continue;
                     }
                 }
                 Err(error) => {
-                    log::warn!("Failed to fetch automatic TMDB snapshot for item {}: {}", candidate.item_id, error);
+                    log::warn!(
+                        "Failed to fetch automatic TMDB snapshot for item {}: {}",
+                        candidate.item_id,
+                        error
+                    );
                     if let Err(persist_error) = db
                         .run({
                             let external_id = result.external_id.clone();
@@ -838,7 +1155,11 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
                         })
                         .await
                     {
-                        log::warn!("Failed to record automatic metadata error for item {}: {}", candidate.item_id, persist_error);
+                        log::warn!(
+                            "Failed to record automatic metadata error for item {}: {}",
+                            candidate.item_id,
+                            persist_error
+                        );
                     }
                     continue;
                 }
@@ -848,10 +1169,16 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
         if candidate.library_kind != crate::config::MediaLibraryKind::Shows {
             let attempted_at = current_timestamp();
             if let Err(error) = db
-                .run(move |conn| mark_metadata_match_attempted(conn, candidate.item_id, attempted_at))
+                .run(move |conn| {
+                    mark_metadata_match_attempted(conn, candidate.item_id, attempted_at)
+                })
                 .await
             {
-                log::warn!("Failed to record automatic metadata attempt for item {}: {}", candidate.item_id, error);
+                log::warn!(
+                    "Failed to record automatic metadata attempt for item {}: {}",
+                    candidate.item_id,
+                    error
+                );
             }
         }
     }
@@ -859,7 +1186,10 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
     let pending_show_backfills = match db.run(linked_shows_needing_descendant_backfill).await {
         Ok(items) => items,
         Err(error) => {
-            log::warn!("Failed to load linked shows needing metadata backfill: {}", error);
+            log::warn!(
+                "Failed to load linked shows needing metadata backfill: {}",
+                error
+            );
             return;
         }
     };
@@ -885,6 +1215,9 @@ async fn run_automatic_movie_metadata_linking(db: &DbConn, settings: &crate::con
             }
         }
     }
+
+    recover_pending_metadata_refreshes(db, settings).await;
+    run_due_metadata_refreshes(db, settings).await;
 }
 
 fn current_user_id(user_guard: Option<&UserGuard>) -> Result<Option<i32>, Status> {
@@ -936,7 +1269,8 @@ async fn load_library_refresh_jobs(
             continue;
         };
 
-        let provider_id = MetadataProviderId::from_storage_value(&link.provider_id).ok_or(Status::BadRequest)?;
+        let provider_id =
+            MetadataProviderId::from_storage_value(&link.provider_id).ok_or(Status::BadRequest)?;
         if provider_id != MetadataProviderId::Tmdb {
             continue;
         }
@@ -970,7 +1304,10 @@ async fn load_library_summary(
         .ok_or(Status::NotFound)
 }
 
-fn schedule_background_library_scan(db: DbConn, settings: Settings) {
+fn schedule_background_library_scan(
+    db: DbConn,
+    settings: Settings,
+) {
     if !BACKGROUND_LIBRARY_SCAN_RUNNING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
@@ -982,16 +1319,22 @@ fn schedule_background_library_scan(db: DbConn, settings: Settings) {
         let legacy_libraries = settings.media.libraries.clone();
         let ffmpeg_settings = settings.ffmpeg.clone();
         let result = db
-            .run(move |conn| sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings))
+            .run(move |conn| {
+                sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings)
+            })
             .await;
 
         if let Err(error) = result {
-            log::error!("Failed to sync media library catalog in the background: {}", error);
+            log::error!(
+                "Failed to sync media library catalog in the background: {}",
+                error
+            );
             BACKGROUND_LIBRARY_SCAN_RUNNING.store(false, Ordering::SeqCst);
             return;
         }
 
-        run_automatic_movie_metadata_linking(&db, &settings).await;
+        recover_pending_metadata_refreshes(&db, &settings).await;
+        run_due_metadata_refreshes(&db, &settings).await;
         BACKGROUND_LIBRARY_SCAN_RUNNING.store(false, Ordering::SeqCst);
     });
 }
@@ -999,17 +1342,22 @@ fn schedule_background_library_scan(db: DbConn, settings: Settings) {
 /// Return server bootstrap information for future browser and native clients.
 #[openapi(tag = "Media")]
 #[get("/api/v1/system/capabilities")]
-pub async fn get_server_capabilities(db: DbConn) -> Result<Json<ServerCapabilitiesResponse>, Status> {
+pub async fn get_server_capabilities(
+    db: DbConn
+) -> Result<Json<ServerCapabilitiesResponse>, Status> {
     let settings = current_settings();
     let transcoding = inspect_transcoding_capability(&settings.ffmpeg);
     let legacy_libraries = settings.media.libraries.clone();
     let libraries_configured = db
-        .run(move |conn| list_library_settings(conn, &legacy_libraries).map(|libraries| libraries.len()))
+        .run(move |conn| {
+            list_library_settings(conn, &legacy_libraries).map(|libraries| libraries.len())
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to count persisted libraries: {}", error);
             Status::InternalServerError
         })?;
+    schedule_background_library_scan(db, settings.clone());
 
     Ok(Json(ServerCapabilitiesResponse {
         app_name: globals::GLOBAL_APP_NAME.to_string(),
@@ -1017,11 +1365,6 @@ pub async fn get_server_capabilities(db: DbConn) -> Result<Json<ServerCapabiliti
         server_url: globals::get_server_url(),
         https_enabled: settings.server.use_https,
         libraries_configured,
-        ffmpeg_strategy: match settings.ffmpeg.strategy {
-            FfmpegStrategy::ExternalBinaries => "external_binaries",
-            FfmpegStrategy::EmbeddedLibrariesPlanned => "embedded_libraries_planned",
-        }
-        .into(),
         api_versions: vec!["v1".into()],
         transcoding,
     }))
@@ -1059,8 +1402,6 @@ pub async fn get_libraries(db: DbConn) -> Result<Json<Vec<PersistedLibrarySummar
             Status::InternalServerError
         })?;
 
-    schedule_background_library_scan(db, settings);
-
     Ok(Json(libraries))
 }
 
@@ -1072,7 +1413,6 @@ pub async fn get_home(
     user_guard: Option<UserGuard>,
     library_id: Option<i32>,
 ) -> Result<Json<MediaHome>, Status> {
-    let settings = current_settings();
     let user_id = current_user_id(user_guard.as_ref())?;
 
     let home = db
@@ -1082,8 +1422,6 @@ pub async fn get_home(
             log::error!("Failed to build media home shelves: {}", error);
             Status::InternalServerError
         })?;
-
-    schedule_background_library_scan(db, settings);
 
     Ok(Json(home))
 }
@@ -1165,8 +1503,8 @@ pub async fn get_item(
 
     let mut item = item.ok_or(Status::NotFound)?;
     if item.theme_song_url.is_none() {
-        let theme_reference = db
-            .run(move |conn| get_item_theme_song_themerr_reference(conn, item_id))
+        let theme_references = db
+            .run(move |conn| get_item_theme_song_themerr_references(conn, item_id))
             .await
             .map_err(|error| {
                 log::error!(
@@ -1177,17 +1515,25 @@ pub async fn get_item(
                 Status::InternalServerError
             })?;
 
-        if let Some((media_type, external_id)) = theme_reference {
-            match fetch_themerr_youtube_theme_url(&media_type, &external_id).await {
+        for (media_type, database_id, external_id) in theme_references {
+            match fetch_themerr_youtube_theme_url_for_database(
+                &media_type,
+                &database_id,
+                &external_id,
+            )
+            .await
+            {
                 Ok(Some(url)) => {
                     item.theme_song_youtube_url = Some(url);
+                    break;
                 }
                 Ok(None) => {}
                 Err(error) => {
                     log::warn!(
-                        "Failed to load ThemerrDB theme song for media item {} ({} {}): {}",
+                        "Failed to load ThemerrDB theme song for media item {} ({} {} {}): {}",
                         item_id,
                         media_type,
+                        database_id,
                         external_id,
                         error
                     );
@@ -1210,7 +1556,11 @@ pub async fn get_item_playback(
         .run(move |conn| get_playback_decision(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to build playback decision for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to build playback decision for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?;
 
@@ -1227,7 +1577,11 @@ pub async fn stream_item(
         .run(move |conn| get_playback_decision(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to build playback decision before streaming item {}: {}", item_id, error);
+            log::error!(
+                "Failed to build playback decision before streaming item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1240,7 +1594,11 @@ pub async fn stream_item(
         .run(move |conn| resolve_media_item_source_path(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to resolve stream source for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to resolve stream source for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1252,7 +1610,11 @@ pub async fn stream_item(
 
 /// Persist browser playback progress for a media item.
 #[openapi(tag = "Media")]
-#[post("/api/v1/items/<item_id>/progress", format = "json", data = "<request>")]
+#[post(
+    "/api/v1/items/<item_id>/progress",
+    format = "json",
+    data = "<request>"
+)]
 pub async fn update_item_progress(
     db: DbConn,
     user_guard: UserGuard,
@@ -1274,7 +1636,11 @@ pub async fn update_item_progress(
     })
     .await
     .map_err(|error| {
-        log::error!("Failed to update playback progress for media item {}: {}", item_id, error);
+        log::error!(
+            "Failed to update playback progress for media item {}: {}",
+            item_id,
+            error
+        );
         Status::InternalServerError
     })?;
 
@@ -1339,7 +1705,11 @@ pub async fn search_item_metadata(
         .run(move |conn| get_media_item_summary(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to load media item summary {} for metadata search: {}", item_id, error);
+            log::error!(
+                "Failed to load media item summary {} for metadata search: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1348,8 +1718,7 @@ pub async fn search_item_metadata(
     }
 
     let fallback_query = item.display_title.clone();
-    let expected_media_type = tmdb_search_media_type(&item)
-        .ok_or(Status::NotFound)?;
+    let expected_media_type = tmdb_search_media_type(&item).ok_or(Status::NotFound)?;
 
     let effective_query = query
         .map(|value| value.trim().to_string())
@@ -1359,7 +1728,11 @@ pub async fn search_item_metadata(
     let results = search_tmdb(&metadata_settings, &effective_query)
         .await
         .map_err(|error| {
-            log::error!("Failed to search metadata for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to search metadata for media item {}: {}",
+                item_id,
+                error
+            );
             Status::ServiceUnavailable
         })?;
 
@@ -1373,7 +1746,11 @@ pub async fn search_item_metadata(
 
 /// Link a media item to a provider match and persist the fetched metadata snapshot.
 #[openapi(tag = "Media")]
-#[post("/api/v1/items/<item_id>/metadata/link", format = "json", data = "<request>")]
+#[post(
+    "/api/v1/items/<item_id>/metadata/link",
+    format = "json",
+    data = "<request>"
+)]
 pub async fn link_item_metadata(
     db: DbConn,
     item_id: i32,
@@ -1389,7 +1766,11 @@ pub async fn link_item_metadata(
         .run(move |conn| get_media_item_summary(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to load media item summary {} for metadata link: {}", item_id, error);
+            log::error!(
+                "Failed to load media item summary {} for metadata link: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1413,7 +1794,11 @@ pub async fn link_item_metadata(
         })
         .await
         .map_err(|error| {
-            log::error!("Failed to inspect stored metadata snapshot for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to inspect stored metadata snapshot for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?;
 
@@ -1427,7 +1812,11 @@ pub async fn link_item_metadata(
         )
         .await
         .map_err(|error| {
-            log::error!("Failed to fetch metadata snapshot for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to fetch metadata snapshot for media item {}: {}",
+                item_id,
+                error
+            );
             Status::ServiceUnavailable
         })?
     };
@@ -1449,7 +1838,11 @@ pub async fn refresh_item_metadata(
         .run(move |conn| get_media_item_summary(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to load media item summary {} for metadata refresh: {}", item_id, error);
+            log::error!(
+                "Failed to load media item summary {} for metadata refresh: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1458,16 +1851,20 @@ pub async fn refresh_item_metadata(
     }
 
     let link = db
-        .run(move |conn| get_primary_item_metadata_link(conn, item_id))
+        .run(move |conn| get_preferred_item_metadata_link(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to load linked metadata for media item {} refresh: {}", item_id, error);
+            log::error!(
+                "Failed to load linked metadata for media item {} refresh: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
 
-    let provider_id = MetadataProviderId::from_storage_value(&link.provider_id)
-        .ok_or(Status::BadRequest)?;
+    let provider_id =
+        MetadataProviderId::from_storage_value(&link.provider_id).ok_or(Status::BadRequest)?;
     if provider_id != MetadataProviderId::Tmdb {
         return Err(Status::BadRequest);
     }
@@ -1486,7 +1883,9 @@ pub async fn refresh_item_metadata(
     )
     .await
     else {
-        return Ok(Json(load_tmdb_metadata_summary_for_item(&db, item_id).await?));
+        return Ok(Json(
+            load_tmdb_metadata_summary_for_item(&db, item_id).await?,
+        ));
     };
 
     if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
@@ -1533,7 +1932,9 @@ pub async fn refresh_library_metadata(
     )
     .await
     else {
-        return Ok(Json(load_library_summary(&db, &settings, library_id).await?));
+        return Ok(Json(
+            load_library_summary(&db, &settings, library_id).await?,
+        ));
     };
 
     if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
@@ -1563,12 +1964,24 @@ pub async fn get_item_artwork(
 ) -> Result<NamedFile, Status> {
     let artwork_kind = ArtworkKind::from_query_value(kind.as_deref());
     let data_dir = current_settings().general.data_dir;
+    let data_dir_for_local_resolve = data_dir.clone();
 
     if let Some(local_path) = db
-        .run(move |conn| resolve_local_item_artwork_path(conn, item_id, artwork_kind, &data_dir))
+        .run(move |conn| {
+            resolve_local_item_artwork_path(
+                conn,
+                item_id,
+                artwork_kind,
+                &data_dir_for_local_resolve,
+            )
+        })
         .await
         .map_err(|error| {
-            log::error!("Failed to resolve local artwork for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to resolve local artwork for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
     {
@@ -1578,10 +1991,14 @@ pub async fn get_item_artwork(
     }
 
     let link = db
-        .run(move |conn| get_primary_item_metadata_link(conn, item_id))
+        .run(move |conn| load_item_artwork_metadata_link(conn, item_id))
         .await
         .map_err(|error| {
-            log::error!("Failed to load linked metadata for media item {} artwork: {}", item_id, error);
+            log::error!(
+                "Failed to load linked metadata for media item {} artwork: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1591,12 +2008,39 @@ pub async fn get_item_artwork(
         ArtworkKind::Backdrop => link.cached_backdrop_path.clone(),
     };
     if let Some(existing_cache) = existing_cache {
+        let expected_item_asset_dir = managed_item_asset_dir(&data_dir, item_id);
         let existing_path = std::path::PathBuf::from(existing_cache);
-        if existing_path.is_file() {
-            return NamedFile::open(existing_path)
-                .await
-                .map_err(|_| Status::NotFound);
+        let current_artwork_url = match artwork_kind {
+            ArtworkKind::Poster => link.artwork_url.as_deref(),
+            ArtworkKind::Backdrop => link.backdrop_url.as_deref(),
+        };
+        let cache_key = match artwork_kind {
+            ArtworkKind::Poster => format!(
+                "{}_poster",
+                MetadataProviderId::from_storage_value(&link.provider_id)
+                    .unwrap_or(MetadataProviderId::Tmdb)
+                    .as_storage_value()
+            ),
+            ArtworkKind::Backdrop => format!(
+                "{}_backdrop",
+                MetadataProviderId::from_storage_value(&link.provider_id)
+                    .unwrap_or(MetadataProviderId::Tmdb)
+                    .as_storage_value()
+            ),
+        };
+        if let Some(url) = current_artwork_url {
+            let expected_path = expected_artwork_cache_path(url, &expected_item_asset_dir, &cache_key);
+            if existing_path.is_file() && existing_path == expected_path {
+                return NamedFile::open(existing_path)
+                    .await
+                    .map_err(|_| Status::NotFound);
+            }
         }
+        log::warn!(
+            "Ignoring stale cached artwork path for media item {}: {:?}",
+            item_id,
+            existing_path
+        );
     }
 
     let snapshot = StoredMetadataSnapshot {
@@ -1615,7 +2059,11 @@ pub async fn get_item_artwork(
     let (poster_path, backdrop_path) = persist_item_metadata_assets(&snapshot, item_id, &data_dir)
         .await
         .map_err(|error| {
-            log::error!("Failed to cache artwork for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to cache artwork for media item {}: {}",
+                item_id,
+                error
+            );
             Status::BadGateway
         })?;
     let cached_path = match artwork_kind {
@@ -1629,13 +2077,35 @@ pub async fn get_item_artwork(
     db.run(move |conn| update_cached_artwork_path(conn, link_id, artwork_kind, &stored_path))
         .await
         .map_err(|error| {
-            log::error!("Failed to persist cached artwork path for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to persist cached artwork path for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?;
 
     NamedFile::open(cached_path)
         .await
         .map_err(|_| Status::NotFound)
+}
+
+fn load_item_artwork_metadata_link(
+    conn: &mut diesel::SqliteConnection,
+    item_id: i32,
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    let mut current_item_id = Some(item_id);
+    while let Some(current_id) = current_item_id {
+        let Some(item) = get_media_item_summary(conn, current_id)? else {
+            return Ok(None);
+        };
+        if let Some(link) = get_preferred_item_metadata_link(conn, current_id)? {
+            return Ok(Some(link));
+        }
+        current_item_id = item.parent_id;
+    }
+
+    Ok(None)
 }
 
 /// Serve a discovered theme-song asset for a media item.
@@ -1649,7 +2119,11 @@ pub async fn get_item_theme(
         .run(move |conn| resolve_item_theme_song_path(conn, item_id, &data_dir))
         .await
         .map_err(|error| {
-            log::error!("Failed to resolve theme song for media item {}: {}", item_id, error);
+            log::error!(
+                "Failed to resolve theme song for media item {}: {}",
+                item_id,
+                error
+            );
             Status::InternalServerError
         })?
         .ok_or(Status::NotFound)?;
@@ -1694,7 +2168,6 @@ pub async fn search_items(
     query: Option<&str>,
     library_id: Option<i32>,
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
-
     let query = query.unwrap_or_default().to_string();
     let items = db
         .run(move |conn| search_media_items(conn, &query, library_id))

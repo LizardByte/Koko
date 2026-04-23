@@ -1,8 +1,8 @@
 use rocket::http::Status;
 use rocket::serde::json::{Value, json, serde_json};
 
-use koko::globals;
 use crate::test_utils::{create_test_client, make_request};
+use koko::globals;
 
 #[rocket::async_test]
 async fn test_get_settings_route() {
@@ -65,9 +65,17 @@ async fn test_add_and_remove_library_routes() {
     .await;
 
     let add_json: Value = serde_json::from_str(&add_response.body).unwrap();
-    let libraries = add_json["settings"]["media"]["libraries"].as_array().unwrap();
+    let libraries = add_json["settings"]["media"]["libraries"]
+        .as_array()
+        .unwrap();
     assert_eq!(libraries.len(), initial_library_count + 1);
-    assert_eq!(libraries[initial_library_count]["paths"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        libraries[initial_library_count]["paths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 
     let remove_response = make_request(
         Some(&client),
@@ -81,7 +89,9 @@ async fn test_add_and_remove_library_routes() {
     .await;
 
     let remove_json: Value = serde_json::from_str(&remove_response.body).unwrap();
-    let libraries_after_remove = remove_json["settings"]["media"]["libraries"].as_array().unwrap();
+    let libraries_after_remove = remove_json["settings"]["media"]["libraries"]
+        .as_array()
+        .unwrap();
     assert_eq!(libraries_after_remove.len(), initial_library_count);
 }
 
@@ -128,7 +138,10 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
     let filtered_entries = filtered_json["entries"].as_array().unwrap();
     assert_eq!(filtered_entries.len(), 1);
     assert_eq!(filtered_entries[0]["level"].as_str().unwrap(), "WARN");
-    assert_eq!(filtered_entries[0]["source_file_path"].as_str().unwrap(), "crates/server/src/lib.rs");
+    assert_eq!(
+        filtered_entries[0]["source_file_path"].as_str().unwrap(),
+        "crates/server/src/lib.rs"
+    );
     assert!(filtered_json["log_path"].as_str().unwrap().contains('/'));
 
     let normalized_response = make_request(
@@ -144,7 +157,8 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
     let normalized_json: Value = serde_json::from_str(&normalized_response.body).unwrap();
     let normalized_entries = normalized_json["entries"].as_array().unwrap();
     assert_eq!(normalized_entries.len(), 1);
-    assert_eq!(normalized_entries[0]["source_file_path"].as_str().unwrap(), "rocket-0.5.1/src/server.rs");
+    assert_eq!(
+        normalized_entries[0]["source_file_path"].as_str().unwrap(),
+        "rocket-0.5.1/src/server.rs"
+    );
 }
-
-

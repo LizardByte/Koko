@@ -433,7 +433,7 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
         .find(|item| item.item_type == "show")
         .expect("Expected show item to exist");
 
-    let candidates = list_automatic_metadata_candidates(&mut connection, 8).unwrap();
+    let candidates = list_automatic_metadata_candidates(&mut connection, None, 8).unwrap();
     assert!(candidates.iter().any(|candidate| {
         candidate.item_id == show.id
             && candidate.display_title == show.display_title

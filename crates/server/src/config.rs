@@ -468,6 +468,11 @@ pub fn normalize_settings(settings: &mut Settings) {
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        if provider.id == MetadataProviderId::Tvdb && provider.api_key.is_some() {
+            // Older settings snapshots can retain TVDB as disabled even after an API key
+            // is saved, which leaves TVDB-only libraries unusable.
+            provider.enabled = true;
+        }
     }
 
     if !settings

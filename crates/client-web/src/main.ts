@@ -100,6 +100,9 @@ interface AppState {
   metadataSearchResults: MetadataSearchResult[];
   searchQuery: string;
   metadataSearchQuery: string;
+  metadataSearchYear: string;
+  metadataSearchLanguage: string;
+  metadataSearchProviders: string[];
   homeTab: HomeBrowseTab;
   browseFilter?: BrowseFilter;
   isLoading: boolean;
@@ -161,6 +164,9 @@ const state: AppState = {
   metadataSearchResults: [],
   searchQuery: '',
   metadataSearchQuery: '',
+  metadataSearchYear: '',
+  metadataSearchLanguage: 'en',
+  metadataSearchProviders: [],
   homeTab: defaultHomeTab(parseRoute()),
   isLoading: true,
   hasDeferredAutoRefreshRender: false,
@@ -1517,16 +1523,18 @@ function renderMetadataSearchResults(): string {
   }
 
   if (!state.metadataSearchResults.length) {
-    return '<div class="empty-state tight">Run a TMDB search to link rich metadata and artwork.</div>';
+    return '<div class="empty-state tight">Search metadata providers to link rich metadata and artwork.</div>';
   }
 
   return state.metadataSearchResults
     .map((result) => `
       <article class="metadata-search-card">
+        ${result.artwork_url ? `<img class="metadata-search-poster" src="${escapeHtml(resolveApiUrl(result.artwork_url))}" alt="" loading="lazy" />` : ''}
         <div>
           <strong>${escapeHtml(result.title)}</strong>
           <p>${escapeHtml(result.overview ?? 'No overview available.')}</p>
           <div class="metadata-match-meta">
+            <span>${escapeHtml(metadataProviderLabels[result.provider_id] ?? result.provider_id)}</span>
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
           </div>
@@ -1541,6 +1549,41 @@ function renderMetadataSearchResults(): string {
       </article>
     `)
     .join('');
+}
+
+function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
+  const itemType = state.selectedItem?.item_type;
+  const libraryKind = itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined;
+  return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
+    .filter((provider) => provider.enabled && provider.configured && provider.implemented)
+    .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
+}
+
+function renderMetadataSearchProviderControls(): string {
+  const providers = selectedItemMetadataProviderOptions();
+  if (!providers.length) {
+    return '';
+  }
+
+  const selectedProviders = state.metadataSearchProviders.length
+    ? state.metadataSearchProviders
+    : providers.map((provider) => provider.id);
+
+  return `
+    <div class="metadata-provider-picker">
+      ${providers.map((provider) => `
+        <label class="checkbox-inline">
+          <input
+            name="metadataSearchProvider"
+            type="checkbox"
+            value="${escapeHtml(provider.id)}"
+            ${selectedProviders.includes(provider.id) ? 'checked' : ''}
+          />
+          <span>${escapeHtml(metadataProviderLabels[provider.id] ?? provider.display_name)}</span>
+        </label>
+      `).join('')}
+    </div>
+  `;
 }
 
 function renderLinkedMetadataSummary(): string {
@@ -1954,7 +1997,10 @@ function renderItemPage(): string {
           ${supportsManualLinking
             ? `
               <form id="metadata-search-form" class="metadata-search-form">
-                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="Search configured metadata providers or leave blank to use the item title" />
+                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="Title" />
+                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="Year" />
+                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="Language" />
+                ${renderMetadataSearchProviderControls()}
                 <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
               </form>
               <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
@@ -2460,6 +2506,9 @@ async function refreshData(showLoading = true): Promise<void> {
       state.selectedPlayback = undefined;
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
+      state.metadataSearchYear = '';
+      state.metadataSearchLanguage = 'en';
+      state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
@@ -2472,6 +2521,9 @@ async function refreshData(showLoading = true): Promise<void> {
       state.searchResults = [];
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
+      state.metadataSearchYear = '';
+      state.metadataSearchLanguage = 'en';
+      state.metadataSearchProviders = [];
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.dashboardItems = [];
@@ -2493,6 +2545,9 @@ async function refreshData(showLoading = true): Promise<void> {
       state.selectedPlayback = undefined;
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
+      state.metadataSearchYear = '';
+      state.metadataSearchLanguage = 'en';
+      state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
@@ -3097,9 +3152,21 @@ function bindEvents(): void {
     }
 
     const input = document.querySelector<HTMLInputElement>('#metadata-search-input');
+    const yearInput = document.querySelector<HTMLInputElement>('#metadata-search-year');
+    const languageInput = document.querySelector<HTMLInputElement>('#metadata-search-language');
     state.metadataSearchQuery = input?.value.trim() ?? '';
+    state.metadataSearchYear = yearInput?.value.trim() ?? '';
+    state.metadataSearchLanguage = languageInput?.value.trim() ?? '';
+    state.metadataSearchProviders = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[name="metadataSearchProvider"]:checked'),
+    ).map((provider) => provider.value);
     try {
-      state.metadataSearchResults = await searchItemMetadata(state.selectedItem.id, state.metadataSearchQuery);
+      state.metadataSearchResults = await searchItemMetadata(state.selectedItem.id, {
+        query: state.metadataSearchQuery,
+        providers: state.metadataSearchProviders,
+        year: state.metadataSearchYear,
+        language: state.metadataSearchLanguage,
+      });
       render();
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to search metadata.';

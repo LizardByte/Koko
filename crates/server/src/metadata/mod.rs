@@ -14,8 +14,6 @@ use diesel::{
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
-use reqwest::StatusCode;
-use reqwest::header::RETRY_AFTER;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -32,21 +30,13 @@ use crate::db::models::{
     ItemMetadataCollection, ItemMetadataLink, MediaItem, NewItemMetadataCollection,
     NewItemMetadataLink,
 };
+use crate::globals::current_timestamp;
 
-const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
 const DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .user_agent(format!("Koko/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("Failed to build shared HTTP client")
-});
-static TMDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
-    Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
 static TVDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
     Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
 static TVDB_AUTH_TOKEN: Lazy<tokio::sync::Mutex<Option<TvdbCachedToken>>> =
@@ -1400,129 +1390,6 @@ fn provider_settings(
     Ok(provider)
 }
 
-async fn wait_for_tmdb_rate_limit(provider: &MetadataProviderSettings) {
-    let requests_per_second = provider.rate_limit_per_second.max(1);
-    let interval = Duration::from_secs_f64(1.0 / f64::from(requests_per_second));
-    let mut next_available_at = TMDB_RATE_LIMITER.lock().await;
-    let now = Instant::now();
-    if *next_available_at > now {
-        tokio::time::sleep((*next_available_at).saturating_duration_since(now)).await;
-    }
-    let base = Instant::now();
-    *next_available_at = base.checked_add(interval).unwrap_or(base);
-}
-
-async fn tmdb_get_text(
-    provider: &MetadataProviderSettings,
-    path: &str,
-    mut query: Vec<(&'static str, String)>,
-    context: &str,
-) -> Result<String, String> {
-    let api_key = provider.api_key.as_deref().unwrap_or_default().to_string();
-    query.push(("api_key", api_key));
-    query.push(("language", provider.language.clone()));
-
-    let retry_attempts = usize::try_from(provider.retry_attempts).unwrap_or(0);
-    let base_backoff = Duration::from_millis(u64::from(provider.retry_backoff_ms.max(1)));
-
-    for attempt in 0..=retry_attempts {
-        wait_for_tmdb_rate_limit(provider).await;
-        let request_url = format!("{}/{}", TMDB_API_BASE, path.trim_start_matches('/'));
-        let response = HTTP_CLIENT.get(&request_url).query(&query).send().await;
-
-        match response {
-            Ok(response) => {
-                let status = response.status();
-                let retry_after = response
-                    .headers()
-                    .get(RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(parse_retry_after_seconds)
-                    .map(Duration::from_secs);
-                let payload = response.text().await.map_err(|error| error.to_string())?;
-                if status.is_success() {
-                    return Ok(payload);
-                }
-
-                let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
-                    || retry_after.is_some()
-                    || payload.to_ascii_lowercase().contains("rate limit");
-                let payload_snippet = format_payload_snippet(&payload);
-                let retryable = rate_limited || status.is_server_error();
-                if retryable && attempt < retry_attempts {
-                    let attempt_number = attempt + 1;
-                    let multiplier = 1_u32
-                        .checked_shl(u32::try_from(attempt).unwrap_or(0))
-                        .unwrap_or(u32::MAX);
-                    let backoff =
-                        retry_after.unwrap_or_else(|| base_backoff.saturating_mul(multiplier));
-                    log::warn!(
-                        "TMDB request retry scheduled for {} after status {}{}{} (attempt {}/{} in {} ms)",
-                        context,
-                        status,
-                        if rate_limited { " [rate limited]" } else { "" },
-                        payload_snippet,
-                        attempt_number,
-                        retry_attempts + 1,
-                        backoff.as_millis()
-                    );
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
-
-                return Err(format!(
-                    "TMDB {} failed with status {}{}{}",
-                    context,
-                    status,
-                    if rate_limited { " [rate limited]" } else { "" },
-                    payload_snippet
-                ));
-            }
-            Err(error) => {
-                if attempt < retry_attempts {
-                    let attempt_number = attempt + 1;
-                    let multiplier = 1_u32
-                        .checked_shl(u32::try_from(attempt).unwrap_or(0))
-                        .unwrap_or(u32::MAX);
-                    let backoff = base_backoff.saturating_mul(multiplier);
-                    log::warn!(
-                        "TMDB request retry scheduled for {} after transport error: {} (attempt {}/{} in {} ms)",
-                        context,
-                        error,
-                        attempt_number,
-                        retry_attempts + 1,
-                        backoff.as_millis()
-                    );
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
-
-                return Err(format!("TMDB {} request failed: {}", context, error));
-            }
-        }
-    }
-
-    Err(format!("TMDB {} request failed after retries", context))
-}
-
-async fn tmdb_get_json<T>(
-    provider: &MetadataProviderSettings,
-    path: &str,
-    query: Vec<(&'static str, String)>,
-    context: &str,
-) -> Result<T, String>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let payload = tmdb_get_text(provider, path, query, context).await?;
-    serde_json::from_str::<T>(&payload)
-        .map_err(|error| format!("TMDB {} returned invalid JSON: {}", context, error))
-}
-
-fn parse_retry_after_seconds(value: &str) -> Option<u64> {
-    value.trim().parse::<u64>().ok()
-}
-
 fn format_payload_snippet(payload: &str) -> String {
     let snippet = payload.split_whitespace().collect::<Vec<_>>().join(" ");
     if snippet.is_empty() {
@@ -2025,14 +1892,6 @@ struct ParsedTmdbCollection {
     artwork_url: Option<String>,
     backdrop_url: Option<String>,
     provider_payload_json: Option<String>,
-}
-
-fn current_timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .unwrap_or_default()
 }
 
 fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {

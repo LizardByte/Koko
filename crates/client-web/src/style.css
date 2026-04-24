@@ -1111,6 +1111,15 @@ legend {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.metadata-search-poster {
+  width: 56px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .metadata-search-card p {
   margin: 0.35rem 0 0;
 }
@@ -1170,6 +1179,12 @@ legend {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+}
+
+.metadata-provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
 }
 
 .settings-activity-panel,

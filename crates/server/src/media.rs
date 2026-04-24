@@ -24,6 +24,7 @@ use crate::db::models::{
     ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, NewMediaFile, NewMediaItem,
     NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState,
 };
+use crate::globals::current_timestamp;
 use crate::metadata::{
     ArtworkKind, MetadataCollectionSummary, get_primary_item_metadata_link,
     list_metadata_collection_summaries, presentation_from_metadata_link,
@@ -531,6 +532,25 @@ pub fn list_library_settings(
         .into_iter()
         .map(media_library_settings_from_row)
         .collect())
+}
+
+/// Return metadata providers configured for a persisted library id.
+pub fn get_library_metadata_providers(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    legacy_libraries: &[MediaLibrarySettings],
+) -> Result<Option<Vec<MetadataProviderId>>, diesel::result::Error> {
+    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
+
+    migrate_legacy_library_settings(conn, legacy_libraries)?;
+
+    let library = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::id.eq(library_id))
+        .select(MediaLibrary::as_select())
+        .first::<MediaLibrary>(conn)
+        .optional()?;
+
+    Ok(library.map(|row| media_library_settings_from_row(row).metadata_providers))
 }
 
 /// Replace the persisted media-library settings stored in the database.
@@ -1563,6 +1583,7 @@ pub fn list_media_items(
 /// Return unmatched movie-like items that are eligible for automatic metadata linking.
 pub fn list_automatic_metadata_candidates(
     conn: &mut SqliteConnection,
+    library_id: Option<i32>,
     limit: usize,
 ) -> Result<Vec<AutomaticMetadataCandidate>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
@@ -1608,15 +1629,14 @@ pub fn list_automatic_metadata_candidates(
         let Some(library) = libraries_by_id.get(&row.library_id) else {
             continue;
         };
+        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
+            continue;
+        }
         let library_settings = media_library_settings_from_row(library.clone());
         if library_settings.kind != MediaLibraryKind::Movies {
             continue;
         }
-        if !library_settings
-            .metadata_providers
-            .iter()
-            .any(|provider| *provider == MetadataProviderId::Tmdb)
-        {
+        if library_settings.metadata_providers.is_empty() {
             continue;
         }
 
@@ -1644,15 +1664,14 @@ pub fn list_automatic_metadata_candidates(
         let Some(library) = libraries_by_id.get(&row.library_id) else {
             continue;
         };
+        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
+            continue;
+        }
         let library_settings = media_library_settings_from_row(library.clone());
         if library_settings.kind != MediaLibraryKind::Shows {
             continue;
         }
-        if !library_settings
-            .metadata_providers
-            .iter()
-            .any(|provider| *provider == MetadataProviderId::Tmdb)
-        {
+        if library_settings.metadata_providers.is_empty() {
             continue;
         }
 
@@ -3546,12 +3565,4 @@ fn fallback_title_from_relative_path(relative_path: &str) -> String {
         .map(|value| value.to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| relative_path.to_string())
-}
-
-fn current_timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .unwrap_or_default()
 }

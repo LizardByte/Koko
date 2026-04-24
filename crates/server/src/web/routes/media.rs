@@ -21,11 +21,13 @@ use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
 use crate::globals;
+use crate::globals::current_timestamp;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
     get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
-    get_media_item_summary, get_persisted_library_summaries, get_playback_decision,
+    get_library_metadata_providers, get_media_item_summary, get_persisted_library_summaries,
+    get_playback_decision,
     get_preferred_item_metadata_link, infer_episode_number, inspect_transcoding_capability,
     library_exists, list_automatic_metadata_candidates, list_library_settings,
     list_media_item_children, list_media_items, mark_metadata_match_attempted,
@@ -170,14 +172,6 @@ fn managed_item_asset_dir(
         .join(item_hex)
 }
 
-fn current_timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .unwrap_or_default()
-}
-
 fn next_system_activity_id() -> String {
     format!(
         "activity-{}",
@@ -286,6 +280,14 @@ fn provider_search_media_type(
         (MetadataProviderId::Tvdb, "show") => Some("series"),
         _ => None,
     }
+}
+
+fn parse_metadata_provider_selection(value: Option<String>) -> Vec<MetadataProviderId> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|provider| MetadataProviderId::from_storage_value(provider.trim()))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -1264,22 +1266,19 @@ fn descendant_metadata_needs_backfill(link: Option<ItemMetadataLink>) -> bool {
     }
 }
 
-#[allow(dead_code)]
 async fn run_automatic_movie_metadata_linking(
     db: &DbConn,
     settings: &crate::config::Settings,
+    library_id: Option<i32>,
 ) {
-    let tmdb_ready = list_provider_statuses(&settings.metadata)
+    let ready_providers = list_provider_statuses(&settings.metadata)
         .into_iter()
-        .any(|provider| {
-            provider.id == MetadataProviderId::Tmdb && provider.enabled && provider.configured
-        });
-    if !tmdb_ready {
-        return;
-    }
+        .filter(|provider| provider.enabled && provider.configured && provider.implemented)
+        .map(|provider| provider.id)
+        .collect::<std::collections::HashSet<_>>();
 
     let candidates = match db
-        .run(|conn| list_automatic_metadata_candidates(conn, 8))
+        .run(move |conn| list_automatic_metadata_candidates(conn, library_id, 8))
         .await
     {
         Ok(candidates) => candidates,
@@ -1290,49 +1289,63 @@ async fn run_automatic_movie_metadata_linking(
     };
 
     for candidate in candidates {
-        let guess_result = match candidate.library_kind {
-            crate::config::MediaLibraryKind::Shows => {
-                guess_provider_show_match(
-                    &settings.metadata,
-                    MetadataProviderId::Tmdb,
-                    &candidate.relative_path,
-                    &candidate.display_title,
-                )
-                .await
+        let mut guessed_provider_id = None;
+        let mut guess = None;
+        for provider_id in candidate
+            .metadata_providers
+            .iter()
+            .filter(|provider_id| ready_providers.contains(provider_id))
+        {
+            let guess_result = match candidate.library_kind {
+                crate::config::MediaLibraryKind::Shows => {
+                    guess_provider_show_match(
+                        &settings.metadata,
+                        provider_id.clone(),
+                        &candidate.relative_path,
+                        &candidate.display_title,
+                    )
+                    .await
+                }
+                _ => {
+                    guess_provider_movie_match(
+                        &settings.metadata,
+                        provider_id.clone(),
+                        &candidate.relative_path,
+                        &candidate.display_title,
+                    )
+                    .await
+                }
+            };
+            match guess_result {
+                Ok(Some(result)) => {
+                    guessed_provider_id = Some(provider_id.clone());
+                    guess = Some(result);
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Automatic {} match failed for item {} ({}): {}",
+                        provider_id.as_storage_value(),
+                        candidate.item_id,
+                        candidate.relative_path,
+                        error
+                    );
+                }
             }
-            _ => {
-                guess_provider_movie_match(
-                    &settings.metadata,
-                    MetadataProviderId::Tmdb,
-                    &candidate.relative_path,
-                    &candidate.display_title,
-                )
-                .await
-            }
-        };
-        let guess = match guess_result {
-            Ok(result) => result,
-            Err(error) => {
-                log::warn!(
-                    "Automatic TMDB match failed for item {} ({}): {}",
-                    candidate.item_id,
-                    candidate.relative_path,
-                    error
-                );
-                continue;
-            }
-        };
+        }
 
-        if let Some(result) = guess {
+        if let (Some(provider_id), Some(result)) = (guessed_provider_id, guess) {
             if let Err(error) = db
                 .run({
                     let external_id = result.external_id.clone();
                     let media_type = result.media_type.clone();
+                    let provider_id = provider_id.clone();
                     move |conn| {
                         set_item_metadata_refresh_state(
                             conn,
                             candidate.item_id,
-                            MetadataProviderId::Tmdb,
+                            provider_id,
                             &external_id,
                             Some(&media_type),
                             "pending",
@@ -1350,7 +1363,7 @@ async fn run_automatic_movie_metadata_linking(
             }
             match fetch_provider_metadata_snapshot(
                 &settings.metadata,
-                MetadataProviderId::Tmdb,
+                provider_id.clone(),
                 &result.external_id,
                 &result.media_type,
             )
@@ -1375,7 +1388,7 @@ async fn run_automatic_movie_metadata_linking(
                                     set_item_metadata_refresh_state(
                                         conn,
                                         candidate.item_id,
-                                        MetadataProviderId::Tmdb,
+                                        snapshot.provider_id,
                                         &external_id,
                                         media_type.as_deref(),
                                         "error",
@@ -1405,11 +1418,12 @@ async fn run_automatic_movie_metadata_linking(
                             let external_id = result.external_id.clone();
                             let media_type = result.media_type.clone();
                             let error_message = error.clone();
+                            let provider_id = provider_id.clone();
                             move |conn| {
                                 set_item_metadata_refresh_state(
                                     conn,
                                     candidate.item_id,
-                                    MetadataProviderId::Tmdb,
+                                    provider_id,
                                     &external_id,
                                     Some(&media_type),
                                     "error",
@@ -1488,8 +1502,10 @@ async fn run_automatic_movie_metadata_linking(
         }
     }
 
-    recover_pending_metadata_refreshes(db, settings).await;
-    run_due_metadata_refreshes(db, settings).await;
+    if library_id.is_none() {
+        recover_pending_metadata_refreshes(db, settings).await;
+        run_due_metadata_refreshes(db, settings).await;
+    }
 }
 
 fn current_user_id(user_guard: Option<&UserGuard>) -> Result<Option<i32>, Status> {
@@ -1510,29 +1526,11 @@ async fn load_item_library_metadata_providers(
     library_id: i32,
 ) -> Result<Vec<MetadataProviderId>, Status> {
     let legacy_libraries = settings.media.libraries.clone();
-    let persisted = db
+    let providers = db
         .run({
             let legacy_libraries = legacy_libraries.clone();
-            move |conn| get_persisted_library_summaries(conn, &legacy_libraries)
+            move |conn| get_library_metadata_providers(conn, library_id, &legacy_libraries)
         })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to load library summaries for library {}: {}",
-                library_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-    let Some(summary) = persisted
-        .into_iter()
-        .find(|library| library.id == library_id)
-    else {
-        return Err(Status::NotFound);
-    };
-
-    let libraries = db
-        .run(move |conn| list_library_settings(conn, &legacy_libraries))
         .await
         .map_err(|error| {
             log::error!(
@@ -1543,15 +1541,7 @@ async fn load_item_library_metadata_providers(
             Status::InternalServerError
         })?;
 
-    libraries
-        .into_iter()
-        .find(|library| {
-            library.path == summary.path
-                && library.name == summary.name
-                && library.kind == summary.kind
-        })
-        .map(|library| library.metadata_providers)
-        .ok_or(Status::NotFound)
+    providers.ok_or(Status::NotFound)
 }
 
 async fn load_library_refresh_jobs(
@@ -1713,23 +1703,36 @@ pub async fn scan_library(
     let legacy_libraries = settings.media.libraries.clone();
     let ffmpeg_settings = settings.ffmpeg.clone();
 
-    let libraries = db
-        .run(move |conn| sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings))
+    let exists = db
+        .run(move |conn| library_exists(conn, library_id))
         .await
         .map_err(|error| {
             log::error!(
-                "Failed to run manual library scan for library {}: {}",
+                "Failed to inspect library {} before manual scan: {}",
                 library_id,
                 error
             );
             Status::InternalServerError
         })?;
+    if !exists {
+        return Err(Status::NotFound);
+    }
 
-    libraries
-        .into_iter()
-        .find(|library| library.id == library_id)
-        .map(Json)
-        .ok_or(Status::NotFound)
+    let summary = load_library_summary(&db, &settings, library_id).await?;
+    tokio::spawn(async move {
+        if let Err(error) = db
+            .run(move |conn| sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings))
+            .await
+        {
+            log::error!(
+                "Failed to run manual library scan for library {}: {}",
+                library_id,
+                error
+            );
+        }
+    });
+
+    Ok(Json(summary))
 }
 
 /// Return active backend activities such as metadata refresh work.
@@ -2055,11 +2058,14 @@ pub async fn get_item_metadata(
 
 /// Search a configured provider for metadata candidates for a media item.
 #[openapi(tag = "Media")]
-#[get("/api/v1/items/<item_id>/metadata/search?<query>")]
+#[get("/api/v1/items/<item_id>/metadata/search?<query>&<providers>&<year>&<language>")]
 pub async fn search_item_metadata(
     db: DbConn,
     item_id: i32,
     query: Option<String>,
+    providers: Option<String>,
+    year: Option<i32>,
+    language: Option<String>,
 ) -> Result<Json<Vec<MetadataSearchResult>>, Status> {
     let settings = current_settings();
     let metadata_settings = settings.metadata.clone();
@@ -2079,12 +2085,24 @@ pub async fn search_item_metadata(
         return Err(Status::BadRequest);
     }
 
-    let providers = load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let library_providers = load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let requested_providers = parse_metadata_provider_selection(providers);
+    let providers = if requested_providers.is_empty() {
+        library_providers
+    } else {
+        requested_providers
+    };
     let fallback_query = item.display_title.clone();
-    let effective_query = query
+    let mut effective_query = query
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback_query);
+    if let Some(year) = year {
+        effective_query = format!("{effective_query} {year}");
+    }
+    let _requested_language = language
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let provider_statuses = list_provider_statuses(&metadata_settings)
         .into_iter()
         .map(|status| (status.id.clone(), status))
@@ -2101,10 +2119,10 @@ pub async fn search_item_metadata(
         let Some(status) = provider_statuses.get(&provider_id) else {
             continue;
         };
+        saw_provider = true;
         if !status.enabled || !status.configured || !status.implemented {
             continue;
         }
-        saw_provider = true;
 
         match search_provider(&metadata_settings, provider_id.clone(), &effective_query).await {
             Ok(provider_results) => {
@@ -2167,9 +2185,14 @@ pub async fn link_item_metadata(
     }
     let library_providers =
         load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
-    if !library_providers.contains(&request.provider_id) {
+    let provider_status = list_provider_statuses(&settings.metadata)
+        .into_iter()
+        .find(|status| status.id == request.provider_id)
+        .ok_or(Status::BadRequest)?;
+    if !provider_status.enabled || !provider_status.configured || !provider_status.implemented {
         return Err(Status::BadRequest);
     }
+    let _library_default_provider = library_providers.contains(&request.provider_id);
     if Some(request.media_type.as_str())
         != provider_search_media_type(request.provider_id.clone(), &item)
     {
@@ -2328,9 +2351,11 @@ pub async fn refresh_library_metadata(
     )
     .await
     else {
-        return Ok(Json(
-            load_library_summary(&db, &settings, library_id).await?,
-        ));
+        let summary = load_library_summary(&db, &settings, library_id).await?;
+        tokio::spawn(async move {
+            run_automatic_movie_metadata_linking(&db, &settings, Some(library_id)).await;
+        });
+        return Ok(Json(summary));
     };
 
     if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
@@ -2346,6 +2371,7 @@ pub async fn refresh_library_metadata(
             record_metadata_refresh_activity_progress(&activity_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
+        run_automatic_movie_metadata_linking(&db, &settings, Some(library_id)).await;
     });
 
     Ok(Json(pending_summary))

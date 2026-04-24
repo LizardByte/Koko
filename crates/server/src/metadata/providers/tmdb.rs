@@ -1,32 +1,14 @@
-use serde::Deserialize;
 use serde_json::Value;
 use strsim::normalized_levenshtein;
+use tmdb_client::apis::client::APIClient as TmdbApiClient;
+use tmdb_client::models::{EpisodeDetails, MovieDetails, SeasonDetails, TvDetails};
 
 use crate::config::{MetadataProviderId, MetadataSettings};
 use crate::metadata::{
     MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult, StoredMetadataSnapshot,
-    cleanup_movie_title, extract_release_year, movie_match_score, parse_movie_name,
-    show_search_query, tmdb_episode_external_id, tmdb_get_json, tmdb_get_text, tmdb_image_url,
-    tmdb_provider_settings, tmdb_season_external_id,
+    cleanup_movie_title, extract_release_year, movie_match_score, parse_movie_name, show_search_query,
+    tmdb_episode_external_id, tmdb_image_url, tmdb_provider_settings, tmdb_season_external_id,
 };
-
-#[derive(Debug, Deserialize)]
-struct TmdbSearchResponse {
-    results: Vec<TmdbSearchItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TmdbSearchItem {
-    id: i64,
-    media_type: Option<String>,
-    title: Option<String>,
-    name: Option<String>,
-    overview: Option<String>,
-    poster_path: Option<String>,
-    backdrop_path: Option<String>,
-    release_date: Option<String>,
-    first_air_date: Option<String>,
-}
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -47,37 +29,23 @@ pub(crate) async fn search(
     query: &str,
 ) -> Result<Vec<MetadataSearchResult>, String> {
     let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_json::<TmdbSearchResponse>(
-        &provider,
-        "search/multi",
-        vec![("query", query.to_string())],
-        &format!("search query {:?}", query),
-    )
-    .await?;
-    Ok(payload
-        .results
-        .into_iter()
-        .filter_map(|item| {
-            let media_type = item.media_type.unwrap_or_default();
-            if media_type != "movie" && media_type != "tv" {
-                return None;
-            }
-
-            let title = item.title.or(item.name)?;
-            Some(MetadataSearchResult {
-                provider_id: MetadataProviderId::Tmdb,
-                external_id: item.id.to_string(),
-                media_type,
-                title,
-                overview: item.overview,
-                artwork_url: item.poster_path.map(|path| tmdb_image_url(&path, "w500")),
-                backdrop_url: item
-                    .backdrop_path
-                    .map(|path| tmdb_image_url(&path, "w1280")),
-                release_year: extract_release_year(item.release_date.or(item.first_air_date)),
-            })
-        })
-        .collect())
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let query = query.to_string();
+    let language = provider.language;
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        let payload = client
+            .search_api()
+            .get_search_multi_paginated(&query, Some(&language), Some(1), Some(false), None)
+            .map_err(|error| format!("TMDB search query {:?} failed: {}", query, error))?;
+        Ok(payload
+            .results
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(search_result_from_value)
+            .collect())
+    })
+    .await
 }
 
 pub(crate) async fn fetch_snapshot(
@@ -86,50 +54,61 @@ pub(crate) async fn fetch_snapshot(
     media_type: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!("{}/{}", media_type, external_id),
-        vec![("append_to_response", "videos".to_string())],
-        &format!("details lookup for {media_type}:{external_id}"),
-    )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-    let title = parsed
-        .get("title")
-        .or_else(|| parsed.get("name"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let overview = parsed
-        .get("overview")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .filter(|value| !value.trim().is_empty());
-    let artwork_url = parsed
-        .get("poster_path")
-        .and_then(Value::as_str)
-        .map(|path| tmdb_image_url(path, "w500"));
-    let backdrop_url = parsed
-        .get("backdrop_path")
-        .and_then(Value::as_str)
-        .map(|path| tmdb_image_url(path, "w1280"));
-    let release_year = parsed
-        .get("release_date")
-        .or_else(|| parsed.get("first_air_date"))
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
-        .and_then(|value| extract_release_year(Some(value)));
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language;
+    let external_id_number = parse_external_id(external_id, media_type)?;
+    let external_id_string = external_id.to_string();
+    let normalized_media_type = match media_type {
+        "series" => "tv".to_string(),
+        other => other.to_string(),
+    };
 
-    Ok(StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::Tmdb,
-        external_id: external_id.to_string(),
-        media_type: Some(media_type.to_string()),
-        title,
-        overview,
-        artwork_url,
-        backdrop_url,
-        release_year,
-        provider_payload_json: Some(payload),
+    run_tmdb_blocking(move || match normalized_media_type.as_str() {
+        "movie" => {
+            let client = TmdbApiClient::new_with_api_key(api_key.clone());
+            let details = client
+                .movies_api()
+                .get_movie_details(
+                    external_id_number,
+                    Some(&language),
+                    None,
+                    Some("videos"),
+                )
+                .map_err(|error| {
+                    format!(
+                        "TMDB details lookup for movie:{} failed: {}",
+                        external_id_string, error
+                    )
+                })?;
+            Ok(movie_snapshot_from_details(
+                &external_id_string,
+                &details,
+            ))
+        }
+        "tv" => {
+            let client = TmdbApiClient::new_with_api_key(api_key);
+            let details = client
+                .tv_api()
+                .get_tv_details(
+                    external_id_number,
+                    Some(&language),
+                    None,
+                    Some("videos"),
+                )
+                .map_err(|error| {
+                    format!(
+                        "TMDB details lookup for tv:{} failed: {}",
+                        external_id_string, error
+                    )
+                })?;
+            Ok(tv_snapshot_from_details(
+                &external_id_string,
+                &details,
+            ))
+        }
+        other => Err(format!("Unsupported TMDB media type: {}", other)),
     })
+    .await
 }
 
 pub(crate) async fn guess_movie_match(
@@ -209,41 +188,28 @@ pub(crate) async fn fetch_season_snapshot(
     season_number: i32,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!("tv/{}/season/{}", show_external_id, season_number),
-        Vec::new(),
-        &format!("season lookup for tv:{show_external_id}:season:{season_number}"),
-    )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-
-    Ok(StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::Tmdb,
-        external_id: tmdb_season_external_id(show_external_id, season_number),
-        media_type: Some("tv_season".into()),
-        title: parsed
-            .get("name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        overview: parsed
-            .get("overview")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        artwork_url: parsed
-            .get("poster_path")
-            .and_then(Value::as_str)
-            .map(|path| tmdb_image_url(path, "w500")),
-        backdrop_url: None,
-        release_year: parsed
-            .get("air_date")
-            .and_then(Value::as_str)
-            .map(|value| value.to_string())
-            .and_then(|value| extract_release_year(Some(value))),
-        provider_payload_json: Some(payload),
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language;
+    let show_id = parse_external_id(show_external_id, "tv")?;
+    let show_external_id = show_external_id.to_string();
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        let details = client
+            .tv_seasons_api()
+            .get_tv_season_details(show_id, season_number, Some(&language), None, None)
+            .map_err(|error| {
+                format!(
+                    "TMDB season lookup for tv:{}:season:{} failed: {}",
+                    show_external_id, season_number, error
+                )
+            })?;
+        Ok(season_snapshot_from_details(
+            &show_external_id,
+            season_number,
+            &details,
+        ))
     })
+    .await
 }
 
 pub(crate) async fn fetch_episode_snapshot(
@@ -253,44 +219,240 @@ pub(crate) async fn fetch_episode_snapshot(
     episode_number: i32,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!(
-            "tv/{}/season/{}/episode/{}",
-            show_external_id, season_number, episode_number
-        ),
-        Vec::new(),
-        &format!(
-            "episode lookup for tv:{show_external_id}:season:{season_number}:episode:{episode_number}"
-        ),
-    )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language;
+    let show_id = parse_external_id(show_external_id, "tv")?;
+    let show_external_id = show_external_id.to_string();
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        let details = client
+            .tv_episodes_api()
+            .get_tv_season_episode_details(
+                show_id,
+                season_number,
+                episode_number,
+                Some(&language),
+                None,
+                None,
+            )
+            .map_err(|error| {
+                format!(
+                    "TMDB episode lookup for tv:{}:season:{}:episode:{} failed: {}",
+                    show_external_id, season_number, episode_number, error
+                )
+            })?;
+        Ok(episode_snapshot_from_details(
+            &show_external_id,
+            season_number,
+            episode_number,
+            &details,
+        ))
+    })
+    .await
+}
 
-    Ok(StoredMetadataSnapshot {
+fn parse_external_id(
+    external_id: &str,
+    media_type: &str,
+) -> Result<i32, String> {
+    external_id.parse::<i32>().map_err(|_| {
+        format!(
+            "TMDB {} external id must be numeric, got {:?}",
+            media_type, external_id
+        )
+    })
+}
+
+fn tmdb_api_key_from_provider(
+    provider: &crate::config::MetadataProviderSettings,
+) -> Result<String, String> {
+    let api_key = provider.api_key.clone().unwrap_or_default();
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err("TMDB is enabled but no API key is configured.".into());
+    }
+
+    Ok(api_key.to_string())
+}
+
+async fn run_tmdb_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("TMDB request task failed: {}", error))?
+}
+
+fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
+    let media_type = item.get("media_type")?.as_str()?.to_ascii_lowercase();
+    if media_type != "movie" && media_type != "tv" {
+        return None;
+    }
+
+    let external_id = item.get("id")?.as_i64()?.to_string();
+    let title = item
+        .get("title")
+        .or_else(|| item.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)?;
+    let overview = item
+        .get("overview")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let artwork_url = item
+        .get("poster_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|path| tmdb_image_url(path, "w500"));
+    let backdrop_url = item
+        .get("backdrop_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|path| tmdb_image_url(path, "w1280"));
+    let release_year = item
+        .get("release_date")
+        .or_else(|| item.get("first_air_date"))
+        .and_then(Value::as_str)
+        .map(|value| value.to_string())
+        .and_then(|value| extract_release_year(Some(value)));
+
+    Some(MetadataSearchResult {
         provider_id: MetadataProviderId::Tmdb,
-        external_id: tmdb_episode_external_id(show_external_id, season_number, episode_number),
-        media_type: Some("tv_episode".into()),
-        title: parsed
-            .get("name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        overview: parsed
-            .get("overview")
-            .and_then(Value::as_str)
+        external_id,
+        media_type,
+        title,
+        overview,
+        artwork_url,
+        backdrop_url,
+        release_year,
+    })
+}
+
+fn movie_snapshot_from_details(
+    external_id: &str,
+    details: &MovieDetails,
+) -> StoredMetadataSnapshot {
+    StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: external_id.to_string(),
+        media_type: Some("movie".into()),
+        title: details.title.clone(),
+        overview: details
+            .overview
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        artwork_url: parsed
-            .get("still_path")
-            .and_then(Value::as_str)
+        artwork_url: details
+            .poster_path
+            .as_deref()
+            .map(|path| tmdb_image_url(path, "w500")),
+        backdrop_url: details
+            .backdrop_path
+            .as_deref()
+            .map(|path| tmdb_image_url(path, "w1280")),
+        release_year: details
+            .release_date
+            .clone()
+            .and_then(|value| extract_release_year(Some(value))),
+        provider_payload_json: serde_json::to_string(details).ok(),
+    }
+}
+
+fn tv_snapshot_from_details(
+    external_id: &str,
+    details: &TvDetails,
+) -> StoredMetadataSnapshot {
+    StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: external_id.to_string(),
+        media_type: Some("tv".into()),
+        title: details.name.clone(),
+        overview: details
+            .overview
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        artwork_url: details
+            .poster_path
+            .as_deref()
+            .map(|path| tmdb_image_url(path, "w500")),
+        backdrop_url: details
+            .backdrop_path
+            .as_deref()
+            .map(|path| tmdb_image_url(path, "w1280")),
+        release_year: details
+            .first_air_date
+            .clone()
+            .and_then(|value| extract_release_year(Some(value))),
+        provider_payload_json: serde_json::to_string(details).ok(),
+    }
+}
+
+fn season_snapshot_from_details(
+    show_external_id: &str,
+    season_number: i32,
+    details: &SeasonDetails,
+) -> StoredMetadataSnapshot {
+    StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: tmdb_season_external_id(show_external_id, season_number),
+        media_type: Some("tv_season".into()),
+        title: details.name.clone(),
+        overview: details
+            .overview
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        artwork_url: details
+            .poster_path
+            .as_deref()
+            .map(|path| tmdb_image_url(path, "w500")),
+        backdrop_url: None,
+        release_year: details
+            .air_date
+            .clone()
+            .and_then(|value| extract_release_year(Some(value))),
+        provider_payload_json: serde_json::to_string(details).ok(),
+    }
+}
+
+fn episode_snapshot_from_details(
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    details: &EpisodeDetails,
+) -> StoredMetadataSnapshot {
+    StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: tmdb_episode_external_id(show_external_id, season_number, episode_number),
+        media_type: Some("tv_episode".into()),
+        title: details.name.clone(),
+        overview: details
+            .overview
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        artwork_url: details
+            .still_path
+            .as_deref()
             .map(|path| tmdb_image_url(path, "w780")),
         backdrop_url: None,
-        release_year: parsed
-            .get("air_date")
-            .and_then(Value::as_str)
-            .map(|value| value.to_string())
+        release_year: details
+            .air_date
+            .clone()
             .and_then(|value| extract_release_year(Some(value))),
-        provider_payload_json: Some(payload),
-    })
+        provider_payload_json: serde_json::to_string(details).ok(),
+    }
 }

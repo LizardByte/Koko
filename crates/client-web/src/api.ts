@@ -654,10 +654,27 @@ export function getItemMetadata(itemId: number): Promise<ItemMetadataResponse> {
   return requestJson<ItemMetadataResponse>('GET', `/api/v1/items/${itemId}/metadata`);
 }
 
-export function searchItemMetadata(itemId: number, query?: string): Promise<MetadataSearchResult[]> {
+export interface MetadataSearchOptions {
+  query?: string;
+  providers?: string[];
+  year?: string;
+  language?: string;
+}
+
+export function searchItemMetadata(itemId: number, options?: string | MetadataSearchOptions): Promise<MetadataSearchResult[]> {
   const params = new URLSearchParams();
-  if (query?.trim()) {
-    params.set('query', query.trim());
+  const normalizedOptions = typeof options === 'string' ? { query: options } : options;
+  if (normalizedOptions?.query?.trim()) {
+    params.set('query', normalizedOptions.query.trim());
+  }
+  if (normalizedOptions?.providers?.length) {
+    params.set('providers', normalizedOptions.providers.join(','));
+  }
+  if (normalizedOptions?.year?.trim()) {
+    params.set('year', normalizedOptions.year.trim());
+  }
+  if (normalizedOptions?.language?.trim()) {
+    params.set('language', normalizedOptions.language.trim());
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return requestJson<MetadataSearchResult[]>('GET', `/api/v1/items/${itemId}/metadata/search${suffix}`);

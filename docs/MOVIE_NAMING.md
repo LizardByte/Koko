@@ -1,18 +1,19 @@
 # Movie naming guidelines
 
-Koko matches movie files more reliably when each media type lives under its own top-level folder and movie files follow a predictable naming pattern.
+Koko matches movie files more reliably when each media type lives under its own top-level folder and movie files follow
+a predictable naming pattern.
 
 ## Recommended folder layout
 
 Keep movies separate from shows, music, books, and photos.
 
 ```text
-Media/
-  Movies/
-  TV Shows/
-  Music/
-  Books/
-  Photos/
+/Media
+  /Books
+  /Movies
+  /Music
+  /Photos
+  /TV Shows
 ```
 
 When you create a movie library in Koko, point it at the movie root such as `Media/Movies`.
@@ -22,8 +23,8 @@ When you create a movie library in Koko, point it at the movie root such as `Med
 The most reliable option is one folder per movie:
 
 ```text
-Movies/
-  Movie Title (2024)/
+/Movies
+  /Movie Title (2024)
     Movie Title (2024).mkv
 ```
 
@@ -32,10 +33,10 @@ This layout works well when you also keep artwork, subtitles, or alternate editi
 Examples:
 
 ```text
-Movies/
-  Avatar (2009)/
+/Movies
+  /Avatar (2009)
     Avatar (2009).mkv
-  Batman Begins (2005)/
+  /Batman Begins (2005)
     Batman Begins (2005).mp4
     Batman Begins (2005).en.srt
     poster.jpg
@@ -46,7 +47,7 @@ Movies/
 Koko also supports movies stored directly inside the library root:
 
 ```text
-Movies/
+/Movies
   Avatar (2009).mkv
   Batman Begins (2005).mp4
 ```
@@ -79,10 +80,10 @@ Koko strips these tags before title matching and uses them as hints where possib
 If you keep more than one edition of the same movie, include the edition tag in the folder name, filename, or both.
 
 ```text
-Movies/
-  Blade Runner (1982) {edition-Director's Cut}/
+/Movies
+  /Blade Runner (1982) {edition-Director's Cut}
     Blade Runner (1982) {edition-Director's Cut}.mp4
-  Blade Runner (1982) {edition-Final Cut}/
+  /Blade Runner (1982) {edition-Final Cut}
     Blade Runner (1982) {edition-Final Cut}.mkv
 ```
 
@@ -102,8 +103,8 @@ Koko recognizes common part suffixes such as:
 Example:
 
 ```text
-Movies/
-  The Dark Knight (2008)/
+/Movies
+  /The Dark Knight (2008)
     The Dark Knight (2008) - pt1.mp4
     The Dark Knight (2008) - pt2.mp4
 ```
@@ -119,16 +120,15 @@ Movies/
 ## Examples Koko matches well
 
 ```text
-Movies/
-  Alien (1979)/
+/Movies
+  /Alien (1979)
     Alien (1979).mkv
 
-Movies/
-  Dune Part Two (2024) {tmdb-693134}/
+/Movies
+  /Dune Part Two (2024) {tmdb-693134}
     Dune Part Two (2024) {tmdb-693134}.mkv
 
-Movies/
-  Mad Max Fury Road (2015) {edition-Black and Chrome}/
+/Movies
+  /Mad Max Fury Road (2015) {edition-Black and Chrome}
     Mad Max Fury Road (2015) {edition-Black and Chrome}.mkv
 ```
-

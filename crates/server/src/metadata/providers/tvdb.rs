@@ -3,15 +3,22 @@ use strsim::normalized_levenshtein;
 
 use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
-    HTTP_CLIENT, MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult,
-    StoredMetadataSnapshot, TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken,
-    TvdbDescendantTarget, cleanup_movie_title, extract_release_year, format_payload_snippet,
-    movie_match_score, parse_movie_name, parse_retry_after_seconds, provider_settings,
-    show_search_query,
+    MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult, StoredMetadataSnapshot,
+    TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken, TvdbDescendantTarget,
+    cleanup_movie_title, extract_release_year, format_payload_snippet, movie_match_score,
+    parse_movie_name, provider_settings, show_search_query,
 };
+use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use reqwest::header::RETRY_AFTER;
 use std::time::{Duration, Instant};
+
+static TVDB_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .user_agent(format!("Koko/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("Failed to build TheTVDB HTTP client")
+});
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -57,27 +64,13 @@ pub(crate) async fn fetch_snapshot(
     external_id: &str,
     media_type: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
-    let provider = provider_settings(settings, MetadataProviderId::Tvdb)
-        .map_err(|error| format!("TheTVDB {}", error))?;
     match media_type {
         "movie" => {
-            let payload = get_json(
-                &provider,
-                &format!("movies/{external_id}/extended"),
-                vec![("meta", "translations".to_string())],
-                &format!("movie details lookup for {external_id}"),
-            )
-            .await?;
+            let payload = fetch_movie_payload(settings, external_id).await?;
             Ok(movie_snapshot_from_value(external_id, &payload))
         }
-        "series" => {
-            let payload = get_json(
-                &provider,
-                &format!("series/{external_id}/extended"),
-                vec![("meta", "translations".to_string())],
-                &format!("series details lookup for {external_id}"),
-            )
-            .await?;
+        "series" | "tv" => {
+            let payload = fetch_series_payload(settings, external_id).await?;
             Ok(series_snapshot_from_value(external_id, &payload))
         }
         "season" => fetch_season_snapshot(settings, external_id, 0, external_id).await,
@@ -151,9 +144,10 @@ pub(crate) async fn fetch_season_snapshot(
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
+    let season_id = parse_tvdb_external_id(season_external_id, "season")?;
     let payload = get_json(
         &provider,
-        &format!("seasons/{season_external_id}/extended"),
+        &format!("seasons/{season_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!("season lookup for series:{show_external_id}:season:{season_external_id}"),
     )
@@ -175,9 +169,10 @@ pub(crate) async fn fetch_episode_snapshot(
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
+    let episode_id = parse_tvdb_external_id(episode_external_id, "episode")?;
     let payload = get_json(
         &provider,
-        &format!("episodes/{episode_external_id}/extended"),
+        &format!("episodes/{episode_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!(
             "episode lookup for series:{show_external_id}:season:{season_number}:episode:{episode_external_id}"
@@ -199,13 +194,15 @@ pub(crate) async fn load_show_descendant_targets(
 ) -> Result<Vec<TvdbDescendantTarget>, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
+    let show_id = parse_tvdb_external_id(show_external_id, "series")?;
     let series_payload = get_json(
         &provider,
-        &format!("series/{show_external_id}/extended"),
+        &format!("series/{show_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!("series descendant lookup for {show_external_id}"),
     )
     .await?;
+
     let mut targets = Vec::new();
     for season in series_payload
         .get("data")
@@ -220,6 +217,7 @@ pub(crate) async fn load_show_descendant_targets(
         let Some(season_number) = season_number(&season) else {
             continue;
         };
+
         let season_payload = get_json(
             &provider,
             &format!("seasons/{season_id}/extended"),
@@ -250,6 +248,18 @@ pub(crate) async fn load_show_descendant_targets(
     }
 
     Ok(targets)
+}
+
+fn parse_tvdb_external_id(
+    external_id: &str,
+    media_type: &str,
+) -> Result<f32, String> {
+    external_id.parse::<f32>().map_err(|_| {
+        format!(
+            "TheTVDB {} external id must be numeric, got {:?}",
+            media_type, external_id
+        )
+    })
 }
 
 async fn wait_for_rate_limit(provider: &MetadataProviderSettings) {
@@ -284,7 +294,7 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
     }
 
     let payload = serde_json::json!({ "apikey": api_key });
-    let response = HTTP_CLIENT
+    let response = TVDB_HTTP_CLIENT
         .post(format!("{}/login", TVDB_API_BASE))
         .json(&payload)
         .send()
@@ -336,7 +346,7 @@ async fn get_text(
         wait_for_rate_limit(provider).await;
         let token = auth_token(provider).await?;
         let request_url = format!("{}/{}", TVDB_API_BASE, path.trim_start_matches('/'));
-        let response = HTTP_CLIENT
+        let response = TVDB_HTTP_CLIENT
             .get(&request_url)
             .bearer_auth(&token)
             .query(&query)
@@ -365,7 +375,6 @@ async fn get_text(
                 let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
                     || retry_after.is_some()
                     || payload.to_ascii_lowercase().contains("rate limit");
-                let payload_snippet = format_payload_snippet(&payload);
                 let retryable =
                     status == StatusCode::UNAUTHORIZED || rate_limited || status.is_server_error();
                 if retryable && attempt < retry_attempts {
@@ -380,7 +389,7 @@ async fn get_text(
                         context,
                         status,
                         if rate_limited { " [rate limited]" } else { "" },
-                        payload_snippet,
+                        format_payload_snippet(&payload),
                         attempt_number,
                         retry_attempts + 1,
                         backoff.as_millis()
@@ -394,7 +403,7 @@ async fn get_text(
                     context,
                     status,
                     if rate_limited { " [rate limited]" } else { "" },
-                    payload_snippet
+                    format_payload_snippet(&payload)
                 ));
             }
             Err(error) => {
@@ -435,14 +444,50 @@ async fn get_json(
         .map_err(|error| format!("TheTVDB {} returned invalid JSON: {}", context, error))
 }
 
+fn parse_retry_after_seconds(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok()
+}
+
+async fn fetch_movie_payload(
+    settings: &MetadataSettings,
+    external_id: &str,
+) -> Result<Value, String> {
+    let provider = provider_settings(settings, MetadataProviderId::Tvdb)
+        .map_err(|error| format!("TheTVDB {}", error))?;
+    let movie_id = parse_tvdb_external_id(external_id, "movie")?;
+    get_json(
+        &provider,
+        &format!("movies/{movie_id}/extended"),
+        vec![("meta", "translations".to_string())],
+        &format!("movie details lookup for {external_id}"),
+    )
+    .await
+}
+
+async fn fetch_series_payload(
+    settings: &MetadataSettings,
+    external_id: &str,
+) -> Result<Value, String> {
+    let provider = provider_settings(settings, MetadataProviderId::Tvdb)
+        .map_err(|error| format!("TheTVDB {}", error))?;
+    let series_id = parse_tvdb_external_id(external_id, "series")?;
+    get_json(
+        &provider,
+        &format!("series/{series_id}/extended"),
+        vec![("meta", "translations".to_string())],
+        &format!("series details lookup for {external_id}"),
+    )
+    .await
+}
+
 fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
     let item_type = item
         .get("type")
         .and_then(Value::as_str)
         .map(|value| value.to_ascii_lowercase())?;
     let media_type = match item_type.as_str() {
-        "series" | "tv series" => "series",
-        "movie" => "movie",
+        "series" | "tv series" | "tv" | "show" => "series",
+        "movie" | "film" | "feature film" => "movie",
         _ => return None,
     };
 
@@ -544,68 +589,74 @@ fn object_id(value: &Value) -> Option<i32> {
         .get("id")
         .and_then(Value::as_i64)
         .and_then(|id| i32::try_from(id).ok())
+        .or_else(|| {
+            value
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<i32>().ok())
+        })
+        .or_else(|| {
+            value
+                .get("tvdb_id")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<i32>().ok())
+        })
+        .or_else(|| {
+            value
+                .get("objectID")
+                .and_then(Value::as_str)
+                .and_then(|id| id.parse::<i32>().ok())
+        })
 }
 
 fn best_title(value: &Value) -> Option<String> {
     value
         .get("name")
         .or_else(|| value.get("title"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(ToOwned::to_owned)
+        .or_else(|| value.get("name_translated"))
         .or_else(|| {
             value
                 .get("translations")
                 .and_then(Value::as_object)
                 .and_then(|translations| {
-                    translations.values().find_map(|entries| {
-                        entries.as_array().and_then(|entries| {
-                            entries.iter().find_map(|entry| {
-                                entry
-                                    .get("name")
-                                    .or_else(|| entry.get("title"))
-                                    .and_then(Value::as_str)
-                                    .map(str::trim)
-                                    .filter(|title| !title.is_empty())
-                                    .map(ToOwned::to_owned)
-                            })
-                        })
-                    })
+                    ["eng", "en", "english"]
+                        .iter()
+                        .find_map(|key| translations.get(*key))
+                        .or_else(|| translations.values().next())
                 })
         })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn best_overview(value: &Value) -> Option<String> {
     value
         .get("overview")
+        .or_else(|| {
+            value
+                .get("overviews")
+                .and_then(Value::as_object)
+                .and_then(|overviews| {
+                    ["eng", "en", "english"]
+                        .iter()
+                        .find_map(|key| overviews.get(*key))
+                        .or_else(|| overviews.values().next())
+                })
+        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|overview| !overview.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            value
-                .get("translations")
-                .and_then(|translations| translations.get("overviewTranslations"))
-                .and_then(Value::as_array)
-                .and_then(|entries| {
-                    entries.iter().find_map(|entry| {
-                        entry
-                            .get("overview")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|overview| !overview.is_empty())
-                            .map(ToOwned::to_owned)
-                    })
-                })
-        })
 }
 
 fn artwork_url(value: &Value) -> Option<String> {
     value
         .get("image")
         .or_else(|| value.get("image_url"))
-        .or_else(|| value.get("artwork"))
+        .or_else(|| value.get("poster"))
+        .or_else(|| value.get("thumbnail"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|url| !url.is_empty())
@@ -618,22 +669,12 @@ fn backdrop_url(value: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|artworks| {
             artworks.iter().find_map(|artwork| {
-                let kind = artwork
-                    .get("type")
-                    .or_else(|| artwork.get("typeName"))
+                artwork
+                    .get("image")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                if kind.contains("background") || kind.contains("fanart") || kind.contains("banner")
-                {
-                    artwork
-                        .get("image")
-                        .or_else(|| artwork.get("image_url"))
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                } else {
-                    None
-                }
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(ToOwned::to_owned)
             })
         })
 }
@@ -655,8 +696,15 @@ fn release_year(value: &Value) -> Option<i32> {
         .and_then(|year| i32::try_from(year).ok())
         .or_else(|| {
             value
+                .get("year")
+                .and_then(Value::as_str)
+                .and_then(|year| year.parse::<i32>().ok())
+        })
+        .or_else(|| {
+            value
                 .get("firstAired")
                 .or_else(|| value.get("releaseDate"))
+                .or_else(|| value.get("first_release"))
                 .and_then(Value::as_str)
                 .map(|value| value.to_string())
                 .and_then(|value| extract_release_year(Some(value)))
@@ -677,4 +725,50 @@ fn episode_number(value: &Value) -> Option<i32> {
         .or_else(|| value.get("episodeNumber"))
         .and_then(Value::as_i64)
         .and_then(|number| i32::try_from(number).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_result_from_value;
+    use serde_json::json;
+
+    #[test]
+    fn tvdb_search_result_accepts_object_id_and_translations() {
+        let result = search_result_from_value(json!({
+            "type": "movie",
+            "objectID": "901",
+            "translations": {
+                "eng": "Top Gun: Maverick"
+            },
+            "overviews": {
+                "eng": "After more than thirty years of service..."
+            },
+            "year": "2022",
+            "image_url": "https://example.test/poster.jpg"
+        }))
+        .expect("expected TVDB search result to parse");
+
+        assert_eq!(result.external_id, "901");
+        assert_eq!(result.media_type, "movie");
+        assert_eq!(result.title, "Top Gun: Maverick");
+        assert_eq!(result.release_year, Some(2022));
+        assert_eq!(
+            result.overview.as_deref(),
+            Some("After more than thirty years of service...")
+        );
+    }
+
+    #[test]
+    fn tvdb_search_result_accepts_show_alias_type() {
+        let result = search_result_from_value(json!({
+            "type": "show",
+            "tvdb_id": "42",
+            "name": "Example Show"
+        }))
+        .expect("expected TVDB show search result to parse");
+
+        assert_eq!(result.external_id, "42");
+        assert_eq!(result.media_type, "series");
+        assert_eq!(result.title, "Example Show");
+    }
 }

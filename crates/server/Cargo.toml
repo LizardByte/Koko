@@ -73,6 +73,7 @@ serde_yaml = "0.9.34"
 strsim = "0.11.1"
 tao = "0.35.0"
 tokio = { version = "1.0", features = ["full"] }
+tmdb_client = "1.8.0"
 tray-icon = "0.22.0"
 webbrowser = "1.0.3"
 # common = { path = "../common" }

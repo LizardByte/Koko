@@ -15,6 +15,7 @@ pub mod media;
 pub mod metadata;
 pub mod signal_handler;
 pub mod tray;
+pub mod utils;
 pub mod web;
 
 /// Main entry point for the application.

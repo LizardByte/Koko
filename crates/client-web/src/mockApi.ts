@@ -358,6 +358,10 @@ const metadataProviders: MetadataProviderStatus[] = [
     enabled: true,
     configured: true,
     language: 'en-US',
+    attribution_text: 'Metadata and artwork provided by The Movie Database (TMDB).',
+    attribution_url: 'https://www.themoviedb.org/',
+    logo_light_url: undefined,
+    logo_dark_url: undefined,
   },
   {
     id: 'musicbrainz',
@@ -369,6 +373,10 @@ const metadataProviders: MetadataProviderStatus[] = [
     enabled: false,
     configured: true,
     language: 'en-US',
+    attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
+    attribution_url: 'https://musicbrainz.org/',
+    logo_light_url: undefined,
+    logo_dark_url: undefined,
   },
 ];
 
@@ -407,6 +415,7 @@ const users: MockUserRecord[] = [
     admin: true,
     birthday: '1990-01-01',
     profile_image_url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=160&h=160&fit=crop',
+    preferred_metadata_languages: ['en-US'],
   },
 ];
 
@@ -436,6 +445,7 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         release_year: 1999,
         media_type: 'movie',
         match_state: 'linked',
+        locale_key: 'en-US',
         provider_payload_json: JSON.stringify({
           videos: {
             results: [
@@ -637,6 +647,9 @@ export function createMockUser(request: CreateUserRequest): string {
     admin: users.length === 0 || request.admin,
     birthday: request.birthday?.trim() || undefined,
     profile_image_url: request.profile_image_url?.trim() || undefined,
+    preferred_metadata_languages: request.preferred_metadata_languages?.length
+      ? request.preferred_metadata_languages
+      : ['en-US'],
   });
   nextUserId += 1;
   return 'User created';
@@ -675,6 +688,9 @@ export function updateMockUser(userId: number, request: UpdateUserRequest): Boot
   user.admin = request.admin;
   user.birthday = request.birthday?.trim() || undefined;
   user.profile_image_url = request.profile_image_url?.trim() || undefined;
+  user.preferred_metadata_languages = request.preferred_metadata_languages?.length
+    ? request.preferred_metadata_languages
+    : ['en-US'];
   return toUserSummary(user);
 }
 
@@ -685,6 +701,7 @@ function toUserSummary(user: MockUserRecord): BootstrapUser {
     admin: user.admin,
     birthday: user.birthday,
     profile_image_url: user.profile_image_url,
+    preferred_metadata_languages: user.preferred_metadata_languages ?? ['en-US'],
   };
 }
 
@@ -981,6 +998,7 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     release_year: candidate.release_year,
     media_type: candidate.media_type,
     match_state: 'linked',
+    locale_key: 'en-US',
     provider_payload_json: JSON.stringify(candidate, null, 2),
     updated_at: Math.floor(Date.now() / 1000),
   };

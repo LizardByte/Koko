@@ -23,6 +23,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_server_capabilities,
         media::get_system_activities,
         media::get_metadata_providers,
+        media::get_metadata_locales,
         media::get_home,
         media::get_libraries,
         media::scan_library,

@@ -451,15 +451,14 @@ pub fn normalize_settings(settings: &mut Settings) {
     }
 
     let mut seen_provider_ids = std::collections::HashSet::new();
-    settings.metadata.providers.retain(|provider| seen_provider_ids.insert(provider.id.clone()));
+    settings
+        .metadata
+        .providers
+        .retain(|provider| seen_provider_ids.insert(provider.id.clone()));
     for provider in &mut settings.metadata.providers {
         provider.language = {
             let trimmed = provider.language.trim();
-            if trimmed.is_empty() {
-                default_metadata_language()
-            } else {
-                trimmed.to_string()
-            }
+            if trimmed.is_empty() { default_metadata_language() } else { trimmed.to_string() }
         };
         provider.rate_limit_per_second = provider.rate_limit_per_second.max(1);
         provider.retry_backoff_ms = provider.retry_backoff_ms.max(1);

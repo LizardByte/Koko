@@ -14,6 +14,7 @@ use rocket::serde::json::Json;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
 use serde::Serialize;
+use strsim::normalized_levenshtein;
 
 // local imports
 use crate::auth::UserGuard;
@@ -21,31 +22,32 @@ use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
 use crate::globals;
-use crate::globals::current_timestamp;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
-    get_library_metadata_providers, get_media_item_summary, get_persisted_library_summaries,
-    get_playback_decision,
-    get_preferred_item_metadata_link, infer_episode_number, inspect_transcoding_capability,
-    library_exists, list_automatic_metadata_candidates, list_library_settings,
-    list_media_item_children, list_media_items, mark_metadata_match_attempted,
-    resolve_item_subtitle_path, resolve_item_theme_song_path, resolve_local_item_artwork_path,
-    resolve_media_item_source_path, search_media_items, sync_persisted_library_catalog,
-    upsert_playback_progress,
+    get_item_theme_song_themerr_references, get_library_files, get_library_metadata_providers,
+    get_media_home, get_media_item, get_media_item_summary,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
+    get_playback_decision, get_preferred_item_metadata_link, infer_episode_number,
+    inspect_transcoding_capability, library_exists, list_automatic_metadata_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    mark_metadata_match_attempted, resolve_item_subtitle_path, resolve_item_theme_song_path,
+    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
+    sync_persisted_library_catalog, upsert_playback_progress,
 };
 use crate::metadata::{
     ArtworkKind, ItemMetadataSummary, MetadataProviderStatus, MetadataSearchResult,
     StoredMetadataSnapshot, expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
-    fetch_provider_metadata_snapshot, fetch_provider_season_metadata_snapshot,
-    fetch_themerr_youtube_theme_url_for_database, get_item_metadata_summaries,
-    get_primary_item_metadata_link, get_stored_metadata_snapshot, guess_provider_movie_match,
-    guess_provider_show_match, list_due_item_metadata_links, list_pending_item_metadata_links,
-    list_provider_statuses, load_tvdb_show_descendant_targets, persist_item_metadata_assets,
+    fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
+    fetch_provider_season_metadata_snapshot, fetch_themerr_youtube_theme_url_for_database,
+    get_item_metadata_summaries, get_primary_item_metadata_link, get_stored_metadata_snapshot,
+    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    list_pending_item_metadata_links, list_provider_statuses, load_tvdb_show_descendant_targets,
+    managed_metadata_asset_dir, normalize_locale_key, persist_item_metadata_assets,
     search_provider, set_item_metadata_refresh_state, update_cached_artwork_path,
     upsert_item_metadata_snapshot_with_refresh_interval,
 };
+use crate::utils::current_timestamp;
 
 /// Capability summary returned to clients during bootstrap.
 #[derive(Debug, Serialize, JsonSchema)]
@@ -123,6 +125,19 @@ pub struct SystemActivitiesResponse {
     pub activities: Vec<SystemActivity>,
 }
 
+/// One locale supported by Koko metadata preferences.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MetadataLocale {
+    /// Koko locale key.
+    pub key: String,
+    /// Human-friendly display name.
+    pub name: String,
+    /// TMDB locale key.
+    pub tmdb: String,
+    /// TheTVDB locale key.
+    pub tvdb: String,
+}
+
 /// Playback progress payload from the browser client.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PlaybackProgressRequest {
@@ -145,8 +160,7 @@ pub struct LinkMetadataRequest {
     pub media_type: String,
 }
 
-static BACKGROUND_LIBRARY_MONITOR_RUNNING: Lazy<AtomicBool> =
-    Lazy::new(|| AtomicBool::new(false));
+static BACKGROUND_LIBRARY_MONITOR_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static NEXT_SYSTEM_ACTIVITY_ID: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(1));
 static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
     tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>,
@@ -158,18 +172,6 @@ const LIBRARY_MONITOR_INTERVAL_SECONDS: u64 = 20;
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
     activity: SystemActivity,
-}
-
-fn managed_item_asset_dir(
-    data_dir: &str,
-    item_id: i32,
-) -> std::path::PathBuf {
-    let item_hex = format!("{:08x}", item_id.max(0));
-    let shard = &item_hex[0..2];
-    std::path::Path::new(data_dir)
-        .join("item_assets")
-        .join(shard)
-        .join(item_hex)
 }
 
 fn next_system_activity_id() -> String {
@@ -288,6 +290,23 @@ fn parse_metadata_provider_selection(value: Option<String>) -> Vec<MetadataProvi
         .split(',')
         .filter_map(|provider| MetadataProviderId::from_storage_value(provider.trim()))
         .collect()
+}
+
+fn metadata_search_score(
+    query: &str,
+    year: Option<i32>,
+    result: &MetadataSearchResult,
+) -> f64 {
+    let title_score = normalized_levenshtein(
+        &query.trim().to_ascii_lowercase(),
+        &result.title.trim().to_ascii_lowercase(),
+    );
+    let year_score = match (year, result.release_year) {
+        (Some(left), Some(right)) if left == right => 0.15,
+        (Some(_), Some(_)) => -0.15,
+        _ => 0.0,
+    };
+    (title_score + year_score).clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Clone)]
@@ -764,88 +783,108 @@ async fn execute_metadata_refresh_target(
     );
     let snapshot_result = match &target.fetch_kind {
         MetadataRefreshFetchKind::Direct => {
-            fetch_provider_metadata_snapshot(
-                &settings.metadata,
-                target.provider_id.clone(),
-                &target.external_id,
-                &target.media_type,
-            )
-            .await
+            match db
+                .run(all_user_preferred_metadata_languages)
+                .await
+                .map_err(|error| error.to_string())
+            {
+                Ok(languages) => {
+                    let mut snapshots = Vec::new();
+                    let mut error = None;
+                    for language in languages {
+                        match fetch_provider_metadata_snapshot_for_locale(
+                            &settings.metadata,
+                            target.provider_id.clone(),
+                            &target.external_id,
+                            &target.media_type,
+                            &language,
+                        )
+                        .await
+                        {
+                            Ok(snapshot) => snapshots.push(snapshot),
+                            Err(fetch_error) => {
+                                error = Some(fetch_error);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(error) = error { Err(error) } else { Ok(snapshots) }
+                }
+                Err(error) => Err(error),
+            }
         }
         MetadataRefreshFetchKind::TmdbShowSeason {
             show_external_id,
             season_number,
-        } => {
-            fetch_provider_season_metadata_snapshot(
-                &settings.metadata,
-                target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                None,
-            )
-            .await
-        }
+        } => fetch_provider_season_metadata_snapshot(
+            &settings.metadata,
+            target.provider_id.clone(),
+            show_external_id,
+            *season_number,
+            None,
+        )
+        .await
+        .map(|snapshot| vec![snapshot]),
         MetadataRefreshFetchKind::TmdbShowEpisode {
             show_external_id,
             season_number,
             episode_number,
-        } => {
-            fetch_provider_episode_metadata_snapshot(
-                &settings.metadata,
-                target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                *episode_number,
-                None,
-            )
-            .await
-        }
+        } => fetch_provider_episode_metadata_snapshot(
+            &settings.metadata,
+            target.provider_id.clone(),
+            show_external_id,
+            *season_number,
+            *episode_number,
+            None,
+        )
+        .await
+        .map(|snapshot| vec![snapshot]),
         MetadataRefreshFetchKind::TvdbSeason {
             show_external_id,
             season_number,
             season_external_id,
-        } => {
-            fetch_provider_season_metadata_snapshot(
-                &settings.metadata,
-                target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                Some(season_external_id),
-            )
-            .await
-        }
+        } => fetch_provider_season_metadata_snapshot(
+            &settings.metadata,
+            target.provider_id.clone(),
+            show_external_id,
+            *season_number,
+            Some(season_external_id),
+        )
+        .await
+        .map(|snapshot| vec![snapshot]),
         MetadataRefreshFetchKind::TvdbEpisode {
             show_external_id,
             season_number,
             episode_number,
             episode_external_id,
-        } => {
-            fetch_provider_episode_metadata_snapshot(
-                &settings.metadata,
-                target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                *episode_number,
-                Some(episode_external_id),
-            )
-            .await
-        }
+        } => fetch_provider_episode_metadata_snapshot(
+            &settings.metadata,
+            target.provider_id.clone(),
+            show_external_id,
+            *season_number,
+            *episode_number,
+            Some(episode_external_id),
+        )
+        .await
+        .map(|snapshot| vec![snapshot]),
     };
 
     match snapshot_result {
-        Ok(snapshot) => {
-            if let Err(status) =
-                persist_snapshot_for_item(db, target.item_id, &snapshot, settings).await
-            {
-                let status_message = format!("{status:?}");
-                log::warn!(
-                    "Failed to persist refreshed {} metadata snapshot for {}: {}",
-                    target.provider_id.as_storage_value(),
-                    describe_metadata_refresh_target(target),
-                    status_message
-                );
-                record_metadata_refresh_error(db, target, &status_message).await;
-                return true;
+        Ok(snapshots) => {
+            for snapshot in snapshots {
+                if let Err(status) =
+                    persist_snapshot_for_item(db, target.item_id, &snapshot, settings).await
+                {
+                    let status_message = format!("{status:?}");
+                    log::warn!(
+                        "Failed to persist refreshed {} metadata snapshot for {}: {}",
+                        target.provider_id.as_storage_value(),
+                        describe_metadata_refresh_target(target),
+                        status_message
+                    );
+                    record_metadata_refresh_error(db, target, &status_message).await;
+                    return true;
+                }
             }
 
             log::info!(
@@ -1209,6 +1248,58 @@ async fn persist_snapshot_tree_for_item(
     Ok(summary)
 }
 
+async fn fetch_snapshots_for_all_user_languages(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: &str,
+) -> Result<Vec<StoredMetadataSnapshot>, Status> {
+    let languages = db
+        .run(all_user_preferred_metadata_languages)
+        .await
+        .map_err(|error| {
+            log::error!("Failed to load preferred metadata languages: {}", error);
+            Status::InternalServerError
+        })?;
+    let mut snapshots = Vec::new();
+    for language in languages {
+        snapshots.push(
+            fetch_provider_metadata_snapshot_for_locale(
+                &settings.metadata,
+                provider_id.clone(),
+                external_id,
+                media_type,
+                &language,
+            )
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to fetch {} metadata snapshot for locale {}: {}",
+                    provider_id.as_storage_value(),
+                    language,
+                    error
+                );
+                Status::ServiceUnavailable
+            })?,
+        );
+    }
+    Ok(snapshots)
+}
+
+async fn persist_snapshot_tree_for_languages(
+    db: &DbConn,
+    item_id: i32,
+    snapshots: &[StoredMetadataSnapshot],
+    settings: &crate::config::Settings,
+) -> Result<ItemMetadataSummary, Status> {
+    let mut summary = None;
+    for snapshot in snapshots {
+        summary = Some(persist_snapshot_tree_for_item(db, item_id, snapshot, settings).await?);
+    }
+    summary.ok_or(Status::ServiceUnavailable)
+}
+
 fn linked_shows_needing_descendant_backfill(
     conn: &mut rocket_sync_db_pools::diesel::SqliteConnection
 ) -> Result<Vec<(i32, String)>, diesel::result::Error> {
@@ -1520,6 +1611,51 @@ fn current_user_id(user_guard: Option<&UserGuard>) -> Result<Option<i32>, Status
         .transpose()
 }
 
+fn user_preferred_metadata_languages(
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    user_id: Option<i32>,
+) -> Result<Vec<String>, diesel::result::Error> {
+    use crate::db::schema::users::dsl as users_dsl;
+    use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
+
+    let Some(user_id) = user_id else {
+        return Ok(vec![crate::metadata::DEFAULT_METADATA_LOCALE.to_string()]);
+    };
+
+    let stored = users_dsl::users
+        .filter(users_dsl::id.eq(user_id))
+        .select(users_dsl::preferred_metadata_languages_json)
+        .first::<String>(conn)
+        .optional()?
+        .unwrap_or_else(|| "[\"en-US\"]".into());
+
+    Ok(crate::web::routes::user::parse_preferred_metadata_languages(&stored))
+}
+
+fn all_user_preferred_metadata_languages(
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection
+) -> Result<Vec<String>, diesel::result::Error> {
+    use crate::db::schema::users::dsl as users_dsl;
+    use diesel::{QueryDsl, RunQueryDsl};
+
+    let rows = users_dsl::users
+        .select(users_dsl::preferred_metadata_languages_json)
+        .load::<String>(conn)?;
+    let mut languages = Vec::new();
+    for row in rows {
+        for language in crate::web::routes::user::parse_preferred_metadata_languages(&row) {
+            let language = normalize_locale_key(&language);
+            if !languages.contains(&language) {
+                languages.push(language);
+            }
+        }
+    }
+    if languages.is_empty() {
+        languages.push(crate::metadata::DEFAULT_METADATA_LOCALE.to_string());
+    }
+    Ok(languages)
+}
+
 async fn load_item_library_metadata_providers(
     db: &DbConn,
     settings: &Settings,
@@ -1623,9 +1759,7 @@ async fn load_library_summary(
         .ok_or(Status::NotFound)
 }
 
-pub fn start_library_monitor(
-    db: DbConn,
-) {
+pub fn start_library_monitor(db: DbConn) {
     if !BACKGROUND_LIBRARY_MONITOR_RUNNING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
@@ -1721,7 +1855,9 @@ pub async fn scan_library(
     let summary = load_library_summary(&db, &settings, library_id).await?;
     tokio::spawn(async move {
         if let Err(error) = db
-            .run(move |conn| sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings))
+            .run(move |conn| {
+                sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings)
+            })
             .await
         {
             log::error!(
@@ -1750,6 +1886,62 @@ pub async fn get_system_activities() -> Json<SystemActivitiesResponse> {
 #[get("/api/v1/metadata/providers")]
 pub fn get_metadata_providers() -> Json<Vec<MetadataProviderStatus>> {
     Json(list_provider_statuses(&current_settings().metadata))
+}
+
+/// Return known locale keys and provider-specific mappings.
+#[openapi(tag = "Media")]
+#[get("/api/v1/metadata/locales")]
+pub fn get_metadata_locales() -> Json<Vec<MetadataLocale>> {
+    Json(vec![
+        MetadataLocale {
+            key: "en-US".into(),
+            name: "English (United States)".into(),
+            tmdb: "en-US".into(),
+            tvdb: "eng".into(),
+        },
+        MetadataLocale {
+            key: "en-GB".into(),
+            name: "English (United Kingdom)".into(),
+            tmdb: "en-GB".into(),
+            tvdb: "eng".into(),
+        },
+        MetadataLocale {
+            key: "es-ES".into(),
+            name: "Spanish (Spain)".into(),
+            tmdb: "es-ES".into(),
+            tvdb: "spa".into(),
+        },
+        MetadataLocale {
+            key: "fr-FR".into(),
+            name: "French (France)".into(),
+            tmdb: "fr-FR".into(),
+            tvdb: "fra".into(),
+        },
+        MetadataLocale {
+            key: "de-DE".into(),
+            name: "German (Germany)".into(),
+            tmdb: "de-DE".into(),
+            tvdb: "deu".into(),
+        },
+        MetadataLocale {
+            key: "it-IT".into(),
+            name: "Italian (Italy)".into(),
+            tmdb: "it-IT".into(),
+            tvdb: "ita".into(),
+        },
+        MetadataLocale {
+            key: "ja-JP".into(),
+            name: "Japanese (Japan)".into(),
+            tmdb: "ja-JP".into(),
+            tvdb: "jpn".into(),
+        },
+        MetadataLocale {
+            key: "pt-BR".into(),
+            name: "Portuguese (Brazil)".into(),
+            tmdb: "pt-BR".into(),
+            tvdb: "por".into(),
+        },
+    ])
 }
 
 /// Return lightweight scan summaries for the configured media libraries.
@@ -1854,12 +2046,17 @@ pub async fn get_items(
 #[get("/api/v1/items/<item_id>")]
 pub async fn get_item(
     db: DbConn,
+    user_guard: Option<UserGuard>,
     item_id: i32,
 ) -> Result<Json<MediaItemDetail>, Status> {
     let data_dir = current_settings().general.data_dir;
+    let user_id = current_user_id(user_guard.as_ref())?;
 
     let item = db
-        .run(move |conn| get_media_item(conn, item_id, &data_dir))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            get_media_item_with_preferred_languages(conn, item_id, &data_dir, &languages)
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to load media item {}: {}", item_id, error);
@@ -2085,24 +2282,24 @@ pub async fn search_item_metadata(
         return Err(Status::BadRequest);
     }
 
-    let library_providers = load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let library_providers =
+        load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
     let requested_providers = parse_metadata_provider_selection(providers);
-    let providers = if requested_providers.is_empty() {
-        library_providers
-    } else {
-        requested_providers
-    };
+    let providers =
+        if requested_providers.is_empty() { library_providers } else { requested_providers };
     let fallback_query = item.display_title.clone();
-    let mut effective_query = query
+    let search_title = query
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback_query);
+    let mut effective_query = search_title.clone();
     if let Some(year) = year {
         effective_query = format!("{effective_query} {year}");
     }
-    let _requested_language = language
+    let requested_language = language
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let mut search_metadata_settings = metadata_settings.clone();
     let provider_statuses = list_provider_statuses(&metadata_settings)
         .into_iter()
         .map(|status| (status.id.clone(), status))
@@ -2124,7 +2321,26 @@ pub async fn search_item_metadata(
             continue;
         }
 
-        match search_provider(&metadata_settings, provider_id.clone(), &effective_query).await {
+        if let Some(language) = requested_language.as_deref() {
+            if let Some(provider) = search_metadata_settings
+                .providers
+                .iter_mut()
+                .find(|provider| provider.id == provider_id)
+            {
+                provider.language = crate::metadata::provider_locale_key(
+                    provider_id.clone(),
+                    &normalize_locale_key(language),
+                );
+            }
+        }
+
+        match search_provider(
+            &search_metadata_settings,
+            provider_id.clone(),
+            &effective_query,
+        )
+        .await
+        {
             Ok(provider_results) => {
                 saw_success = true;
                 results.extend(
@@ -2150,6 +2366,17 @@ pub async fn search_item_metadata(
     if !saw_success && results.is_empty() {
         return Err(Status::ServiceUnavailable);
     }
+
+    for result in &mut results {
+        result.score = Some(metadata_search_score(&search_title, year, result));
+    }
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.title.cmp(&right.title))
+    });
 
     Ok(Json(results))
 }
@@ -2216,27 +2443,20 @@ pub async fn link_item_metadata(
             Status::InternalServerError
         })?;
 
-    let snapshot = if let Some(stored_snapshot) = stored_snapshot {
-        stored_snapshot
+    let snapshots = if let Some(stored_snapshot) = stored_snapshot {
+        vec![stored_snapshot]
     } else {
-        fetch_provider_metadata_snapshot(
-            &settings.metadata,
+        fetch_snapshots_for_all_user_languages(
+            &db,
+            &settings,
             request.provider_id,
             &request.external_id,
             &request.media_type,
         )
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to fetch metadata snapshot for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::ServiceUnavailable
-        })?
+        .await?
     };
 
-    let summary = persist_snapshot_tree_for_item(&db, item_id, &snapshot, &settings).await?;
+    let summary = persist_snapshot_tree_for_languages(&db, item_id, &snapshots, &settings).await?;
 
     Ok(Json(summary))
 }
@@ -2430,25 +2650,22 @@ pub async fn get_item_artwork(
         ArtworkKind::Backdrop => link.cached_backdrop_path.clone(),
     };
     if let Some(existing_cache) = existing_cache {
-        let expected_item_asset_dir = managed_item_asset_dir(&data_dir, item_id);
+        let provider_id = MetadataProviderId::from_storage_value(&link.provider_id)
+            .unwrap_or(MetadataProviderId::Tmdb);
+        let expected_item_asset_dir = managed_metadata_asset_dir(
+            &data_dir,
+            provider_id.clone(),
+            &link.external_id,
+            link.media_type.as_deref(),
+        );
         let existing_path = std::path::PathBuf::from(existing_cache);
         let current_artwork_url = match artwork_kind {
             ArtworkKind::Poster => link.artwork_url.as_deref(),
             ArtworkKind::Backdrop => link.backdrop_url.as_deref(),
         };
         let cache_key = match artwork_kind {
-            ArtworkKind::Poster => format!(
-                "{}_poster",
-                MetadataProviderId::from_storage_value(&link.provider_id)
-                    .unwrap_or(MetadataProviderId::Tmdb)
-                    .as_storage_value()
-            ),
-            ArtworkKind::Backdrop => format!(
-                "{}_backdrop",
-                MetadataProviderId::from_storage_value(&link.provider_id)
-                    .unwrap_or(MetadataProviderId::Tmdb)
-                    .as_storage_value()
-            ),
+            ArtworkKind::Poster => format!("{}_poster", provider_id.as_storage_value()),
+            ArtworkKind::Backdrop => format!("{}_backdrop", provider_id.as_storage_value()),
         };
         if let Some(url) = current_artwork_url {
             let expected_path =
@@ -2476,6 +2693,8 @@ pub async fn get_item_artwork(
         artwork_url: link.artwork_url.clone(),
         backdrop_url: link.backdrop_url.clone(),
         release_year: link.release_year,
+        locale_key: link.locale_key.clone(),
+        provider_locale_key: link.provider_locale_key.clone(),
         provider_payload_json: link.provider_payload_json.clone(),
     };
     let data_dir = current_settings().general.data_dir;

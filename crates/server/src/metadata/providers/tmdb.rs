@@ -1,13 +1,14 @@
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
-use tmdb_client::models::{EpisodeDetails, MovieDetails, SeasonDetails, TvDetails};
+use tmdb_client::models::{EpisodeDetails, MovieDetails, MovieObject, SeasonDetails, TvDetails};
 
 use crate::config::{MetadataProviderId, MetadataSettings};
 use crate::metadata::{
     MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult, StoredMetadataSnapshot,
-    cleanup_movie_title, extract_release_year, movie_match_score, parse_movie_name, show_search_query,
-    tmdb_episode_external_id, tmdb_image_url, tmdb_provider_settings, tmdb_season_external_id,
+    cleanup_movie_title, extract_release_year, movie_match_score, parse_movie_name,
+    show_search_query, tmdb_episode_external_id, tmdb_image_url, tmdb_provider_settings,
+    tmdb_season_external_id,
 };
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
@@ -21,6 +22,10 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         ],
         requires_api_key: true,
         implemented: true,
+        attribution_text: "Metadata and artwork provided by The Movie Database (TMDB).".into(),
+        attribution_url: "https://www.themoviedb.org/".into(),
+        logo_light_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
+        logo_dark_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
     }
 }
 
@@ -72,7 +77,7 @@ pub(crate) async fn fetch_snapshot(
                     external_id_number,
                     Some(&language),
                     None,
-                    Some("videos"),
+                    Some("videos,images,release_dates,external_ids"),
                 )
                 .map_err(|error| {
                     format!(
@@ -80,10 +85,7 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            Ok(movie_snapshot_from_details(
-                &external_id_string,
-                &details,
-            ))
+            Ok(movie_snapshot_from_details(&external_id_string, &details))
         }
         "tv" => {
             let client = TmdbApiClient::new_with_api_key(api_key);
@@ -93,7 +95,7 @@ pub(crate) async fn fetch_snapshot(
                     external_id_number,
                     Some(&language),
                     None,
-                    Some("videos"),
+                    Some("videos,images,content_ratings,external_ids"),
                 )
                 .map_err(|error| {
                     format!(
@@ -101,10 +103,7 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            Ok(tv_snapshot_from_details(
-                &external_id_string,
-                &details,
-            ))
+            Ok(tv_snapshot_from_details(&external_id_string, &details))
         }
         other => Err(format!("Unsupported TMDB media type: {}", other)),
     })
@@ -132,7 +131,18 @@ pub(crate) async fn guess_movie_match(
             artwork_url: snapshot.artwork_url,
             backdrop_url: snapshot.backdrop_url,
             release_year: snapshot.release_year,
+            score: Some(1.0),
         }));
+    }
+    if let Some(tvdb_id) = parsed.tvdb_id.clone() {
+        if let Some(result) = find_tmdb_movie_by_external_id(settings, &tvdb_id, "tvdb_id").await? {
+            return Ok(Some(result));
+        }
+    }
+    if let Some(imdb_id) = parsed.imdb_id.clone() {
+        if let Some(result) = find_tmdb_movie_by_external_id(settings, &imdb_id, "imdb_id").await? {
+            return Ok(Some(result));
+        }
     }
 
     let mut best_result = None;
@@ -150,6 +160,36 @@ pub(crate) async fn guess_movie_match(
     }
 
     Ok((best_score >= 0.78).then_some(best_result).flatten())
+}
+
+async fn find_tmdb_movie_by_external_id(
+    settings: &MetadataSettings,
+    external_id: &str,
+    external_source: &str,
+) -> Result<Option<MetadataSearchResult>, String> {
+    let provider = tmdb_provider_settings(settings)?;
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language;
+    let external_id = external_id.to_string();
+    let external_source = external_source.to_string();
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        let payload = client
+            .find_api()
+            .get_find_external_id(&external_id, &external_source, Some(&language))
+            .map_err(|error| {
+                format!(
+                    "TMDB external id lookup for {}:{} failed: {}",
+                    external_source, external_id, error
+                )
+            })?;
+        Ok(payload
+            .movie_results
+            .unwrap_or_default()
+            .into_iter()
+            .find_map(movie_search_result_from_object))
+    })
+    .await
 }
 
 pub(crate) async fn guess_show_match(
@@ -264,7 +304,7 @@ fn parse_external_id(
 }
 
 fn tmdb_api_key_from_provider(
-    provider: &crate::config::MetadataProviderSettings,
+    provider: &crate::config::MetadataProviderSettings
 ) -> Result<String, String> {
     let api_key = provider.api_key.clone().unwrap_or_default();
     let api_key = api_key.trim();
@@ -333,6 +373,46 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
         artwork_url,
         backdrop_url,
         release_year,
+        score: None,
+    })
+}
+
+fn movie_search_result_from_object(item: MovieObject) -> Option<MetadataSearchResult> {
+    let external_id = item.id?.to_string();
+    let title = item
+        .title
+        .as_deref()
+        .or(item.original_title.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)?;
+    Some(MetadataSearchResult {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id,
+        media_type: "movie".into(),
+        title,
+        overview: item
+            .overview
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        artwork_url: item
+            .poster_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| tmdb_image_url(path, "w500")),
+        backdrop_url: item
+            .backdrop_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| tmdb_image_url(path, "w1280")),
+        release_year: item
+            .release_date
+            .and_then(|value| extract_release_year(Some(value))),
+        score: None,
     })
 }
 
@@ -363,6 +443,8 @@ fn movie_snapshot_from_details(
             .release_date
             .clone()
             .and_then(|value| extract_release_year(Some(value))),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: serde_json::to_string(details).ok(),
     }
 }
@@ -394,6 +476,8 @@ fn tv_snapshot_from_details(
             .first_air_date
             .clone()
             .and_then(|value| extract_release_year(Some(value))),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: serde_json::to_string(details).ok(),
     }
 }
@@ -423,6 +507,8 @@ fn season_snapshot_from_details(
             .air_date
             .clone()
             .and_then(|value| extract_release_year(Some(value))),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: serde_json::to_string(details).ok(),
     }
 }
@@ -453,6 +539,8 @@ fn episode_snapshot_from_details(
             .air_date
             .clone()
             .and_then(|value| extract_release_year(Some(value))),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: serde_json::to_string(details).ok(),
     }
 }

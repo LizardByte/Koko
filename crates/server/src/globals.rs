@@ -72,14 +72,5 @@ pub fn get_server_url() -> String {
     )
 }
 
-/// Return the current Unix timestamp in seconds.
-pub fn current_timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
-        .unwrap_or_default()
-}
-
 /// Global AppPaths instance.
 pub static APP_PATHS: Lazy<AppPaths> = Lazy::new(AppPaths::new);

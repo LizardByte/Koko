@@ -1,5 +1,7 @@
 use serde_json::Value;
 use strsim::normalized_levenshtein;
+use tvdb4::apis::{self, login_api};
+use tvdb4::models::LoginPostRequest;
 
 use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
@@ -8,17 +10,7 @@ use crate::metadata::{
     cleanup_movie_title, extract_release_year, format_payload_snippet, movie_match_score,
     parse_movie_name, provider_settings, show_search_query,
 };
-use once_cell::sync::Lazy;
-use reqwest::StatusCode;
-use reqwest::header::RETRY_AFTER;
 use std::time::{Duration, Instant};
-
-static TVDB_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .user_agent(format!("Koko/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("Failed to build TheTVDB HTTP client")
-});
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -28,6 +20,10 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         supported_kinds: vec![MediaLibraryKind::Movies, MediaLibraryKind::Shows],
         requires_api_key: true,
         implemented: true,
+        attribution_text: "Metadata and artwork provided by TheTVDB.".into(),
+        attribution_url: "https://thetvdb.com/".into(),
+        logo_light_url: Some("https://thetvdb.com/images/attribution/logo2.png".into()),
+        logo_dark_url: Some("https://thetvdb.com/images/attribution/logo1.png".into()),
     }
 }
 
@@ -87,6 +83,21 @@ pub(crate) async fn guess_movie_match(
     let parsed = parse_movie_name(relative_path, display_title);
     if parsed.title.trim().is_empty() {
         return Ok(None);
+    }
+
+    if let Some(tvdb_id) = parsed.tvdb_id.clone() {
+        let snapshot = fetch_snapshot(settings, &tvdb_id, "movie").await?;
+        return Ok(Some(MetadataSearchResult {
+            provider_id: MetadataProviderId::Tvdb,
+            external_id: tvdb_id,
+            media_type: "movie".into(),
+            title: snapshot.title.unwrap_or(parsed.title),
+            overview: snapshot.overview,
+            artwork_url: snapshot.artwork_url,
+            backdrop_url: snapshot.backdrop_url,
+            release_year: snapshot.release_year,
+            score: Some(1.0),
+        }));
     }
 
     let mut best_result = None;
@@ -250,6 +261,14 @@ pub(crate) async fn load_show_descendant_targets(
     Ok(targets)
 }
 
+fn tvdb_configuration(token: Option<String>) -> apis::configuration::Configuration {
+    let mut config = apis::configuration::Configuration::new();
+    config.base_path = TVDB_API_BASE.to_string();
+    config.user_agent = Some(format!("Koko/{}", env!("CARGO_PKG_VERSION")));
+    config.bearer_access_token = token;
+    config
+}
+
 fn parse_tvdb_external_id(
     external_id: &str,
     media_type: &str,
@@ -293,36 +312,17 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
         return Err("TheTVDB is enabled but no API key is configured.".into());
     }
 
-    let payload = serde_json::json!({ "apikey": api_key });
-    let response = TVDB_HTTP_CLIENT
-        .post(format!("{}/login", TVDB_API_BASE))
-        .json(&payload)
-        .send()
+    wait_for_rate_limit(provider).await;
+    let config = tvdb_configuration(None);
+    let response = login_api::login_post(&config, LoginPostRequest::new(api_key))
         .await
-        .map_err(|error| format!("TheTVDB login request failed: {}", error))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("TheTVDB login response failed: {}", error))?;
-    if !status.is_success() {
-        return Err(format!(
-            "TheTVDB login failed with status {}{}",
-            status,
-            format_payload_snippet(&body)
-        ));
-    }
-
-    let parsed: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("TheTVDB login returned invalid JSON: {}", error))?;
-    let token = parsed
-        .get("data")
-        .and_then(|value| value.get("token"))
-        .and_then(Value::as_str)
-        .map(str::trim)
+        .map_err(|error| format_tvdb_error("login", error))?;
+    let token = response
+        .data
+        .and_then(|data| data.token)
+        .map(|token| token.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "TheTVDB login response did not include a token.".to_string())?
-        .to_string();
+        .ok_or_else(|| "TheTVDB login response did not include a token.".to_string())?;
 
     let cached = TvdbCachedToken {
         token: token.clone(),
@@ -331,6 +331,21 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
     let mut cache = TVDB_AUTH_TOKEN.lock().await;
     *cache = Some(cached);
     Ok(token)
+}
+
+fn format_tvdb_error<T: std::fmt::Debug>(
+    context: &str,
+    error: apis::Error<T>,
+) -> String {
+    match error {
+        apis::Error::ResponseError(response) => format!(
+            "TheTVDB {} failed with status {}{}",
+            context,
+            response.status,
+            format_payload_snippet(&response.content)
+        ),
+        other => format!("TheTVDB {} request failed: {}", context, other),
+    }
 }
 
 async fn get_text(
@@ -345,20 +360,24 @@ async fn get_text(
     for attempt in 0..=retry_attempts {
         wait_for_rate_limit(provider).await;
         let token = auth_token(provider).await?;
+        let config = tvdb_configuration(Some(token));
         let request_url = format!("{}/{}", TVDB_API_BASE, path.trim_start_matches('/'));
-        let response = TVDB_HTTP_CLIENT
+        let mut request = config
+            .client
             .get(&request_url)
-            .bearer_auth(&token)
-            .query(&query)
-            .send()
-            .await;
+            .bearer_auth(config.bearer_access_token.as_deref().unwrap_or_default())
+            .query(&query);
+        if let Some(user_agent) = config.user_agent.as_deref() {
+            request = request.header("user-agent", user_agent);
+        }
+        let response = request.send().await;
 
         match response {
             Ok(response) => {
                 let status = response.status();
                 let retry_after = response
                     .headers()
-                    .get(RETRY_AFTER)
+                    .get("retry-after")
                     .and_then(|value| value.to_str().ok())
                     .and_then(parse_retry_after_seconds)
                     .map(Duration::from_secs);
@@ -367,16 +386,15 @@ async fn get_text(
                     return Ok(payload);
                 }
 
-                if status == StatusCode::UNAUTHORIZED {
+                if status.as_u16() == 401 {
                     let mut cache = TVDB_AUTH_TOKEN.lock().await;
                     *cache = None;
                 }
 
-                let rate_limited = status == StatusCode::TOO_MANY_REQUESTS
+                let rate_limited = status.as_u16() == 429
                     || retry_after.is_some()
                     || payload.to_ascii_lowercase().contains("rate limit");
-                let retryable =
-                    status == StatusCode::UNAUTHORIZED || rate_limited || status.is_server_error();
+                let retryable = status.as_u16() == 401 || rate_limited || status.is_server_error();
                 if retryable && attempt < retry_attempts {
                     let attempt_number = attempt + 1;
                     let multiplier = 1_u32
@@ -502,6 +520,7 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
         artwork_url: artwork_url(&item),
         backdrop_url: backdrop_url(&item),
         release_year: release_year(&item),
+        score: None,
     })
 }
 
@@ -519,6 +538,8 @@ fn movie_snapshot_from_value(
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: Some(payload.to_string()),
     }
 }
@@ -537,6 +558,8 @@ fn series_snapshot_from_value(
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: Some(payload.to_string()),
     }
 }
@@ -557,6 +580,8 @@ fn season_snapshot_from_value(
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: Some(payload.to_string()),
     }
 }
@@ -580,6 +605,8 @@ fn episode_snapshot_from_value(
         artwork_url: still_url(data).or_else(|| artwork_url(data)),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
+        provider_locale_key: None,
         provider_payload_json: Some(payload.to_string()),
     }
 }
@@ -625,6 +652,32 @@ fn best_title(value: &Value) -> Option<String> {
                         .or_else(|| translations.values().next())
                 })
         })
+        .or_else(|| {
+            value
+                .get("translations")
+                .and_then(Value::as_array)
+                .and_then(|translations| {
+                    translations
+                        .iter()
+                        .find(|translation| {
+                            translation
+                                .get("language")
+                                .or_else(|| translation.get("languageCode"))
+                                .and_then(Value::as_str)
+                                .map(|language| {
+                                    matches!(
+                                        language.to_ascii_lowercase().as_str(),
+                                        "eng" | "en" | "english"
+                                    )
+                                })
+                                .unwrap_or(false)
+                        })
+                        .or_else(|| translations.first())
+                })
+                .and_then(|translation| {
+                    translation.get("name").or_else(|| translation.get("title"))
+                })
+        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -632,23 +685,70 @@ fn best_title(value: &Value) -> Option<String> {
 }
 
 fn best_overview(value: &Value) -> Option<String> {
-    value
-        .get("overview")
-        .or_else(|| {
-            value
-                .get("overviews")
-                .and_then(Value::as_object)
-                .and_then(|overviews| {
-                    ["eng", "en", "english"]
-                        .iter()
-                        .find_map(|key| overviews.get(*key))
-                        .or_else(|| overviews.values().next())
+    text_field(
+        value,
+        &[
+            "overview",
+            "description",
+            "shortDescription",
+            "longDescription",
+        ],
+    )
+    .or_else(|| translated_overview(value.get("overviews")))
+    .or_else(|| translated_overview(value.get("overviewTranslations")))
+    .or_else(|| translated_overview(value.get("translations")))
+}
+
+fn text_field(
+    value: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|overview| !overview.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn translated_overview(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(map) = value.as_object() {
+        return ["eng", "en", "english"]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(translation_overview_value))
+            .or_else(|| map.values().find_map(translation_overview_value));
+    }
+
+    value.as_array().and_then(|translations| {
+        ["eng", "en", "english"]
+            .iter()
+            .find_map(|key| {
+                translations.iter().find_map(|translation| {
+                    let language = translation
+                        .get("language")
+                        .or_else(|| translation.get("languageCode"))
+                        .or_else(|| translation.get("iso_639_1"))
+                        .and_then(Value::as_str)?;
+                    language
+                        .eq_ignore_ascii_case(key)
+                        .then(|| translation_overview_value(translation))
+                        .flatten()
                 })
-        })
-        .and_then(Value::as_str)
+            })
+            .or_else(|| translations.iter().find_map(translation_overview_value))
+    })
+}
+
+fn translation_overview_value(value: &Value) -> Option<String> {
+    value
+        .as_str()
         .map(str::trim)
         .filter(|overview| !overview.is_empty())
         .map(ToOwned::to_owned)
+        .or_else(|| text_field(value, &["overview", "description"]))
 }
 
 fn artwork_url(value: &Value) -> Option<String> {

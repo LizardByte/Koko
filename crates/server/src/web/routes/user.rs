@@ -21,6 +21,7 @@ pub struct CreateUserForm {
     pub admin: bool,
     pub birthday: Option<String>,
     pub profile_image_url: Option<String>,
+    pub preferred_metadata_languages: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -29,6 +30,7 @@ pub struct UpdateUserForm {
     pub admin: bool,
     pub birthday: Option<String>,
     pub profile_image_url: Option<String>,
+    pub preferred_metadata_languages: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -38,6 +40,7 @@ pub struct UserSummary {
     pub admin: bool,
     pub birthday: Option<String>,
     pub profile_image_url: Option<String>,
+    pub preferred_metadata_languages: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -81,6 +84,9 @@ pub async fn get_bootstrap(
             admin: user.admin,
             birthday: user.birthday,
             profile_image_url: user.profile_image_url,
+            preferred_metadata_languages: parse_preferred_metadata_languages(
+                &user.preferred_metadata_languages_json,
+            ),
         })
     } else {
         None
@@ -119,6 +125,9 @@ pub async fn list_users(
                 admin: user.admin,
                 birthday: user.birthday,
                 profile_image_url: user.profile_image_url,
+                preferred_metadata_languages: parse_preferred_metadata_languages(
+                    &user.preferred_metadata_languages_json,
+                ),
             })
             .collect(),
     ))
@@ -152,6 +161,10 @@ pub async fn update_user(
         .profile_image_url
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let next_preferred_languages = serialize_preferred_metadata_languages(
+        form.preferred_metadata_languages
+            .unwrap_or_else(default_preferred_metadata_languages),
+    );
 
     let updated_user = db
         .run(move |conn| {
@@ -180,6 +193,7 @@ pub async fn update_user(
                     users_dsl::admin.eq(form.admin),
                     users_dsl::birthday.eq(next_birthday),
                     users_dsl::profile_image_url.eq(next_profile_image_url),
+                    users_dsl::preferred_metadata_languages_json.eq(next_preferred_languages),
                 ))
                 .execute(conn)
                 .map_err(|_| Status::Conflict)?;
@@ -198,6 +212,9 @@ pub async fn update_user(
         admin: updated_user.admin,
         birthday: updated_user.birthday,
         profile_image_url: updated_user.profile_image_url,
+        preferred_metadata_languages: parse_preferred_metadata_languages(
+            &updated_user.preferred_metadata_languages_json,
+        ),
     }))
 }
 
@@ -259,6 +276,10 @@ pub async fn create_user(
             .profile_image_url
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+        preferred_metadata_languages_json: serialize_preferred_metadata_languages(
+            form.preferred_metadata_languages
+                .unwrap_or_else(default_preferred_metadata_languages),
+        ),
     };
 
     // Insert new user
@@ -267,4 +288,37 @@ pub async fn create_user(
         .map_err(|_| Status::InternalServerError)?;
 
     Ok("User created")
+}
+
+pub fn default_preferred_metadata_languages() -> Vec<String> {
+    vec!["en-US".to_string()]
+}
+
+pub fn parse_preferred_metadata_languages(value: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(value)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|language| language.trim().to_string())
+        .filter(|language| !language.is_empty())
+        .fold(Vec::new(), |mut languages, language| {
+            if !languages.contains(&language) {
+                languages.push(language);
+            }
+            languages
+        })
+        .into_iter()
+        .chain(default_preferred_metadata_languages())
+        .fold(Vec::new(), |mut languages, language| {
+            if !languages.contains(&language) {
+                languages.push(language);
+            }
+            languages
+        })
+}
+
+pub fn serialize_preferred_metadata_languages(languages: Vec<String>) -> String {
+    serde_json::to_string(&parse_preferred_metadata_languages(
+        &serde_json::to_string(&languages).unwrap_or_else(|_| "[]".into()),
+    ))
+    .unwrap_or_else(|_| "[\"en-US\"]".into())
 }

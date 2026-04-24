@@ -5,7 +5,7 @@ use koko::config::{
 };
 use koko::metadata::{
     StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
-    persist_item_metadata_assets,
+    managed_metadata_asset_dir, persist_item_metadata_assets,
 };
 use std::fs;
 
@@ -174,27 +174,31 @@ fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missi
             .as_nanos()
     ));
     let data_dir = temp_dir.to_string_lossy().to_string();
-    let item_dir = temp_dir.join("item_assets").join("00").join("000000c6");
+    let snapshot = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: "tv:1412:season:1:episode:1".into(),
+        media_type: Some("episode".into()),
+        title: Some("Pilot".into()),
+        overview: None,
+        artwork_url: None,
+        backdrop_url: None,
+        release_year: Some(2012),
+        locale_key: "en-US".into(),
+        provider_locale_key: Some("en-US".into()),
+        provider_payload_json: None,
+    };
+    let item_dir = managed_metadata_asset_dir(
+        &data_dir,
+        snapshot.provider_id.clone(),
+        &snapshot.external_id,
+        snapshot.media_type.as_deref(),
+    );
     fs::create_dir_all(&item_dir).unwrap();
     fs::write(item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg"), b"stale").unwrap();
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime
-        .block_on(persist_item_metadata_assets(
-            &StoredMetadataSnapshot {
-                provider_id: MetadataProviderId::Tmdb,
-                external_id: "tv:1412:season:1:episode:1".into(),
-                media_type: Some("tv_episode".into()),
-                title: Some("Pilot".into()),
-                overview: None,
-                artwork_url: None,
-                backdrop_url: None,
-                release_year: Some(2012),
-                provider_payload_json: None,
-            },
-            198,
-            &data_dir,
-        ))
+        .block_on(persist_item_metadata_assets(&snapshot, 198, &data_dir))
         .unwrap();
 
     assert!(

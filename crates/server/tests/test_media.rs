@@ -23,8 +23,8 @@ use koko::media::{
     upsert_playback_progress,
 };
 use koko::metadata::{
-    ArtworkKind, StoredMetadataSnapshot, get_primary_item_metadata_link,
-    set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
+    ArtworkKind, StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
+    get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -554,6 +554,8 @@ fn test_home_includes_real_collection_summaries() {
             artwork_url: None,
             backdrop_url: None,
             release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: Some(
                 serde_json::json!({
                     "title": item.display_title,
@@ -626,6 +628,54 @@ fn test_sync_restores_file_name_as_display_title() {
 }
 
 #[test]
+fn test_movie_scan_strips_year_provider_tags_and_format_from_display_title() {
+    let root = unique_temp_dir("movie_title_parser");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("Top Gun- Maverick (2022) - 1080p [tmdb-361743] [tvdb-12345].mkv"),
+        b"video",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Beyond The Sky (2018) - Bluray-1080p.mkv"),
+        b"video",
+    )
+    .unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("movie_title_parser_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let titles = items
+        .into_iter()
+        .map(|item| item.display_title)
+        .collect::<Vec<_>>();
+
+    assert!(
+        titles.iter().any(|title| title == "Top Gun: Maverick"),
+        "Expected cleaned Top Gun title in {titles:?}"
+    );
+    assert!(
+        titles.iter().any(|title| title == "Beyond The Sky"),
+        "Expected cleaned Beyond The Sky title in {titles:?}"
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn test_item_detail_includes_linked_metadata_presentation() {
     let root = unique_temp_dir("item_detail_linked_metadata");
     fs::create_dir_all(&root).unwrap();
@@ -657,6 +707,8 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
         backdrop_url: Some("https://image.tmdb.org/t/p/w1280/backdrop.jpg".into()),
         release_year: Some(1999),
+        locale_key: "en-US".into(),
+        provider_locale_key: Some("en-US".into()),
         provider_payload_json: Some(
             serde_json::json!({
                 "tagline": "Welcome to the real world.",
@@ -715,6 +767,83 @@ fn test_item_detail_includes_linked_metadata_presentation() {
 }
 
 #[test]
+fn test_metadata_links_can_store_multiple_locales_for_same_provider() {
+    let root = unique_temp_dir("metadata_link_locales");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("metadata_link_locales_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let movie = items.first().unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: Some("English overview.".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("Matrix".into()),
+            overview: Some("Resumen en espanol.".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "es-ES".into(),
+            provider_locale_key: Some("es-ES".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    let preferred = get_preferred_item_metadata_link_for_languages(
+        &mut connection,
+        movie.id,
+        &[
+            "es-ES".to_string(),
+            "en-US".to_string(),
+        ],
+    )
+    .unwrap()
+    .expect("Expected localized metadata link");
+    assert_eq!(preferred.locale_key, "es-ES");
+    assert_eq!(preferred.overview.as_deref(), Some("Resumen en espanol."));
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn test_item_detail_uses_primary_metadata_link_only() {
     let root = unique_temp_dir("item_detail_primary_metadata_only");
     fs::create_dir_all(&root).unwrap();
@@ -749,6 +878,8 @@ fn test_item_detail_uses_primary_metadata_link_only() {
             artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
             backdrop_url: None,
             release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: None,
         },
     )
@@ -833,6 +964,8 @@ fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
             artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
             backdrop_url: Some("https://image.tmdb.org/t/p/w1280/backdrop.jpg".into()),
             release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: None,
         },
     )
@@ -923,6 +1056,8 @@ fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_e
             artwork_url: None,
             backdrop_url: None,
             release_year: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: None,
         },
     )
@@ -940,6 +1075,8 @@ fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_e
             artwork_url: None,
             backdrop_url: None,
             release_year: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: None,
         },
     )
@@ -1047,6 +1184,8 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
             ),
             backdrop_url: None,
             release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: None,
         },
     )
@@ -1142,6 +1281,8 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
             artwork_url: None,
             backdrop_url: None,
             release_year: Some(2011),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: Some(serde_json::json!({ "name": "Mock Show" }).to_string()),
         },
     )
@@ -1199,6 +1340,8 @@ fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
             artwork_url: None,
             backdrop_url: None,
             release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
             provider_payload_json: Some(
                 serde_json::json!({
                     "title": "The Matrix",
@@ -1393,12 +1536,8 @@ fn test_migration_13_preserves_existing_library_catalog_rows() {
         .revert_last_migration(MIGRATIONS)
         .expect("Expected to revert migration 13");
 
-    let persisted = sync_library_catalog(
-        &mut connection,
-        &[library],
-        &FfmpegSettings::default(),
-    )
-    .expect("Expected populated catalog before re-running migration 13");
+    let persisted = sync_library_catalog(&mut connection, &[library], &FfmpegSettings::default())
+        .expect("Expected populated catalog before re-running migration 13");
     let library_id = persisted[0].id;
     let item_count_before = list_media_items(&mut connection, Some(library_id))
         .unwrap()
@@ -1491,7 +1630,7 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
             video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, media_item_id\
         ) \
         SELECT \
-            ?, library_id, source_root_path, relative_path, file_size, modified_at, media_kind, \
+            ?, library_id, source_root_path, relative_path || '.id-collision', file_size, modified_at, media_kind, \
             fingerprint_seed, display_title, container, duration_ms, bit_rate, width, height, \
             video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, ? \
         FROM media_files WHERE media_item_id = ? LIMIT 1",

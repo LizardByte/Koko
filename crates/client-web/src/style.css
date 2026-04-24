@@ -1148,6 +1148,20 @@ legend {
   min-width: 0;
 }
 
+.metadata-attribution {
+  color: var(--muted);
+  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.metadata-attribution img {
+  max-width: 96px;
+  max-height: 18px;
+  object-fit: contain;
+}
+
 .metadata-search-card {
   display: flex;
   justify-content: space-between;
@@ -1185,6 +1199,14 @@ legend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
+}
+
+.item-title-logo {
+  display: block;
+  max-width: min(340px, 100%);
+  max-height: 120px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .settings-activity-panel,

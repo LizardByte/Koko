@@ -24,11 +24,12 @@ use crate::db::models::{
     ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, NewMediaFile, NewMediaItem,
     NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState,
 };
-use crate::globals::current_timestamp;
 use crate::metadata::{
-    ArtworkKind, MetadataCollectionSummary, get_primary_item_metadata_link,
-    list_metadata_collection_summaries, presentation_from_metadata_link,
+    ArtworkKind, MetadataCollectionSummary, get_preferred_item_metadata_link_for_languages,
+    get_primary_item_metadata_link, list_metadata_collection_summaries,
+    presentation_from_metadata_link,
 };
+use crate::utils::current_timestamp;
 
 /// Scan status for a configured media library.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -233,7 +234,7 @@ pub struct MediaItemSummary {
 }
 
 /// Detailed browser-facing media item response.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemDetail {
     /// Stable database identifier for the item.
     pub id: i32,
@@ -295,6 +296,12 @@ pub struct MediaItemDetail {
     pub genres: Vec<String>,
     /// Release year from linked metadata, when available.
     pub release_year: Option<i32>,
+    /// Provider-supplied title logo URL, when available.
+    pub logo_url: Option<String>,
+    /// Provider-supplied user/community rating, when available.
+    pub rating: Option<f32>,
+    /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
+    pub content_rating: Option<String>,
     /// Linked metadata media type such as movie or tv.
     pub linked_media_type: Option<String>,
     /// Whether the item currently has linked metadata.
@@ -762,7 +769,8 @@ pub fn sync_library_catalog(
         .load::<MediaLibrary>(conn)?;
     let mut persisted = Vec::with_capacity(inspections.len());
 
-    for (index, (library, inspection)) in libraries.iter().zip(inspections.into_iter()).enumerate() {
+    for (index, (library, inspection)) in libraries.iter().zip(inspections.into_iter()).enumerate()
+    {
         let library_values = NewMediaLibrary {
             name: inspection.summary.name.clone(),
             path: inspection.summary.path.clone(),
@@ -1716,6 +1724,16 @@ pub fn get_media_item(
     item_id: i32,
     data_dir: &str,
 ) -> Result<Option<MediaItemDetail>, diesel::result::Error> {
+    get_media_item_with_preferred_languages(conn, item_id, data_dir, &[])
+}
+
+/// Return a single browser-facing media item by its stable identifier and preferred metadata languages.
+pub fn get_media_item_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    data_dir: &str,
+    preferred_languages: &[String],
+) -> Result<Option<MediaItemDetail>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let item = media_items_dsl::media_items
@@ -1733,7 +1751,9 @@ pub fn get_media_item(
     detail.hierarchy = load_media_item_hierarchy(conn, &item)?;
     detail.children = list_media_item_children(conn, item.id)?;
 
-    if let Some(link) = get_preferred_item_metadata_link(conn, item_id)? {
+    if let Some(link) =
+        get_preferred_item_metadata_link_for_languages(conn, item_id, preferred_languages)?
+    {
         if let Some(title) = link
             .title
             .as_deref()
@@ -1747,6 +1767,9 @@ pub fn get_media_item(
         detail.overview = presentation.overview;
         detail.genres = presentation.genres;
         detail.release_year = presentation.release_year;
+        detail.logo_url = presentation.logo_url;
+        detail.rating = presentation.rating;
+        detail.content_rating = presentation.content_rating;
         detail.linked_media_type = presentation.media_type;
         detail.has_metadata = true;
         detail.metadata_refresh_state = Some(link.refresh_state.clone());
@@ -3018,6 +3041,9 @@ fn to_media_item_detail(
         overview: None,
         genres: Vec::new(),
         release_year: None,
+        logo_url: None,
+        rating: None,
+        content_rating: None,
         linked_media_type: None,
         has_metadata: false,
         metadata_refresh_state: None,
@@ -3181,12 +3207,16 @@ fn scan_directory(
                 .and_then(|duration| i64::try_from(duration.as_secs()).ok());
             let relative_path = normalize_relative_path(root, &entry_path);
             let media_kind = kind.as_storage_value().to_string();
-            let default_title = entry_path
+            let raw_default_title = entry_path
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .map(|value| value.to_string())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| fallback_title_from_relative_path(&relative_path));
+            let default_title = match library_kind {
+                MediaLibraryKind::Movies => movie_display_title_from_name(&raw_default_title),
+                _ => raw_default_title,
+            };
 
             files.push(DiscoveredMediaFile {
                 full_path: entry_path,
@@ -3565,4 +3595,52 @@ fn fallback_title_from_relative_path(relative_path: &str) -> String {
         .map(|value| value.to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| relative_path.to_string())
+}
+
+fn movie_display_title_from_name(value: &str) -> String {
+    static BRACKETED_TAG_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"[\{\[]([^\}\]]*)[\}\]]").unwrap());
+    static YEAR_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\b(19\d{2}|20\d{2}|21\d{2})\b").unwrap());
+    static PARENTHETICAL_YEAR_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"[\(\[]\s*(19\d{2}|20\d{2}|21\d{2})\s*[\)\]]").unwrap());
+    static DASH_FORMAT_SUFFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?i)\s+[-–]\s+(?:bluray|blu-ray|brrip|web[- ]?dl|webrip|remux|dvdrip|hdtv|uhd|dvd|proper|repack|extended|unrated|director'?s cut|theatrical|final cut)?(?:[\s._-]*(?:2160p|1080p|720p|480p|4k|uhd|hdr|dv|x264|x265|h264|h265|hevc|av1|aac|dts|truehd|atmos|remux|bluray|blu-ray|web[- ]?dl|webrip|brrip|dvdrip))*\s*$",
+        )
+        .unwrap()
+    });
+    static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|x264|x265|h264|h265|hevc|av1|hdr|dv|webrip|web[- ]?dl|bluray|blu-ray|brrip|dvdrip|remux|aac|dts|truehd|atmos)\b",
+        )
+        .unwrap()
+    });
+    static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+").unwrap());
+
+    let without_tags = BRACKETED_TAG_REGEX.replace_all(value, " ");
+    let mut normalized = DASH_FORMAT_SUFFIX_REGEX
+        .replace(&without_tags, " ")
+        .to_string();
+    normalized = PARENTHETICAL_YEAR_REGEX
+        .replace(&normalized, " ")
+        .to_string();
+    normalized = normalized.replace(['.', '_'], " ");
+    if let Some(year_match) = YEAR_REGEX.find(&normalized) {
+        if !normalized[..year_match.start()].trim().is_empty() {
+            normalized = normalized[..year_match.start()].to_string();
+        }
+    }
+    normalized = TITLE_COLON_DASH_REGEX
+        .replace_all(&normalized, ": ")
+        .to_string();
+    normalized = NOISE_TOKEN_REGEX.replace_all(&normalized, " ").to_string();
+    let cleaned = normalized
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|character: char| !character.is_ascii_alphanumeric())
+        .to_string();
+
+    if cleaned.is_empty() { value.to_string() } else { cleaned }
 }

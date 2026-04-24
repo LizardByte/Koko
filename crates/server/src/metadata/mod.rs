@@ -17,6 +17,7 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
+use sha1::{Digest, Sha1};
 use strsim::normalized_levenshtein;
 
 mod providers;
@@ -30,12 +31,14 @@ use crate::db::models::{
     ItemMetadataCollection, ItemMetadataLink, MediaItem, NewItemMetadataCollection,
     NewItemMetadataLink,
 };
-use crate::globals::current_timestamp;
+use crate::utils::current_timestamp;
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
 const DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
+/// Default Koko metadata locale used when no user preference is available.
+pub const DEFAULT_METADATA_LOCALE: &str = "en-US";
 
 static TVDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
     Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
@@ -57,6 +60,14 @@ pub struct MetadataProviderDescriptor {
     pub requires_api_key: bool,
     /// Whether the provider is implemented in the current build.
     pub implemented: bool,
+    /// Provider attribution text for UI display.
+    pub attribution_text: String,
+    /// Provider attribution link.
+    pub attribution_url: String,
+    /// Provider logo suitable for light backgrounds.
+    pub logo_light_url: Option<String>,
+    /// Provider logo suitable for dark backgrounds.
+    pub logo_dark_url: Option<String>,
 }
 
 /// Runtime status for a metadata provider after applying user settings.
@@ -80,6 +91,14 @@ pub struct MetadataProviderStatus {
     pub configured: bool,
     /// Configured language preference for the provider.
     pub language: String,
+    /// Provider attribution text for UI display.
+    pub attribution_text: String,
+    /// Provider attribution link.
+    pub attribution_url: String,
+    /// Provider logo suitable for light backgrounds.
+    pub logo_light_url: Option<String>,
+    /// Provider logo suitable for dark backgrounds.
+    pub logo_dark_url: Option<String>,
 }
 
 /// Stored metadata match summary for one media item.
@@ -107,6 +126,10 @@ pub struct ItemMetadataSummary {
     pub match_state: String,
     /// Raw stored provider payload, when available.
     pub provider_payload_json: Option<String>,
+    /// Koko locale key for this stored metadata row.
+    pub locale_key: String,
+    /// Provider-specific locale key used to fetch this row.
+    pub provider_locale_key: Option<String>,
     /// Cached poster path, when available.
     pub cached_artwork_path: Option<String>,
     /// Cached backdrop path, when available.
@@ -124,7 +147,7 @@ pub struct ItemMetadataSummary {
 }
 
 /// Search result returned by a metadata provider.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MetadataSearchResult {
     /// Provider identifier.
     pub provider_id: MetadataProviderId,
@@ -142,6 +165,8 @@ pub struct MetadataSearchResult {
     pub backdrop_url: Option<String>,
     /// Candidate release year, if available.
     pub release_year: Option<i32>,
+    /// Match score from 0.0 to 1.0, when Koko can compute one.
+    pub score: Option<f64>,
 }
 
 /// Collection summary aggregated across linked metadata rows.
@@ -186,12 +211,16 @@ pub struct StoredMetadataSnapshot {
     pub backdrop_url: Option<String>,
     /// Release year.
     pub release_year: Option<i32>,
+    /// Koko locale key for this snapshot.
+    pub locale_key: String,
+    /// Provider-specific locale key used to fetch this snapshot.
+    pub provider_locale_key: Option<String>,
     /// Raw provider payload.
     pub provider_payload_json: Option<String>,
 }
 
 /// Presentation fields derived from one stored metadata link.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LinkedMetadataPresentation {
     /// Tagline or short promotional line.
     pub tagline: Option<String>,
@@ -207,6 +236,12 @@ pub struct LinkedMetadataPresentation {
     pub poster_available: bool,
     /// Whether backdrop artwork is available either locally or remotely.
     pub backdrop_available: bool,
+    /// Provider-supplied title logo URL, when available.
+    pub logo_url: Option<String>,
+    /// Provider-supplied user/community rating, when available.
+    pub rating: Option<f32>,
+    /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
+    pub content_rating: Option<String>,
     /// Human-friendly trailer title, when available.
     pub trailer_title: Option<String>,
     /// Browser-embeddable trailer URL, when available.
@@ -218,19 +253,64 @@ struct ParsedMovieName {
     title: String,
     year: Option<i32>,
     tmdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    imdb_id: Option<String>,
 }
 
-static BRACED_TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{([^}]*)}").unwrap());
+static BRACED_TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\{\[]([^\}\]]*)[\}\]]").unwrap());
 static YEAR_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(19\d{2}|20\d{2}|21\d{2})\b").unwrap());
+static PARENTHETICAL_YEAR_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[\(\[]\s*(19\d{2}|20\d{2}|21\d{2})\s*[\)\]]").unwrap());
 static SPLIT_SUFFIX_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\s*[-–]\s*(cd|disc|disk|dvd|part|pt)\s*\d+\s*$").unwrap());
+static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+").unwrap());
 static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|hdr|dv|webrip|web[- ]dl|bluray|brrip|dvdrip|remux|proper|repack|extended|unrated|criterion|aac|dts|truehd|atmos)\b",
     )
     .unwrap()
 });
+
+/// Normalize a Koko locale key into the canonical storage format.
+pub fn normalize_locale_key(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_METADATA_LOCALE.to_string();
+    }
+
+    let mut parts = trimmed.split(['-', '_']);
+    let language = parts.next().unwrap_or("en").to_ascii_lowercase();
+    if let Some(region) = parts.next().filter(|region| !region.is_empty()) {
+        format!("{}-{}", language, region.to_ascii_uppercase())
+    } else if language == "en" {
+        DEFAULT_METADATA_LOCALE.to_string()
+    } else {
+        language
+    }
+}
+
+/// Map a Koko locale key to a provider-specific locale key.
+pub fn provider_locale_key(
+    provider_id: MetadataProviderId,
+    locale_key: &str,
+) -> String {
+    let normalized = normalize_locale_key(locale_key);
+    match provider_id {
+        MetadataProviderId::Tvdb => match normalized.as_str() {
+            "en-GB" | "en-US" => "eng",
+            "es-ES" => "spa",
+            "fr-FR" => "fra",
+            "de-DE" => "deu",
+            "it-IT" => "ita",
+            "ja-JP" => "jpn",
+            "pt-BR" => "por",
+            _ => "eng",
+        }
+        .to_string(),
+        _ => normalized,
+    }
+}
 
 /// Provider contract for metadata implementations.
 pub trait MetadataProvider {
@@ -316,6 +396,10 @@ pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProvid
                 enabled,
                 configured,
                 language,
+                attribution_text: descriptor.attribution_text,
+                attribution_url: descriptor.attribution_url,
+                logo_light_url: descriptor.logo_light_url,
+                logo_dark_url: descriptor.logo_dark_url,
             }
         })
         .collect()
@@ -392,12 +476,49 @@ pub async fn fetch_provider_metadata_snapshot(
     external_id: &str,
     media_type: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_metadata_snapshot_for_locale(
+        settings,
+        provider_id,
+        external_id,
+        media_type,
+        DEFAULT_METADATA_LOCALE,
+    )
+    .await
+}
+
+/// Fetch and normalize one provider metadata snapshot for a specific Koko locale.
+pub async fn fetch_provider_metadata_snapshot_for_locale(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: &str,
+    locale_key: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    let locale_key = normalize_locale_key(locale_key);
+    let provider_locale = provider_locale_key(provider_id.clone(), &locale_key);
+    let mut localized_settings = settings.clone();
+    if let Some(provider) = localized_settings
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == provider_id)
+    {
+        provider.language = provider_locale.clone();
+    }
+
     match provider_id {
         MetadataProviderId::Tmdb => {
-            fetch_tmdb_metadata_snapshot(settings, external_id, media_type).await
+            let mut snapshot =
+                fetch_tmdb_metadata_snapshot(&localized_settings, external_id, media_type).await?;
+            snapshot.locale_key = locale_key;
+            snapshot.provider_locale_key = Some(provider_locale);
+            Ok(snapshot)
         }
         MetadataProviderId::Tvdb => {
-            fetch_tvdb_metadata_snapshot(settings, external_id, media_type).await
+            let mut snapshot =
+                fetch_tvdb_metadata_snapshot(&localized_settings, external_id, media_type).await?;
+            snapshot.locale_key = locale_key;
+            snapshot.provider_locale_key = Some(provider_locale);
+            Ok(snapshot)
         }
         _ => Err(format!(
             "{} metadata fetch is not implemented.",
@@ -723,6 +844,8 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
         let existing = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)
             .optional()?;
@@ -772,6 +895,8 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             relation_kind: "primary".into(),
             match_state: "linked".into(),
             provider_payload_json: snapshot.provider_payload_json.clone(),
+            locale_key: snapshot.locale_key.clone(),
+            provider_locale_key: snapshot.provider_locale_key.clone(),
             cached_artwork_path: if keep_cached_artwork {
                 existing
                     .as_ref()
@@ -811,6 +936,8 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
         let row = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 
@@ -875,6 +1002,13 @@ pub fn set_item_metadata_refresh_state(
             provider_payload_json: existing
                 .as_ref()
                 .and_then(|row| row.provider_payload_json.clone()),
+            locale_key: existing
+                .as_ref()
+                .map(|row| row.locale_key.clone())
+                .unwrap_or_else(|| DEFAULT_METADATA_LOCALE.to_string()),
+            provider_locale_key: existing
+                .as_ref()
+                .and_then(|row| row.provider_locale_key.clone()),
             cached_artwork_path: if keep_cached_paths {
                 existing
                     .as_ref()
@@ -1030,15 +1164,48 @@ pub fn get_primary_item_metadata_link(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    get_preferred_item_metadata_link_for_languages(
+        conn,
+        item_id,
+        &[DEFAULT_METADATA_LOCALE.to_string()],
+    )
+}
+
+/// Return the best stored primary metadata link for the requested language order.
+pub fn get_preferred_item_metadata_link_for_languages(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
 
-    metadata_links_dsl::item_metadata_links
+    let rows = metadata_links_dsl::item_metadata_links
         .filter(metadata_links_dsl::media_item_id.eq(item_id))
         .filter(metadata_links_dsl::relation_kind.eq("primary"))
         .order(metadata_links_dsl::updated_at.desc())
         .select(ItemMetadataLink::as_select())
-        .first(conn)
-        .optional()
+        .load::<ItemMetadataLink>(conn)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut languages = preferred_languages
+        .iter()
+        .map(|language| normalize_locale_key(language))
+        .filter(|language| !language.is_empty())
+        .collect::<Vec<_>>();
+    if !languages
+        .iter()
+        .any(|language| language == DEFAULT_METADATA_LOCALE)
+    {
+        languages.push(DEFAULT_METADATA_LOCALE.to_string());
+    }
+
+    Ok(languages
+        .iter()
+        .find_map(|language| rows.iter().find(|row| row.locale_key == *language).cloned())
+        .or_else(|| rows.into_iter().next()))
 }
 
 /// Return an already stored metadata snapshot matching one provider item.
@@ -1083,11 +1250,7 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         .map(ToOwned::to_owned);
     let overview = parsed_payload
         .as_ref()
-        .and_then(|payload| payload.get("overview"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+        .and_then(provider_overview)
         .or_else(|| link.overview.clone());
     let genres = parsed_payload
         .as_ref()
@@ -1114,6 +1277,9 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         })
         .and_then(|value| extract_release_year(Some(value)))
         .or(link.release_year);
+    let logo_url = parsed_payload.as_ref().and_then(provider_logo_url);
+    let rating = parsed_payload.as_ref().and_then(provider_rating);
+    let content_rating = parsed_payload.as_ref().and_then(provider_content_rating);
 
     LinkedMetadataPresentation {
         tagline,
@@ -1123,6 +1289,9 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         media_type: link.media_type.clone(),
         poster_available: link.cached_artwork_path.is_some() || link.artwork_url.is_some(),
         backdrop_available: link.cached_backdrop_path.is_some() || link.backdrop_url.is_some(),
+        logo_url,
+        rating,
+        content_rating,
         trailer_title: parsed_payload
             .as_ref()
             .and_then(tmdb_trailer_entry)
@@ -1144,13 +1313,98 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
     }
 }
 
+fn provider_logo_url(payload: &Value) -> Option<String> {
+    payload
+        .get("images")
+        .and_then(|images| images.get("logos"))
+        .and_then(Value::as_array)
+        .and_then(|logos| {
+            logos.iter().find_map(|logo| {
+                logo.get("file_path")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(|path| tmdb_image_url(path, "w500"))
+                    .or_else(|| {
+                        logo.get("image")
+                            .or_else(|| logo.get("image_url"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|url| !url.is_empty())
+                            .map(ToOwned::to_owned)
+                    })
+            })
+        })
+}
+
+fn provider_rating(payload: &Value) -> Option<f32> {
+    payload
+        .get("vote_average")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
+        .or_else(|| {
+            payload
+                .get("score")
+                .and_then(Value::as_f64)
+                .map(|value| value as f32)
+        })
+}
+
+fn provider_content_rating(payload: &Value) -> Option<String> {
+    payload
+        .get("release_dates")
+        .and_then(|release_dates| release_dates.get("results"))
+        .and_then(Value::as_array)
+        .and_then(|countries| {
+            countries
+                .iter()
+                .find(|country| country.get("iso_3166_1").and_then(Value::as_str) == Some("US"))
+                .or_else(|| countries.first())
+        })
+        .and_then(|country| country.get("release_dates"))
+        .and_then(Value::as_array)
+        .and_then(|dates| {
+            dates.iter().find_map(|date| {
+                date.get("certification")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .or_else(|| {
+            payload
+                .get("content_ratings")
+                .and_then(|ratings| ratings.get("results"))
+                .and_then(Value::as_array)
+                .and_then(|ratings| {
+                    ratings
+                        .iter()
+                        .find(|rating| {
+                            rating.get("iso_3166_1").and_then(Value::as_str) == Some("US")
+                        })
+                        .or_else(|| ratings.first())
+                })
+                .and_then(|rating| rating.get("rating"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
 /// Persist stored metadata payload and cached artwork into the managed item asset structure.
 pub async fn persist_item_metadata_assets(
     snapshot: &StoredMetadataSnapshot,
-    item_id: i32,
+    _item_id: i32,
     data_dir: &str,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
-    let item_dir = managed_item_asset_dir(data_dir, item_id);
+    let item_dir = managed_metadata_asset_dir(
+        data_dir,
+        snapshot.provider_id.clone(),
+        &snapshot.external_id,
+        snapshot.media_type.as_deref(),
+    );
     fs::create_dir_all(&item_dir).map_err(|error| error.to_string())?;
 
     if let Some(payload_json) = &snapshot.provider_payload_json {
@@ -1175,6 +1429,37 @@ pub async fn persist_item_metadata_assets(
     };
 
     Ok((poster_path, backdrop_path))
+}
+
+/// Return the deterministic provider-guid based asset bundle path for metadata payloads.
+pub fn managed_metadata_asset_dir(
+    data_dir: &str,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: Option<&str>,
+) -> PathBuf {
+    let guid = format!("{}:{}", provider_id.as_storage_value(), external_id.trim());
+    let full_hash = format!("{:x}", Sha1::digest(guid.as_bytes()));
+    let (shard, bundle_name) = full_hash.split_at(1);
+
+    Path::new(data_dir)
+        .join("metadata")
+        .join(metadata_asset_type_directory(media_type))
+        .join(shard)
+        .join(format!("{bundle_name}.bundle"))
+}
+
+fn metadata_asset_type_directory(media_type: Option<&str>) -> &'static str {
+    match media_type
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "movie" => "movies",
+        "tv" | "series" | "show" | "season" | "episode" => "tv",
+        _ => "items",
+    }
 }
 
 /// Persist a cached artwork path for a metadata link.
@@ -1307,6 +1592,10 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
             supported_kinds: vec![MediaLibraryKind::Music],
             requires_api_key: false,
             implemented: false,
+            attribution_text: "MusicBrainz metadata is provided by MusicBrainz.".into(),
+            attribution_url: "https://musicbrainz.org/".into(),
+            logo_light_url: None,
+            logo_dark_url: None,
         }
     }
 }
@@ -1320,6 +1609,10 @@ impl MetadataProvider for OpenLibraryMetadataProvider {
             supported_kinds: vec![MediaLibraryKind::Books],
             requires_api_key: false,
             implemented: false,
+            attribution_text: "Book metadata is provided by Open Library.".into(),
+            attribution_url: "https://openlibrary.org/".into(),
+            logo_light_url: None,
+            logo_dark_url: None,
         }
     }
 }
@@ -1339,6 +1632,10 @@ impl MetadataProvider for LocalNfoMetadataProvider {
             ],
             requires_api_key: false,
             implemented: false,
+            attribution_text: "Local metadata is provided by files in your library.".into(),
+            attribution_url: String::new(),
+            logo_light_url: None,
+            logo_dark_url: None,
         }
     }
 }
@@ -1449,6 +1746,8 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         media_type: link.media_type,
         match_state: link.match_state,
         provider_payload_json: link.provider_payload_json,
+        locale_key: link.locale_key,
+        provider_locale_key: link.provider_locale_key,
         cached_artwork_path: link.cached_artwork_path,
         cached_backdrop_path: link.cached_backdrop_path,
         refresh_state: link.refresh_state,
@@ -1457,6 +1756,100 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         refresh_error: link.refresh_error,
         updated_at: link.updated_at,
     }
+}
+
+fn provider_overview(payload: &Value) -> Option<String> {
+    text_field(
+        payload,
+        &[
+            "overview",
+            "description",
+            "shortDescription",
+            "longDescription",
+        ],
+    )
+    .or_else(|| payload.get("data").and_then(provider_overview))
+    .or_else(|| translated_text(payload.get("overviews"), &["eng", "en", "english"]))
+    .or_else(|| {
+        translated_text(
+            payload.get("overviewTranslations"),
+            &["eng", "en", "english"],
+        )
+    })
+    .or_else(|| translated_text(payload.get("translations"), &["eng", "en", "english"]))
+}
+
+fn text_field(
+    payload: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        payload
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn translated_text(
+    value: Option<&Value>,
+    preferred_keys: &[&str],
+) -> Option<String> {
+    let value = value?;
+    if let Some(text) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        return Some(text.to_string());
+    }
+
+    if let Some(map) = value.as_object() {
+        return preferred_keys
+            .iter()
+            .find_map(|key| map.get(*key).and_then(translated_text_value))
+            .or_else(|| map.values().find_map(translated_text_value));
+    }
+
+    value.as_array().and_then(|entries| {
+        preferred_keys
+            .iter()
+            .find_map(|key| {
+                entries.iter().find_map(|entry| {
+                    let language = entry
+                        .get("language")
+                        .or_else(|| entry.get("languageCode"))
+                        .or_else(|| entry.get("iso_639_1"))
+                        .and_then(Value::as_str)?;
+                    language
+                        .eq_ignore_ascii_case(key)
+                        .then(|| translated_text_value(entry))
+                        .flatten()
+                })
+            })
+            .or_else(|| entries.iter().find_map(translated_text_value))
+    })
+}
+
+fn translated_text_value(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            text_field(
+                value,
+                &[
+                    "overview",
+                    "description",
+                    "name",
+                    "title",
+                ],
+            )
+        })
 }
 
 fn tmdb_trailer_entry(payload: &Value) -> Option<&Value> {
@@ -1538,20 +1931,10 @@ fn stored_snapshot_from_link(link: ItemMetadataLink) -> Option<StoredMetadataSna
         artwork_url: link.artwork_url,
         backdrop_url: link.backdrop_url,
         release_year: link.release_year,
+        locale_key: link.locale_key,
+        provider_locale_key: link.provider_locale_key,
         provider_payload_json: link.provider_payload_json,
     })
-}
-
-fn managed_item_asset_dir(
-    data_dir: &str,
-    item_id: i32,
-) -> PathBuf {
-    let item_hex = format!("{:08x}", item_id.max(0));
-    let shard = &item_hex[0..2];
-    Path::new(data_dir)
-        .join("item_assets")
-        .join(shard)
-        .join(item_hex)
 }
 
 async fn try_cache_item_artwork(
@@ -1633,27 +2016,27 @@ fn parse_movie_name(
         .unwrap_or_default();
 
     let preferred_source =
-        if parent_name.eq_ignore_ascii_case(file_stem) || YEAR_REGEX.is_match(parent_name) {
+        if parent_name.eq_ignore_ascii_case(file_stem) || has_title_and_year(parent_name) {
             parent_name
         } else {
             file_stem
         };
 
-    let tmdb_id = BRACED_TAG_REGEX
+    let tag_values = BRACED_TAG_REGEX
         .captures_iter(preferred_source)
         .chain(BRACED_TAG_REGEX.captures_iter(file_stem))
-        .find_map(|captures| {
-            let value = captures.get(1)?.as_str().trim();
-            value
-                .strip_prefix("tmdb-")
-                .map(|id| id.trim().to_string())
-                .filter(|id| !id.is_empty())
-        });
-    let year = YEAR_REGEX
-        .captures(preferred_source)
-        .or_else(|| YEAR_REGEX.captures(file_stem))
-        .and_then(|captures| captures.get(1))
-        .and_then(|value| value.as_str().parse::<i32>().ok());
+        .filter_map(|captures| {
+            captures
+                .get(1)
+                .map(|value| value.as_str().trim().to_string())
+        })
+        .collect::<Vec<_>>();
+    let tmdb_id = provider_tag_value(&tag_values, "tmdb");
+    let tvdb_id = provider_tag_value(&tag_values, "tvdb");
+    let imdb_id = provider_tag_value(&tag_values, "imdb");
+    let year = movie_year_from_name(preferred_source)
+        .or_else(|| movie_year_from_name(file_stem))
+        .or_else(|| movie_year_from_name(display_title));
 
     let cleaned = cleanup_movie_title(preferred_source);
     let fallback = cleanup_movie_title(display_title);
@@ -1661,7 +2044,45 @@ fn parse_movie_name(
         title: if cleaned.is_empty() { fallback } else { cleaned },
         year,
         tmdb_id,
+        tvdb_id,
+        imdb_id,
     }
+}
+
+fn movie_year_from_name(value: &str) -> Option<i32> {
+    PARENTHETICAL_YEAR_REGEX
+        .captures(value)
+        .or_else(|| {
+            YEAR_REGEX.captures(value).filter(|captures| {
+                captures
+                    .get(1)
+                    .map(|year| !value[..year.start()].trim().is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| value.as_str().parse::<i32>().ok())
+}
+
+fn has_title_and_year(value: &str) -> bool {
+    movie_year_from_name(value).is_some()
+}
+
+fn provider_tag_value(
+    tags: &[String],
+    provider: &str,
+) -> Option<String> {
+    tags.iter().flat_map(|tag| tag.split(':')).find_map(|part| {
+        let part = part.trim();
+        let normalized = part.to_ascii_lowercase();
+        for separator in ["-", ":", "_"] {
+            let prefix = format!("{provider}{separator}");
+            if normalized.starts_with(&prefix) {
+                return Some(part[prefix.len()..].trim().to_string()).filter(|id| !id.is_empty());
+            }
+        }
+        None
+    })
 }
 
 fn show_search_query(
@@ -1694,10 +2115,16 @@ fn show_search_query(
 fn cleanup_movie_title(value: &str) -> String {
     let without_tags = BRACED_TAG_REGEX.replace_all(value, " ");
     let without_split_suffix = SPLIT_SUFFIX_REGEX.replace(&without_tags, " ");
-    let mut normalized = without_split_suffix.replace(['.', '_'], " ");
+    let without_parenthetical_year = PARENTHETICAL_YEAR_REGEX.replace(&without_split_suffix, " ");
+    let mut normalized = without_parenthetical_year.replace(['.', '_'], " ");
     if let Some(year_match) = YEAR_REGEX.find(&normalized) {
-        normalized = normalized[..year_match.start()].to_string();
+        if !normalized[..year_match.start()].trim().is_empty() {
+            normalized = normalized[..year_match.start()].to_string();
+        }
     }
+    normalized = TITLE_COLON_DASH_REGEX
+        .replace_all(&normalized, ": ")
+        .to_string();
     normalized = NOISE_TOKEN_REGEX.replace_all(&normalized, " ").to_string();
 
     normalized
@@ -1920,7 +2347,93 @@ mod tests {
                 title: "Blade Runner".into(),
                 year: Some(1982),
                 tmdb_id: Some("78".into()),
+                tvdb_id: None,
+                imdb_id: None,
             }
+        );
+        assert_eq!(
+            parse_movie_name(
+                "Beyond The Sky (2018) - Bluray-1080p [tmdb-332718:tvdb-12345].mkv",
+                "Beyond The Sky (2018) - Bluray-1080p"
+            ),
+            ParsedMovieName {
+                title: "Beyond The Sky".into(),
+                year: Some(2018),
+                tmdb_id: Some("332718".into()),
+                tvdb_id: Some("12345".into()),
+                imdb_id: None,
+            }
+        );
+        assert_eq!(
+            parse_movie_name("2067 (2020) - 1080p.mkv", "2067 (2020) - 1080p"),
+            ParsedMovieName {
+                title: "2067".into(),
+                year: Some(2020),
+                tmdb_id: None,
+                tvdb_id: None,
+                imdb_id: None,
+            }
+        );
+        assert_eq!(
+            parse_movie_name("2067/2067 (2020) - 1080p.mkv", "2067"),
+            ParsedMovieName {
+                title: "2067".into(),
+                year: Some(2020),
+                tmdb_id: None,
+                tvdb_id: None,
+                imdb_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn presentation_extracts_nested_tvdb_translated_description() {
+        let link = ItemMetadataLink {
+            id: 1,
+            media_item_id: 1,
+            provider_id: "tvdb".into(),
+            external_id: "123".into(),
+            title: Some("Example".into()),
+            overview: None,
+            tagline: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            media_type: Some("movie".into()),
+            relation_kind: "primary".into(),
+            match_state: "linked".into(),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "data": {
+                        "translations": [
+                            {
+                                "language": "spa",
+                                "overview": "Descripcion en espanol."
+                            },
+                            {
+                                "language": "eng",
+                                "description": "English TVDB description."
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            cached_artwork_path: None,
+            cached_backdrop_path: None,
+            refresh_state: "fresh".into(),
+            refresh_interval_seconds: 0,
+            last_refreshed_at: None,
+            next_refresh_at: None,
+            refresh_error: None,
+            updated_at: None,
+        };
+
+        assert_eq!(
+            presentation_from_metadata_link(&link).overview.as_deref(),
+            Some("English TVDB description.")
         );
     }
 
@@ -1930,6 +2443,8 @@ mod tests {
             title: "The Matrix".into(),
             year: Some(1999),
             tmdb_id: None,
+            tvdb_id: None,
+            imdb_id: None,
         };
         let matching_year = MetadataSearchResult {
             provider_id: MetadataProviderId::Tmdb,
@@ -1940,6 +2455,7 @@ mod tests {
             artwork_url: None,
             backdrop_url: None,
             release_year: Some(1999),
+            score: None,
         };
         let wrong_year = MetadataSearchResult {
             release_year: Some(2003),

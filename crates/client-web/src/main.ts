@@ -981,6 +981,7 @@ function renderUserManagement(): string {
                   <label>Username<input name="username" value="${escapeHtml(user.username)}" required /></label>
                   <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
                   <label>Profile image URL<input name="profile_image_url" type="url" value="${escapeHtml(user.profile_image_url ?? '')}" placeholder="https://example.com/avatar.jpg" /></label>
+                  <label>Metadata languages<input name="preferred_metadata_languages" value="${escapeHtml((user.preferred_metadata_languages ?? ['en-US']).join(', '))}" placeholder="en-US, es-ES" /></label>
                   <label class="checkbox-inline"><input name="admin" type="checkbox" ${user.admin ? 'checked' : ''} /> Administrator</label>
                 </div>
                 <div class="provider-tags">
@@ -1003,6 +1004,7 @@ function renderUserManagement(): string {
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
         <label>Profile image URL<input name="profile_image_url" type="url" placeholder="https://example.com/avatar.jpg" /></label>
+        <label>Metadata languages<input name="preferred_metadata_languages" value="en-US" placeholder="en-US, es-ES" /></label>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>
         <button type="submit">${renderButtonContent('Create user', 'user-plus')}</button>
       </section>
@@ -1537,6 +1539,7 @@ function renderMetadataSearchResults(): string {
             <span>${escapeHtml(metadataProviderLabels[result.provider_id] ?? result.provider_id)}</span>
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
+            ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
           </div>
         </div>
         <button
@@ -1549,6 +1552,14 @@ function renderMetadataSearchResults(): string {
       </article>
     `)
     .join('');
+}
+
+function parseMetadataLanguageInput(value: FormDataEntryValue | null): string[] {
+  const languages = String(value ?? '')
+    .split(',')
+    .map((language) => language.trim())
+    .filter(Boolean);
+  return languages.length ? languages : ['en-US'];
 }
 
 function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
@@ -1598,6 +1609,7 @@ function renderLinkedMetadataSummary(): string {
     : linkedMatch.refresh_state === 'error'
       ? 'Refresh failed'
       : 'Up to date';
+  const provider = state.selectedItemMetadata?.providers.find((entry) => entry.id === linkedMatch.provider_id);
 
   return `
     <div class="metadata-current-link">
@@ -1605,9 +1617,13 @@ function renderLinkedMetadataSummary(): string {
       <span class="tag">${escapeHtml(linkedMatch.media_type ?? 'linked')}</span>
       <span class="tag ${metadataRefreshPending || linkedMatch.refresh_state === 'pending' ? 'warning' : linkedMatch.refresh_state === 'error' ? 'danger-tag' : ''}">${escapeHtml(refreshStateLabel)}</span>
       ${linkedMatch.release_year ? `<span class="tag">${linkedMatch.release_year}</span>` : ''}
+      ${linkedMatch.locale_key ? `<span class="tag">${escapeHtml(linkedMatch.locale_key)}</span>` : ''}
       <span class="metadata-current-copy">
         <strong>${escapeHtml(linkedMatch.title ?? linkedMatch.external_id)}</strong>
         <span class="muted">Last refreshed ${escapeHtml(formatTimestamp(linkedMatch.last_refreshed_at ?? linkedMatch.updated_at))}</span>
+        ${provider?.attribution_text
+          ? `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${provider.logo_dark_url ? `<img src="${escapeHtml(provider.logo_dark_url)}" alt="" loading="lazy" />` : ''}${escapeHtml(provider.attribution_text)}</a>`
+          : ''}
         ${linkedMatch.refresh_error ? `<span class="metadata-refresh-error">${escapeHtml(linkedMatch.refresh_error)}</span>` : ''}
       </span>
     </div>
@@ -1871,6 +1887,7 @@ function renderItemPage(): string {
   const genres = state.selectedItem.genres.length
     ? state.selectedItem.genres
     : [];
+  const logoUrl = state.selectedItem.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
   const technicalFacts = [
     { label: 'Duration', value: formatDuration(state.selectedItem.duration_ms) },
     {
@@ -1914,10 +1931,14 @@ function renderItemPage(): string {
           ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(state.selectedItem.display_title)} poster" />` : `<span>${escapeHtml(state.selectedItem.display_title.slice(0, 1).toUpperCase())}</span>`}
         </div>
         <div class="detail-summary item-summary">
-          <h2>${escapeHtml(state.selectedItem.display_title)}</h2>
+          ${logoUrl
+            ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
+            : `<h2>${escapeHtml(state.selectedItem.display_title)}</h2>`}
           ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
           <div class="hero-meta-row">
             ${state.selectedItem.release_year ? `<span class="tag">${state.selectedItem.release_year}</span>` : ''}
+            ${state.selectedItem.content_rating ? `<span class="tag">${escapeHtml(state.selectedItem.content_rating)}</span>` : ''}
+            ${typeof state.selectedItem.rating === 'number' ? `<span class="tag">${escapeHtml(state.selectedItem.rating.toFixed(1))}</span>` : ''}
             ${genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('')}
           </div>
           <p class="hero-description">${escapeHtml(overview)}</p>
@@ -2969,6 +2990,7 @@ function bindEvents(): void {
       admin: true,
       birthday: String(formData.get('birthday') ?? '').trim() || undefined,
       profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
+      preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
     };
 
     try {
@@ -3443,6 +3465,7 @@ function bindEvents(): void {
         admin: formData.get('admin') === 'on',
         birthday: String(formData.get('birthday') ?? '').trim() || undefined,
         profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
+        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
       };
 
       try {
@@ -3474,6 +3497,7 @@ function bindEvents(): void {
       admin: formData.get('admin') === 'on',
       birthday: String(formData.get('birthday') ?? '').trim() || undefined,
       profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
+      preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
     };
 
     try {

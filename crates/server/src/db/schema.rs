@@ -19,6 +19,8 @@ table! {
         relation_kind -> Text,
         match_state -> Text,
         provider_payload_json -> Nullable<Text>,
+        locale_key -> Text,
+        provider_locale_key -> Nullable<Text>,
         cached_artwork_path -> Nullable<Text>,
         cached_backdrop_path -> Nullable<Text>,
         refresh_state -> Text,
@@ -179,5 +181,6 @@ table! {
         admin -> Bool,
         birthday -> Nullable<Text>,
         profile_image_url -> Nullable<Text>,
+        preferred_metadata_languages_json -> Text,
     }
 }

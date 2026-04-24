@@ -72,7 +72,9 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                 if let Some(db) = DbConn::get_one(rocket).await {
                     routes::media::start_library_monitor(db);
                 } else {
-                    log::error!("Failed to acquire database connection for library monitor startup");
+                    log::error!(
+                        "Failed to acquire database connection for library monitor startup"
+                    );
                 }
             })
         }))

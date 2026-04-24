@@ -20,6 +20,7 @@ pub struct User {
     pub admin: bool,
     pub birthday: Option<String>,
     pub profile_image_url: Option<String>,
+    pub preferred_metadata_languages_json: String,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
@@ -152,7 +153,7 @@ pub struct NewMediaItem {
     pub updated_at: Option<i64>,
 }
 
-#[derive(Queryable, Selectable, Identifiable, Associations, Debug)]
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
 #[diesel(belongs_to(MediaItem, foreign_key = media_item_id))]
 #[diesel(table_name = item_metadata_links)]
 pub struct ItemMetadataLink {
@@ -170,6 +171,8 @@ pub struct ItemMetadataLink {
     pub relation_kind: String,
     pub match_state: String,
     pub provider_payload_json: Option<String>,
+    pub locale_key: String,
+    pub provider_locale_key: Option<String>,
     pub cached_artwork_path: Option<String>,
     pub cached_backdrop_path: Option<String>,
     pub refresh_state: String,
@@ -197,6 +200,8 @@ pub struct NewItemMetadataLink {
     pub relation_kind: String,
     pub match_state: String,
     pub provider_payload_json: Option<String>,
+    pub locale_key: String,
+    pub provider_locale_key: Option<String>,
     pub cached_artwork_path: Option<String>,
     pub cached_backdrop_path: Option<String>,
     pub refresh_state: String,

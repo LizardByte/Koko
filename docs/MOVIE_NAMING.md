@@ -56,24 +56,54 @@ This can work well for smaller libraries, but folder-per-movie is still recommen
 
 ## Optional metadata tags in braces
 
-You can include helpful tags in curly braces after the movie title and year.
+You can include helpful tags in curly braces or square brackets after the movie title and year.
+Multiple tags can be split across multiple bracket groups, or combined in one group with `:`.
 
 Supported examples:
 
 ```text
 Batman Begins (2005) {tmdb-272}.mp4
 Batman Begins (2005) {imdb-tt0372784}.mp4
+Batman Begins (2005) [tmdb-272:tvdb-321].mp4
+Batman Begins (2005) [tmdb-272] [edition-Blu-ray].mp4
 Blade Runner (1982) {edition-Final Cut}.mkv
 ```
 
 Useful tag forms:
 
 - `{tmdb-272}`
+- `{tvdb-321}`
 - `{imdb-tt0372784}`
 - `{edition-Director's Cut}`
 - `{edition-Extended}`
 
-Koko strips these tags before title matching and uses them as hints where possible.
+Koko strips these tags before title matching and uses provider identifiers as hints where possible.
+TMDB matching can use direct `tmdb` IDs and can resolve `tvdb` or `imdb` IDs through TMDB's external-id lookup.
+TheTVDB matching can use direct `tvdb` IDs.
+
+## Legacy and quality suffixes
+
+Koko also accepts legacy file names where the format is separated by a dash:
+
+```text
+Beyond The Sky (2018) - Bluray-1080p.mkv
+Movie Title (2024) - 2160p WEB-DL x265.mkv
+```
+
+The format suffix is stripped from the display title and metadata search title. You may also put the format in brackets:
+
+```text
+Beyond The Sky (2018) [Bluray-1080p].mkv
+Movie Title (2024) [2160p:WEB-DL:x265].mkv
+```
+
+For titles that normally contain a colon but are stored on Windows, use a dash before the subtitle:
+
+```text
+Top Gun- Maverick (2022) - 1080p.mkv
+```
+
+Koko displays this as `Top Gun: Maverick`.
 
 ## Multiple editions
 

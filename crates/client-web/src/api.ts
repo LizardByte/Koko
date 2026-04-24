@@ -55,6 +55,7 @@ export interface BootstrapUser {
   admin: boolean;
   birthday?: string;
   profile_image_url?: string;
+  preferred_metadata_languages: string[];
 }
 
 export interface AppBootstrapResponse {
@@ -78,6 +79,7 @@ export interface CreateUserRequest {
   admin: boolean;
   birthday?: string;
   profile_image_url?: string;
+  preferred_metadata_languages?: string[];
 }
 
 export interface UpdateUserRequest {
@@ -85,6 +87,7 @@ export interface UpdateUserRequest {
   admin: boolean;
   birthday?: string;
   profile_image_url?: string;
+  preferred_metadata_languages?: string[];
 }
 
 export interface MediaLibrary {
@@ -149,6 +152,9 @@ export interface MediaItemDetail extends MediaItemSummary {
   overview?: string;
   genres: string[];
   release_year?: number;
+  logo_url?: string;
+  rating?: number;
+  content_rating?: string;
   linked_media_type?: string;
   trailer_title?: string;
   trailer_url?: string;
@@ -175,6 +181,10 @@ export interface MetadataProviderStatus {
   enabled: boolean;
   configured: boolean;
   language: string;
+  attribution_text: string;
+  attribution_url: string;
+  logo_light_url?: string;
+  logo_dark_url?: string;
 }
 
 export interface ItemMetadataMatch {
@@ -189,6 +199,8 @@ export interface ItemMetadataMatch {
   media_type?: string;
   match_state: string;
   provider_payload_json?: string;
+  locale_key: string;
+  provider_locale_key?: string;
   cached_artwork_path?: string;
   cached_backdrop_path?: string;
   refresh_state?: string;
@@ -213,6 +225,7 @@ export interface MetadataSearchResult {
   artwork_url?: string;
   backdrop_url?: string;
   release_year?: number;
+  score?: number;
 }
 
 export interface MediaShelf {

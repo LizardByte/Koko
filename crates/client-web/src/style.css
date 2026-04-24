@@ -484,6 +484,14 @@ legend {
   width: 100%;
 }
 
+.content-navbar-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .content-navbar-actions .search-form {
   justify-content: flex-end;
 }

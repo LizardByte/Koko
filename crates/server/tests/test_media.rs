@@ -15,7 +15,7 @@ use koko::db::MIGRATIONS;
 use koko::media::{
     LibraryScanStatus, get_item_theme_song_themerr_reference,
     get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
-    get_preferred_item_metadata_link, get_persisted_library_summaries, infer_episode_number,
+    get_persisted_library_summaries, get_preferred_item_metadata_link, infer_episode_number,
     infer_season_number, inspect_libraries, inspect_transcoding_capability,
     list_automatic_metadata_candidates, list_library_settings, list_media_items,
     remove_library_setting, replace_library_settings, resolve_local_item_artwork_path,
@@ -23,8 +23,8 @@ use koko::media::{
     upsert_playback_progress,
 };
 use koko::metadata::{
-    ArtworkKind, StoredMetadataSnapshot, get_primary_item_metadata_link, set_item_metadata_refresh_state,
-    upsert_item_metadata_snapshot,
+    ArtworkKind, StoredMetadataSnapshot, get_primary_item_metadata_link,
+    set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1274,6 +1274,164 @@ fn test_library_settings_are_persisted_in_database() {
     drop(connection);
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(updated_root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_replace_library_settings_allows_duplicate_paths() {
+    let root = unique_temp_dir("persisted_library_settings_duplicate_paths");
+    let movies = root.join("Movies");
+    fs::create_dir_all(&movies).unwrap();
+
+    let (mut connection, db_path) =
+        create_test_connection("persisted_library_settings_duplicate_paths_db");
+    let result = replace_library_settings(
+        &mut connection,
+        &[
+            MediaLibrarySettings {
+                name: "Movies".into(),
+                path: movies.to_string_lossy().to_string(),
+                paths: vec![movies.to_string_lossy().to_string()],
+                recursive: true,
+                kind: MediaLibraryKind::Movies,
+                metadata_providers: vec![MetadataProviderId::Tmdb],
+            },
+            MediaLibrarySettings {
+                name: "Shows".into(),
+                path: movies.to_string_lossy().to_string(),
+                paths: vec![movies.to_string_lossy().to_string()],
+                recursive: true,
+                kind: MediaLibraryKind::Shows,
+                metadata_providers: vec![
+                    MetadataProviderId::Tmdb,
+                    MetadataProviderId::Tvdb,
+                ],
+            },
+        ],
+    );
+
+    let libraries = result.unwrap();
+    assert_eq!(libraries.len(), 2);
+    assert_eq!(libraries[0].path, movies.to_string_lossy().to_string());
+    assert_eq!(libraries[1].path, movies.to_string_lossy().to_string());
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
+    let root = unique_temp_dir("sync_library_catalog_duplicate_paths");
+    let media = root.join("Media");
+    fs::create_dir_all(&media).unwrap();
+    fs::write(media.join("feature.mkv"), b"video").unwrap();
+
+    let duplicate_libraries = vec![
+        MediaLibrarySettings {
+            name: "Movies".into(),
+            path: media.to_string_lossy().to_string(),
+            paths: vec![media.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Movies,
+            metadata_providers: vec![MetadataProviderId::Tmdb],
+        },
+        MediaLibrarySettings {
+            name: "Shows".into(),
+            path: media.to_string_lossy().to_string(),
+            paths: vec![media.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Shows,
+            metadata_providers: vec![MetadataProviderId::Tvdb],
+        },
+    ];
+
+    let (mut connection, db_path) =
+        create_test_connection("sync_library_catalog_duplicate_paths_db");
+    replace_library_settings(&mut connection, &duplicate_libraries)
+        .expect("Expected duplicate-path settings to persist");
+
+    sync_library_catalog(
+        &mut connection,
+        &duplicate_libraries,
+        &FfmpegSettings::default(),
+    )
+    .expect("Expected sync to process both duplicate-path libraries");
+
+    let summaries = get_persisted_library_summaries(&mut connection, &[])
+        .expect("Expected persisted library summaries after sync");
+    assert_eq!(summaries.len(), 2);
+    assert_ne!(summaries[0].id, summaries[1].id);
+    assert!(
+        summaries.iter().all(|summary| summary.scan_revision > 0),
+        "Expected every duplicate-path library to have scan_state initialized"
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_migration_13_preserves_existing_library_catalog_rows() {
+    let root = unique_temp_dir("migration_13_preserves_catalog");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie-one.mkv"), b"video").unwrap();
+    fs::write(root.join("movie-two.mkv"), b"video").unwrap();
+
+    let library = MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+    };
+
+    let (mut connection, db_path) = create_test_connection("migration_13_preserves_catalog_db");
+    connection
+        .revert_last_migration(MIGRATIONS)
+        .expect("Expected to revert migration 13");
+
+    let persisted = sync_library_catalog(
+        &mut connection,
+        &[library],
+        &FfmpegSettings::default(),
+    )
+    .expect("Expected populated catalog before re-running migration 13");
+    let library_id = persisted[0].id;
+    let item_count_before = list_media_items(&mut connection, Some(library_id))
+        .unwrap()
+        .len();
+    let file_count_before = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .len();
+    let library_count_before = list_library_settings(&mut connection, &[]).unwrap().len();
+
+    connection
+        .run_pending_migrations(MIGRATIONS)
+        .expect("Expected migration 13 to re-run successfully");
+
+    let libraries_after = list_library_settings(&mut connection, &[]).unwrap();
+    let library_id_after = get_persisted_library_summaries(&mut connection, &[])
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.path == root.to_string_lossy())
+        .expect("Expected migrated library summary to exist")
+        .id;
+    let item_count_after = list_media_items(&mut connection, Some(library_id_after))
+        .unwrap()
+        .len();
+    let file_count_after = get_library_files(&mut connection, library_id_after)
+        .unwrap()
+        .len();
+
+    assert_eq!(libraries_after.len(), library_count_before);
+    assert_eq!(item_count_after, item_count_before);
+    assert_eq!(file_count_after, file_count_before);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();
 }
 

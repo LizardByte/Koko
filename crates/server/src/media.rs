@@ -736,13 +736,13 @@ pub fn sync_library_catalog(
         .iter()
         .map(inspect_library_with_inventory)
         .collect();
-    let configured_storage_keys: HashSet<String> = inspections
-        .iter()
-        .map(|inspection| inspection.summary.path.clone())
-        .collect();
+    let existing_library_rows = media_libraries_dsl::media_libraries
+        .order(media_libraries_dsl::id.asc())
+        .select(MediaLibrary::as_select())
+        .load::<MediaLibrary>(conn)?;
     let mut persisted = Vec::with_capacity(inspections.len());
 
-    for inspection in inspections {
+    for (index, (library, inspection)) in libraries.iter().zip(inspections.into_iter()).enumerate() {
         let library_values = NewMediaLibrary {
             name: inspection.summary.name.clone(),
             path: inspection.summary.path.clone(),
@@ -751,26 +751,16 @@ pub fn sync_library_catalog(
             kind: inspection.summary.kind.as_storage_value(),
             recursive: inspection.summary.recursive,
             metadata_providers_json: serde_json::to_string(
-                &libraries
+                &library
+                    .metadata_providers
                     .iter()
-                    .find(|library| library.primary_path() == inspection.summary.path)
-                    .map(|library| {
-                        library
-                            .metadata_providers
-                            .iter()
-                            .map(|provider| provider.as_storage_value())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_else(|| vec![MetadataProviderId::Tmdb.as_storage_value()]),
+                    .map(|provider| provider.as_storage_value())
+                    .collect::<Vec<_>>(),
             )
             .unwrap_or_else(|_| "[\"tmdb\"]".into()),
         };
 
-        let existing_library = media_libraries_dsl::media_libraries
-            .filter(media_libraries_dsl::path.eq(&library_values.path))
-            .select(MediaLibrary::as_select())
-            .first(conn)
-            .optional()?;
+        let existing_library = existing_library_rows.get(index).cloned();
 
         let library_row = if let Some(existing_library) = existing_library {
             diesel::update(
@@ -790,7 +780,7 @@ pub fn sync_library_catalog(
                 .execute(conn)?;
 
             media_libraries_dsl::media_libraries
-                .filter(media_libraries_dsl::path.eq(&library_values.path))
+                .order(media_libraries_dsl::id.desc())
                 .select(MediaLibrary::as_select())
                 .first(conn)?
         };
@@ -938,11 +928,9 @@ pub fn sync_library_catalog(
         });
     }
 
-    let stale_library_rows = media_libraries_dsl::media_libraries
-        .select(MediaLibrary::as_select())
-        .load::<MediaLibrary>(conn)?
+    let stale_library_rows = existing_library_rows
         .into_iter()
-        .filter(|library| !configured_storage_keys.contains(&library.path))
+        .skip(libraries.len())
         .collect::<Vec<_>>();
 
     if !stale_library_rows.is_empty() {
@@ -1565,10 +1553,7 @@ pub fn list_media_items(
     for row in rows {
         let mut summary = to_media_item_summary(row);
         let summary_id = summary.id;
-        apply_primary_metadata_link(
-            &mut summary,
-            metadata_links.get(&summary_id),
-        );
+        apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
         items.push(summary);
     }
 
@@ -2778,10 +2763,7 @@ fn media_item_summary_with_preferred_title(
 ) -> Result<MediaItemSummary, diesel::result::Error> {
     let mut summary = to_media_item_summary(row);
     let link = get_preferred_item_metadata_link(conn, summary.id)?;
-    apply_primary_metadata_link(
-        &mut summary,
-        link.as_ref(),
-    );
+    apply_primary_metadata_link(&mut summary, link.as_ref());
 
     Ok(summary)
 }
@@ -2833,9 +2815,7 @@ fn primary_metadata_links_by_item_id(
 
     let mut by_item_id = HashMap::new();
     for row in rows {
-        by_item_id
-            .entry(row.media_item_id)
-            .or_insert(row);
+        by_item_id.entry(row.media_item_id).or_insert(row);
     }
 
     Ok(by_item_id)
@@ -2865,22 +2845,17 @@ fn preferred_item_metadata_link_for_summary(
 
     let expected_media_type = expected_metadata_media_type(item);
     if let Some(expected_external_id) = expected_tmdb_external_id_for_item(conn, item)? {
-        if let Some(index) = links
-            .iter()
-            .position(|link| {
-                link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
-                    && link.external_id == expected_external_id
-            })
-        {
+        if let Some(index) = links.iter().position(|link| {
+            link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
+                && link.external_id == expected_external_id
+        }) {
             return Ok(Some(links.swap_remove(index)));
         }
 
         if let Some(expected_media_type) = expected_media_type {
             links.retain(|link| {
-                !(
-                    link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
-                        && link.media_type.as_deref() == Some(expected_media_type)
-                )
+                !(link.provider_id == MetadataProviderId::Tmdb.as_storage_value()
+                    && link.media_type.as_deref() == Some(expected_media_type))
             });
             if links.is_empty() {
                 return Ok(None);
@@ -2922,13 +2897,17 @@ fn expected_tmdb_external_id_for_item(
             let Some(season_number) = item.season_number else {
                 return Ok(None);
             };
-            Ok(Some(format!("tv:{show_external_id}:season:{season_number}")))
+            Ok(Some(format!(
+                "tv:{show_external_id}:season:{season_number}"
+            )))
         }
         "episode" => {
             let Some(show_external_id) = show_tmdb_external_id_for_item(conn, item)? else {
                 return Ok(None);
             };
-            let (Some(season_number), Some(episode_number)) = (item.season_number, item.episode_number) else {
+            let (Some(season_number), Some(episode_number)) =
+                (item.season_number, item.episode_number)
+            else {
                 return Ok(None);
             };
             Ok(Some(format!(
@@ -3109,10 +3088,7 @@ pub fn list_media_item_children(
     for row in rows {
         let mut summary = to_media_item_summary(row);
         let summary_id = summary.id;
-        apply_primary_metadata_link(
-            &mut summary,
-            metadata_links.get(&summary_id),
-        );
+        apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
         items.push(summary);
     }
 

@@ -81,6 +81,48 @@ fn default_metadata_refresh_interval_days() -> Option<u32> {
     Some(30)
 }
 
+fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProviderSettings {
+    match id {
+        MetadataProviderId::Tmdb => MetadataProviderSettings::default(),
+        MetadataProviderId::Tvdb => MetadataProviderSettings {
+            id: MetadataProviderId::Tvdb,
+            enabled: false,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
+        MetadataProviderId::MusicBrainz => MetadataProviderSettings {
+            id: MetadataProviderId::MusicBrainz,
+            enabled: false,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
+        MetadataProviderId::OpenLibrary => MetadataProviderSettings {
+            id: MetadataProviderId::OpenLibrary,
+            enabled: false,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
+        MetadataProviderId::LocalNfo => MetadataProviderSettings {
+            id: MetadataProviderId::LocalNfo,
+            enabled: true,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
+    }
+}
+
 fn default_library_metadata_providers() -> Vec<MetadataProviderId> {
     vec![MetadataProviderId::Tmdb]
 }
@@ -177,6 +219,8 @@ pub enum MetadataProviderId {
     /// TheMovieDB for movie and television metadata.
     #[default]
     Tmdb,
+    /// TheTVDB for movie and television metadata.
+    Tvdb,
     /// MusicBrainz for music-oriented metadata.
     #[serde(rename = "musicbrainz")]
     MusicBrainz,
@@ -191,6 +235,7 @@ impl MetadataProviderId {
     pub fn as_storage_value(&self) -> &'static str {
         match self {
             MetadataProviderId::Tmdb => "tmdb",
+            MetadataProviderId::Tvdb => "tvdb",
             MetadataProviderId::MusicBrainz => "musicbrainz",
             MetadataProviderId::OpenLibrary => "open_library",
             MetadataProviderId::LocalNfo => "local_nfo",
@@ -201,6 +246,7 @@ impl MetadataProviderId {
     pub fn from_storage_value(value: &str) -> Option<Self> {
         match value.trim() {
             "tmdb" => Some(MetadataProviderId::Tmdb),
+            "tvdb" => Some(MetadataProviderId::Tvdb),
             "musicbrainz" => Some(MetadataProviderId::MusicBrainz),
             "open_library" => Some(MetadataProviderId::OpenLibrary),
             "local_nfo" => Some(MetadataProviderId::LocalNfo),
@@ -353,7 +399,10 @@ impl Default for MetadataProviderSettings {
 impl Default for MetadataSettings {
     fn default() -> Self {
         Self {
-            providers: vec![MetadataProviderSettings::default()],
+            providers: vec![
+                default_metadata_provider_settings(MetadataProviderId::Tmdb),
+                default_metadata_provider_settings(MetadataProviderId::Tvdb),
+            ],
             refresh_interval_days: default_metadata_refresh_interval_days(),
         }
     }
@@ -399,6 +448,49 @@ pub fn normalize_settings(settings: &mut Settings) {
 
     for library in &mut settings.media.libraries {
         library.normalize();
+    }
+
+    let mut seen_provider_ids = std::collections::HashSet::new();
+    settings.metadata.providers.retain(|provider| seen_provider_ids.insert(provider.id.clone()));
+    for provider in &mut settings.metadata.providers {
+        provider.language = {
+            let trimmed = provider.language.trim();
+            if trimmed.is_empty() {
+                default_metadata_language()
+            } else {
+                trimmed.to_string()
+            }
+        };
+        provider.rate_limit_per_second = provider.rate_limit_per_second.max(1);
+        provider.retry_backoff_ms = provider.retry_backoff_ms.max(1);
+        provider.api_key = provider
+            .api_key
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+
+    if !settings
+        .metadata
+        .providers
+        .iter()
+        .any(|provider| provider.id == MetadataProviderId::Tmdb)
+    {
+        settings
+            .metadata
+            .providers
+            .push(default_metadata_provider_settings(MetadataProviderId::Tmdb));
+    }
+    if !settings
+        .metadata
+        .providers
+        .iter()
+        .any(|provider| provider.id == MetadataProviderId::Tvdb)
+    {
+        settings
+            .metadata
+            .providers
+            .push(default_metadata_provider_settings(MetadataProviderId::Tvdb));
     }
 }
 

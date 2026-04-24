@@ -17,9 +17,11 @@ use regex::Regex;
 use reqwest::StatusCode;
 use reqwest::header::RETRY_AFTER;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use strsim::normalized_levenshtein;
+
+mod providers;
 
 // local imports
 use crate::config::{
@@ -33,6 +35,7 @@ use crate::db::models::{
 
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
+const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
 const DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
 
@@ -44,6 +47,10 @@ static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
 });
 static TMDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
     Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
+static TVDB_RATE_LIMITER: Lazy<tokio::sync::Mutex<Instant>> =
+    Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
+static TVDB_AUTH_TOKEN: Lazy<tokio::sync::Mutex<Option<TvdbCachedToken>>> =
+    Lazy::new(|| tokio::sync::Mutex::new(None));
 
 /// High-level descriptor for a metadata provider.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -252,6 +259,7 @@ impl MetadataRegistry {
         Self {
             providers: vec![
                 Box::new(TmdbMetadataProvider),
+                Box::new(TvdbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),
@@ -372,42 +380,161 @@ pub fn list_due_item_metadata_links(
 }
 
 /// Search TMDB for metadata candidates using the current provider configuration.
+pub async fn search_provider(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    query: &str,
+) -> Result<Vec<MetadataSearchResult>, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => search_tmdb(settings, query).await,
+        MetadataProviderId::Tvdb => search_tvdb(settings, query).await,
+        _ => Err(format!(
+            "{} search is not implemented.",
+            provider_display_name(&provider_id)
+        )),
+    }
+}
+
+/// Fetch and normalize one provider metadata snapshot.
+pub async fn fetch_provider_metadata_snapshot(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => {
+            fetch_tmdb_metadata_snapshot(settings, external_id, media_type).await
+        }
+        MetadataProviderId::Tvdb => {
+            fetch_tvdb_metadata_snapshot(settings, external_id, media_type).await
+        }
+        _ => Err(format!(
+            "{} metadata fetch is not implemented.",
+            provider_display_name(&provider_id)
+        )),
+    }
+}
+
+/// Fetch one provider season snapshot for a linked show descendant.
+pub async fn fetch_provider_season_metadata_snapshot(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    season_external_id: Option<&str>,
+) -> Result<StoredMetadataSnapshot, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => {
+            fetch_tmdb_season_metadata_snapshot(settings, show_external_id, season_number).await
+        }
+        MetadataProviderId::Tvdb => {
+            let season_external_id = season_external_id.ok_or_else(|| {
+                "TheTVDB season refresh is missing a season external id.".to_string()
+            })?;
+            fetch_tvdb_season_metadata_snapshot(
+                settings,
+                show_external_id,
+                season_number,
+                season_external_id,
+            )
+            .await
+        }
+        _ => Err(format!(
+            "{} season metadata fetch is not implemented.",
+            provider_display_name(&provider_id)
+        )),
+    }
+}
+
+/// Fetch one provider episode snapshot for a linked show descendant.
+pub async fn fetch_provider_episode_metadata_snapshot(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    episode_external_id: Option<&str>,
+) -> Result<StoredMetadataSnapshot, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => {
+            fetch_tmdb_episode_metadata_snapshot(
+                settings,
+                show_external_id,
+                season_number,
+                episode_number,
+            )
+            .await
+        }
+        MetadataProviderId::Tvdb => {
+            let episode_external_id = episode_external_id.ok_or_else(|| {
+                "TheTVDB episode refresh is missing an episode external id.".to_string()
+            })?;
+            fetch_tvdb_episode_metadata_snapshot(
+                settings,
+                show_external_id,
+                season_number,
+                episode_number,
+                episode_external_id,
+            )
+            .await
+        }
+        _ => Err(format!(
+            "{} episode metadata fetch is not implemented.",
+            provider_display_name(&provider_id)
+        )),
+    }
+}
+
+/// Guess the best provider movie match for one library item.
+pub async fn guess_provider_movie_match(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    relative_path: &str,
+    display_title: &str,
+) -> Result<Option<MetadataSearchResult>, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => {
+            guess_tmdb_movie_match(settings, relative_path, display_title).await
+        }
+        MetadataProviderId::Tvdb => {
+            guess_tvdb_movie_match(settings, relative_path, display_title).await
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Guess the best provider show match for one show item.
+pub async fn guess_provider_show_match(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    relative_path: &str,
+    display_title: &str,
+) -> Result<Option<MetadataSearchResult>, String> {
+    match provider_id {
+        MetadataProviderId::Tmdb => {
+            guess_tmdb_show_match(settings, relative_path, display_title).await
+        }
+        MetadataProviderId::Tvdb => {
+            guess_tvdb_show_match(settings, relative_path, display_title).await
+        }
+        _ => Ok(None),
+    }
+}
+/// Search TMDB for metadata candidates using the current provider configuration.
 pub async fn search_tmdb(
     settings: &MetadataSettings,
     query: &str,
 ) -> Result<Vec<MetadataSearchResult>, String> {
-    let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_json::<TmdbSearchResponse>(
-        &provider,
-        "search/multi",
-        vec![("query", query.to_string())],
-        &format!("search query {:?}", query),
-    )
-    .await?;
-    Ok(payload
-        .results
-        .into_iter()
-        .filter_map(|item| {
-            let media_type = item.media_type.unwrap_or_default();
-            if media_type != "movie" && media_type != "tv" {
-                return None;
-            }
+    providers::tmdb::search(settings, query).await
+}
 
-            let title = item.title.or(item.name)?;
-            Some(MetadataSearchResult {
-                provider_id: MetadataProviderId::Tmdb,
-                external_id: item.id.to_string(),
-                media_type,
-                title,
-                overview: item.overview,
-                artwork_url: item.poster_path.map(|path| tmdb_image_url(&path, "w500")),
-                backdrop_url: item
-                    .backdrop_path
-                    .map(|path| tmdb_image_url(&path, "w1280")),
-                release_year: extract_release_year(item.release_date.or(item.first_air_date)),
-            })
-        })
-        .collect())
+/// Search TheTVDB for metadata candidates using the current provider configuration.
+pub async fn search_tvdb(
+    settings: &MetadataSettings,
+    query: &str,
+) -> Result<Vec<MetadataSearchResult>, String> {
+    providers::tvdb::search(settings, query).await
 }
 
 /// Fetch and normalize a TMDB metadata snapshot for one provider item.
@@ -416,51 +543,16 @@ pub async fn fetch_tmdb_metadata_snapshot(
     external_id: &str,
     media_type: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
-    let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!("{}/{}", media_type, external_id),
-        vec![("append_to_response", "videos".to_string())],
-        &format!("details lookup for {media_type}:{external_id}"),
-    )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-    let title = parsed
-        .get("title")
-        .or_else(|| parsed.get("name"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let overview = parsed
-        .get("overview")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .filter(|value| !value.trim().is_empty());
-    let artwork_url = parsed
-        .get("poster_path")
-        .and_then(Value::as_str)
-        .map(|path| tmdb_image_url(path, "w500"));
-    let backdrop_url = parsed
-        .get("backdrop_path")
-        .and_then(Value::as_str)
-        .map(|path| tmdb_image_url(path, "w1280"));
-    let release_year = parsed
-        .get("release_date")
-        .or_else(|| parsed.get("first_air_date"))
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
-        .and_then(|value| extract_release_year(Some(value)));
+    providers::tmdb::fetch_snapshot(settings, external_id, media_type).await
+}
 
-    Ok(StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::Tmdb,
-        external_id: external_id.to_string(),
-        media_type: Some(media_type.to_string()),
-        title,
-        overview,
-        artwork_url,
-        backdrop_url,
-        release_year,
-        provider_payload_json: Some(payload),
-    })
+/// Fetch and normalize a TheTVDB metadata snapshot for one provider item.
+pub async fn fetch_tvdb_metadata_snapshot(
+    settings: &MetadataSettings,
+    external_id: &str,
+    media_type: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    providers::tvdb::fetch_snapshot(settings, external_id, media_type).await
 }
 
 /// Guess the best TMDB movie match for one library item using filename cleanup and fuzzy scoring.
@@ -469,40 +561,16 @@ pub async fn guess_tmdb_movie_match(
     relative_path: &str,
     display_title: &str,
 ) -> Result<Option<MetadataSearchResult>, String> {
-    let parsed = parse_movie_name(relative_path, display_title);
-    if parsed.title.trim().is_empty() {
-        return Ok(None);
-    }
+    providers::tmdb::guess_movie_match(settings, relative_path, display_title).await
+}
 
-    if let Some(tmdb_id) = parsed.tmdb_id.clone() {
-        let snapshot = fetch_tmdb_metadata_snapshot(settings, &tmdb_id, "movie").await?;
-        return Ok(Some(MetadataSearchResult {
-            provider_id: MetadataProviderId::Tmdb,
-            external_id: tmdb_id,
-            media_type: "movie".into(),
-            title: snapshot.title.unwrap_or(parsed.title),
-            overview: snapshot.overview,
-            artwork_url: snapshot.artwork_url,
-            backdrop_url: snapshot.backdrop_url,
-            release_year: snapshot.release_year,
-        }));
-    }
-
-    let mut best_result = None;
-    let mut best_score = 0.0;
-    for result in search_tmdb(settings, &parsed.title).await? {
-        if result.media_type != "movie" {
-            continue;
-        }
-
-        let score = movie_match_score(&parsed, &result);
-        if score > best_score {
-            best_score = score;
-            best_result = Some(result);
-        }
-    }
-
-    Ok((best_score >= 0.78).then_some(best_result).flatten())
+/// Guess the best TheTVDB movie match for one library item using filename cleanup and fuzzy scoring.
+pub async fn guess_tvdb_movie_match(
+    settings: &MetadataSettings,
+    relative_path: &str,
+    display_title: &str,
+) -> Result<Option<MetadataSearchResult>, String> {
+    providers::tvdb::guess_movie_match(settings, relative_path, display_title).await
 }
 
 /// Guess the best TMDB television match for one show item using the show title and path.
@@ -511,29 +579,16 @@ pub async fn guess_tmdb_show_match(
     relative_path: &str,
     display_title: &str,
 ) -> Result<Option<MetadataSearchResult>, String> {
-    let query = show_search_query(relative_path, display_title);
-    if query.trim().is_empty() {
-        return Ok(None);
-    }
+    providers::tmdb::guess_show_match(settings, relative_path, display_title).await
+}
 
-    let mut best_result = None;
-    let mut best_score = 0.0;
-    for result in search_tmdb(settings, &query).await? {
-        if result.media_type != "tv" {
-            continue;
-        }
-
-        let score = normalized_levenshtein(
-            &cleanup_movie_title(&query).to_ascii_lowercase(),
-            &cleanup_movie_title(&result.title).to_ascii_lowercase(),
-        );
-        if score > best_score {
-            best_score = score;
-            best_result = Some(result);
-        }
-    }
-
-    Ok((best_score >= 0.78).then_some(best_result).flatten())
+/// Guess the best TheTVDB television match for one show item using the show title and path.
+pub async fn guess_tvdb_show_match(
+    settings: &MetadataSettings,
+    relative_path: &str,
+    display_title: &str,
+) -> Result<Option<MetadataSearchResult>, String> {
+    providers::tvdb::guess_show_match(settings, relative_path, display_title).await
 }
 
 /// Fetch TMDB metadata for one season of a linked show.
@@ -542,42 +597,23 @@ pub async fn fetch_tmdb_season_metadata_snapshot(
     show_external_id: &str,
     season_number: i32,
 ) -> Result<StoredMetadataSnapshot, String> {
-    let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!("tv/{}/season/{}", show_external_id, season_number),
-        Vec::new(),
-        &format!("season lookup for tv:{show_external_id}:season:{season_number}"),
-    )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+    providers::tmdb::fetch_season_snapshot(settings, show_external_id, season_number).await
+}
 
-    Ok(StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::Tmdb,
-        external_id: tmdb_season_external_id(show_external_id, season_number),
-        media_type: Some("tv_season".into()),
-        title: parsed
-            .get("name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        overview: parsed
-            .get("overview")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        artwork_url: parsed
-            .get("poster_path")
-            .and_then(Value::as_str)
-            .map(|path| tmdb_image_url(path, "w500")),
-        backdrop_url: None,
-        release_year: parsed
-            .get("air_date")
-            .and_then(Value::as_str)
-            .map(|value| value.to_string())
-            .and_then(|value| extract_release_year(Some(value))),
-        provider_payload_json: Some(payload),
-    })
+/// Fetch TheTVDB metadata for one season of a linked show.
+pub async fn fetch_tvdb_season_metadata_snapshot(
+    settings: &MetadataSettings,
+    show_external_id: &str,
+    season_number: i32,
+    season_external_id: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    providers::tvdb::fetch_season_snapshot(
+        settings,
+        show_external_id,
+        season_number,
+        season_external_id,
+    )
+    .await
 }
 
 /// Fetch TMDB metadata for one episode of a linked show.
@@ -587,47 +623,39 @@ pub async fn fetch_tmdb_episode_metadata_snapshot(
     season_number: i32,
     episode_number: i32,
 ) -> Result<StoredMetadataSnapshot, String> {
-    let provider = tmdb_provider_settings(settings)?;
-    let payload = tmdb_get_text(
-        &provider,
-        &format!(
-            "tv/{}/season/{}/episode/{}",
-            show_external_id, season_number, episode_number
-        ),
-        Vec::new(),
-        &format!(
-            "episode lookup for tv:{show_external_id}:season:{season_number}:episode:{episode_number}"
-        ),
+    providers::tmdb::fetch_episode_snapshot(
+        settings,
+        show_external_id,
+        season_number,
+        episode_number,
     )
-    .await?;
-    let parsed: Value = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+    .await
+}
 
-    Ok(StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::Tmdb,
-        external_id: tmdb_episode_external_id(show_external_id, season_number, episode_number),
-        media_type: Some("tv_episode".into()),
-        title: parsed
-            .get("name")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        overview: parsed
-            .get("overview")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        artwork_url: parsed
-            .get("still_path")
-            .and_then(Value::as_str)
-            .map(|path| tmdb_image_url(path, "w780")),
-        backdrop_url: None,
-        release_year: parsed
-            .get("air_date")
-            .and_then(Value::as_str)
-            .map(|value| value.to_string())
-            .and_then(|value| extract_release_year(Some(value))),
-        provider_payload_json: Some(payload),
-    })
+/// Fetch TheTVDB metadata for one episode of a linked show.
+pub async fn fetch_tvdb_episode_metadata_snapshot(
+    settings: &MetadataSettings,
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    episode_external_id: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    providers::tvdb::fetch_episode_snapshot(
+        settings,
+        show_external_id,
+        season_number,
+        episode_number,
+        episode_external_id,
+    )
+    .await
+}
+
+/// Load TheTVDB descendant metadata targets for one linked show.
+pub async fn load_tvdb_show_descendant_targets(
+    settings: &MetadataSettings,
+    show_external_id: &str,
+) -> Result<Vec<TvdbDescendantTarget>, String> {
+    providers::tvdb::load_show_descendant_targets(settings, show_external_id).await
 }
 
 /// Resolve a ThemerrDB YouTube theme-song URL for one linked TMDB movie or show.
@@ -710,29 +738,25 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             .optional()?;
         let keep_cached_artwork = existing
             .as_ref()
-            .map(
-                |row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        snapshot.provider_id.as_storage_value(),
-                        &snapshot.external_id,
-                        snapshot.media_type.as_deref(),
-                    ) && row.artwork_url == snapshot.artwork_url
-                },
-            )
+            .map(|row| {
+                !metadata_refresh_target_changed(
+                    row,
+                    snapshot.provider_id.as_storage_value(),
+                    &snapshot.external_id,
+                    snapshot.media_type.as_deref(),
+                ) && row.artwork_url == snapshot.artwork_url
+            })
             .unwrap_or(false);
         let keep_cached_backdrop = existing
             .as_ref()
-            .map(
-                |row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        snapshot.provider_id.as_storage_value(),
-                        &snapshot.external_id,
-                        snapshot.media_type.as_deref(),
-                    ) && row.backdrop_url == snapshot.backdrop_url
-                },
-            )
+            .map(|row| {
+                !metadata_refresh_target_changed(
+                    row,
+                    snapshot.provider_id.as_storage_value(),
+                    &snapshot.external_id,
+                    snapshot.media_type.as_deref(),
+                ) && row.backdrop_url == snapshot.backdrop_url
+            })
             .unwrap_or(false);
 
         let payload = NewItemMetadataLink {
@@ -827,16 +851,14 @@ pub fn set_item_metadata_refresh_state(
             .optional()?;
         let keep_cached_paths = existing
             .as_ref()
-            .map(
-                |row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        provider_id.as_storage_value(),
-                        external_id,
-                        media_type,
-                    )
-                },
-            )
+            .map(|row| {
+                !metadata_refresh_target_changed(
+                    row,
+                    provider_id.as_storage_value(),
+                    external_id,
+                    media_type,
+                )
+            })
             .unwrap_or(false);
 
         let payload = NewItemMetadataLink {
@@ -1149,24 +1171,14 @@ pub async fn persist_item_metadata_assets(
 
     let poster_cache_key = format!("{}_poster", snapshot.provider_id.as_storage_value());
     let poster_path = if let Some(url) = &snapshot.artwork_url {
-        try_cache_item_artwork(
-            url,
-            &item_dir,
-            &poster_cache_key,
-        )
-        .await
+        try_cache_item_artwork(url, &item_dir, &poster_cache_key).await
     } else {
         purge_stale_cached_artwork_files(&item_dir, &poster_cache_key, None)?;
         None
     };
     let backdrop_cache_key = format!("{}_backdrop", snapshot.provider_id.as_storage_value());
     let backdrop_path = if let Some(url) = &snapshot.backdrop_url {
-        try_cache_item_artwork(
-            url,
-            &item_dir,
-            &backdrop_cache_key,
-        )
-        .await
+        try_cache_item_artwork(url, &item_dir, &backdrop_cache_key).await
     } else {
         purge_stale_cached_artwork_files(&item_dir, &backdrop_cache_key, None)?;
         None
@@ -1279,23 +1291,20 @@ pub fn expected_artwork_cache_path(
 }
 
 struct TmdbMetadataProvider;
+struct TvdbMetadataProvider;
 struct MusicBrainzMetadataProvider;
 struct OpenLibraryMetadataProvider;
 struct LocalNfoMetadataProvider;
 
 impl MetadataProvider for TmdbMetadataProvider {
     fn descriptor(&self) -> MetadataProviderDescriptor {
-        MetadataProviderDescriptor {
-            id: MetadataProviderId::Tmdb,
-            display_name: "TheMovieDB".into(),
-            description: "Primary movie and television metadata provider for Koko.".into(),
-            supported_kinds: vec![
-                MediaLibraryKind::Movies,
-                MediaLibraryKind::Shows,
-            ],
-            requires_api_key: true,
-            implemented: true,
-        }
+        providers::tmdb::descriptor()
+    }
+}
+
+impl MetadataProvider for TvdbMetadataProvider {
+    fn descriptor(&self) -> MetadataProviderDescriptor {
+        providers::tvdb::descriptor()
     }
 }
 
@@ -1344,31 +1353,39 @@ impl MetadataProvider for LocalNfoMetadataProvider {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct TmdbSearchResponse {
-    results: Vec<TmdbSearchItem>,
+#[derive(Debug, Clone)]
+struct TvdbCachedToken {
+    token: String,
+    expires_at: Instant,
 }
 
-#[derive(Debug, Deserialize)]
-struct TmdbSearchItem {
-    id: i64,
-    media_type: Option<String>,
-    title: Option<String>,
-    name: Option<String>,
-    overview: Option<String>,
-    poster_path: Option<String>,
-    backdrop_path: Option<String>,
-    release_date: Option<String>,
-    first_air_date: Option<String>,
+/// Provider-side season and episode identifiers resolved for one show descendant.
+#[derive(Debug, Clone)]
+pub struct TvdbDescendantTarget {
+    /// Local season number for matching persisted items.
+    pub season_number: i32,
+    /// Local episode number for matching persisted items.
+    pub episode_number: i32,
+    /// Provider-side season identifier.
+    pub season_external_id: String,
+    /// Provider-side episode identifier.
+    pub episode_external_id: String,
 }
 
 fn tmdb_provider_settings(settings: &MetadataSettings) -> Result<MetadataProviderSettings, String> {
+    provider_settings(settings, MetadataProviderId::Tmdb).map_err(|error| format!("TMDB {}", error))
+}
+
+fn provider_settings(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+) -> Result<MetadataProviderSettings, String> {
     let provider = settings
         .providers
         .iter()
-        .find(|provider| provider.id == MetadataProviderId::Tmdb && provider.enabled)
+        .find(|provider| provider.id == provider_id && provider.enabled)
         .cloned()
-        .ok_or_else(|| "TMDB is not enabled in the current configuration.".to_string())?;
+        .ok_or_else(|| "is not enabled in the current configuration.".to_string())?;
 
     let api_key = provider
         .api_key
@@ -1377,7 +1394,7 @@ fn tmdb_provider_settings(settings: &MetadataSettings) -> Result<MetadataProvide
         .trim()
         .to_string();
     if api_key.is_empty() {
-        return Err("TMDB is enabled but no API key is configured.".into());
+        return Err("is enabled but no API key is configured.".into());
     }
 
     Ok(provider)
@@ -1698,6 +1715,16 @@ fn tmdb_image_url(
         size,
         path.trim_start_matches('/')
     )
+}
+
+fn provider_display_name(provider_id: &MetadataProviderId) -> &'static str {
+    match provider_id {
+        MetadataProviderId::Tmdb => "TMDB",
+        MetadataProviderId::Tvdb => "TheTVDB",
+        MetadataProviderId::MusicBrainz => "MusicBrainz",
+        MetadataProviderId::OpenLibrary => "Open Library",
+        MetadataProviderId::LocalNfo => "Local NFO",
+    }
 }
 
 fn tmdb_season_external_id(

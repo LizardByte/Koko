@@ -48,11 +48,18 @@ pub async fn create_test_client(prefix: Option<&str>) -> Client {
 
     // Create the full database path
     let db_path = format!("./test_data/{}", db_name);
+    let settings_path = format!("./test_data/{}_{}_{}.yml", prefix, test_id, timestamp);
 
     // Remove the database file if it exists from a previous run
     if std::path::Path::new(&db_path).exists() {
         std::fs::remove_file(&db_path).ok();
     }
+    if std::path::Path::new(&settings_path).exists() {
+        std::fs::remove_file(&settings_path).ok();
+    }
+
+    // Persist settings to a test-scoped file instead of the user's real config path.
+    std::env::set_var("KOKO_SETTINGS_PATH", &settings_path);
 
     // Create a new rocket instance with the unique database path
     let rocket = web::rocket_with_db_path(Some(db_path));

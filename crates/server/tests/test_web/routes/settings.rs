@@ -96,6 +96,59 @@ async fn test_add_and_remove_library_routes() {
 }
 
 #[rocket::async_test]
+async fn test_add_library_route_allows_duplicate_root_paths() {
+    let client = create_test_client(Some("settings_route_add_duplicate")).await;
+
+    make_request(
+        Some(&client),
+        "post",
+        "/api/v1/settings/libraries",
+        Some(json!({
+            "library": {
+                "name": "Movies",
+                "path": "C:/Media/Movies",
+                "paths": ["C:/Media/Movies"],
+                "recursive": true,
+                "kind": "movies",
+                "metadata_providers": ["tmdb"]
+            }
+        })),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let duplicate = make_request(
+        Some(&client),
+        "post",
+        "/api/v1/settings/libraries",
+        Some(json!({
+            "library": {
+                "name": "Duplicate Movies",
+                "path": "C:/Media/Movies",
+                "paths": ["C:/Media/Movies"],
+                "recursive": true,
+                "kind": "movies",
+                "metadata_providers": ["tmdb", "tvdb"]
+            }
+        })),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let duplicate_json: Value = serde_json::from_str(&duplicate.body).unwrap();
+    let libraries = duplicate_json["settings"]["media"]["libraries"]
+        .as_array()
+        .unwrap();
+    assert_eq!(libraries.len(), 2);
+    assert_eq!(libraries[0]["path"].as_str().unwrap(), "C:/Media/Movies");
+    assert_eq!(libraries[1]["path"].as_str().unwrap(), "C:/Media/Movies");
+}
+
+#[rocket::async_test]
 async fn test_remove_missing_library_route() {
     let client = create_test_client(Some("settings_route_remove_missing")).await;
 

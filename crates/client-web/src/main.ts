@@ -29,6 +29,7 @@ import {
   linkItemMetadata,
   loginUser,
   resolveApiUrl,
+  scanLibrary,
   searchItemMetadata,
   searchItems,
   setStoredAuthToken,
@@ -338,7 +339,7 @@ function clearPendingLibraryRefresh(): void {
 }
 
 function shouldAutoRefreshLibraries(): boolean {
-  return state.route.page !== 'item'
+  return state.route.page === 'home'
     && state.libraries.some((library) => library.status === 'never_scanned');
 }
 
@@ -350,7 +351,7 @@ function schedulePendingLibraryRefresh(): void {
 
   pendingLibraryRefreshHandle = window.setTimeout(() => {
     pendingLibraryRefreshHandle = undefined;
-    void refreshData();
+    void refreshPendingLibraryData();
   }, 1800);
 }
 
@@ -1064,7 +1065,7 @@ function formatChildCount(item: MediaItemSummary): string {
 function libraryStatusLabel(status: string): string {
   switch (status) {
     case 'never_scanned':
-      return 'Scanning';
+      return 'Pending first scan';
     case 'available':
       return 'Ready';
     case 'missing_path':
@@ -1290,7 +1291,7 @@ function renderLibraryOverview(): string {
           </article>
           <article class="library-stat-card">
             <span class="label">Status</span>
-            <strong>${state.libraries.some((entry) => entry.status === 'never_scanned') ? 'Scanning' : 'Ready'}</strong>
+            <strong>${state.libraries.some((entry) => entry.status === 'never_scanned') ? 'Pending scans' : 'Ready'}</strong>
           </article>
         </div>
       </section>
@@ -1333,7 +1334,7 @@ function renderLibraryOverview(): string {
         </article>
       </div>
       ${library.error ? `<p class="muted library-overview-note">${escapeHtml(library.error)}</p>` : ''}
-      ${library.status === 'never_scanned' ? '<p class="muted library-overview-note">Koko is scanning this library in the background. New items will appear automatically.</p>' : ''}
+      ${library.status === 'never_scanned' ? '<p class="muted library-overview-note">This library has not been scanned yet. It will populate after the next catalog scan starts.</p>' : ''}
       ${refreshProgress
         ? `<p class="muted library-overview-note">Metadata refresh progress: ${refreshProgress.completed}/${refreshProgress.total}${refreshProgress.failed ? ` (${refreshProgress.failed} failed)` : ''}. Artwork and item cards update automatically as each item completes.</p>`
         : ''}
@@ -1355,7 +1356,7 @@ function renderLibraryTab(): string {
     }
 
     if (library?.status === 'never_scanned') {
-      return '<div class="empty-state">Koko is scanning this library right now. The show, season, and episode hierarchy will appear when the scan completes.</div>';
+      return '<div class="empty-state">This library has not been scanned yet. The show, season, and episode hierarchy will appear after the first scan completes.</div>';
     }
 
     if (library?.status && library.status !== 'available') {
@@ -1493,7 +1494,12 @@ function renderHomePage(): string {
             <button id="reset-search" class="secondary-button" type="button">${renderButtonContent('Reset', 'x')}</button>
           </form>
           ${library
-            ? `<button type="button" class="secondary-button" id="refresh-active-library-metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderButtonContent(libraryRefreshPending ? 'Refreshing library metadata' : 'Refresh library metadata', 'refresh-cw')}</button>`
+            ? `
+              <div class="content-navbar-actions-row">
+                <button type="button" class="secondary-button" id="scan-active-library">${renderButtonContent('Scan library now', 'refresh-cw')}</button>
+                <button type="button" class="secondary-button" id="refresh-active-library-metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderButtonContent(libraryRefreshPending ? 'Refreshing library metadata' : 'Refresh library metadata', 'refresh-cw')}</button>
+              </div>
+            `
             : ''}
         </div>
       `,
@@ -1948,8 +1954,8 @@ function renderItemPage(): string {
           ${supportsManualLinking
             ? `
               <form id="metadata-search-form" class="metadata-search-form">
-                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="Search TMDB or leave blank to use the item title" />
-                <button type="submit">${renderButtonContent('Search TMDB', 'search')}</button>
+                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="Search configured metadata providers or leave blank to use the item title" />
+                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
               </form>
               <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
             `
@@ -1962,9 +1968,18 @@ function renderItemPage(): string {
 
 const metadataProviderKinds: Record<string, string[]> = {
   tmdb: ['movies', 'shows'],
+  tvdb: ['movies', 'shows'],
   musicbrainz: ['music'],
   open_library: ['books'],
   local_nfo: ['movies', 'shows', 'music', 'photos', 'books', 'home_videos'],
+};
+
+const metadataProviderLabels: Record<string, string> = {
+  tmdb: 'TMDB',
+  tvdb: 'TheTVDB',
+  musicbrainz: 'MusicBrainz',
+  open_library: 'Open Library',
+  local_nfo: 'Local NFO',
 };
 
 function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
@@ -1979,7 +1994,7 @@ function metadataProviderCheckboxes(prefix: string, selectedProviders: string[],
           data-provider-kinds="${metadataProviderKinds[providerId].join(',')}"
           ${selectedProviders.includes(providerId) ? 'checked' : ''}
         />
-        ${providerId}
+        ${metadataProviderLabels[providerId] ?? providerId}
       </label>
     `)
     .join('');
@@ -2007,7 +2022,10 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
           </div>
           <div class="settings-library-actions">
             ${persistedLibrary
-              ? `<button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>`
+              ? `
+                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}">${renderButtonContent('Scan now', 'refresh-cw')}</button>
+                <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
+              `
               : ''}
             <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
           </div>
@@ -2056,6 +2074,7 @@ function renderSettingsPage(): string {
   }
 
   const tmdb = settings.metadata.providers.find((provider) => provider.id === 'tmdb');
+  const tvdb = settings.metadata.providers.find((provider) => provider.id === 'tvdb');
   const section = activeSettingsSection();
 
   return `
@@ -2097,6 +2116,7 @@ function renderSettingsPage(): string {
           <h3>Metadata providers</h3>
           <div class="form-row checkbox-row">
             <label><input name="tmdb_enabled" type="checkbox" ${tmdb?.enabled ? 'checked' : ''} /> Enable TMDB</label>
+            <label><input name="tvdb_enabled" type="checkbox" ${tvdb?.enabled ? 'checked' : ''} /> Enable TheTVDB</label>
           </div>
           <div class="form-row">
             <label>TMDB API key<input name="tmdb_api_key" value="${escapeHtml(tmdb?.api_key ?? '')}" /></label>
@@ -2108,6 +2128,17 @@ function renderSettingsPage(): string {
           </div>
           <div class="form-row">
             <label>TMDB retry backoff (ms)<input name="tmdb_retry_backoff_ms" type="number" min="0" step="100" value="${tmdb?.retry_backoff_ms ?? 1000}" /></label>
+            <label>TheTVDB API key<input name="tvdb_api_key" value="${escapeHtml(tvdb?.api_key ?? '')}" /></label>
+          </div>
+          <div class="form-row">
+            <label>TheTVDB language<input name="tvdb_language" value="${escapeHtml(tvdb?.language ?? 'en-US')}" /></label>
+            <label>TheTVDB rate limit (requests/second)<input name="tvdb_rate_limit_per_second" type="number" min="1" value="${tvdb?.rate_limit_per_second ?? 4}" /></label>
+          </div>
+          <div class="form-row">
+            <label>TheTVDB retry attempts<input name="tvdb_retry_attempts" type="number" min="0" value="${tvdb?.retry_attempts ?? 3}" /></label>
+            <label>TheTVDB retry backoff (ms)<input name="tvdb_retry_backoff_ms" type="number" min="0" step="100" value="${tvdb?.retry_backoff_ms ?? 1000}" /></label>
+          </div>
+          <div class="form-row">
             <label>Automatic refresh
               <select name="metadata_refresh_interval_days">
                 <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
@@ -2466,12 +2497,16 @@ async function refreshData(showLoading = true): Promise<void> {
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
-      const [logsResponse, dashboardItems] = await Promise.all([
-        getLogs(currentLogFilterRequest()),
-        getItems(),
-      ]);
-      state.logsResponse = logsResponse;
-      state.dashboardItems = dashboardItems;
+      if (state.route.section === 'dashboard') {
+        state.logsResponse = undefined;
+        state.dashboardItems = await getItems();
+      } else if (state.route.section === 'logs') {
+        state.dashboardItems = [];
+        state.logsResponse = await getLogs(currentLogFilterRequest());
+      } else {
+        state.dashboardItems = [];
+        state.logsResponse = undefined;
+      }
     }
 
     state.apiMode = getApiMode();
@@ -2483,6 +2518,56 @@ async function refreshData(showLoading = true): Promise<void> {
     schedulePendingLibraryRefresh();
     schedulePendingMetadataRefresh();
     render(false);
+  }
+}
+
+async function refreshPendingLibraryData(): Promise<void> {
+  const route = parseRoute();
+  if (route.page !== 'home') {
+    return;
+  }
+
+  let shouldRender = false;
+  const previousError = state.error;
+
+  try {
+    const libraryId = route.libraryId;
+    const searchQuery = state.searchQuery.trim();
+    const previousSnapshot = snapshotJson({
+      libraries: state.libraries,
+      home: state.home,
+      libraryItems: state.libraryItems,
+      searchResults: state.searchResults,
+    });
+    const [libraries, home, libraryItems, searchResults] = await Promise.all([
+      getLibraries(),
+      getHome(libraryId),
+      getItems(libraryId),
+      searchQuery
+        ? searchItems(searchQuery, libraryId)
+        : Promise.resolve([]),
+    ]);
+    if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
+      return;
+    }
+
+    state.libraries = libraries;
+    state.home = home;
+    state.libraryItems = libraryItems;
+    state.searchResults = searchResults;
+    state.error = undefined;
+    shouldRender = previousSnapshot !== snapshotJson({
+      libraries: state.libraries,
+      home: state.home,
+      libraryItems: state.libraryItems,
+      searchResults: state.searchResults,
+    }) || previousError !== state.error;
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : 'Failed to refresh library data.';
+    shouldRender = previousError !== state.error;
+  } finally {
+    schedulePendingLibraryRefresh();
+    maybeRenderAfterAutoRefresh(shouldRender);
   }
 }
 
@@ -2636,22 +2721,23 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
           : Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30)
         : current.metadata.refresh_interval_days,
       providers: current.metadata.providers.map((provider) => {
-        if (provider.id !== 'tmdb') {
+        if (provider.id !== 'tmdb' && provider.id !== 'tvdb') {
           return provider;
         }
 
-        if (!formData.has('tmdb_api_key') && !formData.has('tmdb_enabled')) {
+        const prefix = provider.id;
+        if (!formData.has(`${prefix}_api_key`) && !formData.has(`${prefix}_enabled`)) {
           return provider;
         }
 
         return {
           ...provider,
-          enabled: settingsSection === 'general' ? formData.get('tmdb_enabled') === 'on' : provider.enabled,
-          api_key: String(formData.get('tmdb_api_key') ?? provider.api_key ?? ''),
-          language: String(formData.get('tmdb_language') ?? provider.language),
-          rate_limit_per_second: Math.max(1, Number(formData.get('tmdb_rate_limit_per_second') ?? provider.rate_limit_per_second)),
-          retry_attempts: Math.max(0, Number(formData.get('tmdb_retry_attempts') ?? provider.retry_attempts)),
-          retry_backoff_ms: Math.max(1, Number(formData.get('tmdb_retry_backoff_ms') ?? provider.retry_backoff_ms)),
+          enabled: settingsSection === 'general' ? formData.get(`${prefix}_enabled`) === 'on' : provider.enabled,
+          api_key: String(formData.get(`${prefix}_api_key`) ?? provider.api_key ?? ''),
+          language: String(formData.get(`${prefix}_language`) ?? provider.language),
+          rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
+          retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
+          retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),
         };
       }),
     },
@@ -3260,6 +3346,21 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>('#refresh-log-viewer')?.addEventListener('click', async () => {
     await refreshLogsView();
   });
+  document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
+    const library = activeLibrary();
+    if (!library) {
+      return;
+    }
+
+    try {
+      const scannedLibrary = await scanLibrary(library.id);
+      state.libraries = state.libraries.map((entry) => entry.id === scannedLibrary.id ? scannedLibrary : entry);
+      await refreshData(false);
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to scan library.';
+      render();
+    }
+  });
 
   document.querySelectorAll<HTMLFormElement>('[data-update-user-id]').forEach((form) => {
     form.addEventListener('submit', async (event) => {
@@ -3386,6 +3487,23 @@ function bindEvents(): void {
       state.error = error instanceof Error ? error.message : 'Failed to add library.';
       render();
     }
+  });
+  document.querySelectorAll<HTMLElement>('[data-scan-library-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const libraryId = Number(button.dataset.scanLibraryId);
+      if (!Number.isFinite(libraryId)) {
+        return;
+      }
+
+      try {
+        const scannedLibrary = await scanLibrary(libraryId);
+        state.libraries = state.libraries.map((entry) => entry.id === scannedLibrary.id ? scannedLibrary : entry);
+        await refreshData(false);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to scan library.';
+        render();
+      }
+    });
   });
 
   const addLibraryKindSelect = document.querySelector<HTMLSelectElement>('#add-library-form select[name="library_kind"]');

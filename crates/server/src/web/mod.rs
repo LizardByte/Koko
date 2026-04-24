@@ -6,6 +6,7 @@ mod routes;
 // lib imports
 use rocket::config::Config;
 use rocket::config::TlsConfig;
+use rocket::fairing::AdHoc;
 use rocket::figment::Figment;
 use rocket_okapi::settings::UrlObject;
 use rocket_okapi::{rapidoc::*, swagger_ui::*};
@@ -66,6 +67,15 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
     rocket::custom(figment)
         .attach(DbConn::fairing())
         .attach(Migrate)
+        .attach(AdHoc::on_liftoff("Start library monitor", |rocket| {
+            Box::pin(async move {
+                if let Some(db) = DbConn::get_one(rocket).await {
+                    routes::media::start_library_monitor(db);
+                } else {
+                    log::error!("Failed to acquire database connection for library monitor startup");
+                }
+            })
+        }))
         .mount("/", routes::api_routes())
         .mount(
             "/swagger-ui/",

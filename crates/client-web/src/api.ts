@@ -523,6 +523,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
     return refreshMockLibraryMetadata(Number(libraryRefreshMatch[1])) as T;
   }
 
+  const libraryScanMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/scan$/);
+  if (method === 'POST' && libraryScanMatch) {
+    return refreshMockLibraryMetadata(Number(libraryScanMatch[1])) as T;
+  }
+
   throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
 }
 
@@ -550,7 +555,12 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
       if (response.status === 401) {
         clearStoredAuthToken();
       }
-      const error = new Error(`${response.status} ${response.statusText}`);
+      const responseText = (await response.text()).trim();
+      const error = new Error(
+        responseText
+          ? `${response.status} ${response.statusText}: ${responseText}`
+          : `${response.status} ${response.statusText}`,
+      );
       if (import.meta.env.DEV) {
         useMockApi();
         return getMockJsonResponse<T>(method, path, body);
@@ -663,6 +673,10 @@ export function refreshItemMetadata(itemId: number): Promise<ItemMetadataMatch> 
 
 export function refreshLibraryMetadata(libraryId: number): Promise<MediaLibrary> {
   return requestJson<MediaLibrary>('POST', `/api/v1/libraries/${libraryId}/metadata/refresh`);
+}
+
+export function scanLibrary(libraryId: number): Promise<MediaLibrary> {
+  return requestJson<MediaLibrary>('POST', `/api/v1/libraries/${libraryId}/scan`);
 }
 
 export function getPlaybackDecision(itemId: number): Promise<PlaybackDecision> {

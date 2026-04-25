@@ -5,10 +5,10 @@ use tmdb_client::models::{EpisodeDetails, MovieDetails, MovieObject, SeasonDetai
 
 use crate::config::{MetadataProviderId, MetadataSettings};
 use crate::metadata::{
-    MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult, StoredMetadataSnapshot,
-    cleanup_movie_title, extract_release_year, movie_match_score, parse_movie_name,
-    show_search_query, tmdb_episode_external_id, tmdb_image_url, tmdb_provider_settings,
-    tmdb_season_external_id,
+    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataSearchResult,
+    StoredMetadataSnapshot, cleanup_movie_title, extract_release_year, movie_match_score,
+    parse_movie_name, show_search_query, tmdb_episode_external_id, tmdb_image_url,
+    tmdb_provider_settings, tmdb_season_external_id,
 };
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
@@ -26,6 +26,24 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         attribution_url: "https://www.themoviedb.org/".into(),
         logo_light_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
         logo_dark_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
+    }
+}
+
+pub(crate) fn metadata_item_kind(media_type: Option<&str>) -> MetadataItemKind {
+    match media_type
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "movie" => MetadataItemKind::Movie,
+        "tv" => MetadataItemKind::Show,
+        "tv_season" => MetadataItemKind::Season,
+        "tv_episode" => MetadataItemKind::Episode,
+        "collection" => MetadataItemKind::Collection,
+        "person" | "people" => MetadataItemKind::Person,
+        "company" => MetadataItemKind::Company,
+        _ => MetadataItemKind::Item,
     }
 }
 
@@ -61,6 +79,7 @@ pub(crate) async fn fetch_snapshot(
     let provider = tmdb_provider_settings(settings)?;
     let api_key = tmdb_api_key_from_provider(&provider)?;
     let language = provider.language;
+    let image_languages = tmdb_include_image_languages(&language);
     let external_id_number = parse_external_id(external_id, media_type)?;
     let external_id_string = external_id.to_string();
     let normalized_media_type = match media_type {
@@ -76,7 +95,7 @@ pub(crate) async fn fetch_snapshot(
                 .get_movie_details(
                     external_id_number,
                     Some(&language),
-                    None,
+                    Some(&image_languages),
                     Some("videos,images,release_dates,external_ids"),
                 )
                 .map_err(|error| {
@@ -94,7 +113,7 @@ pub(crate) async fn fetch_snapshot(
                 .get_tv_details(
                     external_id_number,
                     Some(&language),
-                    None,
+                    Some(&image_languages),
                     Some("videos,images,content_ratings,external_ids"),
                 )
                 .map_err(|error| {
@@ -108,6 +127,21 @@ pub(crate) async fn fetch_snapshot(
         other => Err(format!("Unsupported TMDB media type: {}", other)),
     })
     .await
+}
+
+fn tmdb_include_image_languages(language: &str) -> String {
+    let base_language = language
+        .split(['-', '_'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("en");
+
+    if base_language.eq_ignore_ascii_case("null") {
+        "null".into()
+    } else {
+        format!("{base_language},null")
+    }
 }
 
 pub(crate) async fn guess_movie_match(

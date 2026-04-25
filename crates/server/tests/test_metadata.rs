@@ -5,7 +5,7 @@ use koko::config::{
 };
 use koko::metadata::{
     StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
-    managed_metadata_asset_dir, persist_item_metadata_assets,
+    managed_metadata_asset_dir, metadata_asset_uuid, persist_item_metadata_assets,
 };
 use std::fs;
 
@@ -192,6 +192,7 @@ fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missi
         snapshot.provider_id.clone(),
         &snapshot.external_id,
         snapshot.media_type.as_deref(),
+        &snapshot.locale_key,
     );
     fs::create_dir_all(&item_dir).unwrap();
     fs::write(item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg"), b"stale").unwrap();
@@ -207,4 +208,34 @@ fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missi
     );
 
     fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn test_managed_metadata_asset_dir_uses_locale_aware_sha256_uuid_path() {
+    let data_dir = "C:/koko-data";
+    let english = managed_metadata_asset_dir(
+        data_dir,
+        MetadataProviderId::Tmdb,
+        "603",
+        Some("movie"),
+        "en-US",
+    );
+    let spanish = managed_metadata_asset_dir(
+        data_dir,
+        MetadataProviderId::Tmdb,
+        "603",
+        Some("movie"),
+        "es-ES",
+    );
+
+    assert_ne!(english, spanish);
+    assert_eq!(
+        metadata_asset_uuid(MetadataProviderId::Tmdb, "603", "en-US"),
+        "tmdb:603:en-US"
+    );
+    assert!(
+        english.to_string_lossy().contains("/metadata/movies/")
+            || english.to_string_lossy().contains("\\metadata\\movies\\")
+    );
+    assert!(!english.to_string_lossy().contains(".bundle"));
 }

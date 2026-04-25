@@ -26,8 +26,8 @@ use crate::db::models::{
 };
 use crate::metadata::{
     ArtworkKind, MetadataCollectionSummary, get_preferred_item_metadata_link_for_languages,
-    get_primary_item_metadata_link, list_metadata_collection_summaries,
-    presentation_from_metadata_link,
+    get_primary_item_metadata_link, list_metadata_collection_summaries_with_preferred_languages,
+    normalize_locale_key, presentation_from_metadata_link,
 };
 use crate::utils::current_timestamp;
 
@@ -221,6 +221,12 @@ pub struct MediaItemSummary {
     pub height: Option<i32>,
     /// Genre labels from linked metadata when available.
     pub genres: Vec<String>,
+    /// Description or overview from linked metadata, when available.
+    pub overview: Option<String>,
+    /// Local or managed backdrop artwork URL, when available.
+    pub backdrop_url: Option<String>,
+    /// Local or managed title logo URL, when available.
+    pub logo_url: Option<String>,
     /// Whether the item currently has linked metadata.
     pub has_metadata: bool,
     /// Current metadata refresh state when metadata exists.
@@ -1022,7 +1028,7 @@ fn sync_logical_media_items_for_library(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
-    let planned = plan_library_media_items(&files, library_kind);
+    let planned = plan_library_media_items(&files, library_kind, library.id);
     let planned_keys = planned
         .items
         .iter()
@@ -1181,6 +1187,7 @@ fn upsert_planned_media_item(
 fn plan_library_media_items(
     files: &[MediaFile],
     library_kind: &MediaLibraryKind,
+    library_id: i32,
 ) -> PlannedLibraryItems {
     let mut items_by_key = HashMap::<String, PlannedMediaItem>::new();
     let mut leaf_identity_by_file_id = HashMap::new();
@@ -1193,6 +1200,7 @@ fn plan_library_media_items(
                 file.display_title
                     .as_deref()
                     .unwrap_or(fallback_title.as_str()),
+                library_id,
             );
             upsert_planned_item(
                 &mut items_by_key,
@@ -1393,6 +1401,7 @@ fn parent_relative_path(
 fn parse_show_path(
     relative_path: &str,
     fallback_title: &str,
+    library_id: i32,
 ) -> ParsedShowPath {
     let normalized = relative_path.replace('\\', "/");
     let parts = normalized
@@ -1421,7 +1430,11 @@ fn parse_show_path(
     let season_title = season_number
         .map(|number| format!("Season {}", number))
         .unwrap_or_else(|| season_source.trim().to_string());
-    let show_key = format!("show:{}", normalize_identity_segment(&show_title));
+    let show_key = format!(
+        "library:{}:show:{}",
+        library_id,
+        normalize_identity_segment(&show_title)
+    );
     let season_key = format!(
         "{}:season:{}",
         show_key,
@@ -1558,6 +1571,15 @@ pub fn list_media_items(
     conn: &mut SqliteConnection,
     library_id: Option<i32>,
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    list_media_items_with_preferred_languages(conn, library_id, &[])
+}
+
+/// List browser-facing media items using the caller's preferred metadata languages.
+pub fn list_media_items_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let mut query = media_items_dsl::media_items.into_boxed();
@@ -1573,9 +1595,10 @@ pub fn list_media_items(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
-    let metadata_links = primary_metadata_links_by_item_id(
+    let metadata_links = preferred_metadata_links_by_item_id(
         conn,
         &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        preferred_languages,
     )?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
@@ -1748,8 +1771,9 @@ pub fn get_media_item_with_preferred_languages(
 
     let backing_file = load_backing_media_file(conn, item_id)?;
     let mut detail = to_media_item_detail(item.clone(), backing_file.as_ref());
-    detail.hierarchy = load_media_item_hierarchy(conn, &item)?;
-    detail.children = list_media_item_children(conn, item.id)?;
+    detail.hierarchy = load_media_item_hierarchy(conn, &item, preferred_languages)?;
+    detail.children =
+        list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?;
 
     if let Some(link) =
         get_preferred_item_metadata_link_for_languages(conn, item_id, preferred_languages)?
@@ -1767,7 +1791,9 @@ pub fn get_media_item_with_preferred_languages(
         detail.overview = presentation.overview;
         detail.genres = presentation.genres;
         detail.release_year = presentation.release_year;
-        detail.logo_url = presentation.logo_url;
+        if presentation.logo_url.is_some() {
+            detail.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item_id));
+        }
         detail.rating = presentation.rating;
         detail.content_rating = presentation.content_rating;
         detail.linked_media_type = presentation.media_type;
@@ -1823,12 +1849,22 @@ pub fn search_media_items(
     query: &str,
     library_id: Option<i32>,
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    search_media_items_with_preferred_languages(conn, query, library_id, &[])
+}
+
+/// Search browser-facing media items using the caller's preferred metadata languages.
+pub fn search_media_items_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    query: &str,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
 
     let query = query.trim().to_ascii_lowercase();
-    let items = list_media_items(conn, library_id)?;
+    let items = list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
 
     Ok(items
         .into_iter()
@@ -1846,12 +1882,27 @@ pub fn get_media_home(
     user_id: Option<i32>,
     library_id: Option<i32>,
 ) -> Result<MediaHome, diesel::result::Error> {
-    let items = list_media_items(conn, library_id)?;
+    get_media_home_with_preferred_languages(conn, user_id, library_id, &[])
+}
 
-    let continue_watching = get_continue_watching_items(conn, user_id, library_id)?;
+/// Return Kodi/Plex-style media shelves using the caller's preferred metadata languages.
+pub fn get_media_home_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<MediaHome, diesel::result::Error> {
+    let items = list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
+
+    let continue_watching =
+        get_continue_watching_items(conn, user_id, library_id, preferred_languages)?;
     let recently_added = sort_recently_added(&items);
     let recommended = sort_recommended(&items, &continue_watching);
-    let collections = list_metadata_collection_summaries(conn, library_id)?;
+    let collections = list_metadata_collection_summaries_with_preferred_languages(
+        conn,
+        library_id,
+        preferred_languages,
+    )?;
 
     Ok(MediaHome {
         library_id,
@@ -2100,6 +2151,7 @@ pub fn resolve_local_item_artwork_path(
     Ok(match kind {
         ArtworkKind::Poster => assets.poster_path,
         ArtworkKind::Backdrop => assets.backdrop_path,
+        ArtworkKind::Logo => None,
     })
 }
 
@@ -2150,6 +2202,7 @@ fn get_continue_watching_items(
     conn: &mut SqliteConnection,
     user_id: Option<i32>,
     library_id: Option<i32>,
+    preferred_languages: &[String],
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     use crate::db::schema::playback_progress::dsl as playback_progress_dsl;
 
@@ -2166,7 +2219,8 @@ fn get_continue_watching_items(
 
     let mut items = Vec::new();
     for progress in progress_rows {
-        if let Some(item) = get_media_item_summary(conn, progress.media_item_id)? {
+        if let Some(row) = load_media_item_row(conn, progress.media_item_id)? {
+            let item = media_item_summary_with_preferred_languages(conn, row, preferred_languages)?;
             if library_id.is_none() || Some(item.library_id) == library_id {
                 items.push(item);
             }
@@ -2771,6 +2825,9 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         width: None,
         height: None,
         genres: Vec::new(),
+        overview: None,
+        backdrop_url: None,
+        logo_url: None,
         has_metadata: false,
         metadata_refresh_state: None,
         metadata_refresh_error: None,
@@ -2803,8 +2860,20 @@ fn media_item_summary_with_preferred_title(
     conn: &mut SqliteConnection,
     row: MediaItem,
 ) -> Result<MediaItemSummary, diesel::result::Error> {
+    media_item_summary_with_preferred_languages(conn, row, &[])
+}
+
+fn media_item_summary_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    row: MediaItem,
+    preferred_languages: &[String],
+) -> Result<MediaItemSummary, diesel::result::Error> {
     let mut summary = to_media_item_summary(row);
-    let link = get_preferred_item_metadata_link(conn, summary.id)?;
+    let link = if preferred_languages.is_empty() {
+        get_preferred_item_metadata_link(conn, summary.id)?
+    } else {
+        get_preferred_item_metadata_link_for_languages(conn, summary.id, preferred_languages)?
+    };
     apply_primary_metadata_link(&mut summary, link.as_ref());
 
     Ok(summary)
@@ -2828,15 +2897,26 @@ fn apply_primary_metadata_link(
     }
     let presentation = presentation_from_metadata_link(link);
     summary.genres = presentation.genres;
+    summary.overview = presentation.overview;
+    if presentation.backdrop_available {
+        summary.backdrop_url = Some(format!(
+            "/api/v1/items/{}/artwork?kind=backdrop",
+            summary.id
+        ));
+    }
+    if presentation.logo_url.is_some() {
+        summary.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", summary.id));
+    }
     summary.has_metadata = true;
     summary.metadata_refresh_state = Some(link.refresh_state.clone());
     summary.metadata_refresh_error = link.refresh_error.clone();
     summary.artwork_updated_at = link.updated_at;
 }
 
-fn primary_metadata_links_by_item_id(
+fn preferred_metadata_links_by_item_id(
     conn: &mut SqliteConnection,
     item_ids: &[i32],
+    preferred_languages: &[String],
 ) -> Result<HashMap<i32, ItemMetadataLink>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
 
@@ -2855,12 +2935,34 @@ fn primary_metadata_links_by_item_id(
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?;
 
+    let language_rank = preferred_languages
+        .iter()
+        .enumerate()
+        .map(|(index, language)| (normalize_locale_key(language), index))
+        .collect::<HashMap<_, _>>();
+    let default_rank = preferred_languages.len();
     let mut by_item_id = HashMap::new();
     for row in rows {
-        by_item_id.entry(row.media_item_id).or_insert(row);
+        let next_rank = language_rank
+            .get(&normalize_locale_key(&row.locale_key))
+            .copied()
+            .unwrap_or(default_rank);
+        match by_item_id.entry(row.media_item_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((next_rank, row));
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if next_rank < entry.get().0 {
+                    entry.insert((next_rank, row));
+                }
+            }
+        }
     }
 
-    Ok(by_item_id)
+    Ok(by_item_id
+        .into_iter()
+        .map(|(item_id, (_rank, link))| (item_id, link))
+        .collect())
 }
 
 /// Return the best metadata link for a media item, preferring links that
@@ -3083,6 +3185,7 @@ fn load_backing_media_file(
 fn load_media_item_hierarchy(
     conn: &mut SqliteConnection,
     item: &MediaItem,
+    preferred_languages: &[String],
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
@@ -3100,7 +3203,11 @@ fn load_media_item_hierarchy(
         };
 
         next_parent_id = parent.parent_id;
-        hierarchy.push(media_item_summary_with_preferred_title(conn, parent)?);
+        hierarchy.push(media_item_summary_with_preferred_languages(
+            conn,
+            parent,
+            preferred_languages,
+        )?);
     }
 
     hierarchy.reverse();
@@ -3111,6 +3218,15 @@ fn load_media_item_hierarchy(
 pub fn list_media_item_children(
     conn: &mut SqliteConnection,
     item_id: i32,
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    list_media_item_children_with_preferred_languages(conn, item_id, &[])
+}
+
+/// Return direct child summaries for one browser-facing media item and preferred languages.
+pub fn list_media_item_children_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
@@ -3125,9 +3241,10 @@ pub fn list_media_item_children(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
-    let metadata_links = primary_metadata_links_by_item_id(
+    let metadata_links = preferred_metadata_links_by_item_id(
         conn,
         &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        preferred_languages,
     )?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {

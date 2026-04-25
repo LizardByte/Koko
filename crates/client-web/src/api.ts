@@ -129,6 +129,9 @@ export interface MediaItemSummary {
   width?: number;
   height?: number;
   genres: string[];
+  overview?: string;
+  backdrop_url?: string;
+  logo_url?: string;
   has_metadata?: boolean;
   metadata_refresh_state?: string;
   metadata_refresh_error?: string;
@@ -199,6 +202,13 @@ export interface ItemMetadataMatch {
   media_type?: string;
   match_state: string;
   provider_payload_json?: string;
+  logo_url?: string;
+  cached_logo_path?: string;
+  genres: string[];
+  rating?: number;
+  content_rating?: string;
+  trailer_title?: string;
+  trailer_url?: string;
   locale_key: string;
   provider_locale_key?: string;
   cached_artwork_path?: string;
@@ -778,7 +788,7 @@ export function getStreamUrl(itemId: number): string {
   return `${getStoredApiBase()}/api/v1/items/${itemId}/stream`;
 }
 
-export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' = 'poster', revision?: number): string {
+export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'logo' = 'poster', revision?: number): string {
   const params = new URLSearchParams({ kind });
   if (typeof revision === 'number') {
     params.set('rev', String(revision));

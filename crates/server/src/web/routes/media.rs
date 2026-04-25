@@ -26,14 +26,16 @@ use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
     get_item_theme_song_themerr_references, get_library_files, get_library_metadata_providers,
-    get_media_home, get_media_item, get_media_item_summary,
+    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
     get_media_item_with_preferred_languages, get_persisted_library_summaries,
     get_playback_decision, get_preferred_item_metadata_link, infer_episode_number,
     inspect_transcoding_capability, library_exists, list_automatic_metadata_candidates,
     list_library_settings, list_media_item_children, list_media_items,
+    list_media_items_with_preferred_languages,
     mark_metadata_match_attempted, resolve_item_subtitle_path, resolve_item_theme_song_path,
-    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
-    sync_persisted_library_catalog, upsert_playback_progress,
+    resolve_local_item_artwork_path, resolve_media_item_source_path,
+    search_media_items_with_preferred_languages, sync_persisted_library_catalog,
+    upsert_playback_progress,
 };
 use crate::metadata::{
     ArtworkKind, ItemMetadataSummary, MetadataProviderStatus, MetadataSearchResult,
@@ -194,7 +196,7 @@ async fn persist_snapshot_for_item(
     snapshot: &StoredMetadataSnapshot,
     settings: &Settings,
 ) -> Result<ItemMetadataSummary, Status> {
-    let (poster_path, backdrop_path) =
+    let (poster_path, backdrop_path, logo_path) =
         persist_item_metadata_assets(snapshot, item_id, &settings.general.data_dir)
             .await
             .map_err(|error| {
@@ -263,6 +265,24 @@ async fn persist_snapshot_for_item(
             Status::InternalServerError
         })?;
         summary.cached_backdrop_path = Some(backdrop_path_string);
+    }
+
+    if let Some(logo_path) = logo_path {
+        let summary_id = summary.id;
+        let logo_path_string = logo_path.to_string_lossy().to_string();
+        db.run(move |conn| {
+            update_cached_artwork_path(conn, summary_id, ArtworkKind::Logo, &logo_path)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to store logo cache path for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
+        summary.cached_logo_path = Some(logo_path_string);
     }
 
     Ok(summary)
@@ -1973,7 +1993,10 @@ pub async fn get_home(
     let user_id = current_user_id(user_guard.as_ref())?;
 
     let home = db
-        .run(move |conn| get_media_home(conn, user_id, library_id))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            get_media_home_with_preferred_languages(conn, user_id, library_id, &languages)
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to build media home shelves: {}", error);
@@ -2028,10 +2051,16 @@ pub async fn get_library_inventory(
 #[get("/api/v1/items?<library_id>")]
 pub async fn get_items(
     db: DbConn,
+    user_guard: Option<UserGuard>,
     library_id: Option<i32>,
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
+    let user_id = current_user_id(user_guard.as_ref())?;
+
     let items = db
-        .run(move |conn| list_media_items(conn, library_id))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            list_media_items_with_preferred_languages(conn, library_id, &languages)
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to load media items: {}", error);
@@ -2601,39 +2630,46 @@ pub async fn refresh_library_metadata(
 #[get("/api/v1/items/<item_id>/artwork?<kind>")]
 pub async fn get_item_artwork(
     db: DbConn,
+    user_guard: Option<UserGuard>,
     item_id: i32,
     kind: Option<String>,
 ) -> Result<NamedFile, Status> {
     let artwork_kind = ArtworkKind::from_query_value(kind.as_deref());
+    let user_id = current_user_id(user_guard.as_ref())?;
     let data_dir = current_settings().general.data_dir;
     let data_dir_for_local_resolve = data_dir.clone();
 
-    if let Some(local_path) = db
-        .run(move |conn| {
-            resolve_local_item_artwork_path(
-                conn,
-                item_id,
-                artwork_kind,
-                &data_dir_for_local_resolve,
-            )
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to resolve local artwork for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::InternalServerError
-        })?
-    {
-        return NamedFile::open(local_path)
+    if artwork_kind != ArtworkKind::Logo {
+        if let Some(local_path) = db
+            .run(move |conn| {
+                resolve_local_item_artwork_path(
+                    conn,
+                    item_id,
+                    artwork_kind,
+                    &data_dir_for_local_resolve,
+                )
+            })
             .await
-            .map_err(|_| Status::NotFound);
+            .map_err(|error| {
+                log::error!(
+                    "Failed to resolve local artwork for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::InternalServerError
+            })?
+        {
+            return NamedFile::open(local_path)
+                .await
+                .map_err(|_| Status::NotFound);
+        }
     }
 
     let link = db
-        .run(move |conn| load_item_artwork_metadata_link(conn, item_id))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            load_item_artwork_metadata_link(conn, item_id, &languages)
+        })
         .await
         .map_err(|error| {
             log::error!(
@@ -2648,6 +2684,7 @@ pub async fn get_item_artwork(
     let existing_cache = match artwork_kind {
         ArtworkKind::Poster => link.cached_artwork_path.clone(),
         ArtworkKind::Backdrop => link.cached_backdrop_path.clone(),
+        ArtworkKind::Logo => link.cached_logo_path.clone(),
     };
     if let Some(existing_cache) = existing_cache {
         let provider_id = MetadataProviderId::from_storage_value(&link.provider_id)
@@ -2657,15 +2694,18 @@ pub async fn get_item_artwork(
             provider_id.clone(),
             &link.external_id,
             link.media_type.as_deref(),
+            &link.locale_key,
         );
         let existing_path = std::path::PathBuf::from(existing_cache);
         let current_artwork_url = match artwork_kind {
             ArtworkKind::Poster => link.artwork_url.as_deref(),
             ArtworkKind::Backdrop => link.backdrop_url.as_deref(),
+            ArtworkKind::Logo => link.logo_url.as_deref(),
         };
         let cache_key = match artwork_kind {
             ArtworkKind::Poster => format!("{}_poster", provider_id.as_storage_value()),
             ArtworkKind::Backdrop => format!("{}_backdrop", provider_id.as_storage_value()),
+            ArtworkKind::Logo => format!("{}_logo", provider_id.as_storage_value()),
         };
         if let Some(url) = current_artwork_url {
             let expected_path =
@@ -2698,19 +2738,21 @@ pub async fn get_item_artwork(
         provider_payload_json: link.provider_payload_json.clone(),
     };
     let data_dir = current_settings().general.data_dir;
-    let (poster_path, backdrop_path) = persist_item_metadata_assets(&snapshot, item_id, &data_dir)
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to cache artwork for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::BadGateway
-        })?;
+    let (poster_path, backdrop_path, logo_path) =
+        persist_item_metadata_assets(&snapshot, item_id, &data_dir)
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to cache artwork for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::BadGateway
+            })?;
     let cached_path = match artwork_kind {
         ArtworkKind::Poster => poster_path,
         ArtworkKind::Backdrop => backdrop_path,
+        ArtworkKind::Logo => logo_path,
     }
     .ok_or(Status::NotFound)?;
 
@@ -2735,13 +2777,18 @@ pub async fn get_item_artwork(
 fn load_item_artwork_metadata_link(
     conn: &mut diesel::SqliteConnection,
     item_id: i32,
+    preferred_languages: &[String],
 ) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
     let mut current_item_id = Some(item_id);
     while let Some(current_id) = current_item_id {
         let Some(item) = get_media_item_summary(conn, current_id)? else {
             return Ok(None);
         };
-        if let Some(link) = get_preferred_item_metadata_link(conn, current_id)? {
+        if let Some(link) = crate::metadata::get_preferred_item_metadata_link_for_languages(
+            conn,
+            current_id,
+            preferred_languages,
+        )? {
             return Ok(Some(link));
         }
         current_item_id = item.parent_id;
@@ -2807,12 +2854,17 @@ pub async fn get_item_subtitle(
 #[get("/api/v1/search?<query>&<library_id>")]
 pub async fn search_items(
     db: DbConn,
+    user_guard: Option<UserGuard>,
     query: Option<&str>,
     library_id: Option<i32>,
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
     let query = query.unwrap_or_default().to_string();
+    let user_id = current_user_id(user_guard.as_ref())?;
     let items = db
-        .run(move |conn| search_media_items(conn, &query, library_id))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            search_media_items_with_preferred_languages(conn, &query, library_id, &languages)
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to search media items: {}", error);

@@ -14,7 +14,7 @@ use rocket_okapi::{rapidoc::*, swagger_ui::*};
 // local imports
 use crate::certs;
 use crate::config::current_settings;
-use crate::db::{DbConn, Migrate};
+use crate::db::{DbConn, Migrate, ReleaseDatabase, prepare_sqlite_database_path};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 
@@ -43,13 +43,15 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
 
     // Use custom database path for tests, or default for production
     let db_path = custom_db_path.unwrap_or_else(|| globals::APP_PATHS.db_path.clone());
+    prepare_sqlite_database_path(&db_path);
+    let database_url = sqlite_database_url(&db_path);
 
     let figment = Figment::from(Config::default())
         .merge((
             "databases",
             rocket::figment::map! {
                 "sqlite_db" => rocket::figment::map! {
-                    "url" => format!("sqlite://{}", db_path),
+                    "url" => database_url,
                 }
             },
         ))
@@ -67,6 +69,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
     rocket::custom(figment)
         .attach(DbConn::fairing())
         .attach(Migrate)
+        .attach(ReleaseDatabase)
         .attach(AdHoc::on_liftoff("Start library monitor", |rocket| {
             Box::pin(async move {
                 if let Some(db) = DbConn::get_one(rocket).await {
@@ -107,12 +110,31 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         .mount("/", routes::spa_routes())
 }
 
+fn sqlite_database_url(db_path: &str) -> String {
+    if db_path == ":memory:" || db_path.starts_with("file:") {
+        return format!("sqlite://{db_path}");
+    }
+
+    let normalized = db_path.replace('\\', "/");
+    let has_windows_drive = normalized
+        .as_bytes()
+        .get(1)
+        .is_some_and(|character| *character == b':');
+    if has_windows_drive {
+        format!("sqlite:///{normalized}")
+    } else {
+        format!("sqlite://{normalized}")
+    }
+}
+
 /// Launch the web server with graceful shutdown support.
 pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
     let rocket = rocket().ignite().await.expect("Failed to ignite rocket");
+    let rocket_shutdown = rocket.shutdown();
 
     // Start the rocket server
     let rocket_handle = rocket.launch();
+    tokio::pin!(rocket_handle);
 
     // Clone the shutdown signal for the future
     let shutdown_signal_clone = shutdown_signal.clone();
@@ -127,7 +149,7 @@ pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
 
     // Race between the server and shutdown signal
     tokio::select! {
-        result = rocket_handle => {
+        result = &mut rocket_handle => {
             log::info!("Rocket server has shut down");
             // Rocket shut down (likely due to SIGINT), signal other components to shut down
             shutdown_signal.shutdown();
@@ -137,6 +159,10 @@ pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
         }
         _ = shutdown_future => {
             log::info!("Web server shutting down gracefully");
+            rocket_shutdown.notify();
+            if let Err(e) = rocket_handle.await {
+                log::error!("Web server error during graceful shutdown: {}", e);
+            }
         }
     }
 }

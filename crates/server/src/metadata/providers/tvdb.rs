@@ -5,10 +5,10 @@ use tvdb4::models::LoginPostRequest;
 
 use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
-    MediaLibraryKind, MetadataProviderDescriptor, MetadataSearchResult, StoredMetadataSnapshot,
-    TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken, TvdbDescendantTarget,
-    cleanup_movie_title, extract_release_year, format_payload_snippet, movie_match_score,
-    parse_movie_name, provider_settings, show_search_query,
+    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataSearchResult,
+    StoredMetadataSnapshot, TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken,
+    TvdbDescendantTarget, cleanup_movie_title, extract_release_year, format_payload_snippet,
+    movie_match_score, parse_movie_name, provider_settings, show_search_query,
 };
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,25 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         attribution_url: "https://thetvdb.com/".into(),
         logo_light_url: Some("https://thetvdb.com/images/attribution/logo2.png".into()),
         logo_dark_url: Some("https://thetvdb.com/images/attribution/logo1.png".into()),
+    }
+}
+
+pub(crate) fn metadata_item_kind(media_type: Option<&str>) -> MetadataItemKind {
+    match media_type
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "movie" => MetadataItemKind::Movie,
+        "series" | "tv" => MetadataItemKind::Show,
+        "season" => MetadataItemKind::Season,
+        "episode" => MetadataItemKind::Episode,
+        "list" => MetadataItemKind::Collection,
+        "people" | "person" | "actor" => MetadataItemKind::Person,
+        "company" => MetadataItemKind::Company,
+        "award" => MetadataItemKind::Award,
+        _ => MetadataItemKind::Item,
     }
 }
 
@@ -62,12 +81,32 @@ pub(crate) async fn fetch_snapshot(
 ) -> Result<StoredMetadataSnapshot, String> {
     match media_type {
         "movie" => {
+            let provider = provider_settings(settings, MetadataProviderId::Tvdb)
+                .map_err(|error| format!("TheTVDB {}", error))?;
             let payload = fetch_movie_payload(settings, external_id).await?;
-            Ok(movie_snapshot_from_value(external_id, &payload))
+            let translation =
+                fetch_translation_payload(&provider, "movies", external_id, &provider.language)
+                    .await;
+            Ok(movie_snapshot_from_value(
+                external_id,
+                &payload,
+                translation.as_ref(),
+                &provider.language,
+            ))
         }
         "series" | "tv" => {
+            let provider = provider_settings(settings, MetadataProviderId::Tvdb)
+                .map_err(|error| format!("TheTVDB {}", error))?;
             let payload = fetch_series_payload(settings, external_id).await?;
-            Ok(series_snapshot_from_value(external_id, &payload))
+            let translation =
+                fetch_translation_payload(&provider, "series", external_id, &provider.language)
+                    .await;
+            Ok(series_snapshot_from_value(
+                external_id,
+                &payload,
+                translation.as_ref(),
+                &provider.language,
+            ))
         }
         "season" => fetch_season_snapshot(settings, external_id, 0, external_id).await,
         "episode" => fetch_episode_snapshot(settings, external_id, 0, 0, external_id).await,
@@ -163,11 +202,16 @@ pub(crate) async fn fetch_season_snapshot(
         &format!("season lookup for series:{show_external_id}:season:{season_external_id}"),
     )
     .await?;
+    let translation =
+        fetch_translation_payload(&provider, "seasons", season_external_id, &provider.language)
+            .await;
     Ok(season_snapshot_from_value(
         show_external_id,
         season_number,
         season_external_id,
         &payload,
+        translation.as_ref(),
+        &provider.language,
     ))
 }
 
@@ -190,12 +234,21 @@ pub(crate) async fn fetch_episode_snapshot(
         ),
     )
     .await?;
+    let translation = fetch_translation_payload(
+        &provider,
+        "episodes",
+        episode_external_id,
+        &provider.language,
+    )
+    .await;
     Ok(episode_snapshot_from_value(
         show_external_id,
         season_number,
         episode_number,
         episode_external_id,
         &payload,
+        translation.as_ref(),
+        &provider.language,
     ))
 }
 
@@ -498,6 +551,34 @@ async fn fetch_series_payload(
     .await
 }
 
+async fn fetch_translation_payload(
+    provider: &MetadataProviderSettings,
+    record_path: &str,
+    external_id: &str,
+    provider_language: &str,
+) -> Option<Value> {
+    let id = parse_tvdb_external_id(external_id, record_path).ok()?;
+    match get_json(
+        provider,
+        &format!(
+            "{}/{}/translations/{}",
+            record_path.trim_matches('/'),
+            id,
+            provider_language
+        ),
+        Vec::new(),
+        &format!("{record_path} translation lookup for {external_id} [{provider_language}]"),
+    )
+    .await
+    {
+        Ok(payload) => payload.get("data").cloned().or(Some(payload)),
+        Err(error) => {
+            log::debug!("Skipping TheTVDB translation payload: {}", error);
+            None
+        }
+    }
+}
+
 fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
     let item_type = item
         .get("type")
@@ -510,13 +591,13 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
     };
 
     let external_id = object_id(&item)?.to_string();
-    let title = best_title(&item)?;
+    let title = best_title(&item, "eng")?;
     Some(MetadataSearchResult {
         provider_id: MetadataProviderId::Tvdb,
         external_id,
         media_type: media_type.into(),
         title,
-        overview: best_overview(&item),
+        overview: best_overview(&item, "eng"),
         artwork_url: artwork_url(&item),
         backdrop_url: backdrop_url(&item),
         release_year: release_year(&item),
@@ -527,40 +608,46 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
 fn movie_snapshot_from_value(
     external_id: &str,
     payload: &Value,
+    translation: Option<&Value>,
+    provider_language: &str,
 ) -> StoredMetadataSnapshot {
-    let data = payload.get("data").unwrap_or(payload);
+    let enriched_payload = payload_with_translation(payload, translation);
+    let data = enriched_payload.get("data").unwrap_or(&enriched_payload);
     StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tvdb,
         external_id: external_id.to_string(),
         media_type: Some("movie".into()),
-        title: best_title(data),
-        overview: best_overview(data),
+        title: best_title(data, provider_language),
+        overview: best_overview(data, provider_language),
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
         locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
         provider_locale_key: None,
-        provider_payload_json: Some(payload.to_string()),
+        provider_payload_json: Some(enriched_payload.to_string()),
     }
 }
 
 fn series_snapshot_from_value(
     external_id: &str,
     payload: &Value,
+    translation: Option<&Value>,
+    provider_language: &str,
 ) -> StoredMetadataSnapshot {
-    let data = payload.get("data").unwrap_or(payload);
+    let enriched_payload = payload_with_translation(payload, translation);
+    let data = enriched_payload.get("data").unwrap_or(&enriched_payload);
     StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tvdb,
         external_id: external_id.to_string(),
         media_type: Some("series".into()),
-        title: best_title(data),
-        overview: best_overview(data),
+        title: best_title(data, provider_language),
+        overview: best_overview(data, provider_language),
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
         locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
         provider_locale_key: None,
-        provider_payload_json: Some(payload.to_string()),
+        provider_payload_json: Some(enriched_payload.to_string()),
     }
 }
 
@@ -569,20 +656,24 @@ fn season_snapshot_from_value(
     season_number: i32,
     season_external_id: &str,
     payload: &Value,
+    translation: Option<&Value>,
+    provider_language: &str,
 ) -> StoredMetadataSnapshot {
-    let data = payload.get("data").unwrap_or(payload);
+    let enriched_payload = payload_with_translation(payload, translation);
+    let data = enriched_payload.get("data").unwrap_or(&enriched_payload);
     StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tvdb,
         external_id: format!("series:{show_external_id}:season:{season_external_id}"),
         media_type: Some("season".into()),
-        title: best_title(data).or_else(|| Some(format!("Season {}", season_number))),
-        overview: best_overview(data),
+        title: best_title(data, provider_language)
+            .or_else(|| Some(format!("Season {}", season_number))),
+        overview: best_overview(data, provider_language),
         artwork_url: artwork_url(data),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
         locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
         provider_locale_key: None,
-        provider_payload_json: Some(payload.to_string()),
+        provider_payload_json: Some(enriched_payload.to_string()),
     }
 }
 
@@ -592,23 +683,42 @@ fn episode_snapshot_from_value(
     _episode_number: i32,
     episode_external_id: &str,
     payload: &Value,
+    translation: Option<&Value>,
+    provider_language: &str,
 ) -> StoredMetadataSnapshot {
-    let data = payload.get("data").unwrap_or(payload);
+    let enriched_payload = payload_with_translation(payload, translation);
+    let data = enriched_payload.get("data").unwrap_or(&enriched_payload);
     StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tvdb,
         external_id: format!(
             "series:{show_external_id}:season:{season_number}:episode:{episode_external_id}"
         ),
         media_type: Some("episode".into()),
-        title: best_title(data),
-        overview: best_overview(data),
+        title: best_title(data, provider_language),
+        overview: best_overview(data, provider_language),
         artwork_url: still_url(data).or_else(|| artwork_url(data)),
         backdrop_url: backdrop_url(data),
         release_year: release_year(data),
         locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.to_string(),
         provider_locale_key: None,
-        provider_payload_json: Some(payload.to_string()),
+        provider_payload_json: Some(enriched_payload.to_string()),
     }
+}
+
+fn payload_with_translation(
+    payload: &Value,
+    translation: Option<&Value>,
+) -> Value {
+    let Some(translation) = translation else {
+        return payload.clone();
+    };
+    let mut payload = payload.clone();
+    if let Some(data) = payload.get_mut("data").and_then(Value::as_object_mut) {
+        data.insert("koko_translation".into(), translation.clone());
+    } else if let Some(map) = payload.as_object_mut() {
+        map.insert("koko_translation".into(), translation.clone());
+    }
+    payload
 }
 
 fn object_id(value: &Value) -> Option<i32> {
@@ -636,21 +746,44 @@ fn object_id(value: &Value) -> Option<i32> {
         })
 }
 
-fn best_title(value: &Value) -> Option<String> {
+fn best_title(
+    value: &Value,
+    provider_language: &str,
+) -> Option<String> {
+    let preferred = tvdb_language_preference(provider_language);
     value
-        .get("name")
-        .or_else(|| value.get("title"))
-        .or_else(|| value.get("name_translated"))
+        .get("koko_translation")
+        .and_then(|translation| text_field(translation, &["name", "title"]))
+        .or_else(|| {
+            value
+                .get("translations")
+                .and_then(|translations| translation_record(translations, &preferred))
+                .and_then(|translation| text_field(translation, &["name", "title"]))
+        })
+        .or_else(|| {
+            value
+                .get("name")
+                .or_else(|| value.get("title"))
+                .or_else(|| value.get("name_translated"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(ToOwned::to_owned)
+        })
         .or_else(|| {
             value
                 .get("translations")
                 .and_then(Value::as_object)
                 .and_then(|translations| {
-                    ["eng", "en", "english"]
+                    preferred
                         .iter()
-                        .find_map(|key| translations.get(*key))
+                        .find_map(|key| translations.get(key))
                         .or_else(|| translations.values().next())
                 })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(ToOwned::to_owned)
         })
         .or_else(|| {
             value
@@ -677,26 +810,70 @@ fn best_title(value: &Value) -> Option<String> {
                 .and_then(|translation| {
                     translation.get("name").or_else(|| translation.get("title"))
                 })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .map(ToOwned::to_owned)
         })
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(ToOwned::to_owned)
 }
 
-fn best_overview(value: &Value) -> Option<String> {
-    text_field(
-        value,
-        &[
-            "overview",
-            "description",
-            "shortDescription",
-            "longDescription",
-        ],
-    )
-    .or_else(|| translated_overview(value.get("overviews")))
-    .or_else(|| translated_overview(value.get("overviewTranslations")))
-    .or_else(|| translated_overview(value.get("translations")))
+fn best_overview(
+    value: &Value,
+    provider_language: &str,
+) -> Option<String> {
+    let preferred = tvdb_language_preference(provider_language);
+    value
+        .get("koko_translation")
+        .and_then(|translation| text_field(translation, &["overview", "description"]))
+        .or_else(|| {
+            value
+                .get("translations")
+                .and_then(|translations| translation_record(translations, &preferred))
+                .and_then(|translation| text_field(translation, &["overview", "description"]))
+        })
+        .or_else(|| {
+            text_field(
+                value,
+                &[
+                    "overview",
+                    "description",
+                    "shortDescription",
+                    "longDescription",
+                ],
+            )
+        })
+        .or_else(|| translated_overview(value.get("overviews"), &preferred))
+        .or_else(|| translated_overview(value.get("overviewTranslations"), &preferred))
+        .or_else(|| translated_overview(value.get("translations"), &preferred))
+}
+
+fn translation_record<'a>(
+    value: &'a Value,
+    preferred_keys: &[String],
+) -> Option<&'a Value> {
+    if let Some(map) = value.as_object() {
+        return preferred_keys
+            .iter()
+            .find_map(|key| map.get(key))
+            .or_else(|| map.values().next());
+    }
+
+    value.as_array().and_then(|translations| {
+        preferred_keys
+            .iter()
+            .find_map(|key| {
+                translations.iter().find(|translation| {
+                    translation
+                        .get("language")
+                        .or_else(|| translation.get("languageCode"))
+                        .or_else(|| translation.get("iso_639_1"))
+                        .and_then(Value::as_str)
+                        .map(|language| language.eq_ignore_ascii_case(key))
+                        .unwrap_or(false)
+                })
+            })
+            .or_else(|| translations.first())
+    })
 }
 
 fn text_field(
@@ -713,17 +890,20 @@ fn text_field(
     })
 }
 
-fn translated_overview(value: Option<&Value>) -> Option<String> {
+fn translated_overview(
+    value: Option<&Value>,
+    preferred_keys: &[String],
+) -> Option<String> {
     let value = value?;
     if let Some(map) = value.as_object() {
-        return ["eng", "en", "english"]
+        return preferred_keys
             .iter()
-            .find_map(|key| map.get(*key).and_then(translation_overview_value))
+            .find_map(|key| map.get(key).and_then(translation_overview_value))
             .or_else(|| map.values().find_map(translation_overview_value));
     }
 
     value.as_array().and_then(|translations| {
-        ["eng", "en", "english"]
+        preferred_keys
             .iter()
             .find_map(|key| {
                 translations.iter().find_map(|translation| {
@@ -733,13 +913,37 @@ fn translated_overview(value: Option<&Value>) -> Option<String> {
                         .or_else(|| translation.get("iso_639_1"))
                         .and_then(Value::as_str)?;
                     language
-                        .eq_ignore_ascii_case(key)
+                        .eq_ignore_ascii_case(key.as_str())
                         .then(|| translation_overview_value(translation))
                         .flatten()
                 })
             })
             .or_else(|| translations.iter().find_map(translation_overview_value))
     })
+}
+
+fn tvdb_language_preference(provider_language: &str) -> Vec<String> {
+    let normalized = provider_language.trim().to_ascii_lowercase();
+    let mut languages = Vec::new();
+    if !normalized.is_empty() {
+        languages.push(normalized.clone());
+    }
+    match normalized.as_str() {
+        "eng" | "en" | "english" => {}
+        "spa" => languages.push("es".into()),
+        "fra" => languages.push("fr".into()),
+        "deu" => languages.push("de".into()),
+        "ita" => languages.push("it".into()),
+        "jpn" => languages.push("ja".into()),
+        "por" => languages.push("pt".into()),
+        _ => {}
+    }
+    for language in ["eng", "en", "english"] {
+        if !languages.iter().any(|entry| entry == language) {
+            languages.push(language.to_string());
+        }
+    }
+    languages
 }
 
 fn translation_overview_value(value: &Value) -> Option<String> {
@@ -752,31 +956,66 @@ fn translation_overview_value(value: &Value) -> Option<String> {
 }
 
 fn artwork_url(value: &Value) -> Option<String> {
-    value
-        .get("image")
-        .or_else(|| value.get("image_url"))
-        .or_else(|| value.get("poster"))
-        .or_else(|| value.get("thumbnail"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-        .map(ToOwned::to_owned)
+    tvdb_artwork_url(value, &[14, 2, 7]).or_else(|| {
+        value
+            .get("image")
+            .or_else(|| value.get("image_url"))
+            .or_else(|| value.get("poster"))
+            .or_else(|| value.get("thumbnail"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 fn backdrop_url(value: &Value) -> Option<String> {
-    value
+    tvdb_artwork_url(value, &[15, 3, 8]).or_else(|| {
+        value
+            .get("artworks")
+            .and_then(Value::as_array)
+            .and_then(|artworks| {
+                artworks.iter().find_map(|artwork| {
+                    artwork
+                        .get("image")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|url| !url.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+            })
+    })
+}
+
+fn tvdb_artwork_url(
+    value: &Value,
+    preferred_types: &[i64],
+) -> Option<String> {
+    let artworks = value
         .get("artworks")
-        .and_then(Value::as_array)
-        .and_then(|artworks| {
-            artworks.iter().find_map(|artwork| {
+        .or_else(|| value.get("artwork"))
+        .and_then(Value::as_array)?;
+    preferred_types.iter().find_map(|preferred_type| {
+        artworks
+            .iter()
+            .filter(|artwork| artwork.get("type").and_then(Value::as_i64) == Some(*preferred_type))
+            .max_by(|left, right| {
+                let left_score = left.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                let right_score = right.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                left_score
+                    .partial_cmp(&right_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .and_then(|artwork| {
                 artwork
                     .get("image")
+                    .or_else(|| artwork.get("thumbnail"))
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|url| !url.is_empty())
                     .map(ToOwned::to_owned)
             })
-        })
+    })
 }
 
 fn still_url(value: &Value) -> Option<String> {
@@ -829,7 +1068,10 @@ fn episode_number(value: &Value) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::search_result_from_value;
+    use super::{
+        artwork_url, backdrop_url, best_overview, movie_snapshot_from_value,
+        search_result_from_value,
+    };
     use serde_json::json;
 
     #[test]
@@ -870,5 +1112,80 @@ mod tests {
         assert_eq!(result.external_id, "42");
         assert_eq!(result.media_type, "series");
         assert_eq!(result.title, "Example Show");
+    }
+
+    #[test]
+    fn tvdb_movie_snapshot_prefers_translation_payload_for_overview_and_tagline() {
+        let payload = json!({
+            "data": {
+                "id": 901,
+                "name": "Provider Name",
+                "overviewTranslations": ["eng", "rus"],
+                "translations": {
+                    "rus": "rus"
+                },
+                "artworks": [
+                    { "type": 14, "image": "https://example.test/poster.jpg", "score": 1.0 },
+                    { "type": 15, "image": "https://example.test/backdrop.jpg", "score": 1.0 },
+                    { "type": 25, "image": "https://example.test/logo.png", "score": 1.0 }
+                ],
+                "genres": [{ "name": "Action" }]
+            }
+        });
+        let translation = json!({
+            "language": "eng",
+            "name": "Translated Name",
+            "overview": "Translated overview.",
+            "tagline": "Translated tagline."
+        });
+
+        let snapshot = movie_snapshot_from_value("901", &payload, Some(&translation), "eng");
+        assert_eq!(snapshot.title.as_deref(), Some("Translated Name"));
+        assert_eq!(snapshot.overview.as_deref(), Some("Translated overview."));
+        assert_eq!(
+            snapshot.artwork_url.as_deref(),
+            Some("https://example.test/poster.jpg")
+        );
+        assert_eq!(
+            snapshot.backdrop_url.as_deref(),
+            Some("https://example.test/backdrop.jpg")
+        );
+        assert!(
+            snapshot
+                .provider_payload_json
+                .as_deref()
+                .is_some_and(|payload| payload.contains("Translated tagline."))
+        );
+    }
+
+    #[test]
+    fn tvdb_overview_does_not_use_language_code_names() {
+        let payload = json!({
+            "translations": [
+                { "language": "rus", "name": "rus" }
+            ]
+        });
+
+        assert_eq!(best_overview(&payload, "eng"), None);
+    }
+
+    #[test]
+    fn tvdb_artwork_uses_documented_type_ids() {
+        let payload = json!({
+            "artworks": [
+                { "type": 25, "image": "https://example.test/logo.png", "score": 9.0 },
+                { "type": 14, "image": "https://example.test/poster.jpg", "score": 4.0 },
+                { "type": 15, "image": "https://example.test/backdrop.jpg", "score": 6.0 }
+            ]
+        });
+
+        assert_eq!(
+            artwork_url(&payload).as_deref(),
+            Some("https://example.test/poster.jpg")
+        );
+        assert_eq!(
+            backdrop_url(&payload).as_deref(),
+            Some("https://example.test/backdrop.jpg")
+        );
     }
 }

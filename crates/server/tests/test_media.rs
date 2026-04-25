@@ -718,6 +718,22 @@ fn test_item_detail_includes_linked_metadata_presentation() {
                     { "id": 878, "name": "Science Fiction" }
                 ],
                 "release_date": "1999-03-31",
+                "vote_average": 8.2,
+                "images": {
+                    "logos": [
+                        { "file_path": "/matrix-logo.png" }
+                    ]
+                },
+                "release_dates": {
+                    "results": [
+                        {
+                            "iso_3166_1": "US",
+                            "release_dates": [
+                                { "certification": "R" }
+                            ]
+                        }
+                    ]
+                },
                 "videos": {
                     "results": [
                         {
@@ -734,6 +750,19 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         ),
     };
     upsert_item_metadata_snapshot(&mut connection, movie.id, &snapshot).unwrap();
+    let stored_link = get_primary_item_metadata_link(&mut connection, movie.id)
+        .unwrap()
+        .expect("Expected stored metadata link");
+    assert_eq!(
+        stored_link.logo_url.as_deref(),
+        Some("https://image.tmdb.org/t/p/w500/matrix-logo.png")
+    );
+    assert_eq!(stored_link.rating, Some(8.2));
+    assert_eq!(stored_link.content_rating.as_deref(), Some("R"));
+    assert_eq!(
+        stored_link.trailer_title.as_deref(),
+        Some("Official Trailer")
+    );
 
     let detail = get_media_item(&mut connection, movie.id, &root.to_string_lossy())
         .unwrap()
@@ -746,6 +775,12 @@ fn test_item_detail_includes_linked_metadata_presentation() {
     );
     assert_eq!(detail.release_year, Some(1999));
     assert_eq!(detail.genres, vec!["Action", "Science Fiction"]);
+    assert_eq!(
+        detail.logo_url.as_deref(),
+        Some("/api/v1/items/1/artwork?kind=logo")
+    );
+    assert_eq!(detail.rating, Some(8.2));
+    assert_eq!(detail.content_rating.as_deref(), Some("R"));
     assert!(detail.artwork_updated_at.is_some());
     assert_eq!(detail.trailer_title.as_deref(), Some("Official Trailer"));
     assert_eq!(
@@ -1516,8 +1551,69 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
 }
 
 #[test]
-fn test_migration_13_preserves_existing_library_catalog_rows() {
-    let root = unique_temp_dir("migration_13_preserves_catalog");
+fn test_sync_allows_duplicate_show_libraries_with_same_path() {
+    let root = unique_temp_dir("sync_duplicate_show_libraries_same_path");
+    let season = root.join("Example Show").join("Season 1");
+    fs::create_dir_all(&season).unwrap();
+    fs::write(season.join("Example Show - S01E01.mkv"), b"video").unwrap();
+
+    let duplicate_libraries = vec![
+        MediaLibrarySettings {
+            name: "TV Shows - TMDB".into(),
+            path: root.to_string_lossy().to_string(),
+            paths: vec![root.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Shows,
+            metadata_providers: vec![MetadataProviderId::Tmdb],
+        },
+        MediaLibrarySettings {
+            name: "TV Shows - TVDB".into(),
+            path: root.to_string_lossy().to_string(),
+            paths: vec![root.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Shows,
+            metadata_providers: vec![MetadataProviderId::Tvdb],
+        },
+    ];
+
+    let (mut connection, db_path) =
+        create_test_connection("sync_duplicate_show_libraries_same_path_db");
+    replace_library_settings(&mut connection, &duplicate_libraries)
+        .expect("Expected duplicate show-library settings to persist");
+
+    sync_library_catalog(
+        &mut connection,
+        &duplicate_libraries,
+        &FfmpegSettings::default(),
+    )
+    .expect("Expected duplicate show libraries with the same path to sync");
+
+    let summaries = get_persisted_library_summaries(&mut connection, &[])
+        .expect("Expected persisted library summaries after sync");
+    assert_eq!(summaries.len(), 2);
+
+    for summary in summaries {
+        let items = list_media_items(&mut connection, Some(summary.id))
+            .expect("Expected scoped media items for duplicate show library");
+        assert_eq!(items.len(), 3);
+        assert_eq!(items.iter().filter(|item| item.item_type == "show").count(), 1);
+        assert_eq!(items.iter().filter(|item| item.item_type == "season").count(), 1);
+        assert_eq!(items.iter().filter(|item| item.item_type == "episode").count(), 1);
+
+        let files = get_library_files(&mut connection, summary.id)
+            .expect("Expected scoped media files for duplicate show library");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].library_id, summary.id);
+    }
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_latest_metadata_migration_preserves_existing_library_catalog_rows() {
+    let root = unique_temp_dir("latest_metadata_migration_preserves_catalog");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("movie-one.mkv"), b"video").unwrap();
     fs::write(root.join("movie-two.mkv"), b"video").unwrap();
@@ -1532,12 +1628,8 @@ fn test_migration_13_preserves_existing_library_catalog_rows() {
     };
 
     let (mut connection, db_path) = create_test_connection("migration_13_preserves_catalog_db");
-    connection
-        .revert_last_migration(MIGRATIONS)
-        .expect("Expected to revert migration 13");
-
     let persisted = sync_library_catalog(&mut connection, &[library], &FfmpegSettings::default())
-        .expect("Expected populated catalog before re-running migration 13");
+        .expect("Expected populated catalog before re-running latest migration");
     let library_id = persisted[0].id;
     let item_count_before = list_media_items(&mut connection, Some(library_id))
         .unwrap()
@@ -1548,8 +1640,11 @@ fn test_migration_13_preserves_existing_library_catalog_rows() {
     let library_count_before = list_library_settings(&mut connection, &[]).unwrap().len();
 
     connection
+        .revert_last_migration(MIGRATIONS)
+        .expect("Expected to revert latest metadata migration");
+    connection
         .run_pending_migrations(MIGRATIONS)
-        .expect("Expected migration 13 to re-run successfully");
+        .expect("Expected latest metadata migration to re-run successfully");
 
     let libraries_after = list_library_settings(&mut connection, &[]).unwrap();
     let library_id_after = get_persisted_library_summaries(&mut connection, &[])

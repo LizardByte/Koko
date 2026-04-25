@@ -61,6 +61,7 @@ import {
 
 type AppRoute =
   | { page: 'home'; libraryId?: number }
+  | { page: 'browse-detail'; kind: 'category' | 'collection'; key: string; libraryId?: number }
   | { page: 'item'; itemId: number }
   | { page: 'settings'; section?: SettingsSection };
 
@@ -71,6 +72,8 @@ interface BrowseFilter {
   kind: 'category' | 'collection';
   label: string;
   itemIds: number[];
+  overview?: string;
+  artworkUrl?: string;
 }
 
 interface TrailerOption {
@@ -89,6 +92,7 @@ interface AppState {
   home?: MediaHome;
   libraryItems: MediaItemSummary[];
   searchResults: MediaItemSummary[];
+  homePreviewItemId?: number;
   metadataProviders: MetadataProviderStatus[];
   systemActivities: SystemActivity[];
   dashboardItems: MediaItemSummary[];
@@ -158,6 +162,7 @@ const state: AppState = {
   libraries: [],
   libraryItems: [],
   searchResults: [],
+  homePreviewItemId: undefined,
   metadataProviders: [],
   systemActivities: [],
   dashboardItems: [],
@@ -195,6 +200,7 @@ if (!app) {
 const appRoot = app;
 let pendingLibraryRefreshHandle: number | undefined;
 let pendingMetadataRefreshHandle: number | undefined;
+let pendingLiveSearchHandle: number | undefined;
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
   return state.systemActivities.filter((activity) => {
@@ -327,6 +333,25 @@ function parseRoute(): AppRoute {
   const itemMatch = normalizedPath.match(/^\/items\/(\d+)$/);
   if (itemMatch) {
     return { page: 'item', itemId: Number(itemMatch[1]) };
+  }
+
+  const libraryBrowseMatch = normalizedPath.match(/^\/libraries\/(\d+)\/(collections|categories)\/(.+)$/);
+  if (libraryBrowseMatch) {
+    return {
+      page: 'browse-detail',
+      libraryId: Number(libraryBrowseMatch[1]),
+      kind: libraryBrowseMatch[2] === 'collections' ? 'collection' : 'category',
+      key: decodeURIComponent(libraryBrowseMatch[3]),
+    };
+  }
+
+  const browseMatch = normalizedPath.match(/^\/(collections|categories)\/(.+)$/);
+  if (browseMatch) {
+    return {
+      page: 'browse-detail',
+      kind: browseMatch[1] === 'collections' ? 'collection' : 'category',
+      key: decodeURIComponent(browseMatch[2]),
+    };
   }
 
   const libraryMatch = normalizedPath.match(/^\/libraries\/(\d+)$/);
@@ -824,7 +849,7 @@ function joinPaths(paths: string[]): string {
 }
 
 function activeLibraryId(): number | undefined {
-  if (state.route.page === 'home') {
+  if (state.route.page === 'home' || state.route.page === 'browse-detail') {
     return state.route.libraryId;
   }
 
@@ -1161,8 +1186,80 @@ function filteredTopLevelLibraryItems(): MediaItemSummary[] {
 
 function applyBrowseFilter(filter: BrowseFilter): void {
   state.browseFilter = filter;
-  state.homeTab = 'library';
   render();
+}
+
+function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
+  const segment = kind === 'collection' ? 'collections' : 'categories';
+  const encodedKey = encodeURIComponent(key);
+  return typeof activeLibraryId() === 'number'
+    ? `/libraries/${activeLibraryId()}/${segment}/${encodedKey}`
+    : `/${segment}/${encodedKey}`;
+}
+
+function browseFilterForRoute(): BrowseFilter | undefined {
+  if (state.route.page !== 'browse-detail') {
+    return undefined;
+  }
+
+  if (state.route.kind === 'collection') {
+    const collection = collectionSummaries().find((entry) => entry.id === state.route.key);
+    if (!collection) {
+      return undefined;
+    }
+
+    return {
+      kind: 'collection',
+      label: collection.name,
+      itemIds: collection.item_ids,
+      overview: collection.overview,
+      artworkUrl: collection.backdrop_url ?? collection.artwork_url,
+    };
+  }
+
+  const category = categorySummaries().find((entry) => entry.genre === state.route.key);
+  if (!category) {
+    return undefined;
+  }
+
+  return {
+    kind: 'category',
+    label: category.genre,
+    itemIds: category.items.map((item) => item.id),
+    overview: category.items.slice(0, 5).map((item) => item.display_title).join(' · '),
+  };
+}
+
+function renderBrowseFilterDetail(): string {
+  const filter = state.route.page === 'browse-detail' ? browseFilterForRoute() : state.browseFilter;
+  if (!filter) {
+    return '<div class="empty-state">This page is no longer available for the current library.</div>';
+  }
+
+  const allowedIds = new Set(filter.itemIds);
+  const items = topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+  const artworkStyle = filter.artworkUrl
+    ? `style="--home-feature-image: url('${escapeHtml(filter.artworkUrl)}');"`
+    : '';
+
+  return `
+    <section class="browse-filter-detail">
+      <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" ${artworkStyle}>
+        <div class="home-feature-copy">
+          <p class="eyebrow">${escapeHtml(filter.kind === 'collection' ? 'Collection' : 'Category')}</p>
+          <h2>${escapeHtml(filter.label)}</h2>
+          <p>${escapeHtml(filter.overview ?? `${items.length} title${items.length === 1 ? '' : 's'} in this ${filter.kind}.`)}</p>
+          <div class="hero-meta-row">
+            <span class="tag">${items.length} title${items.length === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+        <button type="button" class="secondary-button home-feature-action" id="clear-browse-filter">
+          ${renderButtonContent('Back', 'arrow-left')}
+        </button>
+      </div>
+      <div class="item-grid">${items.map(renderItemCard).join('')}</div>
+    </section>
+  `;
 }
 
 function metadataBadgeMarkup(item: MediaItemSummary): string {
@@ -1204,7 +1301,7 @@ function renderItemCard(item: MediaItemSummary): string {
   const badgeMarkup = metadataBadgeMarkup(item);
 
   return `
-    <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''}" type="button" data-item-id="${item.id}">
+    <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
       <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(item.item_type)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
           ${badgeMarkup}
@@ -1219,23 +1316,77 @@ function renderItemCard(item: MediaItemSummary): string {
   `;
 }
 
-function renderShelfStack(): string {
-  if (state.searchQuery.trim()) {
-    if (!state.searchResults.length) {
-      return '<section class="shelf"><div class="empty-state">No media items matched the current search.</div></section>';
-    }
-
-    return `
-      <section class="shelf">
-        <div class="shelf-header">
-          <h3>Search results</h3>
-          <span>${state.searchResults.length} matches</span>
-        </div>
-        <div class="item-grid">${state.searchResults.map(renderItemCard).join('')}</div>
-      </section>
-    `;
+function homePreviewItem(): MediaItemSummary | undefined {
+  const items = filteredTopLevelLibraryItems();
+  if (!items.length) {
+    return undefined;
   }
 
+  return items.find((item) => item.id === state.homePreviewItemId) ?? items[0];
+}
+
+function renderHomeFeature(): string {
+  const item = homePreviewItem();
+  if (!item) {
+    return '';
+  }
+
+  const backdropUrl = item.backdrop_url ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at) : undefined;
+  const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
+  const library = state.libraries.find((entry) => entry.id === item.library_id);
+  const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
+
+  return `
+    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+      <div class="home-feature-copy">
+        ${logoUrl
+          ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
+          : `<h2>${escapeHtml(item.display_title)}</h2>`}
+        <p>${escapeHtml(item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`)}</p>
+        <div class="hero-meta-row">
+          ${genreMarkup}
+          <span class="tag">${escapeHtml(formatChildCount(item))}</span>
+        </div>
+      </div>
+      <button type="button" class="secondary-button home-feature-action" data-item-id="${item.id}">
+        ${renderButtonContent('Open', 'arrow-right')}
+      </button>
+    </section>
+  `;
+}
+
+function renderSearchResults(): string {
+  if (!state.searchResults.length) {
+    return '<section class="shelf"><div class="empty-state">No media items matched the current search.</div></section>';
+  }
+
+  return `
+    <section class="search-results-section">
+      <div class="shelf-header">
+        <h3>Search results</h3>
+        <span>${state.searchResults.length} matches</span>
+      </div>
+      <div class="search-results-list">
+        ${state.searchResults.map((item) => {
+          const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
+          const library = state.libraries.find((entry) => entry.id === item.library_id);
+          return `
+            <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+              <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
+              <span class="search-result-copy">
+                <strong>${escapeHtml(item.display_title)}</strong>
+                <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)} · ${formatChildCount(item)}`)}</span>
+                ${item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
+              </span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderShelfStack(): string {
   const shelves = state.home?.shelves ?? [];
   if (!shelves.length) {
     return '<section class="shelf"><div class="empty-state">No shelves are available yet. Add a library to get started.</div></section>';
@@ -1249,7 +1400,11 @@ function renderShelfStack(): string {
           <span>${shelf.items.length} items</span>
         </div>
         ${shelf.items.length
-          ? `<div class="shelf-row">${shelf.items.map(renderItemCard).join('')}</div>`
+          ? `<div class="shelf-row-shell">
+              <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+              <div class="shelf-row" data-shelf-row="${escapeHtml(shelf.id)}">${shelf.items.map(renderItemCard).join('')}</div>
+              <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+            </div>`
           : '<div class="empty-state shelf-empty">Nothing here yet.</div>'}
       </section>
     `)
@@ -1266,7 +1421,7 @@ function renderHomeTabs(): string {
   ];
 
   return `
-    <nav class="browse-tabs panel page-panel" aria-label="Browse views">
+    <nav class="browse-tabs" aria-label="Browse views">
       ${tabs.map((tab) => `
         <button
           type="button"
@@ -1452,8 +1607,8 @@ function renderCategoriesTab(): string {
 }
 
 function renderHomeTabContent(): string {
-  if (state.searchQuery.trim()) {
-    return renderShelfStack();
+  if (state.route.page === 'browse-detail' || state.browseFilter) {
+    return renderBrowseFilterDetail();
   }
 
   switch (state.homeTab) {
@@ -1484,36 +1639,9 @@ function renderPageNavbar(eyebrow: string, title: string, description: string, a
 }
 
 function renderHomePage(): string {
-  const activeLibraryName = selectedLibraryName();
-  const library = activeLibrary();
-  const activeLibraryPaths = library?.paths ?? [];
-  const libraryRefreshPending = library ? Boolean(libraryRefreshProgress(library)) : false;
-
   return `
-    ${renderPageNavbar(
-      'Browse',
-      activeLibraryName,
-      activeLibraryPaths.length ? `${activeLibraryPaths.length} folder${activeLibraryPaths.length === 1 ? '' : 's'} connected for this library.` : 'Browse every configured library from one place.',
-      `
-        <div class="content-navbar-actions-stack">
-          <form id="search-form" class="search-form">
-            <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search titles or relative paths" />
-            <button type="submit">${renderButtonContent('Search', 'search')}</button>
-            <button id="reset-search" class="secondary-button" type="button">${renderButtonContent('Reset', 'x')}</button>
-          </form>
-          ${library
-            ? `
-              <div class="content-navbar-actions-row">
-                <button type="button" class="secondary-button" id="scan-active-library">${renderButtonContent('Scan library now', 'refresh-cw')}</button>
-                <button type="button" class="secondary-button" id="refresh-active-library-metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderButtonContent(libraryRefreshPending ? 'Refreshing library metadata' : 'Refresh library metadata', 'refresh-cw')}</button>
-              </div>
-            `
-            : ''}
-        </div>
-      `,
-    )}
-    ${renderHomeTabs()}
-    ${renderLibraryOverview()}
+    ${renderHomeNavbar()}
+    ${state.route.page === 'browse-detail' ? '' : renderHomeFeature()}
     <section class="shelf-stack panel page-panel">${renderHomeTabContent()}</section>
   `;
 }
@@ -1594,6 +1722,65 @@ function renderMetadataSearchProviderControls(): string {
         </label>
       `).join('')}
     </div>
+  `;
+}
+
+function renderSearchPopover(): string {
+  if (!state.searchQuery.trim()) {
+    return '';
+  }
+
+  if (!state.searchResults.length) {
+    return '<div class="search-popover panel"><div class="empty-state tight">No media items matched the current search.</div></div>';
+  }
+
+  return `
+    <div class="search-popover panel">
+      <div class="search-popover-header">
+        <strong>Search results</strong>
+        <span>${state.searchResults.length} match${state.searchResults.length === 1 ? '' : 'es'}</span>
+      </div>
+      <div class="search-results-list compact">
+        ${state.searchResults.slice(0, 8).map((item) => {
+          const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
+          const library = state.libraries.find((entry) => entry.id === item.library_id);
+          return `
+            <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+              <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
+              <span class="search-result-copy">
+                <strong>${escapeHtml(item.display_title)}</strong>
+                <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`)}</span>
+              </span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderHomeNavbar(): string {
+  const library = activeLibrary();
+  const libraryRefreshPending = library ? Boolean(libraryRefreshProgress(library)) : false;
+
+  return `
+    <header class="home-navbar">
+      ${renderHomeTabs()}
+      <div class="home-navbar-tools">
+        <form id="search-form" class="search-form">
+          <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" />
+          <button type="submit" class="icon-button" title="Search" aria-label="Search">${renderIcon('search')}</button>
+          <button id="reset-search" class="icon-button secondary-button" type="button" title="Clear search" aria-label="Clear search">${renderIcon('x')}</button>
+        </form>
+        ${library
+          ? `
+            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library">${renderIcon('refresh-cw')}</button>
+            <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderIcon('refresh-cw')}</button>
+          `
+          : ''}
+      </div>
+      ${renderSearchPopover()}
+    </header>
   `;
 }
 
@@ -1933,7 +2120,7 @@ function renderItemPage(): string {
         <div class="detail-summary item-summary">
           ${logoUrl
             ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
-            : `<h2>${escapeHtml(state.selectedItem.display_title)}</h2>`}
+            : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`}
           ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
           <div class="hero-meta-row">
             ${state.selectedItem.release_year ? `<span class="tag">${state.selectedItem.release_year}</span>` : ''}
@@ -2511,12 +2698,13 @@ async function refreshData(showLoading = true): Promise<void> {
     state.systemActivities = systemActivitiesResponse.activities;
     state.users = canManageUsers() ? await getUsers() : [];
 
-    if (state.route.page === 'home') {
+    if (state.route.page === 'home' || state.route.page === 'browse-detail') {
+      const libraryId = state.route.libraryId;
       const [home, libraryItems, searchResults] = await Promise.all([
-        getHome(state.route.libraryId),
-        getItems(state.route.libraryId),
+        getHome(libraryId),
+        getItems(libraryId),
         state.searchQuery.trim()
-          ? searchItems(state.searchQuery, state.route.libraryId)
+          ? searchItems(state.searchQuery, libraryId)
           : Promise.resolve([]),
       ]);
       state.home = home;
@@ -3073,6 +3261,18 @@ function bindEvents(): void {
     void refreshData();
   });
 
+  document.querySelector<HTMLInputElement>('#search-input')?.addEventListener('input', (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    state.searchQuery = input.value.trim();
+    if (pendingLiveSearchHandle !== undefined) {
+      window.clearTimeout(pendingLiveSearchHandle);
+    }
+    pendingLiveSearchHandle = window.setTimeout(() => {
+      pendingLiveSearchHandle = undefined;
+      void refreshData(false);
+    }, 250);
+  });
+
   document.querySelector<HTMLButtonElement>('#reset-search')?.addEventListener('click', () => {
     state.searchQuery = '';
     void refreshData();
@@ -3103,6 +3303,7 @@ function bindEvents(): void {
       }
 
       state.homeTab = nextTab;
+      state.browseFilter = undefined;
       render();
     });
   });
@@ -3119,11 +3320,7 @@ function bindEvents(): void {
         return;
       }
 
-      applyBrowseFilter({
-        kind: 'category',
-        label: category.genre,
-        itemIds: category.items.map((item) => item.id),
-      });
+      navigateTo(browseDetailPath('category', category.genre));
     });
   });
 
@@ -3139,17 +3336,13 @@ function bindEvents(): void {
         return;
       }
 
-      applyBrowseFilter({
-        kind: 'collection',
-        label: collection.name,
-        itemIds: collection.item_ids,
-      });
+      navigateTo(browseDetailPath('collection', collection.id));
     });
   });
 
   document.querySelector<HTMLButtonElement>('#clear-browse-filter')?.addEventListener('click', () => {
     state.browseFilter = undefined;
-    render();
+    navigateTo(typeof activeLibraryId() === 'number' ? `/libraries/${activeLibraryId()}` : '/');
   });
 
   document.querySelectorAll<HTMLElement>('[data-item-id]').forEach((button) => {
@@ -3435,6 +3628,41 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>('#refresh-log-viewer')?.addEventListener('click', async () => {
     await refreshLogsView();
   });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-shelf-scroll]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const [shelfId, directionValue] = (button.dataset.shelfScroll ?? '').split(':');
+      const direction = Number(directionValue);
+      const row = document.querySelector<HTMLElement>(`[data-shelf-row="${CSS.escape(shelfId)}"]`);
+      if (!row || !Number.isFinite(direction)) {
+        return;
+      }
+      row.scrollBy({ left: direction * Math.max(320, row.clientWidth * 0.8), behavior: 'smooth' });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach((element) => {
+    const updatePreview = (): void => {
+      const itemId = Number(element.dataset.previewItemId);
+      if (!Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
+        return;
+      }
+      state.homePreviewItemId = itemId;
+      const root = document.querySelector<HTMLElement>('.home-feature');
+      if (root) {
+        root.outerHTML = renderHomeFeature();
+        createIcons({ icons });
+        document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.addEventListener('click', () => {
+          const nextItemId = Number(document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.dataset.itemId);
+          if (Number.isFinite(nextItemId)) {
+            navigateTo(`/items/${nextItemId}`);
+          }
+        });
+      }
+    };
+    element.addEventListener('mouseenter', updatePreview);
+    element.addEventListener('focus', updatePreview);
+  });
   document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
     const library = activeLibrary();
     if (!library) {
@@ -3635,7 +3863,7 @@ function syncAddLibraryProviderOptions(): void {
 
 window.addEventListener('popstate', () => {
   state.route = parseRoute();
-  if (state.route.page === 'home') {
+  if (state.route.page === 'home' || state.route.page === 'browse-detail') {
     state.homeTab = defaultHomeTab(state.route);
     state.browseFilter = undefined;
   }

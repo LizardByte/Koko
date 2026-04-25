@@ -17,7 +17,7 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use strsim::normalized_levenshtein;
 
 mod providers;
@@ -102,7 +102,7 @@ pub struct MetadataProviderStatus {
 }
 
 /// Stored metadata match summary for one media item.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct ItemMetadataSummary {
     /// Stable row identifier for the metadata link.
     pub id: i32,
@@ -126,6 +126,20 @@ pub struct ItemMetadataSummary {
     pub match_state: String,
     /// Raw stored provider payload, when available.
     pub provider_payload_json: Option<String>,
+    /// Provider-supplied title logo URL, when available.
+    pub logo_url: Option<String>,
+    /// Cached title logo path, when available.
+    pub cached_logo_path: Option<String>,
+    /// Provider genre labels stored directly for querying and UI use.
+    pub genres: Vec<String>,
+    /// Provider-supplied user/community rating, when available.
+    pub rating: Option<f32>,
+    /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
+    pub content_rating: Option<String>,
+    /// Human-friendly trailer title, when available.
+    pub trailer_title: Option<String>,
+    /// Browser-embeddable trailer URL, when available.
+    pub trailer_url: Option<String>,
     /// Koko locale key for this stored metadata row.
     pub locale_key: String,
     /// Provider-specific locale key used to fetch this row.
@@ -190,6 +204,45 @@ pub struct MetadataCollectionSummary {
     pub item_ids: Vec<i32>,
     /// Number of unique root items in the collection.
     pub item_count: usize,
+}
+
+/// Koko's provider-neutral metadata item kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataItemKind {
+    /// A feature-length movie.
+    Movie,
+    /// A television or episodic series.
+    Show,
+    /// A season within a show.
+    Season,
+    /// An episode within a season.
+    Episode,
+    /// A provider collection or list that groups items.
+    Collection,
+    /// A person, actor, creator, or crew member.
+    Person,
+    /// A production or distribution company.
+    Company,
+    /// A provider award record.
+    Award,
+    /// A generic metadata item when no narrower Koko kind applies.
+    Item,
+}
+
+impl MetadataItemKind {
+    fn asset_directory(self) -> &'static str {
+        match self {
+            MetadataItemKind::Movie => "movies",
+            MetadataItemKind::Show => "shows",
+            MetadataItemKind::Season => "seasons",
+            MetadataItemKind::Episode => "episodes",
+            MetadataItemKind::Collection => "collections",
+            MetadataItemKind::Person => "people",
+            MetadataItemKind::Company => "companies",
+            MetadataItemKind::Award => "awards",
+            MetadataItemKind::Item => "items",
+        }
+    }
 }
 
 /// Stored metadata snapshot fetched from a provider.
@@ -299,11 +352,17 @@ pub fn provider_locale_key(
     match provider_id {
         MetadataProviderId::Tvdb => match normalized.as_str() {
             "en-GB" | "en-US" => "eng",
+            "es" => "spa",
             "es-ES" => "spa",
+            "fr" => "fra",
             "fr-FR" => "fra",
+            "de" => "deu",
             "de-DE" => "deu",
+            "it" => "ita",
             "it-IT" => "ita",
+            "ja" => "jpn",
             "ja-JP" => "jpn",
+            "pt" => "por",
             "pt-BR" => "por",
             _ => "eng",
         }
@@ -495,36 +554,85 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
     locale_key: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
     let locale_key = normalize_locale_key(locale_key);
-    let provider_locale = provider_locale_key(provider_id.clone(), &locale_key);
-    let mut localized_settings = settings.clone();
-    if let Some(provider) = localized_settings
-        .providers
-        .iter_mut()
-        .find(|provider| provider.id == provider_id)
-    {
-        provider.language = provider_locale.clone();
+    let mut last_error = None;
+    for fetch_locale in locale_fallback_chain(&locale_key) {
+        let provider_locale = provider_locale_key(provider_id.clone(), &fetch_locale);
+        let mut localized_settings = settings.clone();
+        if let Some(provider) = localized_settings
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        {
+            provider.language = provider_locale.clone();
+        }
+
+        let result = match provider_id {
+            MetadataProviderId::Tmdb => {
+                fetch_tmdb_metadata_snapshot(&localized_settings, external_id, media_type).await
+            }
+            MetadataProviderId::Tvdb => {
+                fetch_tvdb_metadata_snapshot(&localized_settings, external_id, media_type).await
+            }
+            _ => Err(format!(
+                "{} metadata fetch is not implemented.",
+                provider_display_name(&provider_id)
+            )),
+        };
+
+        match result {
+            Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
+                snapshot.locale_key = locale_key;
+                snapshot.provider_locale_key = Some(provider_locale);
+                return Ok(snapshot);
+            }
+            Ok(mut snapshot) => {
+                snapshot.locale_key = locale_key.clone();
+                snapshot.provider_locale_key = Some(provider_locale);
+                last_error = Some("metadata provider returned an empty localized snapshot".into());
+            }
+            Err(error) => last_error = Some(error),
+        }
     }
 
-    match provider_id {
-        MetadataProviderId::Tmdb => {
-            let mut snapshot =
-                fetch_tmdb_metadata_snapshot(&localized_settings, external_id, media_type).await?;
-            snapshot.locale_key = locale_key;
-            snapshot.provider_locale_key = Some(provider_locale);
-            Ok(snapshot)
-        }
-        MetadataProviderId::Tvdb => {
-            let mut snapshot =
-                fetch_tvdb_metadata_snapshot(&localized_settings, external_id, media_type).await?;
-            snapshot.locale_key = locale_key;
-            snapshot.provider_locale_key = Some(provider_locale);
-            Ok(snapshot)
-        }
-        _ => Err(format!(
+    Err(last_error.unwrap_or_else(|| {
+        format!(
             "{} metadata fetch is not implemented.",
             provider_display_name(&provider_id)
-        )),
+        )
+    }))
+}
+
+fn locale_fallback_chain(locale_key: &str) -> Vec<String> {
+    let normalized = normalize_locale_key(locale_key);
+    let mut locales = vec![normalized.clone()];
+    if let Some(language) = normalized
+        .split('-')
+        .next()
+        .filter(|language| !language.is_empty() && *language != normalized && *language != "en")
+    {
+        locales.push(language.to_string());
     }
+    if !locales
+        .iter()
+        .any(|locale| locale == DEFAULT_METADATA_LOCALE)
+    {
+        locales.push(DEFAULT_METADATA_LOCALE.to_string());
+    }
+    locales
+}
+
+fn snapshot_has_presentable_metadata(snapshot: &StoredMetadataSnapshot) -> bool {
+    snapshot
+        .title
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || snapshot
+            .overview
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || snapshot.artwork_url.is_some()
+        || snapshot.backdrop_url.is_some()
+        || snapshot.provider_payload_json.is_some()
 }
 
 /// Fetch one provider season snapshot for a linked show descendant.
@@ -871,23 +979,35 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
                 ) && row.backdrop_url == snapshot.backdrop_url
             })
             .unwrap_or(false);
+        let parsed_payload = snapshot
+            .provider_payload_json
+            .as_deref()
+            .and_then(|payload| serde_json::from_str::<Value>(payload).ok());
+        let logo_url = parsed_payload.as_ref().and_then(provider_logo_url);
+        let keep_cached_logo = existing
+            .as_ref()
+            .map(|row| {
+                !metadata_refresh_target_changed(
+                    row,
+                    snapshot.provider_id.as_storage_value(),
+                    &snapshot.external_id,
+                    snapshot.media_type.as_deref(),
+                ) && row.logo_url == logo_url
+            })
+            .unwrap_or(false);
+        let genres = parsed_payload
+            .as_ref()
+            .map(provider_genres)
+            .unwrap_or_default();
 
+        let trailer = parsed_payload.as_ref().and_then(tmdb_trailer_entry);
         let payload = NewItemMetadataLink {
             media_item_id: item_id,
             provider_id: snapshot.provider_id.as_storage_value().to_string(),
             external_id: snapshot.external_id.clone(),
             title: snapshot.title.clone(),
             overview: snapshot.overview.clone(),
-            tagline: snapshot
-                .provider_payload_json
-                .as_deref()
-                .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
-                .and_then(|payload| {
-                    payload
-                        .get("tagline")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                }),
+            tagline: parsed_payload.as_ref().and_then(provider_tagline),
             artwork_url: snapshot.artwork_url.clone(),
             backdrop_url: snapshot.backdrop_url.clone(),
             release_year: snapshot.release_year,
@@ -895,6 +1015,31 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             relation_kind: "primary".into(),
             match_state: "linked".into(),
             provider_payload_json: snapshot.provider_payload_json.clone(),
+            logo_url,
+            cached_logo_path: if keep_cached_logo {
+                existing
+                    .as_ref()
+                    .and_then(|row| row.cached_logo_path.clone())
+            } else {
+                None
+            },
+            genres_json: serde_json::to_string(&genres).ok(),
+            rating: parsed_payload.as_ref().and_then(provider_rating),
+            content_rating: parsed_payload.as_ref().and_then(provider_content_rating),
+            trailer_title: trailer
+                .and_then(|entry| entry.get("name"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            trailer_url: trailer
+                .and_then(|entry| {
+                    entry
+                        .get("site")
+                        .and_then(Value::as_str)
+                        .zip(entry.get("key").and_then(Value::as_str))
+                })
+                .and_then(|(site, key)| youtube_embed_url(site, key)),
             locale_key: snapshot.locale_key.clone(),
             provider_locale_key: snapshot.provider_locale_key.clone(),
             cached_artwork_path: if keep_cached_artwork {
@@ -1002,6 +1147,15 @@ pub fn set_item_metadata_refresh_state(
             provider_payload_json: existing
                 .as_ref()
                 .and_then(|row| row.provider_payload_json.clone()),
+            logo_url: existing.as_ref().and_then(|row| row.logo_url.clone()),
+            cached_logo_path: existing
+                .as_ref()
+                .and_then(|row| row.cached_logo_path.clone()),
+            genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
+            rating: existing.as_ref().and_then(|row| row.rating),
+            content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
+            trailer_title: existing.as_ref().and_then(|row| row.trailer_title.clone()),
+            trailer_url: existing.as_ref().and_then(|row| row.trailer_url.clone()),
             locale_key: existing
                 .as_ref()
                 .map(|row| row.locale_key.clone())
@@ -1073,6 +1227,15 @@ pub fn list_metadata_collection_summaries(
     conn: &mut SqliteConnection,
     library_id: Option<i32>,
 ) -> Result<Vec<MetadataCollectionSummary>, diesel::result::Error> {
+    list_metadata_collection_summaries_with_preferred_languages(conn, library_id, &[])
+}
+
+/// Return collection summaries using only each item's preferred metadata locale.
+pub fn list_metadata_collection_summaries_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<Vec<MetadataCollectionSummary>, diesel::result::Error> {
     use crate::db::schema::item_metadata_collections::dsl as collection_dsl;
     use crate::db::schema::item_metadata_links::dsl as link_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
@@ -1095,14 +1258,51 @@ pub fn list_metadata_collection_summaries(
         .collect::<HashMap<_, _>>();
     let link_rows = link_dsl::item_metadata_links
         .filter(link_dsl::media_item_id.eq_any(items_by_id.keys().copied().collect::<Vec<_>>()))
+        .filter(link_dsl::relation_kind.eq("primary"))
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?;
     if link_rows.is_empty() {
         return Ok(Vec::new());
     }
 
-    let links_by_id = link_rows
-        .into_iter()
+    let mut languages = preferred_languages
+        .iter()
+        .map(|language| normalize_locale_key(language))
+        .filter(|language| !language.is_empty())
+        .collect::<Vec<_>>();
+    if !languages
+        .iter()
+        .any(|language| language == DEFAULT_METADATA_LOCALE)
+    {
+        languages.push(DEFAULT_METADATA_LOCALE.to_string());
+    }
+    let language_rank = languages
+        .iter()
+        .enumerate()
+        .map(|(index, language)| (language.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_rank = languages.len();
+    let mut preferred_links_by_item_id = HashMap::<i32, (usize, ItemMetadataLink)>::new();
+    for link in link_rows {
+        let rank = language_rank
+            .get(&normalize_locale_key(&link.locale_key))
+            .copied()
+            .unwrap_or(fallback_rank);
+        match preferred_links_by_item_id.entry(link.media_item_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert((rank, link));
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if rank < entry.get().0 {
+                    entry.insert((rank, link));
+                }
+            }
+        }
+    }
+
+    let links_by_id = preferred_links_by_item_id
+        .into_values()
+        .map(|(_rank, link)| link)
         .map(|link| (link.id, link))
         .collect::<HashMap<_, _>>();
     let collection_rows = collection_dsl::item_metadata_collections
@@ -1241,31 +1441,44 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         .as_deref()
         .and_then(|payload| serde_json::from_str::<Value>(payload).ok());
 
-    let tagline = parsed_payload
-        .as_ref()
-        .and_then(|payload| payload.get("tagline"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let overview = parsed_payload
-        .as_ref()
-        .and_then(provider_overview)
-        .or_else(|| link.overview.clone());
-    let genres = parsed_payload
-        .as_ref()
-        .and_then(|payload| payload.get("genres"))
-        .and_then(Value::as_array)
-        .map(|genres| {
-            genres
-                .iter()
-                .filter_map(|genre| genre.get("name").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
+    let tagline = link.tagline.clone().or_else(|| {
+        parsed_payload
+            .as_ref()
+            .and_then(|payload| payload.get("tagline"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
+    let overview = link
+        .overview
+        .clone()
+        .or_else(|| parsed_payload.as_ref().and_then(provider_overview));
+    let genres = link
+        .genres_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .filter(|genres| !genres.is_empty())
+        .or_else(|| parsed_payload.as_ref().map(provider_genres))
         .unwrap_or_default();
+    let genres = if genres.is_empty() {
+        parsed_payload
+            .as_ref()
+            .and_then(|payload| payload.get("genres"))
+            .and_then(Value::as_array)
+            .map(|genres| {
+                genres
+                    .iter()
+                    .filter_map(|genre| genre.get("name").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        genres
+    };
     let release_year = parsed_payload
         .as_ref()
         .and_then(|payload| {
@@ -1277,9 +1490,17 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         })
         .and_then(|value| extract_release_year(Some(value)))
         .or(link.release_year);
-    let logo_url = parsed_payload.as_ref().and_then(provider_logo_url);
-    let rating = parsed_payload.as_ref().and_then(provider_rating);
-    let content_rating = parsed_payload.as_ref().and_then(provider_content_rating);
+    let logo_url = link
+        .logo_url
+        .clone()
+        .or_else(|| parsed_payload.as_ref().and_then(provider_logo_url));
+    let rating = link
+        .rating
+        .or_else(|| parsed_payload.as_ref().and_then(provider_rating));
+    let content_rating = link
+        .content_rating
+        .clone()
+        .or_else(|| parsed_payload.as_ref().and_then(provider_content_rating));
 
     LinkedMetadataPresentation {
         tagline,
@@ -1292,24 +1513,28 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         logo_url,
         rating,
         content_rating,
-        trailer_title: parsed_payload
-            .as_ref()
-            .and_then(tmdb_trailer_entry)
-            .and_then(|entry| entry.get("name"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        trailer_url: parsed_payload
-            .as_ref()
-            .and_then(tmdb_trailer_entry)
-            .and_then(|entry| {
-                entry
-                    .get("site")
-                    .and_then(Value::as_str)
-                    .zip(entry.get("key").and_then(Value::as_str))
-            })
-            .and_then(|(site, key)| youtube_embed_url(site, key)),
+        trailer_title: link.trailer_title.clone().or_else(|| {
+            parsed_payload
+                .as_ref()
+                .and_then(tmdb_trailer_entry)
+                .and_then(|entry| entry.get("name"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        }),
+        trailer_url: link.trailer_url.clone().or_else(|| {
+            parsed_payload
+                .as_ref()
+                .and_then(tmdb_trailer_entry)
+                .and_then(|entry| {
+                    entry
+                        .get("site")
+                        .and_then(Value::as_str)
+                        .zip(entry.get("key").and_then(Value::as_str))
+                })
+                .and_then(|(site, key)| youtube_embed_url(site, key))
+        }),
     }
 }
 
@@ -1335,6 +1560,131 @@ fn provider_logo_url(payload: &Value) -> Option<String> {
                     })
             })
         })
+        .or_else(|| provider_tvdb_artwork(payload, &[23, 25, 5, 18]))
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| provider_tvdb_artwork(data, &[23, 25, 5, 18]))
+        })
+}
+
+fn provider_tagline(payload: &Value) -> Option<String> {
+    text_field(payload, &["tagline"])
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| text_field(data, &["tagline"]))
+        })
+        .or_else(|| {
+            payload
+                .get("koko_translation")
+                .and_then(|translation| text_field(translation, &["tagline"]))
+        })
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| data.get("koko_translation"))
+                .and_then(|translation| text_field(translation, &["tagline"]))
+        })
+}
+
+fn provider_tvdb_artwork(
+    payload: &Value,
+    preferred_types: &[i64],
+) -> Option<String> {
+    let artworks = payload
+        .get("artworks")
+        .or_else(|| payload.get("artwork"))
+        .and_then(Value::as_array)?;
+    preferred_types.iter().find_map(|preferred_type| {
+        artworks
+            .iter()
+            .filter(|artwork| artwork.get("type").and_then(Value::as_i64) == Some(*preferred_type))
+            .max_by(|left, right| {
+                let left_score = left.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                let right_score = right.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                left_score
+                    .partial_cmp(&right_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .and_then(|artwork| {
+                artwork
+                    .get("image")
+                    .or_else(|| artwork.get("thumbnail"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+    })
+}
+
+fn provider_genres(payload: &Value) -> Vec<String> {
+    let mut genres = Vec::new();
+    collect_provider_genres(payload.get("genres"), &mut genres);
+    if let Some(data) = payload.get("data") {
+        collect_provider_genres(data.get("genres"), &mut genres);
+    }
+    genres
+}
+
+fn collect_provider_genres(
+    value: Option<&Value>,
+    genres: &mut Vec<String>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    match value {
+        Value::Array(entries) => {
+            for entry in entries {
+                let genre = entry
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        entry
+                            .get("name")
+                            .or_else(|| entry.get("label"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    });
+                if let Some(genre) = genre {
+                    push_unique_genre(genres, genre);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                if let Some(genre) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                {
+                    push_unique_genre(genres, genre);
+                }
+            }
+        }
+        Value::String(value) => push_unique_genre(genres, value.trim().to_string()),
+        _ => {}
+    }
+}
+
+fn push_unique_genre(
+    genres: &mut Vec<String>,
+    genre: String,
+) {
+    if !genre.is_empty()
+        && !genres
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&genre))
+    {
+        genres.push(genre);
+    }
 }
 
 fn provider_rating(payload: &Value) -> Option<f32> {
@@ -1391,6 +1741,27 @@ fn provider_content_rating(payload: &Value) -> Option<String> {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         })
+        .or_else(|| {
+            payload
+                .get("contentRatings")
+                .or_else(|| payload.get("content_ratings"))
+                .and_then(Value::as_array)
+                .and_then(|ratings| {
+                    ratings
+                        .iter()
+                        .find(|rating| {
+                            rating.get("country").and_then(Value::as_str) == Some("usa")
+                                || rating.get("country").and_then(Value::as_str) == Some("us")
+                                || rating.get("country").and_then(Value::as_str) == Some("US")
+                        })
+                        .or_else(|| ratings.first())
+                })
+                .and_then(|rating| rating.get("name").or_else(|| rating.get("fullName")))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 /// Persist stored metadata payload and cached artwork into the managed item asset structure.
@@ -1398,12 +1769,13 @@ pub async fn persist_item_metadata_assets(
     snapshot: &StoredMetadataSnapshot,
     _item_id: i32,
     data_dir: &str,
-) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
+) -> Result<(Option<PathBuf>, Option<PathBuf>, Option<PathBuf>), String> {
     let item_dir = managed_metadata_asset_dir(
         data_dir,
         snapshot.provider_id.clone(),
         &snapshot.external_id,
         snapshot.media_type.as_deref(),
+        &snapshot.locale_key,
     );
     fs::create_dir_all(&item_dir).map_err(|error| error.to_string())?;
 
@@ -1412,6 +1784,12 @@ pub async fn persist_item_metadata_assets(
         fs::write(item_dir.join(metadata_file_name), payload_json)
             .map_err(|error| error.to_string())?;
     }
+
+    let parsed_payload = snapshot
+        .provider_payload_json
+        .as_deref()
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok());
+    let logo_url = parsed_payload.as_ref().and_then(provider_logo_url);
 
     let poster_cache_key = format!("{}_poster", snapshot.provider_id.as_storage_value());
     let poster_path = if let Some(url) = &snapshot.artwork_url {
@@ -1427,39 +1805,56 @@ pub async fn persist_item_metadata_assets(
         purge_stale_cached_artwork_files(&item_dir, &backdrop_cache_key, None)?;
         None
     };
+    let logo_cache_key = format!("{}_logo", snapshot.provider_id.as_storage_value());
+    let logo_path = if let Some(url) = logo_url {
+        try_cache_item_artwork(&url, &item_dir, &logo_cache_key).await
+    } else {
+        purge_stale_cached_artwork_files(&item_dir, &logo_cache_key, None)?;
+        None
+    };
 
-    Ok((poster_path, backdrop_path))
+    Ok((poster_path, backdrop_path, logo_path))
 }
 
-/// Return the deterministic provider-guid based asset bundle path for metadata payloads.
+/// Return the deterministic provider-uuid based asset path for metadata payloads.
 pub fn managed_metadata_asset_dir(
     data_dir: &str,
     provider_id: MetadataProviderId,
     external_id: &str,
     media_type: Option<&str>,
+    locale_key: &str,
 ) -> PathBuf {
-    let guid = format!("{}:{}", provider_id.as_storage_value(), external_id.trim());
-    let full_hash = format!("{:x}", Sha1::digest(guid.as_bytes()));
-    let (shard, bundle_name) = full_hash.split_at(1);
+    let item_kind = providers::metadata_item_kind(provider_id.clone(), media_type);
+    let uuid = metadata_asset_uuid(provider_id, external_id, locale_key);
+    let full_hash = Sha256::digest(uuid.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let (shard, directory_name) = full_hash.split_at(1);
 
     Path::new(data_dir)
         .join("metadata")
-        .join(metadata_asset_type_directory(media_type))
+        .join(metadata_asset_type_directory(item_kind))
         .join(shard)
-        .join(format!("{bundle_name}.bundle"))
+        .join(directory_name)
 }
 
-fn metadata_asset_type_directory(media_type: Option<&str>) -> &'static str {
-    match media_type
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "movie" => "movies",
-        "tv" | "series" | "show" | "season" | "episode" => "tv",
-        _ => "items",
-    }
+/// Return the stable provider UUID used to derive metadata paths.
+pub fn metadata_asset_uuid(
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    locale_key: &str,
+) -> String {
+    format!(
+        "{}:{}:{}",
+        provider_id.as_storage_value(),
+        external_id.trim(),
+        normalize_locale_key(locale_key)
+    )
+}
+
+fn metadata_asset_type_directory(item_kind: MetadataItemKind) -> &'static str {
+    item_kind.asset_directory()
 }
 
 /// Persist a cached artwork path for a metadata link.
@@ -1495,19 +1890,32 @@ pub fn update_cached_artwork_path(
                 )
                 .execute(conn)?;
             }
+            ArtworkKind::Logo => {
+                diesel::update(
+                    metadata_links_dsl::item_metadata_links
+                        .filter(metadata_links_dsl::id.eq(link_id)),
+                )
+                .set(
+                    metadata_links_dsl::cached_logo_path
+                        .eq(cache_path.to_string_lossy().to_string()),
+                )
+                .execute(conn)?;
+            }
         }
 
         Ok(())
     })
 }
 
-/// Poster or backdrop artwork kind.
+/// Poster, backdrop, or title logo artwork kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtworkKind {
     /// Poster or cover art.
     Poster,
     /// Background or hero artwork.
     Backdrop,
+    /// Title logo artwork.
+    Logo,
 }
 
 impl ArtworkKind {
@@ -1515,6 +1923,7 @@ impl ArtworkKind {
     pub fn from_query_value(value: Option<&str>) -> Self {
         match value.unwrap_or_default() {
             "backdrop" => ArtworkKind::Backdrop,
+            "logo" => ArtworkKind::Logo,
             _ => ArtworkKind::Poster,
         }
     }
@@ -1746,6 +2155,17 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         media_type: link.media_type,
         match_state: link.match_state,
         provider_payload_json: link.provider_payload_json,
+        logo_url: link.logo_url,
+        cached_logo_path: link.cached_logo_path,
+        genres: link
+            .genres_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .unwrap_or_default(),
+        rating: link.rating,
+        content_rating: link.content_rating,
+        trailer_title: link.trailer_title,
+        trailer_url: link.trailer_url,
         locale_key: link.locale_key,
         provider_locale_key: link.provider_locale_key,
         cached_artwork_path: link.cached_artwork_path,
@@ -1839,17 +2259,7 @@ fn translated_text_value(value: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            text_field(
-                value,
-                &[
-                    "overview",
-                    "description",
-                    "name",
-                    "title",
-                ],
-            )
-        })
+        .or_else(|| text_field(value, &["overview", "description"]))
 }
 
 fn tmdb_trailer_entry(payload: &Value) -> Option<&Value> {
@@ -2419,6 +2829,13 @@ mod tests {
                 })
                 .to_string(),
             ),
+            logo_url: None,
+            cached_logo_path: None,
+            genres_json: None,
+            rating: None,
+            content_rating: None,
+            trailer_title: None,
+            trailer_url: None,
             locale_key: "en-US".into(),
             provider_locale_key: Some("eng".into()),
             cached_artwork_path: None,
@@ -2435,6 +2852,62 @@ mod tests {
             presentation_from_metadata_link(&link).overview.as_deref(),
             Some("English TVDB description.")
         );
+    }
+
+    #[test]
+    fn presentation_ignores_tvdb_translation_names_when_overview_is_missing() {
+        let link = ItemMetadataLink {
+            id: 1,
+            media_item_id: 1,
+            provider_id: "tvdb".into(),
+            external_id: "123".into(),
+            title: Some("Example".into()),
+            overview: Some("Stored overview wins.".into()),
+            tagline: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            media_type: Some("movie".into()),
+            relation_kind: "primary".into(),
+            match_state: "linked".into(),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "data": {
+                        "translations": [
+                            {
+                                "language": "rus",
+                                "name": "rus"
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+            logo_url: None,
+            cached_logo_path: None,
+            genres_json: Some(serde_json::json!(["Drama", "Mystery"]).to_string()),
+            rating: None,
+            content_rating: None,
+            trailer_title: None,
+            trailer_url: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            cached_artwork_path: None,
+            cached_backdrop_path: None,
+            refresh_state: "fresh".into(),
+            refresh_interval_seconds: 0,
+            last_refreshed_at: None,
+            next_refresh_at: None,
+            refresh_error: None,
+            updated_at: None,
+        };
+
+        let presentation = presentation_from_metadata_link(&link);
+        assert_eq!(
+            presentation.overview.as_deref(),
+            Some("Stored overview wins.")
+        );
+        assert_eq!(presentation.genres, vec!["Drama", "Mystery"]);
     }
 
     #[test]

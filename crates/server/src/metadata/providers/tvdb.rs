@@ -709,14 +709,29 @@ fn payload_with_translation(
     payload: &Value,
     translation: Option<&Value>,
 ) -> Value {
-    let Some(translation) = translation else {
-        return payload.clone();
-    };
     let mut payload = payload.clone();
     if let Some(data) = payload.get_mut("data").and_then(Value::as_object_mut) {
-        data.insert("koko_translation".into(), translation.clone());
+        if let Some(translation) = translation {
+            data.insert("koko_translation".into(), translation.clone());
+            if let Some(language) = translation
+                .get("language")
+                .or_else(|| translation.get("languageCode"))
+                .and_then(Value::as_str)
+            {
+                data.insert("koko_provider_language".into(), Value::String(language.to_string()));
+            }
+        }
     } else if let Some(map) = payload.as_object_mut() {
-        map.insert("koko_translation".into(), translation.clone());
+        if let Some(translation) = translation {
+            map.insert("koko_translation".into(), translation.clone());
+            if let Some(language) = translation
+                .get("language")
+                .or_else(|| translation.get("languageCode"))
+                .and_then(Value::as_str)
+            {
+                map.insert("koko_provider_language".into(), Value::String(language.to_string()));
+            }
+        }
     }
     payload
 }

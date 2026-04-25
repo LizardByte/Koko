@@ -61,7 +61,7 @@ import {
 
 type AppRoute =
   | { page: 'home'; libraryId?: number }
-  | { page: 'browse-detail'; kind: 'category' | 'collection'; key: string; libraryId?: number }
+  | { page: 'browse-detail'; kind: 'category' | 'collection' | 'playlist'; key: string; libraryId?: number }
   | { page: 'item'; itemId: number }
   | { page: 'settings'; section?: SettingsSection };
 
@@ -69,7 +69,7 @@ type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | '
 type SettingsSection = 'general' | 'libraries' | 'dashboard' | 'logs';
 
 interface BrowseFilter {
-  kind: 'category' | 'collection';
+  kind: 'category' | 'collection' | 'playlist';
   label: string;
   itemIds: number[];
   overview?: string;
@@ -134,7 +134,9 @@ type AppIconName =
   | 'arrow-left'
   | 'book'
   | 'clapperboard'
+  | 'database-zap'
   | 'film'
+  | 'folder-sync'
   | 'house'
   | 'image'
   | 'layout-grid'
@@ -201,6 +203,7 @@ const appRoot = app;
 let pendingLibraryRefreshHandle: number | undefined;
 let pendingMetadataRefreshHandle: number | undefined;
 let pendingLiveSearchHandle: number | undefined;
+const activeGamepadButtons = new Set<string>();
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
   return state.systemActivities.filter((activity) => {
@@ -335,21 +338,29 @@ function parseRoute(): AppRoute {
     return { page: 'item', itemId: Number(itemMatch[1]) };
   }
 
-  const libraryBrowseMatch = normalizedPath.match(/^\/libraries\/(\d+)\/(collections|categories)\/(.+)$/);
+  const libraryBrowseMatch = normalizedPath.match(/^\/libraries\/(\d+)\/items\/(collections|categories|playlists)\/(.+)$/);
   if (libraryBrowseMatch) {
     return {
       page: 'browse-detail',
       libraryId: Number(libraryBrowseMatch[1]),
-      kind: libraryBrowseMatch[2] === 'collections' ? 'collection' : 'category',
+      kind: libraryBrowseMatch[2] === 'collections'
+        ? 'collection'
+        : libraryBrowseMatch[2] === 'playlists'
+          ? 'playlist'
+          : 'category',
       key: decodeURIComponent(libraryBrowseMatch[3]),
     };
   }
 
-  const browseMatch = normalizedPath.match(/^\/(collections|categories)\/(.+)$/);
+  const browseMatch = normalizedPath.match(/^\/items\/(collections|categories|playlists)\/(.+)$/);
   if (browseMatch) {
     return {
       page: 'browse-detail',
-      kind: browseMatch[1] === 'collections' ? 'collection' : 'category',
+      kind: browseMatch[1] === 'collections'
+        ? 'collection'
+        : browseMatch[1] === 'playlists'
+          ? 'playlist'
+          : 'category',
       key: decodeURIComponent(browseMatch[2]),
     };
   }
@@ -860,6 +871,29 @@ function activeLibrary(): MediaLibrary | undefined {
   return state.libraries.find((library) => library.id === activeLibraryId());
 }
 
+function setButtonBusy(button: HTMLButtonElement | null | undefined, busy: boolean): void {
+  if (!button) {
+    return;
+  }
+  button.disabled = busy;
+  button.classList.toggle('is-busy', busy);
+  button.setAttribute('aria-busy', busy ? 'true' : 'false');
+}
+
+function activeLibrarySettings(): MediaLibrarySettings | undefined {
+  const library = activeLibrary();
+  if (!library || !state.settingsResponse) {
+    return undefined;
+  }
+
+  return state.settingsResponse.settings.media.libraries.find((settings) => {
+    const paths = [settings.path, ...settings.paths].map((path) => path.trim()).filter(Boolean);
+    return settings.name === library.name
+      || paths.includes(library.path)
+      || library.paths.some((path) => paths.includes(path));
+  });
+}
+
 function persistedLibraryForSettings(library: MediaLibrarySettings): MediaLibrary | undefined {
   const configuredPaths = [library.path, ...library.paths]
     .map((path) => path.trim())
@@ -1184,17 +1218,12 @@ function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   return items.filter((item) => allowedIds.has(item.id));
 }
 
-function applyBrowseFilter(filter: BrowseFilter): void {
-  state.browseFilter = filter;
-  render();
-}
-
 function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
-  const segment = kind === 'collection' ? 'collections' : 'categories';
+  const segment = kind === 'collection' ? 'collections' : kind === 'playlist' ? 'playlists' : 'categories';
   const encodedKey = encodeURIComponent(key);
   return typeof activeLibraryId() === 'number'
-    ? `/libraries/${activeLibraryId()}/${segment}/${encodedKey}`
-    : `/${segment}/${encodedKey}`;
+    ? `/libraries/${activeLibraryId()}/items/${segment}/${encodedKey}`
+    : `/items/${segment}/${encodedKey}`;
 }
 
 function browseFilterForRoute(): BrowseFilter | undefined {
@@ -1214,6 +1243,15 @@ function browseFilterForRoute(): BrowseFilter | undefined {
       itemIds: collection.item_ids,
       overview: collection.overview,
       artworkUrl: collection.backdrop_url ?? collection.artwork_url,
+    };
+  }
+
+  if (state.route.kind === 'playlist') {
+    return {
+      kind: 'playlist',
+      label: state.route.key,
+      itemIds: [],
+      overview: 'No playlist items are available yet.',
     };
   }
 
@@ -1246,7 +1284,7 @@ function renderBrowseFilterDetail(): string {
     <section class="browse-filter-detail">
       <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" ${artworkStyle}>
         <div class="home-feature-copy">
-          <p class="eyebrow">${escapeHtml(filter.kind === 'collection' ? 'Collection' : 'Category')}</p>
+          <p class="eyebrow">${escapeHtml(filter.kind === 'collection' ? 'Collection' : filter.kind === 'playlist' ? 'Playlist' : 'Category')}</p>
           <h2>${escapeHtml(filter.label)}</h2>
           <p>${escapeHtml(filter.overview ?? `${items.length} title${items.length === 1 ? '' : 's'} in this ${filter.kind}.`)}</p>
           <div class="hero-meta-row">
@@ -1317,12 +1355,34 @@ function renderItemCard(item: MediaItemSummary): string {
 }
 
 function homePreviewItem(): MediaItemSummary | undefined {
-  const items = filteredTopLevelLibraryItems();
+  const items = homePreviewCandidates();
   if (!items.length) {
     return undefined;
   }
 
   return items.find((item) => item.id === state.homePreviewItemId) ?? items[0];
+}
+
+function homePreviewCandidates(): MediaItemSummary[] {
+  switch (state.homeTab) {
+    case 'library':
+      return filteredTopLevelLibraryItems();
+    case 'collections': {
+      const firstCollection = collectionSummaries()[0];
+      if (!firstCollection) {
+        return filteredTopLevelLibraryItems();
+      }
+      const allowedIds = new Set(firstCollection.item_ids);
+      return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+    }
+    case 'categories': {
+      const firstCategory = categorySummaries()[0];
+      return firstCategory?.items ?? filteredTopLevelLibraryItems();
+    }
+    default:
+      return (state.home?.shelves ?? []).find((shelf) => shelf.items.length)?.items
+        ?? filteredTopLevelLibraryItems();
+  }
 }
 
 function renderHomeFeature(): string {
@@ -1387,7 +1447,7 @@ function renderSearchResults(): string {
 }
 
 function renderShelfStack(): string {
-  const shelves = state.home?.shelves ?? [];
+  const shelves = (state.home?.shelves ?? []).filter((shelf) => shelf.items.length);
   if (!shelves.length) {
     return '<section class="shelf"><div class="empty-state">No shelves are available yet. Add a library to get started.</div></section>';
   }
@@ -1399,13 +1459,11 @@ function renderShelfStack(): string {
           <h3>${escapeHtml(shelf.title)}</h3>
           <span>${shelf.items.length} items</span>
         </div>
-        ${shelf.items.length
-          ? `<div class="shelf-row-shell">
+        <div class="shelf-row-shell">
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
               <div class="shelf-row" data-shelf-row="${escapeHtml(shelf.id)}">${shelf.items.map(renderItemCard).join('')}</div>
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
-            </div>`
-          : '<div class="empty-state shelf-empty">Nothing here yet.</div>'}
+            </div>
       </section>
     `)
     .join('');
@@ -1665,6 +1723,7 @@ function renderMetadataSearchResults(): string {
           <p>${escapeHtml(result.overview ?? 'No overview available.')}</p>
           <div class="metadata-match-meta">
             <span>${escapeHtml(metadataProviderLabels[result.provider_id] ?? result.provider_id)}</span>
+            ${providerAttributionLogo(result.provider_id) ? `<img class="metadata-attribution-logo" src="${escapeHtml(providerAttributionLogo(result.provider_id) ?? '')}" alt="" loading="lazy" />` : ''}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
             ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
@@ -1693,9 +1752,38 @@ function parseMetadataLanguageInput(value: FormDataEntryValue | null): string[] 
 function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
   const libraryKind = itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined;
+  const enabledLibraryProviders = activeLibrarySettings()?.metadata_providers ?? [];
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .filter((provider) => provider.enabled && provider.configured && provider.implemented)
+    .filter((provider) => !enabledLibraryProviders.length || enabledLibraryProviders.includes(provider.id))
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
+}
+
+function selectedItemDefaultMetadataTitle(): string {
+  return state.selectedItem?.display_title.trim()
+    || state.selectedItemMetadata?.matches[0]?.title?.trim()
+    || '';
+}
+
+function selectedItemDefaultMetadataYear(): string {
+  const year = state.selectedItem?.release_year ?? state.selectedItemMetadata?.matches[0]?.release_year;
+  return typeof year === 'number' ? String(year) : '';
+}
+
+function defaultMetadataSearchLanguage(): string {
+  return state.bootstrap?.current_user?.preferred_metadata_languages?.[0]
+    ?? activeLibrarySettings()
+      ?.metadata_providers
+      ?.map((providerId) => state.metadataProviders.find((provider) => provider.id === providerId)?.language)
+      .find((language) => language && language.trim())
+    ?? state.metadataProviders.find((provider) => provider.enabled && provider.configured)?.language
+    ?? 'en-US';
+}
+
+function providerAttributionLogo(providerId: string): string | undefined {
+  const provider = (state.selectedItemMetadata?.providers ?? state.metadataProviders)
+    .find((entry) => entry.id === providerId);
+  return provider?.logo_dark_url ?? provider?.logo_light_url;
 }
 
 function renderMetadataSearchProviderControls(): string {
@@ -1768,14 +1856,14 @@ function renderHomeNavbar(): string {
       ${renderHomeTabs()}
       <div class="home-navbar-tools">
         <form id="search-form" class="search-form">
-          <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" />
+          <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" autocomplete="off" />
           <button type="submit" class="icon-button" title="Search" aria-label="Search">${renderIcon('search')}</button>
           <button id="reset-search" class="icon-button secondary-button" type="button" title="Clear search" aria-label="Clear search">${renderIcon('x')}</button>
         </form>
         ${library
           ? `
-            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library">${renderIcon('refresh-cw')}</button>
-            <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderIcon('refresh-cw')}</button>
+            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library">${renderIcon('folder-sync')}</button>
+            <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderIcon('database-zap')}</button>
           `
           : ''}
       </div>
@@ -2205,9 +2293,9 @@ function renderItemPage(): string {
           ${supportsManualLinking
             ? `
               <form id="metadata-search-form" class="metadata-search-form">
-                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="Title" />
-                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="Year" />
-                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="Language" />
+                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
+                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
+                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
                 ${renderMetadataSearchProviderControls()}
                 <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
               </form>
@@ -2716,7 +2804,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
       state.metadataSearchYear = '';
-      state.metadataSearchLanguage = 'en';
+      state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.isTrailerMenuOpen = false;
@@ -2731,7 +2819,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
       state.metadataSearchYear = '';
-      state.metadataSearchLanguage = 'en';
+      state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
@@ -2755,7 +2843,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
       state.metadataSearchYear = '';
-      state.metadataSearchLanguage = 'en';
+      state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.isTrailerMenuOpen = false;
@@ -3279,12 +3367,14 @@ function bindEvents(): void {
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata')?.addEventListener('click', async () => {
+    const button = document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata');
     const library = activeLibrary();
     if (!library || libraryRefreshProgress(library)) {
       return;
     }
 
     try {
+      setButtonBusy(button, true);
       const refreshedLibrary = await refreshLibraryMetadata(library.id);
       state.libraries = state.libraries.map((entry) => entry.id === refreshedLibrary.id ? refreshedLibrary : entry);
       await refreshPendingMetadataData();
@@ -3304,6 +3394,7 @@ function bindEvents(): void {
 
       state.homeTab = nextTab;
       state.browseFilter = undefined;
+      state.homePreviewItemId = undefined;
       render();
     });
   });
@@ -3369,13 +3460,15 @@ function bindEvents(): void {
     const input = document.querySelector<HTMLInputElement>('#metadata-search-input');
     const yearInput = document.querySelector<HTMLInputElement>('#metadata-search-year');
     const languageInput = document.querySelector<HTMLInputElement>('#metadata-search-language');
-    state.metadataSearchQuery = input?.value.trim() ?? '';
-    state.metadataSearchYear = yearInput?.value.trim() ?? '';
-    state.metadataSearchLanguage = languageInput?.value.trim() ?? '';
+    state.metadataSearchQuery = input?.value.trim() || selectedItemDefaultMetadataTitle();
+    state.metadataSearchYear = yearInput?.value.trim() || selectedItemDefaultMetadataYear();
+    state.metadataSearchLanguage = languageInput?.value.trim() || defaultMetadataSearchLanguage();
     state.metadataSearchProviders = Array.from(
       document.querySelectorAll<HTMLInputElement>('input[name="metadataSearchProvider"]:checked'),
     ).map((provider) => provider.value);
     try {
+      const submitButton = document.querySelector<HTMLButtonElement>('#metadata-search-form button[type="submit"]');
+      setButtonBusy(submitButton, true);
       state.metadataSearchResults = await searchItemMetadata(state.selectedItem.id, {
         query: state.metadataSearchQuery,
         providers: state.metadataSearchProviders,
@@ -3664,12 +3757,14 @@ function bindEvents(): void {
     element.addEventListener('focus', updatePreview);
   });
   document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
+    const button = document.querySelector<HTMLButtonElement>('#scan-active-library');
     const library = activeLibrary();
     if (!library) {
       return;
     }
 
     try {
+      setButtonBusy(button, true);
       const scannedLibrary = await scanLibrary(library.id);
       state.libraries = state.libraries.map((entry) => entry.id === scannedLibrary.id ? scannedLibrary : entry);
       await refreshData(false);
@@ -3860,6 +3955,77 @@ function syncAddLibraryProviderOptions(): void {
     }
   }
 }
+
+window.addEventListener('keydown', (event) => {
+  if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (target?.matches('input, textarea, select, [contenteditable="true"]')) {
+    return;
+  }
+  const focusable = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+  if (!focusable.length) {
+    return;
+  }
+  const currentIndex = Math.max(0, focusable.indexOf(document.activeElement as HTMLElement));
+  const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+  focusable[(currentIndex + direction + focusable.length) % focusable.length]?.focus();
+  event.preventDefault();
+});
+
+function moveFocus(direction: 1 | -1): void {
+  const focusable = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.offsetParent !== null);
+  if (!focusable.length) {
+    return;
+  }
+  const currentIndex = Math.max(0, focusable.indexOf(document.activeElement as HTMLElement));
+  focusable[(currentIndex + direction + focusable.length) % focusable.length]?.focus();
+}
+
+function activateFocusedElement(): void {
+  const focused = document.activeElement as HTMLElement | null;
+  if (focused?.matches('button, a[href], input, select, textarea')) {
+    focused.click();
+  }
+}
+
+function pollGamepads(): void {
+  const gamepads = navigator.getGamepads?.() ?? [];
+  gamepads.forEach((gamepad) => {
+    if (!gamepad) {
+      return;
+    }
+    const actions: Array<[string, boolean, () => void]> = [
+      ['up', Boolean(gamepad.buttons[12]?.pressed) || gamepad.axes[1] < -0.65, () => moveFocus(-1)],
+      ['down', Boolean(gamepad.buttons[13]?.pressed) || gamepad.axes[1] > 0.65, () => moveFocus(1)],
+      ['left', Boolean(gamepad.buttons[14]?.pressed) || gamepad.axes[0] < -0.65, () => moveFocus(-1)],
+      ['right', Boolean(gamepad.buttons[15]?.pressed) || gamepad.axes[0] > 0.65, () => moveFocus(1)],
+      ['activate', Boolean(gamepad.buttons[0]?.pressed), activateFocusedElement],
+      ['back', Boolean(gamepad.buttons[1]?.pressed), () => window.history.back()],
+    ];
+    actions.forEach(([name, pressed, action]) => {
+      const key = `${gamepad.index}:${name}`;
+      if (pressed && !activeGamepadButtons.has(key)) {
+        activeGamepadButtons.add(key);
+        action();
+      } else if (!pressed) {
+        activeGamepadButtons.delete(key);
+      }
+    });
+  });
+  window.requestAnimationFrame(pollGamepads);
+}
+
+window.requestAnimationFrame(pollGamepads);
 
 window.addEventListener('popstate', () => {
   state.route = parseRoute();

@@ -36,12 +36,23 @@ button {
   color: #fff;
   padding: 0.8rem 1rem;
   cursor: pointer;
-  transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease;
+  transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease, background 160ms ease, outline-color 160ms ease;
   box-shadow: 0 12px 30px rgba(93, 123, 255, 0.24);
 }
 
 button:hover:not(:disabled) {
   transform: translateY(-1px);
+  box-shadow: 0 14px 34px rgba(93, 123, 255, 0.38);
+  filter: brightness(1.1);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid #8bf3ca;
+  outline-offset: 3px;
 }
 
 button:disabled {
@@ -54,6 +65,28 @@ button:disabled {
   background: rgba(255, 255, 255, 0.08);
   box-shadow: none;
   color: #dbe7ff;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+button.is-busy {
+  position: relative;
+  color: transparent;
+  pointer-events: none;
+}
+
+button.is-busy::after {
+  content: '';
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: spin 0.85s linear infinite;
 }
 
 .button-content {
@@ -429,6 +462,14 @@ legend {
   height: 100vh;
   min-width: 0;
   overflow-y: auto;
+}
+
+.main-shell:has(.home-navbar) {
+  padding: 0;
+}
+
+.main-shell:has(.home-navbar) .main-shell-inner {
+  gap: 0;
 }
 
 .panel {
@@ -916,7 +957,9 @@ legend {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 1rem;
-  min-height: 230px;
+  height: 350px;
+  min-height: 350px;
+  max-height: 350px;
   padding: 1.4rem;
   border-radius: 0;
   overflow: hidden;
@@ -924,14 +967,26 @@ legend {
 }
 
 .home-feature.has-artwork {
+  background: linear-gradient(135deg, rgba(8, 12, 20, 0.98), rgba(17, 29, 42, 0.94));
+}
+
+.home-feature.has-artwork::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: min(62%, 920px);
   background-image:
-    linear-gradient(90deg, rgba(8, 12, 20, 0.94), rgba(8, 12, 20, 0.58) 50%, rgba(8, 12, 20, 0.14)),
+    linear-gradient(90deg, rgba(8, 12, 20, 1), rgba(8, 12, 20, 0.34) 38%, rgba(8, 12, 20, 0.02)),
     var(--home-feature-image);
   background-size: cover;
-  background-position: center;
+  background-position: top right;
+  opacity: 0.92;
+  pointer-events: none;
 }
 
 .home-feature-copy {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -949,6 +1004,10 @@ legend {
   max-width: 68ch;
   margin: 0;
   color: #d7e4ff;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .home-feature-logo {
@@ -959,6 +1018,8 @@ legend {
 }
 
 .home-feature-action {
+  position: relative;
+  z-index: 1;
   align-self: end;
 }
 
@@ -1310,6 +1371,7 @@ legend {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
+  align-items: stretch;
 }
 
 .metadata-search-card {
@@ -1336,6 +1398,13 @@ legend {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.metadata-attribution-logo {
+  max-width: 76px;
+  max-height: 18px;
+  object-fit: contain;
 }
 
 .metadata-current-link {
@@ -1372,9 +1441,19 @@ legend {
 
 .metadata-search-card {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   align-items: start;
+  width: 100%;
+}
+
+.metadata-search-card > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.metadata-search-card > button {
+  margin-left: auto;
 }
 
 .tag {
@@ -1846,6 +1925,28 @@ legend {
     height: auto;
     overflow: visible;
     padding: 0.9rem;
+  }
+
+  .home-navbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+    padding: 0.45rem;
+  }
+
+  .home-navbar-tools,
+  .home-navbar .search-form {
+    width: 100%;
+  }
+
+  .home-feature {
+    top: 5.6rem;
+    height: 230px;
+    min-height: 230px;
+    max-height: 230px;
+  }
+
+  .home-feature.has-artwork::before {
+    width: 72%;
   }
 
   .content-navbar,

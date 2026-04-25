@@ -317,16 +317,31 @@ fn metadata_search_score(
     year: Option<i32>,
     result: &MetadataSearchResult,
 ) -> f64 {
+    let query_title = query.trim();
+    let result_title = result.title.trim();
     let title_score = normalized_levenshtein(
-        &query.trim().to_ascii_lowercase(),
-        &result.title.trim().to_ascii_lowercase(),
+        &query_title.to_ascii_lowercase(),
+        &result_title.to_ascii_lowercase(),
     );
     let year_score = match (year, result.release_year) {
-        (Some(left), Some(right)) if left == right => 0.15,
-        (Some(_), Some(_)) => -0.15,
+        (Some(left), Some(right)) if left == right => 0.16,
+        (Some(left), Some(right)) => {
+            let distance = (left - right).abs() as f64;
+            -(0.06 + distance.min(12.0) * 0.035)
+        }
+        (Some(_), None) => -0.05,
         _ => 0.0,
     };
-    (title_score + year_score).clamp(0.0, 1.0)
+    let casing_score = if query_title.eq_ignore_ascii_case(result_title)
+        && query_title != result_title
+    {
+        -0.04
+    } else if query_title == result_title {
+        0.03
+    } else {
+        0.0
+    };
+    (title_score + year_score + casing_score).clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Clone)]

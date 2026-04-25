@@ -1560,11 +1560,11 @@ fn provider_logo_url(payload: &Value) -> Option<String> {
                     })
             })
         })
-        .or_else(|| provider_tvdb_artwork(payload, &[23, 25, 5, 18]))
+        .or_else(|| provider_tvdb_logo_artwork(payload))
         .or_else(|| {
             payload
                 .get("data")
-                .and_then(|data| provider_tvdb_artwork(data, &[23, 25, 5, 18]))
+                .and_then(provider_tvdb_logo_artwork)
         })
 }
 
@@ -1588,9 +1588,19 @@ fn provider_tagline(payload: &Value) -> Option<String> {
         })
 }
 
-fn provider_tvdb_artwork(
+fn provider_tvdb_logo_artwork(payload: &Value) -> Option<String> {
+    let expected_language = payload
+        .get("koko_provider_language")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|language| !language.is_empty())?;
+    provider_tvdb_artwork_with_language(payload, &[23, 25], expected_language)
+}
+
+fn provider_tvdb_artwork_with_language(
     payload: &Value,
     preferred_types: &[i64],
+    expected_language: &str,
 ) -> Option<String> {
     let artworks = payload
         .get("artworks")
@@ -1600,6 +1610,7 @@ fn provider_tvdb_artwork(
         artworks
             .iter()
             .filter(|artwork| artwork.get("type").and_then(Value::as_i64) == Some(*preferred_type))
+            .filter(|artwork| tvdb_artwork_language_matches(artwork, expected_language))
             .max_by(|left, right| {
                 let left_score = left.get("score").and_then(Value::as_f64).unwrap_or(0.0);
                 let right_score = right.get("score").and_then(Value::as_f64).unwrap_or(0.0);
@@ -1617,6 +1628,20 @@ fn provider_tvdb_artwork(
                     .map(ToOwned::to_owned)
             })
     })
+}
+
+fn tvdb_artwork_language_matches(
+    artwork: &Value,
+    expected_language: &str,
+) -> bool {
+    let expected = expected_language.trim();
+    artwork
+        .get("language")
+        .or_else(|| artwork.get("languageCode"))
+        .or_else(|| artwork.get("iso_639_1"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|language| language.eq_ignore_ascii_case(expected))
 }
 
 fn provider_genres(payload: &Value) -> Vec<String> {

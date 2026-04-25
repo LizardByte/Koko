@@ -392,6 +392,7 @@ legend {
 }
 
 .library-rail.collapsed .brand-block > div:last-child,
+.library-rail.collapsed .brand-block>div:last-child,
 .library-rail.collapsed .rail-label,
 .library-rail.collapsed .rail-user-card {
   display: none;
@@ -988,7 +989,7 @@ legend {
   padding: 1.4rem;
   border-radius: 0;
   overflow: hidden;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
   /* Solid base color prevents item cards from bleeding through when scrolled underneath */
   background: #0d1221;
 }
@@ -1009,9 +1010,9 @@ legend {
   background-repeat: no-repeat;
   background-size: cover;
   pointer-events: none;
-  /* Fade the left edge of this right-anchored element to blend into the solid background */
-  mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.6) 22%, rgba(0, 0, 0, 0.96) 50%, #000 100%);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.6) 22%, rgba(0, 0, 0, 0.96) 50%, #000 100%);
+  /* Only blend the left edge — right portion is fully visible, no mask applied there */
+  mask-image: linear-gradient(to right, transparent 0%, black 18%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 18%);
 }
 
 .home-feature::after {
@@ -1019,9 +1020,8 @@ legend {
   position: absolute;
   inset: 0;
   z-index: 1;
-  background:
-    linear-gradient(90deg, rgba(8, 12, 20, 0.96) 0%, rgba(8, 12, 20, 0.82) 42%, rgba(8, 12, 20, 0.42) 100%),
-    linear-gradient(180deg, rgba(8, 12, 20, 0.1) 0%, rgba(8, 12, 20, 0.62) 100%);
+  /* Dark only on the left where text lives — fades to transparent before the artwork area */
+  background: linear-gradient(90deg, rgba(8, 12, 20, 0.95) 0%, rgba(8, 12, 20, 0.72) 28%, rgba(8, 12, 20, 0.18) 52%, transparent 68%);
   pointer-events: none;
 }
 
@@ -1038,9 +1038,7 @@ legend {
 }
 
 .home-page-backdrop .home-feature::after {
-  background:
-    linear-gradient(90deg, rgba(8, 12, 20, 0.9) 0%, rgba(8, 12, 20, 0.7) 42%, rgba(8, 12, 20, 0.28) 100%),
-    linear-gradient(180deg, rgba(8, 12, 20, 0.06) 0%, rgba(8, 12, 20, 0.48) 100%);
+  background: linear-gradient(90deg, rgba(8, 12, 20, 0.9) 0%, rgba(8, 12, 20, 0.64) 28%, rgba(8, 12, 20, 0.12) 52%, transparent 68%);
 }
 
 .home-feature-copy {

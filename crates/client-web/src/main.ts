@@ -107,6 +107,7 @@ interface AppState {
   metadataSearchYear: string;
   metadataSearchLanguage: string;
   metadataSearchProviders: string[];
+  showFullSearchResults: boolean;
   homeTab: HomeBrowseTab;
   browseFilter?: BrowseFilter;
   isLoading: boolean;
@@ -132,7 +133,10 @@ interface AppState {
 
 type AppIconName =
   | 'arrow-left'
+  | 'arrow-right'
   | 'book'
+  | 'chevron-left'
+  | 'chevron-right'
   | 'clapperboard'
   | 'database-zap'
   | 'film'
@@ -174,6 +178,7 @@ const state: AppState = {
   metadataSearchYear: '',
   metadataSearchLanguage: 'en',
   metadataSearchProviders: [],
+  showFullSearchResults: false,
   homeTab: defaultHomeTab(parseRoute()),
   isLoading: true,
   hasDeferredAutoRefreshRender: false,
@@ -904,14 +909,6 @@ function persistedLibraryForSettings(library: MediaLibrarySettings): MediaLibrar
   });
 }
 
-function selectedLibraryName(): string {
-  if (state.route.page === 'settings') {
-    return 'Settings';
-  }
-
-  return activeLibrary()?.name ?? (state.route.page === 'item' ? 'Item details' : 'Home');
-}
-
 function selectedLibraryIcon(kind?: string): AppIconName {
   switch (kind) {
     case 'mixed':
@@ -1230,9 +1227,10 @@ function browseFilterForRoute(): BrowseFilter | undefined {
   if (state.route.page !== 'browse-detail') {
     return undefined;
   }
+  const route = state.route;
 
-  if (state.route.kind === 'collection') {
-    const collection = collectionSummaries().find((entry) => entry.id === state.route.key);
+  if (route.kind === 'collection') {
+    const collection = collectionSummaries().find((entry) => entry.id === route.key);
     if (!collection) {
       return undefined;
     }
@@ -1246,16 +1244,16 @@ function browseFilterForRoute(): BrowseFilter | undefined {
     };
   }
 
-  if (state.route.kind === 'playlist') {
+  if (route.kind === 'playlist') {
     return {
       kind: 'playlist',
-      label: state.route.key,
+      label: route.key,
       itemIds: [],
       overview: 'No playlist items are available yet.',
     };
   }
 
-  const category = categorySummaries().find((entry) => entry.genre === state.route.key);
+  const category = categorySummaries().find((entry) => entry.genre === route.key);
   if (!category) {
     return undefined;
   }
@@ -1379,10 +1377,17 @@ function homePreviewCandidates(): MediaItemSummary[] {
       const firstCategory = categorySummaries()[0];
       return firstCategory?.items ?? filteredTopLevelLibraryItems();
     }
-    default:
-      return (state.home?.shelves ?? []).find((shelf) => shelf.items.length)?.items
-        ?? filteredTopLevelLibraryItems();
+    default: {
+      const shelfItems = (state.home?.shelves ?? []).flatMap((shelf) => shelf.items);
+      return shelfItems.length ? shelfItems : filteredTopLevelLibraryItems();
+    }
   }
+}
+
+function pageBackdropUrlForItem(item: Pick<MediaItemSummary, 'id' | 'backdrop_url' | 'artwork_updated_at'> | undefined): string | undefined {
+  return item?.backdrop_url
+    ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at)
+    : undefined;
 }
 
 function renderHomeFeature(): string {
@@ -1391,7 +1396,7 @@ function renderHomeFeature(): string {
     return '';
   }
 
-  const backdropUrl = item.backdrop_url ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at) : undefined;
+  const backdropUrl = pageBackdropUrlForItem(item);
   const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
@@ -1493,7 +1498,7 @@ function renderHomeTabs(): string {
   `;
 }
 
-function renderLibraryOverview(): string {
+export function renderLibraryOverview(): string {
   const library = activeLibrary();
   const refreshProgress = library ? libraryRefreshProgress(library) : undefined;
   const stalePending = library ? Math.max(0, library.metadata_refresh_pending - activeLibraryPendingRefreshCount(library.id)) : 0;
@@ -1669,6 +1674,10 @@ function renderHomeTabContent(): string {
     return renderBrowseFilterDetail();
   }
 
+  if (state.showFullSearchResults && state.searchQuery.trim()) {
+    return renderSearchResults();
+  }
+
   switch (state.homeTab) {
     case 'library':
       return renderLibraryTab();
@@ -1752,11 +1761,19 @@ function parseMetadataLanguageInput(value: FormDataEntryValue | null): string[] 
 function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
   const libraryKind = itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined;
-  const enabledLibraryProviders = activeLibrarySettings()?.metadata_providers ?? [];
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .filter((provider) => provider.enabled && provider.configured && provider.implemented)
-    .filter((provider) => !enabledLibraryProviders.length || enabledLibraryProviders.includes(provider.id))
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
+}
+
+function defaultMetadataSearchProviderIds(): string[] {
+  const providers = selectedItemMetadataProviderOptions();
+  const librarySettings = activeLibrarySettings();
+  const libraryProviderIds = librarySettings?.metadata_providers ?? [];
+  const selectedLibraryProviders = providers
+    .filter((provider) => libraryProviderIds.includes(provider.id))
+    .map((provider) => provider.id);
+  return librarySettings ? selectedLibraryProviders : providers.map((provider) => provider.id);
 }
 
 function selectedItemDefaultMetadataTitle(): string {
@@ -1794,7 +1811,7 @@ function renderMetadataSearchProviderControls(): string {
 
   const selectedProviders = state.metadataSearchProviders.length
     ? state.metadataSearchProviders
-    : providers.map((provider) => provider.id);
+    : defaultMetadataSearchProviderIds();
 
   return `
     <div class="metadata-provider-picker">
@@ -1814,7 +1831,7 @@ function renderMetadataSearchProviderControls(): string {
 }
 
 function renderSearchPopover(): string {
-  if (!state.searchQuery.trim()) {
+  if (!state.searchQuery.trim() || state.showFullSearchResults) {
     return '';
   }
 
@@ -1857,8 +1874,7 @@ function renderHomeNavbar(): string {
       <div class="home-navbar-tools">
         <form id="search-form" class="search-form">
           <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" autocomplete="off" />
-          <button type="submit" class="icon-button" title="Search" aria-label="Search">${renderIcon('search')}</button>
-          <button id="reset-search" class="icon-button secondary-button" type="button" title="Clear search" aria-label="Clear search">${renderIcon('x')}</button>
+          <button id="search-toggle" type="submit" class="icon-button search-toggle-button" title="Search" aria-label="Search">${renderIcon('search')}</button>
         </form>
         ${library
           ? `
@@ -2676,6 +2692,13 @@ function render(preserveScroll = true): void {
   const previousScrollTop = preserveScroll
     ? document.querySelector<HTMLElement>('.main-shell')?.scrollTop ?? 0
     : 0;
+  const activeElement = document.activeElement as HTMLInputElement | null;
+  const activeElementId = activeElement?.id;
+  const activeSelection = activeElement
+    && typeof activeElement.selectionStart === 'number'
+    && typeof activeElement.selectionEnd === 'number'
+      ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
+      : undefined;
 
   if (!state.bootstrap && state.isLoading) {
     appRoot.innerHTML = renderAuthShell('Loading Koko', 'Checking server state and account access.', '');
@@ -2697,14 +2720,20 @@ function render(preserveScroll = true): void {
     return;
   }
 
+  const homeFeatureItem = state.route.page === 'home' || state.route.page === 'browse-detail'
+    ? homePreviewItem()
+    : undefined;
   const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
     && (state.selectedItem.backdrop_url || state.selectedItemMetadata?.matches.some((match) => Boolean(match.backdrop_url || match.cached_backdrop_path)))
-    ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
-    : undefined;
+      ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
+      : pageBackdropUrlForItem(homeFeatureItem);
   const railCollapsed = isRailCollapsed();
+  const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
+    ? ' home-page-backdrop'
+    : '';
 
   appRoot.innerHTML = `
-    <div class="app-shell${pageBackdropUrl ? ' has-page-backdrop' : ''}${railCollapsed ? ' rail-collapsed' : ''}">
+    <div class="app-shell${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
       ${pageBackdropUrl ? `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(pageBackdropUrl)}');"></div>` : ''}
       ${renderRail()}
       <div class="main-shell">
@@ -2725,6 +2754,13 @@ function render(preserveScroll = true): void {
       const shell = document.querySelector<HTMLElement>('.main-shell');
       if (shell) {
         shell.scrollTop = previousScrollTop;
+      }
+      if (activeElementId) {
+        const nextActiveElement = document.getElementById(activeElementId) as HTMLInputElement | null;
+        nextActiveElement?.focus();
+        if (activeSelection && nextActiveElement?.setSelectionRange) {
+          nextActiveElement.setSelectionRange(activeSelection.start, activeSelection.end);
+        }
       }
     });
   }
@@ -2757,6 +2793,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.home = undefined;
       state.libraryItems = [];
       state.searchResults = [];
+      state.showFullSearchResults = false;
       state.metadataProviders = [];
       state.systemActivities = [];
       state.dashboardItems = [];
@@ -2816,6 +2853,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.home = undefined;
       state.libraryItems = [];
       state.searchResults = [];
+      state.showFullSearchResults = false;
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
       state.metadataSearchYear = '';
@@ -2837,6 +2875,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.home = undefined;
       state.libraryItems = [];
       state.searchResults = [];
+      state.showFullSearchResults = false;
       state.selectedItem = undefined;
       state.selectedItemMetadata = undefined;
       state.selectedPlayback = undefined;
@@ -2869,7 +2908,7 @@ async function refreshData(showLoading = true): Promise<void> {
     state.isLoading = false;
     schedulePendingLibraryRefresh();
     schedulePendingMetadataRefresh();
-    render(false);
+    render(true);
   }
 }
 
@@ -3346,12 +3385,14 @@ function bindEvents(): void {
     event.preventDefault();
     const input = document.querySelector<HTMLInputElement>('#search-input');
     state.searchQuery = input?.value.trim() ?? '';
+    state.showFullSearchResults = Boolean(state.searchQuery);
     void refreshData();
   });
 
   document.querySelector<HTMLInputElement>('#search-input')?.addEventListener('input', (event) => {
     const input = event.currentTarget as HTMLInputElement;
     state.searchQuery = input.value.trim();
+    state.showFullSearchResults = false;
     if (pendingLiveSearchHandle !== undefined) {
       window.clearTimeout(pendingLiveSearchHandle);
     }
@@ -3359,11 +3400,6 @@ function bindEvents(): void {
       pendingLiveSearchHandle = undefined;
       void refreshData(false);
     }, 250);
-  });
-
-  document.querySelector<HTMLButtonElement>('#reset-search')?.addEventListener('click', () => {
-    state.searchQuery = '';
-    void refreshData();
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata')?.addEventListener('click', async () => {
@@ -3741,6 +3777,7 @@ function bindEvents(): void {
         return;
       }
       state.homePreviewItemId = itemId;
+      const previewItem = homePreviewCandidates().find((item) => item.id === itemId);
       const root = document.querySelector<HTMLElement>('.home-feature');
       if (root) {
         root.outerHTML = renderHomeFeature();
@@ -3751,6 +3788,20 @@ function bindEvents(): void {
             navigateTo(`/items/${nextItemId}`);
           }
         });
+      }
+      const backdropUrl = pageBackdropUrlForItem(previewItem);
+      const appShell = document.querySelector<HTMLElement>('.app-shell');
+      const pageBackdrop = document.querySelector<HTMLElement>('.page-backdrop');
+      if (backdropUrl) {
+        appShell?.classList.add('has-page-backdrop');
+        if (pageBackdrop) {
+          pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
+        } else {
+          appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
+        }
+      } else {
+        appShell?.classList.remove('has-page-backdrop');
+        pageBackdrop?.remove();
       }
     };
     element.addEventListener('mouseenter', updatePreview);

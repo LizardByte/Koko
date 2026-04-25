@@ -2336,10 +2336,7 @@ pub async fn search_item_metadata(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or(fallback_query);
-    let mut effective_query = search_title.clone();
-    if let Some(year) = year {
-        effective_query = format!("{effective_query} {year}");
-    }
+    let effective_query = search_title.clone();
     let requested_language = language
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());

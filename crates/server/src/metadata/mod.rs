@@ -186,7 +186,7 @@ pub struct MetadataSearchResult {
 /// Collection summary aggregated across linked metadata rows.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct MetadataCollectionSummary {
-    /// Stable client-facing identifier.
+    /// Stable Koko collection identifier.
     pub id: String,
     /// Provider identifier.
     pub provider_id: MetadataProviderId,
@@ -1313,7 +1313,7 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
         .select(ItemMetadataCollection::as_select())
         .load::<ItemMetadataCollection>(conn)?;
 
-    let mut grouped = HashMap::<String, (ItemMetadataCollection, HashSet<i32>)>::new();
+    let mut grouped = HashMap::<String, (ItemMetadataCollection, HashSet<i32>, i32)>::new();
     for collection in collection_rows {
         let Some(link) = links_by_id.get(&collection.metadata_link_id) else {
             continue;
@@ -1327,23 +1327,25 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
                 "{}:{}",
                 collection.provider_id, collection.external_id
             ))
-            .and_modify(|(_, item_ids)| {
+            .and_modify(|(_, item_ids, local_id)| {
                 item_ids.insert(root_id);
+                *local_id = (*local_id).min(collection.id);
             })
             .or_insert_with(|| {
                 let mut item_ids = HashSet::new();
                 item_ids.insert(root_id);
-                (collection, item_ids)
+                let local_id = collection.id;
+                (collection, item_ids, local_id)
             });
     }
 
     let mut summaries = grouped
         .into_values()
-        .map(|(collection, item_ids)| {
+        .map(|(collection, item_ids, local_id)| {
             let mut item_ids = item_ids.into_iter().collect::<Vec<_>>();
             item_ids.sort_unstable();
             MetadataCollectionSummary {
-                id: format!("{}:{}", collection.provider_id, collection.external_id),
+                id: format!("collection:{local_id}"),
                 provider_id: metadata_provider_id_from_db(&collection.provider_id),
                 external_id: collection.external_id,
                 name: collection.name,

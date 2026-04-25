@@ -445,6 +445,7 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         release_year: 1999,
         media_type: 'movie',
         match_state: 'linked',
+        genres: ['Action', 'Science Fiction'],
         locale_key: 'en-US',
         provider_payload_json: JSON.stringify({
           videos: {
@@ -998,6 +999,7 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     release_year: candidate.release_year,
     media_type: candidate.media_type,
     match_state: 'linked',
+    genres: [],
     locale_key: 'en-US',
     provider_payload_json: JSON.stringify(candidate, null, 2),
     updated_at: Math.floor(Date.now() / 1000),

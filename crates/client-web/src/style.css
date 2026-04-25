@@ -798,6 +798,10 @@ legend {
   gap: 1.25rem;
 }
 
+.shelf-stack.panel {
+  border-radius: 0;
+}
+
 .shelf {
   display: flex;
   flex-direction: column;
@@ -973,6 +977,7 @@ legend {
   position: sticky;
   top: 3.75rem;
   z-index: 7;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
@@ -983,11 +988,62 @@ legend {
   padding: 1.4rem;
   border-radius: 0;
   overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(135deg, rgba(12, 18, 31, 0.94), rgba(12, 18, 31, 0.78));
+}
+
+.home-feature.has-artwork {
+  background: linear-gradient(135deg, rgba(8, 12, 20, 0.95), rgba(17, 29, 42, 0.68));
+}
+
+.home-feature.has-artwork::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 0;
+  width: min(72%, 1040px);
+  background-image: var(--home-feature-image);
+  background-position: top right;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0.68;
+  pointer-events: none;
+  mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.36) 24%, rgba(0, 0, 0, 0.94) 58%, rgba(0, 0, 0, 0.98) 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.36) 24%, rgba(0, 0, 0, 0.94) 58%, rgba(0, 0, 0, 0.98) 100%);
+}
+
+.home-feature::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(90deg, rgba(8, 12, 20, 0.96) 0%, rgba(8, 12, 20, 0.82) 42%, rgba(8, 12, 20, 0.42) 100%),
+    linear-gradient(180deg, rgba(8, 12, 20, 0.1) 0%, rgba(8, 12, 20, 0.62) 100%);
+  pointer-events: none;
+}
+
+.home-page-backdrop .home-feature {
+  background: linear-gradient(135deg, rgba(12, 18, 31, 0.84), rgba(12, 18, 31, 0.58));
+}
+
+.home-page-backdrop .home-feature.has-artwork {
+  background: linear-gradient(135deg, rgba(8, 12, 20, 0.88), rgba(17, 29, 42, 0.46));
+}
+
+.home-page-backdrop .home-feature.has-artwork::before {
+  opacity: 0.82;
+}
+
+.home-page-backdrop .home-feature::after {
+  background:
+    linear-gradient(90deg, rgba(8, 12, 20, 0.9) 0%, rgba(8, 12, 20, 0.7) 42%, rgba(8, 12, 20, 0.28) 100%),
+    linear-gradient(180deg, rgba(8, 12, 20, 0.06) 0%, rgba(8, 12, 20, 0.48) 100%);
 }
 
 .home-feature-copy {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1020,7 +1076,7 @@ legend {
 
 .home-feature-action {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   align-self: end;
 }
 

@@ -989,11 +989,13 @@ legend {
   border-radius: 0;
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(135deg, rgba(12, 18, 31, 0.94), rgba(12, 18, 31, 0.78));
+  /* Solid base color prevents item cards from bleeding through when scrolled underneath */
+  background: #0d1221;
 }
 
 .home-feature.has-artwork {
-  background: linear-gradient(135deg, rgba(8, 12, 20, 0.95), rgba(17, 29, 42, 0.68));
+  /* Keep a solid base so posters below can't bleed through */
+  background: #0a0f1c;
 }
 
 .home-feature.has-artwork::before {
@@ -1006,10 +1008,10 @@ legend {
   background-position: top right;
   background-repeat: no-repeat;
   background-size: cover;
-  opacity: 0.68;
   pointer-events: none;
-  mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.36) 24%, rgba(0, 0, 0, 0.94) 58%, rgba(0, 0, 0, 0.98) 100%);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.36) 24%, rgba(0, 0, 0, 0.94) 58%, rgba(0, 0, 0, 0.98) 100%);
+  /* Fade the left edge of this right-anchored element to blend into the solid background */
+  mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.6) 22%, rgba(0, 0, 0, 0.96) 50%, #000 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0, 0, 0, 0.6) 22%, rgba(0, 0, 0, 0.96) 50%, #000 100%);
 }
 
 .home-feature::after {
@@ -1024,15 +1026,15 @@ legend {
 }
 
 .home-page-backdrop .home-feature {
-  background: linear-gradient(135deg, rgba(12, 18, 31, 0.84), rgba(12, 18, 31, 0.58));
+  background: #0a0e1c;
 }
 
 .home-page-backdrop .home-feature.has-artwork {
-  background: linear-gradient(135deg, rgba(8, 12, 20, 0.88), rgba(17, 29, 42, 0.46));
+  background: #090d1a;
 }
 
 .home-page-backdrop .home-feature.has-artwork::before {
-  opacity: 0.82;
+  opacity: 0.62;
 }
 
 .home-page-backdrop .home-feature::after {

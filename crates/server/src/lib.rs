@@ -14,6 +14,7 @@ mod logging;
 pub mod media;
 pub mod metadata;
 pub mod signal_handler;
+pub mod transcode;
 pub mod tray;
 pub mod utils;
 pub mod web;

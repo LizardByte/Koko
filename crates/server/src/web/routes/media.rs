@@ -2,6 +2,7 @@
 
 // lib imports
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use once_cell::sync::Lazy;
@@ -9,6 +10,7 @@ use rocket::fs::NamedFile;
 use rocket::get;
 use rocket::http::Status;
 use rocket::post;
+use rocket::delete;
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
 use rocket_okapi::openapi;
@@ -162,12 +164,21 @@ pub struct LinkMetadataRequest {
     pub media_type: String,
 }
 
+/// Request to start a playback session.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateSessionRequest {
+    pub item_id: i32,
+    pub client_profile: crate::media::ClientProfile,
+}
+
 static BACKGROUND_LIBRARY_MONITOR_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static NEXT_SYSTEM_ACTIVITY_ID: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(1));
 static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
     tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_METADATA_REFRESH_ITEMS: Lazy<tokio::sync::RwLock<HashMap<i32, String>>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static ACTIVE_PLAYBACK_SESSIONS: Lazy<tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 const LIBRARY_MONITOR_INTERVAL_SECONDS: u64 = 20;
 
@@ -2151,6 +2162,136 @@ pub async fn get_item(
     Ok(Json(item))
 }
 
+/// Create a new playback session.
+#[openapi(tag = "Media")]
+#[post("/api/v1/sessions", format = "json", data = "<request>")]
+pub async fn create_session(
+    db: DbConn,
+    user_guard: Option<UserGuard>,
+    request: Json<CreateSessionRequest>,
+) -> Result<Json<crate::media::PlaybackSession>, Status> {
+    let payload = request.into_inner();
+    let user_id = current_user_id(user_guard.as_ref()).unwrap_or(None);
+    
+    let decision = db
+        .run({
+            let profile = payload.client_profile.clone();
+            move |conn| get_playback_decision(conn, payload.item_id, Some(&profile))
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+
+    let session_id = crate::transcode::next_session_id();
+    
+    let session = crate::media::PlaybackSession {
+        session_id: session_id.clone(),
+        item_id: payload.item_id,
+        user_id,
+        client_profile: payload.client_profile,
+        decision,
+        created_at: current_timestamp(),
+    };
+
+    ACTIVE_PLAYBACK_SESSIONS.write().await.insert(session_id, session.clone());
+
+    Ok(Json(session))
+}
+
+/// Delete a playback session.
+#[openapi(tag = "Media")]
+#[delete("/api/v1/sessions/<session_id>")]
+pub async fn delete_session(session_id: String) -> Status {
+    let removed = ACTIVE_PLAYBACK_SESSIONS.write().await.remove(&session_id);
+    
+    if removed.is_some() {
+        let settings = current_settings();
+        let session_dir = PathBuf::from(&settings.general.data_dir)
+            .join("transcode_cache")
+            .join(&session_id);
+        
+        // Background cleanup
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_dir_all(session_dir).await;
+        });
+        
+        Status::NoContent
+    } else {
+        Status::NotFound
+    }
+}
+
+/// Stream content for a session (handles transcode or direct play).
+#[rocket::get("/api/v1/sessions/<session_id>/stream")]
+pub async fn get_session_stream(
+    db: DbConn,
+    session_id: String,
+) -> Result<NamedFile, Status> {
+    let session = ACTIVE_PLAYBACK_SESSIONS.read().await.get(&session_id).cloned().ok_or(Status::NotFound)?;
+    
+    if session.decision.can_direct_play {
+        let source_path = db
+            .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
+            .await
+            .map_err(|_| Status::InternalServerError)?
+            .ok_or(Status::NotFound)?;
+        return NamedFile::open(source_path).await.map_err(|_| Status::NotFound);
+    }
+    
+    let settings = current_settings();
+    let session_dir = PathBuf::from(&settings.general.data_dir)
+        .join("transcode_cache")
+        .join(&session_id);
+    
+    // We'll write to an mp4 or matching container file
+    let container = session.decision.transcode_container.clone().unwrap_or_else(|| "mp4".into());
+    let output_path = session_dir.join(format!("output.{}", container));
+    
+    // If output exists and is non-empty, we can stream it
+    if let Ok(metadata) = tokio::fs::metadata(&output_path).await {
+        if metadata.len() > 0 {
+            return NamedFile::open(&output_path).await.map_err(|_| Status::NotFound);
+        }
+    }
+    
+    // Otherwise we need to spawn FFmpeg
+    let source_path = db
+        .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+        
+    let spec = crate::transcode::TranscodeSpec {
+        source_path,
+        output_path: output_path.clone(),
+        container,
+        video_codec: session.decision.transcode_video_codec.clone(),
+        audio_codec: session.decision.transcode_audio_codec.clone(),
+        max_width: if session.client_profile.max_video_width > 0 { Some(session.client_profile.max_video_width) } else { None },
+        max_height: if session.client_profile.max_video_height > 0 { Some(session.client_profile.max_video_height) } else { None },
+        max_bitrate_kbps: if session.client_profile.max_bitrate_kbps > 0 { Some(session.client_profile.max_bitrate_kbps) } else { None },
+        start_time_ms: None, // Seeking could be implemented via query params
+    };
+    
+    match crate::transcode::spawn_transcode(&session_id, &spec, &settings.ffmpeg).await {
+        Ok(mut child) => {
+            // We just let it run in the background. In a real app we'd wait for it to write some data first,
+            // or return a chunked stream attached to stdout.
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+            
+            // Wait briefly for ffmpeg to create the file and write headers
+            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+            NamedFile::open(&output_path).await.map_err(|_| Status::NotFound)
+        }
+        Err(e) => {
+            log::error!("Failed to spawn transcode: {}", e);
+            Err(Status::InternalServerError)
+        }
+    }
+}
+
 /// Return direct-play versus transcode information for a media item.
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>/playback")]
@@ -2159,7 +2300,7 @@ pub async fn get_item_playback(
     item_id: i32,
 ) -> Result<Json<PlaybackDecision>, Status> {
     let decision = db
-        .run(move |conn| get_playback_decision(conn, item_id))
+        .run(move |conn| get_playback_decision(conn, item_id, None))
         .await
         .map_err(|error| {
             log::error!(
@@ -2180,7 +2321,7 @@ pub async fn stream_item(
     item_id: i32,
 ) -> Result<NamedFile, Status> {
     let decision = db
-        .run(move |conn| get_playback_decision(conn, item_id))
+        .run(move |conn| get_playback_decision(conn, item_id, None))
         .await
         .map_err(|error| {
             log::error!(

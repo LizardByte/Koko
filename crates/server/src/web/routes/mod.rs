@@ -36,6 +36,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::link_item_metadata,
         media::refresh_item_metadata,
         media::get_item_playback,
+        media::create_session,
+        media::delete_session,
         media::search_items,
         media::update_item_progress,
         settings::get_settings,
@@ -57,6 +59,7 @@ pub fn spa_routes() -> Vec<rocket::Route> {
         media::get_item_artwork,
         media::get_item_theme,
         media::get_item_subtitle,
-        media::stream_item
+        media::stream_item,
+        media::get_session_stream
     ]
 }

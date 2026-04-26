@@ -15,7 +15,7 @@ use diesel::{
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // local imports
@@ -365,6 +365,33 @@ pub struct MediaHome {
     pub collections: Vec<MetadataCollectionSummary>,
 }
 
+/// Codec/container/format capabilities that a client declares to the server.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ClientProfile {
+    /// Unique client type identifier (e.g. "web", "android", "desktop-win").
+    pub client_type: String,
+    /// Human-readable client name for logging/UI.
+    pub client_name: String,
+    /// Containers the client can play natively (e.g. ["mp4", "webm", "matroska"]).
+    pub supported_containers: Vec<String>,
+    /// Video codecs the client can decode (e.g. ["h264", "av1", "vp9", "hevc"]).
+    pub supported_video_codecs: Vec<String>,
+    /// Audio codecs the client can decode (e.g. ["aac", "opus", "mp3", "flac"]).
+    pub supported_audio_codecs: Vec<String>,
+    /// Subtitle formats the client can render (e.g. ["srt", "vtt", "ass"]).
+    pub supported_subtitle_formats: Vec<String>,
+    /// Maximum video width the client wants to receive (0 = no limit).
+    pub max_video_width: u32,
+    /// Maximum video height the client wants to receive (0 = no limit).
+    pub max_video_height: u32,
+    /// Maximum total bitrate in kbps the client wants to receive (0 = no limit).
+    pub max_bitrate_kbps: u32,
+    /// Whether the client can handle adaptive bitrate streams (HLS/DASH).
+    pub supports_adaptive_streaming: bool,
+    /// Whether the client prefers HLS over raw progressive download.
+    pub prefer_hls: bool,
+}
+
 /// Direct-play versus transcode decision for one media item.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct PlaybackDecision {
@@ -380,6 +407,39 @@ pub struct PlaybackDecision {
     pub stream_url: Option<String>,
     /// Browser media MIME type when known.
     pub mime_type: Option<String>,
+    /// When transcode is required, the target container.
+    pub transcode_container: Option<String>,
+    /// When transcode is required, the target video codec.
+    pub transcode_video_codec: Option<String>,
+    /// When transcode is required, the target audio codec.
+    pub transcode_audio_codec: Option<String>,
+    /// Whether only the video track needs transcoding.
+    pub video_transcode_required: bool,
+    /// Whether only the audio track needs transcoding.
+    pub audio_transcode_required: bool,
+    /// Source media info for display.
+    pub source_video_codec: Option<String>,
+    /// Source audio codec.
+    pub source_audio_codec: Option<String>,
+    /// Source container.
+    pub source_container: Option<String>,
+}
+
+/// Server-managed playback session tracking one active transcode or direct-play stream.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
+pub struct PlaybackSession {
+    /// The unique identifier for this session.
+    pub session_id: String,
+    /// The ID of the item being played.
+    pub item_id: i32,
+    /// The user requesting playback, if any.
+    pub user_id: Option<i32>,
+    /// The client profile that initiated this session.
+    pub client_profile: ClientProfile,
+    /// The playback decision rendered for this session.
+    pub decision: PlaybackDecision,
+    /// Unix timestamp when the session was created.
+    pub created_at: i64,
 }
 
 /// One unmatched media item that is eligible for automatic metadata linking.
@@ -1931,6 +1991,7 @@ pub fn get_media_home_with_preferred_languages(
 pub fn get_playback_decision(
     conn: &mut SqliteConnection,
     item_id: i32,
+    profile: Option<&ClientProfile>,
 ) -> Result<Option<PlaybackDecision>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
@@ -1947,21 +2008,53 @@ pub fn get_playback_decision(
     let backing_file = load_backing_media_file(conn, item_id)?;
 
     Ok(Some(if let Some(row) = backing_file {
-        let can_direct_play = item.playable && is_browser_direct_play(&row);
+        let default_profile = ClientProfile {
+            client_type: "web".into(),
+            client_name: "Web".into(),
+            supported_containers: vec!["mp4".into(), "webm".into()],
+            supported_video_codecs: vec!["h264".into(), "av1".into(), "vp8".into(), "vp9".into()],
+            supported_audio_codecs: vec!["aac".into(), "mp3".into(), "opus".into(), "vorbis".into(), "flac".into()],
+            supported_subtitle_formats: vec!["vtt".into()],
+            max_video_width: 0,
+            max_video_height: 0,
+            max_bitrate_kbps: 0,
+            supports_adaptive_streaming: false,
+            prefer_hls: false,
+        };
+        let p = profile.unwrap_or(&default_profile);
+        
+        let can_direct_play = item.playable && can_client_direct_play(&row, p);
         let mime_type = detect_mime_type(&row);
+
+        let video_codec = row.video_codec.as_deref().unwrap_or("").to_lowercase();
+        let audio_codec = row.audio_codec.as_deref().unwrap_or("").to_lowercase();
+        let video_transcode_required = !video_codec.is_empty() && !p.supported_video_codecs.iter().any(|c| c.eq_ignore_ascii_case(&video_codec));
+        let audio_transcode_required = !audio_codec.is_empty() && !p.supported_audio_codecs.iter().any(|c| c.eq_ignore_ascii_case(&audio_codec));
+        
+        // Target codecs when transcoding is required
+        let transcode_video_codec = if video_transcode_required { Some("h264".into()) } else { None };
+        let transcode_audio_codec = if audio_transcode_required { Some("aac".into()) } else { None };
+        let transcode_container = if !can_direct_play { Some("mp4".into()) } else { None };
 
         PlaybackDecision {
             item_id,
             can_direct_play,
             transcode_required: item.playable && !can_direct_play,
             reason: if can_direct_play {
-                "Browser direct play is supported for this item.".into()
+                "Client direct play is supported for this item.".into()
             } else {
-                "A future FFmpeg-backed transcode path will be required for browser playback."
-                    .into()
+                "A transcode path will be required for playback.".into()
             },
             stream_url: can_direct_play.then(|| format!("/api/v1/items/{}/stream", item_id)),
             mime_type,
+            transcode_container,
+            transcode_video_codec,
+            transcode_audio_codec,
+            video_transcode_required,
+            audio_transcode_required,
+            source_video_codec: row.video_codec,
+            source_audio_codec: row.audio_codec,
+            source_container: row.container,
         }
     } else {
         PlaybackDecision {
@@ -1971,6 +2064,14 @@ pub fn get_playback_decision(
             reason: "This item is a container and cannot be played directly.".into(),
             stream_url: None,
             mime_type: None,
+            transcode_container: None,
+            transcode_video_codec: None,
+            transcode_audio_codec: None,
+            video_transcode_required: false,
+            audio_transcode_required: false,
+            source_video_codec: None,
+            source_audio_codec: None,
+            source_container: None,
         }
     }))
 }
@@ -2344,42 +2445,51 @@ pub fn get_media_item_summary(
     }
 }
 
-fn is_browser_direct_play(file: &MediaFile) -> bool {
+fn container_matches(file_container: &str, profile_container: &str) -> bool {
+    // Sometimes containers are reported as e.g. "matroska,webm". We check if our profile container is in there.
+    file_container.to_ascii_lowercase().contains(&profile_container.to_ascii_lowercase())
+}
+
+fn within_resolution_limits(file: &MediaFile, profile: &ClientProfile) -> bool {
+    if profile.max_video_width > 0 {
+        if let Some(w) = file.width {
+            if w as u32 > profile.max_video_width { return false; }
+        }
+    }
+    if profile.max_video_height > 0 {
+        if let Some(h) = file.height {
+            if h as u32 > profile.max_video_height { return false; }
+        }
+    }
+    true
+}
+
+fn can_client_direct_play(file: &MediaFile, profile: &ClientProfile) -> bool {
     let extension = Path::new(&file.relative_path)
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
 
-    match file.media_kind.as_str() {
-        "video" => {
-            let container_supported =
-                matches!(
-                    file.container.as_deref(),
-                    Some("mp4" | "mov" | "matroska,webm" | "webm")
-                ) || matches!(extension.as_deref(), Some("mp4" | "m4v" | "webm"));
-            let video_codec_supported = matches!(
-                file.video_codec.as_deref(),
-                Some("h264" | "av1" | "vp8" | "vp9")
-            );
-            let audio_codec_supported = file.audio_codec.is_none()
-                || matches!(
-                    file.audio_codec.as_deref(),
-                    Some("aac" | "mp3" | "opus" | "vorbis")
-                );
+    let is_supported_container = if let Some(container) = file.container.as_deref() {
+        profile.supported_containers.iter().any(|c| container_matches(container, c))
+    } else {
+        // Fallback to extension check if container is missing
+        extension.as_deref().map(|ext| profile.supported_containers.iter().any(|c| c.eq_ignore_ascii_case(ext))).unwrap_or(false)
+    };
 
-            container_supported && video_codec_supported && audio_codec_supported
-        }
-        "audio" => {
-            matches!(
-                extension.as_deref(),
-                Some("mp3" | "m4a" | "wav" | "ogg" | "opus" | "flac")
-            ) || matches!(
-                file.audio_codec.as_deref(),
-                Some("mp3" | "aac" | "opus" | "vorbis" | "flac")
-            )
-        }
-        _ => false,
-    }
+    let is_supported_video = if let Some(codec) = file.video_codec.as_deref() {
+        profile.supported_video_codecs.iter().any(|c| c.eq_ignore_ascii_case(codec))
+    } else {
+        true // No video track -> skip check
+    };
+
+    let is_supported_audio = if let Some(codec) = file.audio_codec.as_deref() {
+        profile.supported_audio_codecs.iter().any(|c| c.eq_ignore_ascii_case(codec))
+    } else {
+        true // No audio track -> skip check
+    };
+
+    is_supported_container && is_supported_video && is_supported_audio && within_resolution_limits(file, profile)
 }
 
 fn detect_mime_type(file: &MediaFile) -> Option<String> {

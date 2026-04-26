@@ -24,7 +24,6 @@ import {
   getSettings,
   getStoredAuthToken,
   getStoredApiBase,
-  getStreamUrl,
   getUsers,
   linkItemMetadata,
   loginUser,
@@ -57,6 +56,11 @@ import {
   type SettingsSnapshot,
   type ServerCapabilities,
   type SystemActivity,
+  getWebClientProfile,
+  type PlaybackSession,
+  createPlaybackSession,
+  deletePlaybackSession,
+  getSessionStreamUrl,
 } from './api';
 
 type AppRoute =
@@ -112,6 +116,7 @@ interface AppState {
   browseFilter?: BrowseFilter;
   isLoading: boolean;
   isPlayerOpen: boolean;
+  activePlaybackSession?: PlaybackSession;
   isTrailerMenuOpen: boolean;
   activeTrailer?: { title: string; url: string };
   error?: string;
@@ -148,16 +153,22 @@ type AppIconName =
   | 'log-in'
   | 'log-out'
   | 'music'
+  | 'maximize'
+  | 'pause'
   | 'play'
   | 'plus'
   | 'refresh-cw'
   | 'save'
   | 'search'
   | 'settings'
+  | 'skip-back'
+  | 'skip-forward'
   | 'trash-2'
   | 'tv'
   | 'triangle-alert'
   | 'user-plus'
+  | 'volume-2'
+  | 'volume-x'
   | 'x';
 
 const state: AppState = {
@@ -515,6 +526,14 @@ function formatDuration(durationMs?: number): string {
   }
 
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatMediaTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return '0:00';
+  }
+
+  return formatDuration(Math.floor(seconds * 1000));
 }
 
 function formatFileSize(fileSize?: number): string {
@@ -2234,7 +2253,7 @@ function renderItemPage(): string {
           </div>
           <p class="hero-description">${escapeHtml(overview)}</p>
           <div class="detail-actions">
-            ${state.selectedItem.playable ? `<button type="button" id="play-selected-item" ${playback?.can_direct_play ? '' : 'disabled'}>${renderButtonContent(playback?.can_direct_play ? 'Play now' : 'Transcode planned', 'play')}</button>` : ''}
+            ${state.selectedItem.playable ? `<button type="button" id="play-selected-item">${renderButtonContent('Play now', 'play')}</button>` : ''}
             ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
           </div>
@@ -2606,31 +2625,71 @@ function renderPlayerOverlay(): string {
     `;
   }
 
-  if (!state.isPlayerOpen || !state.selectedItem || !state.selectedPlayback?.can_direct_play) {
+  if (!state.isPlayerOpen || !state.selectedItem || !state.activePlaybackSession) {
     return '';
   }
 
-  const tag = state.selectedItem.media_kind === 'audio' ? 'audio' : 'video';
-  const source = getStreamUrl(state.selectedItem.id);
+  const isAudio = state.selectedItem.media_kind === 'audio';
+  const tag = isAudio ? 'audio' : 'video';
+  const source = getSessionStreamUrl(state.activePlaybackSession.session_id);
+  const posterUrl = state.selectedItem.poster_url
+    ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
+    : undefined;
+  const backdropUrl = state.selectedItem.backdrop_url
+    ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
+    : posterUrl;
   const trackMarkup = tag === 'video'
     ? state.selectedItem.subtitle_tracks
         .map((track) => `<track kind="subtitles" label="${escapeHtml(track.label)}" srclang="${escapeHtml(subtitleLanguage(track.label))}" src="${escapeHtml(resolveApiUrl(track.url))}" />`)
         .join('')
     : '';
 
+  const transcodeBadge = state.activePlaybackSession.decision.transcode_required
+    ? `<span class="player-badge is-transcoding" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Transcoding</span>`
+    : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
+
   return `
-    <div class="player-overlay">
-      <div class="player-shell">
-        <div class="player-header">
-          <div>
-            <p class="eyebrow">Now playing</p>
+    <div class="player-overlay media-player-overlay">
+      <div class="player-shell media-player-shell ${isAudio ? 'audio-player-shell' : 'video-player-shell'} is-controls-visible" tabindex="-1" ${backdropUrl ? `style="--player-backdrop-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+        ${isAudio ? `
+          <div class="audio-player-backdrop" aria-hidden="true"></div>
+          <div class="audio-player-art ${posterUrl ? 'has-image' : ''}">
+            ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="" />` : renderIcon('music', 'audio-player-art-icon')}
+          </div>
+          <audio id="media-player" autoplay preload="metadata" src="${escapeHtml(source)}"></audio>
+        ` : `
+          <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
+        `}
+        <div class="player-idle-hit-area" aria-hidden="true"></div>
+        <div class="player-top-controls player-controls">
+          <div class="player-title-block">
+            <span class="eyebrow">Now playing</span>
             <h2>${escapeHtml(state.selectedItem.display_title)}</h2>
           </div>
-          <button id="close-player" class="secondary-button" type="button">${renderButtonContent('Close', 'x')}</button>
+          <div class="player-top-actions">
+            ${transcodeBadge}
+            <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
+          </div>
         </div>
-        ${tag === 'audio'
-          ? `<audio id="media-player" controls autoplay src="${escapeHtml(source)}"></audio>`
-          : `<video id="media-player" controls autoplay playsinline src="${escapeHtml(source)}">${trackMarkup}</video>`}
+        <div class="player-center-controls player-controls">
+          <button class="player-icon-button player-large-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
+          <button id="player-play-toggle" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+          <button class="player-icon-button player-large-button" type="button" data-player-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+        </div>
+        <div class="player-bottom-controls player-controls">
+          <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
+          <div class="player-control-row">
+            <div class="player-control-cluster">
+              <button id="player-play-toggle-small" class="player-icon-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+              <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(state.selectedItem.duration_ms))}</span></span>
+            </div>
+            <div class="player-control-cluster">
+              <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
+              <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
+              <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -2689,6 +2748,10 @@ function renderRail(): string {
 }
 
 function render(preserveScroll = true): void {
+  if (!state.isPlayerOpen) {
+    document.body.style.cursor = '';
+  }
+
   const previousScrollTop = preserveScroll
     ? document.querySelector<HTMLElement>('.main-shell')?.scrollTop ?? 0
     : 0;
@@ -2844,6 +2907,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
+      state.activePlaybackSession = undefined;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -2885,6 +2949,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
+      state.activePlaybackSession = undefined;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -3259,14 +3324,205 @@ async function refreshLogsView(): Promise<void> {
   }
 }
 
+function closeActivePlaybackSession(): void {
+  state.isPlayerOpen = false;
+  document.body.style.cursor = '';
+  const sessionToClose = state.activePlaybackSession;
+  state.activePlaybackSession = undefined;
+  render();
+  if (sessionToClose) {
+    deletePlaybackSession(sessionToClose.session_id).catch((error) => {
+      console.error('Failed to close playback session', error);
+    });
+  }
+}
+
 function bindPlayerProgress(): void {
   const player = document.querySelector<HTMLMediaElement>('#media-player');
   if (!player || !state.selectedItem) {
     return;
   }
 
+  const shell = document.querySelector<HTMLElement>('.media-player-shell');
+  const progress = document.querySelector<HTMLInputElement>('#player-progress');
+  const volume = document.querySelector<HTMLInputElement>('#player-volume');
+  const currentTimeLabel = document.querySelector<HTMLElement>('#player-current-time');
+  const durationLabel = document.querySelector<HTMLElement>('#player-duration');
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#player-play-toggle, #player-play-toggle-small'));
+  const muteButton = document.querySelector<HTMLButtonElement>('#player-mute-toggle');
+  const fullscreenButton = document.querySelector<HTMLButtonElement>('#player-fullscreen');
+  let controlsHideHandle: number | undefined;
+  let isScrubbing = false;
+
+  const setButtonIcon = (button: HTMLButtonElement | null | undefined, iconName: AppIconName, label: string): void => {
+    if (!button) {
+      return;
+    }
+    button.innerHTML = renderIcon(iconName, 'player-control-icon');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    createIcons({ icons });
+  };
+
+  const updatePlayButtons = (): void => {
+    const iconName: AppIconName = player.paused ? 'play' : 'pause';
+    const label = player.paused ? 'Play' : 'Pause';
+    playButtons.forEach((button) => setButtonIcon(button, iconName, label));
+  };
+
+  const updateMuteButton = (): void => {
+    setButtonIcon(muteButton, player.muted || player.volume === 0 ? 'volume-x' : 'volume-2', player.muted ? 'Unmute' : 'Mute');
+    if (volume && !isScrubbing) {
+      volume.value = String(player.muted ? 0 : player.volume);
+    }
+  };
+
+  const updateTimeline = (): void => {
+    const duration = Number.isFinite(player.duration) && player.duration > 0
+      ? player.duration
+      : (state.selectedItem?.duration_ms ?? 0) / 1000;
+    if (progress && !isScrubbing) {
+      progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (player.currentTime / duration) * 1000))) : '0';
+    }
+    if (currentTimeLabel) {
+      currentTimeLabel.textContent = formatMediaTime(player.currentTime);
+    }
+    if (durationLabel) {
+      durationLabel.textContent = formatMediaTime(duration);
+    }
+  };
+
+  const showControls = (): void => {
+    shell?.classList.add('is-controls-visible');
+    shell?.classList.remove('is-controls-hidden');
+    document.body.style.cursor = '';
+    if (controlsHideHandle !== undefined) {
+      window.clearTimeout(controlsHideHandle);
+    }
+    controlsHideHandle = window.setTimeout(() => {
+      if (!player.paused && !isScrubbing) {
+        shell?.classList.remove('is-controls-visible');
+        shell?.classList.add('is-controls-hidden');
+        document.body.style.cursor = 'none';
+      }
+    }, 3200);
+  };
+
+  const seekBy = (seconds: number): void => {
+    if (!Number.isFinite(player.duration)) {
+      player.currentTime = Math.max(0, player.currentTime + seconds);
+      return;
+    }
+    player.currentTime = Math.min(player.duration, Math.max(0, player.currentTime + seconds));
+  };
+
+  const togglePlayback = (): void => {
+    if (player.paused) {
+      void player.play();
+    } else {
+      player.pause();
+    }
+  };
+
+  const toggleFullscreen = (): void => {
+    const fullscreenElement = document.fullscreenElement;
+    if (fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    void shell?.requestFullscreen?.();
+  };
+
+  shell?.focus({ preventScroll: true });
+  ['mousemove', 'mousedown', 'touchstart', 'pointermove'].forEach((eventName) => {
+    shell?.addEventListener(eventName, showControls, { passive: true });
+  });
+  shell?.addEventListener('keydown', (event) => {
+    if (event.target instanceof HTMLInputElement) {
+      return;
+    }
+    if (event.key === ' ' || event.key === 'k') {
+      event.preventDefault();
+      togglePlayback();
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      seekBy(-10);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      seekBy(30);
+    } else if (event.key === 'm') {
+      event.preventDefault();
+      player.muted = !player.muted;
+      updateMuteButton();
+    } else if (event.key === 'f') {
+      event.preventDefault();
+      toggleFullscreen();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeActivePlaybackSession();
+    }
+    showControls();
+  });
+
+  playButtons.forEach((button) => button.addEventListener('click', () => {
+    togglePlayback();
+    showControls();
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-player-seek]').forEach((button) => {
+    button.addEventListener('click', () => {
+      seekBy(Number(button.dataset.playerSeek));
+      showControls();
+    });
+  });
+  muteButton?.addEventListener('click', () => {
+    player.muted = !player.muted;
+    updateMuteButton();
+    showControls();
+  });
+  volume?.addEventListener('input', () => {
+    player.volume = Number(volume.value);
+    player.muted = player.volume === 0;
+    updateMuteButton();
+    showControls();
+  });
+  fullscreenButton?.addEventListener('click', () => {
+    toggleFullscreen();
+    showControls();
+  });
+  progress?.addEventListener('input', () => {
+    isScrubbing = true;
+    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    if (duration > 0) {
+      const previewSeconds = (Number(progress.value) / 1000) * duration;
+      if (currentTimeLabel) {
+        currentTimeLabel.textContent = formatMediaTime(previewSeconds);
+      }
+    }
+    showControls();
+  });
+  progress?.addEventListener('change', () => {
+    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    if (duration > 0) {
+      player.currentTime = (Number(progress.value) / 1000) * duration;
+    }
+    isScrubbing = false;
+    updateTimeline();
+    showControls();
+  });
+
   let lastSentSeconds = -1;
+  player.addEventListener('loadedmetadata', updateTimeline);
+  player.addEventListener('play', () => {
+    updatePlayButtons();
+    showControls();
+  });
+  player.addEventListener('pause', () => {
+    updatePlayButtons();
+    showControls();
+  });
+  player.addEventListener('volumechange', updateMuteButton);
   player.addEventListener('timeupdate', () => {
+    updateTimeline();
     const currentSeconds = Math.floor(player.currentTime);
     if (currentSeconds === lastSentSeconds || currentSeconds % 15 !== 0) {
       return;
@@ -3281,12 +3537,19 @@ function bindPlayerProgress(): void {
   });
 
   player.addEventListener('ended', () => {
+    updatePlayButtons();
+    showControls();
     void updatePlaybackProgress(state.selectedItem!.id, {
       position_ms: Math.floor((Number.isFinite(player.duration) ? player.duration : 0) * 1000),
       duration_ms: Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : state.selectedItem?.duration_ms,
       completed: true,
     });
   });
+
+  updatePlayButtons();
+  updateMuteButton();
+  updateTimeline();
+  showControls();
 }
 
 function bindEvents(): void {
@@ -3645,18 +3908,28 @@ function bindEvents(): void {
     render();
   });
 
-  document.querySelector<HTMLButtonElement>('#play-selected-item')?.addEventListener('click', () => {
-    if (!state.selectedPlayback?.can_direct_play) {
+  document.querySelector<HTMLButtonElement>('#play-selected-item')?.addEventListener('click', async () => {
+    if (!state.selectedItem) {
       return;
     }
 
-    state.isPlayerOpen = true;
-    render();
+    try {
+      state.isPlayerOpen = true;
+      render();
+      state.activePlaybackSession = await createPlaybackSession({
+        item_id: state.selectedItem.id,
+        client_profile: getWebClientProfile(),
+      });
+      render();
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+      state.isPlayerOpen = false;
+      render();
+    }
   });
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
-    state.isPlayerOpen = false;
-    render();
+    closeActivePlaybackSession();
   });
 
   document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit', async (event) => {
@@ -4008,6 +4281,9 @@ function syncAddLibraryProviderOptions(): void {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (state.isPlayerOpen || state.activeTrailer || event.defaultPrevented) {
+    return;
+  }
   if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'].includes(event.key)) {
     return;
   }

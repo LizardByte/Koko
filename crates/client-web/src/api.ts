@@ -233,6 +233,27 @@ export interface MetadataSearchResult {
   title: string;
   overview?: string;
   artwork_url?: string;
+  cached_backdrop_path?: string;
+  refresh_state?: string;
+  last_refreshed_at?: number;
+  next_refresh_at?: number;
+  refresh_error?: string;
+  updated_at?: number;
+}
+
+export interface ItemMetadataResponse {
+  item_id: number;
+  providers: MetadataProviderStatus[];
+  matches: ItemMetadataMatch[];
+}
+
+export interface MetadataSearchResult {
+  provider_id: string;
+  external_id: string;
+  media_type: string;
+  title: string;
+  overview?: string;
+  artwork_url?: string;
   backdrop_url?: string;
   release_year?: number;
   score?: number;
@@ -269,6 +290,58 @@ export interface PlaybackDecision {
   reason: string;
   stream_url?: string;
   mime_type?: string;
+  transcode_container?: string;
+  transcode_video_codec?: string;
+  transcode_audio_codec?: string;
+  video_transcode_required: boolean;
+  audio_transcode_required: boolean;
+  source_video_codec?: string;
+  source_audio_codec?: string;
+  source_container?: string;
+}
+
+export interface ClientProfile {
+  client_type: string;
+  client_name: string;
+  supported_containers: string[];
+  supported_video_codecs: string[];
+  supported_audio_codecs: string[];
+  supported_subtitle_formats: string[];
+  max_video_width: number;
+  max_video_height: number;
+  max_bitrate_kbps: number;
+  supports_adaptive_streaming: boolean;
+  prefer_hls: boolean;
+}
+
+export function getWebClientProfile(): ClientProfile {
+  return {
+    client_type: 'web',
+    client_name: `Koko Web (${navigator.userAgent.split(' ').pop()})`,
+    supported_containers: ['mp4', 'webm', 'mp3', 'flac', 'ogg', 'wav', 'm4a'],
+    supported_video_codecs: ['h264', 'av1', 'vp8', 'vp9'],
+    supported_audio_codecs: ['aac', 'mp3', 'opus', 'vorbis', 'flac'],
+    supported_subtitle_formats: ['vtt'],
+    max_video_width: 0,
+    max_video_height: 0,
+    max_bitrate_kbps: 0,
+    supports_adaptive_streaming: false,
+    prefer_hls: false,
+  };
+}
+
+export interface PlaybackSession {
+  session_id: string;
+  item_id: number;
+  user_id?: number;
+  client_profile: ClientProfile;
+  decision: PlaybackDecision;
+  created_at: number;
+}
+
+export interface CreateSessionRequest {
+  item_id: number;
+  client_profile: ClientProfile;
 }
 
 export interface MetadataProviderSettings {
@@ -494,6 +567,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
           return item as T;
         }
 
+        const sessionStreamMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/stream$/);
+        if (sessionStreamMatch) {
+          throw new Error('501 Not Implemented (mock streaming not fully supported)');
+        }
+
         throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
       }
     }
@@ -525,6 +603,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
     return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
   }
 
+  const deleteSessionMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)$/);
+  if (method === 'DELETE' && deleteSessionMatch) {
+    return undefined as T;
+  }
+
   const itemProgressMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/progress$/);
   if (method === 'POST' && itemProgressMatch) {
     updateMockPlaybackProgress(Number(itemProgressMatch[1]), body as PlaybackProgressRequest);
@@ -549,6 +632,18 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
   const libraryScanMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/scan$/);
   if (method === 'POST' && libraryScanMatch) {
     return refreshMockLibraryMetadata(Number(libraryScanMatch[1])) as T;
+  }
+
+  if (method === 'POST' && url.pathname === '/api/v1/sessions') {
+    // Basic mock for create_session
+    const request = body as CreateSessionRequest;
+    return {
+      session_id: 'mock-session-123',
+      item_id: request.item_id,
+      client_profile: request.client_profile,
+      decision: getMockPlayback(request.item_id),
+      created_at: Date.now(),
+    } as T;
   }
 
   throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
@@ -786,6 +881,18 @@ export function resolveApiUrl(path: string): string {
 
 export function getStreamUrl(itemId: number): string {
   return `${getStoredApiBase()}/api/v1/items/${itemId}/stream`;
+}
+
+export function getSessionStreamUrl(sessionId: string): string {
+  return `${getStoredApiBase()}/api/v1/sessions/${sessionId}/stream`;
+}
+
+export function createPlaybackSession(request: CreateSessionRequest): Promise<PlaybackSession> {
+  return requestJson<PlaybackSession>('POST', '/api/v1/sessions', request);
+}
+
+export function deletePlaybackSession(sessionId: string): Promise<void> {
+  return requestJson<void>('DELETE', `/api/v1/sessions/${sessionId}`);
 }
 
 export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'logo' = 'poster', revision?: number): string {

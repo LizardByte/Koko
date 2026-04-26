@@ -854,6 +854,8 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
       item_id: itemId,
       can_direct_play: false,
       transcode_required: false,
+      video_transcode_required: false,
+      audio_transcode_required: false,
       reason: 'This item is a container and cannot be played directly.',
       stream_url: undefined,
       mime_type: undefined,
@@ -865,6 +867,8 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
     item_id: itemId,
     can_direct_play: canDirectPlay,
     transcode_required: !canDirectPlay,
+    video_transcode_required: !canDirectPlay && item.media_kind === 'video',
+    audio_transcode_required: !canDirectPlay,
     reason: canDirectPlay
       ? 'Browser direct play is supported for this item.'
       : 'A future FFmpeg-backed transcode path will be required for browser playback.',

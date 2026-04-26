@@ -24,6 +24,7 @@ import {
   getSettings,
   getStoredAuthToken,
   getStoredApiBase,
+  getStreamUrl,
   getUsers,
   linkItemMetadata,
   loginUser,
@@ -118,6 +119,8 @@ interface AppState {
   isPlayerOpen: boolean;
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
+  activeAudioStreamIndex?: number;
+  isAudioTrackMenuOpen: boolean;
   isTrailerMenuOpen: boolean;
   activeTrailer?: { title: string; url: string };
   error?: string;
@@ -149,6 +152,7 @@ type AppIconName =
   | 'folder-sync'
   | 'house'
   | 'image'
+  | 'languages'
   | 'layout-grid'
   | 'link-2'
   | 'log-in'
@@ -197,6 +201,8 @@ const state: AppState = {
   hasDeferredAutoRefreshRender: false,
   isPlayerOpen: false,
   activePlaybackStartMs: 0,
+  activeAudioStreamIndex: undefined,
+  isAudioTrackMenuOpen: false,
   isTrailerMenuOpen: false,
   activeTrailer: undefined,
   metadataDashboardFilters: {
@@ -2649,7 +2655,12 @@ function renderPlayerOverlay(): string {
 
   const isAudio = state.selectedItem.media_kind === 'audio';
   const tag = isAudio ? 'audio' : 'video';
-  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs);
+  const selectedAudioStreamIndex = state.activeAudioStreamIndex;
+  const isExplicitAudioTrackSelection = state.activeAudioStreamIndex !== undefined;
+  const shouldUseDirectItemStream = state.activePlaybackSession.decision.can_direct_play && !isExplicitAudioTrackSelection;
+  const source = shouldUseDirectItemStream
+    ? getStreamUrl(state.selectedItem.id)
+    : getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs, selectedAudioStreamIndex);
   const posterUrl = state.selectedItem.poster_url
     ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
     : undefined;
@@ -2666,6 +2677,13 @@ function renderPlayerOverlay(): string {
   const transcodeBadge = state.activePlaybackSession.decision.transcode_required
     ? `<span class="player-badge is-transcoding" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Transcoding</span>`
     : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
+  const audioTracks = state.selectedItem.audio_tracks ?? [];
+  const activeAudioTrack = audioTracks.find((track) => track.index === selectedAudioStreamIndex)
+    ?? audioTracks.find((track) => track.default)
+    ?? audioTracks[0];
+  const audioTrackMenuTitle = !isExplicitAudioTrackSelection
+    ? 'Audio track changes may require remuxing'
+    : `Audio track: ${activeAudioTrack?.label ?? 'Default'}`;
 
   return `
     <div class="player-overlay media-player-overlay">
@@ -2679,6 +2697,13 @@ function renderPlayerOverlay(): string {
         ` : `
           <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
         `}
+        <div class="player-loading-indicator" aria-live="polite">
+          <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
+        </div>
+        <div class="player-error-indicator" aria-live="polite">
+          <strong>Playback could not start</strong>
+          <span>Try another audio track or start playback again.</span>
+        </div>
         <div class="player-idle-hit-area" aria-hidden="true"></div>
         <div class="player-top-controls player-controls">
           <div class="player-title-block">
@@ -2692,21 +2717,33 @@ function renderPlayerOverlay(): string {
             <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
           </div>
         </div>
-        <div class="player-center-controls player-controls">
-          <button class="player-icon-button player-large-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
-          <button id="player-play-toggle" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-          <button class="player-icon-button player-large-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
-        </div>
         <div class="player-bottom-controls player-controls">
           <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
           <div class="player-control-row">
             <div class="player-control-cluster">
+              <button class="player-icon-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
               <button id="player-play-toggle-small" class="player-icon-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+              <button class="player-icon-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
               <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(state.selectedItem.duration_ms))}</span></span>
             </div>
             <div class="player-control-cluster">
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
+              ${!isAudio && audioTracks.length > 1 ? `
+                <div class="player-menu-shell">
+                  <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track">${renderIcon('languages', 'player-control-icon')}</button>
+                  ${state.isAudioTrackMenuOpen ? `
+                    <div class="player-track-menu" role="menu" aria-label="Audio tracks">
+                      ${audioTracks.map((track) => `
+                        <button class="player-track-option ${track.index === activeAudioTrack?.index ? 'active' : ''}" type="button" role="menuitemradio" aria-checked="${track.index === activeAudioTrack?.index ? 'true' : 'false'}" data-player-audio-track-index="${track.index}">
+                          <span>${escapeHtml(track.label)}</span>
+                          <small>${escapeHtml([track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ') || (track.default ? 'Default' : 'Audio'))}</small>
+                        </button>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+              ` : ''}
               ${isAudio ? '' : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`}
               <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
             </div>
@@ -2931,6 +2968,8 @@ async function refreshData(showLoading = true): Promise<void> {
       state.isPlayerOpen = false;
       state.activePlaybackSession = undefined;
       state.activePlaybackStartMs = 0;
+      state.activeAudioStreamIndex = undefined;
+      state.isAudioTrackMenuOpen = false;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -2974,6 +3013,8 @@ async function refreshData(showLoading = true): Promise<void> {
       state.isPlayerOpen = false;
       state.activePlaybackSession = undefined;
       state.activePlaybackStartMs = 0;
+      state.activeAudioStreamIndex = undefined;
+      state.isAudioTrackMenuOpen = false;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -3354,6 +3395,8 @@ function closeActivePlaybackSession(): void {
   const sessionToClose = state.activePlaybackSession;
   state.activePlaybackSession = undefined;
   state.activePlaybackStartMs = 0;
+  state.activeAudioStreamIndex = undefined;
+  state.isAudioTrackMenuOpen = false;
   render();
   if (sessionToClose) {
     deletePlaybackSession(sessionToClose.session_id).catch((error) => {
@@ -3373,19 +3416,37 @@ function bindPlayerProgress(): void {
   const volume = document.querySelector<HTMLInputElement>('#player-volume');
   const currentTimeLabel = document.querySelector<HTMLElement>('#player-current-time');
   const durationLabel = document.querySelector<HTMLElement>('#player-duration');
-  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#player-play-toggle, #player-play-toggle-small'));
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#player-play-toggle-small'));
   const muteButton = document.querySelector<HTMLButtonElement>('#player-mute-toggle');
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#player-fullscreen');
   const pipButton = document.querySelector<HTMLButtonElement>('#player-pip');
+  const audioTrackToggle = document.querySelector<HTMLButtonElement>('#player-audio-track-toggle');
   const isTranscoding = state.activePlaybackSession?.decision.transcode_required ?? false;
+  const isDirectItemStream = Boolean(state.activePlaybackSession?.decision.can_direct_play && state.activeAudioStreamIndex === undefined);
   const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
-  const playbackBaseOffsetSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const playbackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const playbackBaseOffsetSeconds = isDirectItemStream ? 0 : playbackStartSeconds;
   const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
   let lastSkipDirection = 0;
   let lastSkipAt = 0;
   let skipStepIndex = 0;
+
+  const setPlayerLoading = (loading: boolean): void => {
+    const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
+    shell?.classList.toggle('is-media-loading', shouldShowLoading);
+    shell?.classList.remove('has-media-error');
+  };
+
+  const refreshPlayerLoading = (): void => {
+    setPlayerLoading(!player.paused && player.readyState < player.HAVE_FUTURE_DATA);
+  };
+
+  const setPlayerError = (): void => {
+    shell?.classList.remove('is-media-loading');
+    shell?.classList.add('has-media-error');
+  };
 
   const setButtonIcon = (button: HTMLButtonElement | null | undefined, iconName: AppIconName, label: string): void => {
     if (!button) {
@@ -3552,6 +3613,22 @@ function bindPlayerProgress(): void {
     toggleFullscreen();
     showControls();
   });
+  audioTrackToggle?.addEventListener('click', () => {
+    state.isAudioTrackMenuOpen = !state.isAudioTrackMenuOpen;
+    render(false);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-player-audio-track-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextAudioTrackIndex = Number(button.dataset.playerAudioTrackIndex);
+      if (!Number.isFinite(nextAudioTrackIndex)) {
+        return;
+      }
+      state.activeAudioStreamIndex = nextAudioTrackIndex;
+      state.activePlaybackStartMs = Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000);
+      state.isAudioTrackMenuOpen = false;
+      render(false);
+    });
+  });
   pipButton?.addEventListener('click', async () => {
     if (!(player instanceof HTMLVideoElement) || !document.pictureInPictureEnabled) {
       state.error = 'Picture in picture is not available in this browser.';
@@ -3606,7 +3683,22 @@ function bindPlayerProgress(): void {
   });
 
   let lastSentSeconds = -1;
-  player.addEventListener('loadedmetadata', updateTimeline);
+  player.addEventListener('loadstart', () => setPlayerLoading(true));
+  player.addEventListener('waiting', refreshPlayerLoading);
+  player.addEventListener('stalled', refreshPlayerLoading);
+  player.addEventListener('loadeddata', () => setPlayerLoading(false));
+  player.addEventListener('canplay', () => setPlayerLoading(false));
+  player.addEventListener('playing', () => setPlayerLoading(false));
+  player.addEventListener('error', () => {
+    setPlayerError();
+    console.error('Media playback failed', player.error);
+  });
+  player.addEventListener('loadedmetadata', () => {
+    if (isDirectItemStream && playbackStartSeconds > 0 && Number.isFinite(player.duration)) {
+      player.currentTime = Math.min(playbackStartSeconds, Math.max(0, player.duration - 0.25));
+    }
+    updateTimeline();
+  });
   player.addEventListener('play', () => {
     updatePlayButtons();
     showControls();
@@ -3617,6 +3709,7 @@ function bindPlayerProgress(): void {
   });
   player.addEventListener('volumechange', updateMuteButton);
   player.addEventListener('timeupdate', () => {
+    setPlayerLoading(false);
     updateTimeline();
     const currentSeconds = Math.floor(player.currentTime);
     if (currentSeconds === lastSentSeconds || currentSeconds % 15 !== 0) {
@@ -3645,7 +3738,14 @@ function bindPlayerProgress(): void {
   updateMuteButton();
   updatePipButton();
   updateTimeline();
+  setPlayerLoading(player.readyState < player.HAVE_FUTURE_DATA);
   showControls();
+  void player.play().catch((error) => {
+    console.warn('Autoplay after opening player was blocked or failed', error);
+    updatePlayButtons();
+    setPlayerLoading(false);
+    showControls();
+  });
 }
 
 function bindEvents(): void {
@@ -4013,6 +4113,8 @@ function bindEvents(): void {
       const startMs = Number(button.dataset.playSelectedItemStartMs);
       state.activePlaybackStartMs = Number.isFinite(startMs) ? Math.max(0, startMs) : 0;
       state.isPlayerOpen = true;
+      state.activeAudioStreamIndex = undefined;
+      state.isAudioTrackMenuOpen = false;
       render();
       state.activePlaybackSession = await createPlaybackSession({
         item_id: state.selectedItem.id,

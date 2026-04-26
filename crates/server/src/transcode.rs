@@ -58,6 +58,8 @@ pub struct TranscodeSpec {
     pub max_bitrate_kbps: Option<u32>,
     /// The start time in milliseconds to seek to.
     pub start_time_ms: Option<i64>,
+    /// Zero-based audio stream index among audio streams.
+    pub audio_stream_index: Option<usize>,
 }
 
 impl TranscodeSpec {
@@ -93,7 +95,7 @@ impl TranscodeSpec {
         args.push("-map".into());
         args.push("0:v:0?".into()); // First video
         args.push("-map".into());
-        args.push("0:a:0?".into()); // First audio
+        args.push(format!("0:a:{}?", self.audio_stream_index.unwrap_or(0)));
 
         // Video codec
         args.push("-c:v".into());
@@ -163,12 +165,14 @@ pub async fn spawn_transcode(
     
     log::info!("Starting FFmpeg: {} {}", settings.ffmpeg_path, args.join(" "));
 
-    let child = Command::new(&settings.ffmpeg_path)
+    let mut command = Command::new(&settings.ffmpeg_path);
+    command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = command.spawn()?;
 
     Ok(child)
 }
@@ -183,12 +187,14 @@ pub async fn spawn_transcode_stdout(
 
     log::info!("Starting FFmpeg stdout stream: {} {}", settings.ffmpeg_path, args.join(" "));
 
-    let child = Command::new(&settings.ffmpeg_path)
+    let mut command = Command::new(&settings.ffmpeg_path);
+    command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = command.spawn()?;
 
     Ok(child)
 }

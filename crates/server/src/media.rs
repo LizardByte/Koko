@@ -326,6 +326,8 @@ pub struct MediaItemDetail {
     pub trailer_title: Option<String>,
     /// Browser-embeddable trailer URL, when available.
     pub trailer_url: Option<String>,
+    /// Audio streams discovered in the source container.
+    pub audio_tracks: Vec<MediaAudioTrack>,
     /// Discovered subtitle sidecars for this item.
     pub subtitle_tracks: Vec<MediaSubtitleTrack>,
     /// Breadcrumb-like hierarchy for this item.
@@ -336,6 +338,21 @@ pub struct MediaItemDetail {
     pub playback_position_ms: Option<i64>,
     /// Last saved playback duration for the current user.
     pub playback_duration_ms: Option<i64>,
+}
+
+/// One audio stream discovered inside a media file.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MediaAudioTrack {
+    /// Zero-based audio stream index among audio streams, suitable for `0:a:<index>`.
+    pub index: usize,
+    /// Human-friendly label.
+    pub label: String,
+    /// Codec name when available.
+    pub codec: Option<String>,
+    /// Stream language when available.
+    pub language: Option<String>,
+    /// Whether the stream is marked as default.
+    pub default: bool,
 }
 
 /// Subtitle track discovered for one media item.
@@ -448,6 +465,8 @@ pub struct PlaybackSession {
     pub decision: PlaybackDecision,
     /// Unix timestamp when the session was created.
     pub created_at: i64,
+    /// Selected zero-based audio stream index among audio streams.
+    pub audio_stream_index: Option<usize>,
 }
 
 /// One unmatched media item that is eligible for automatic metadata linking.
@@ -1907,6 +1926,10 @@ pub fn get_media_item_with_preferred_languages(
             })
             .collect();
     }
+    detail.audio_tracks = backing_file
+        .as_ref()
+        .and_then(|file| audio_tracks_from_metadata_json(file.metadata_json.as_deref()))
+        .unwrap_or_default();
 
     Ok(Some(detail))
 }
@@ -2965,6 +2988,129 @@ fn parse_ffprobe_metadata(
     })
 }
 
+/// Return audio stream summaries from stored ffprobe JSON.
+pub fn audio_tracks_from_metadata_json(raw_json: Option<&str>) -> Option<Vec<MediaAudioTrack>> {
+    let parsed: Value = serde_json::from_str(raw_json?).ok()?;
+    let streams = parsed.get("streams")?.as_array()?;
+    let mut audio_index = 0usize;
+    let tracks = streams
+        .iter()
+        .filter_map(|stream| {
+            if stream.get("codec_type").and_then(Value::as_str) != Some("audio") {
+                return None;
+            }
+
+            let index = audio_index;
+            audio_index += 1;
+            let codec = stream
+                .get("codec_name")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let tags = stream.get("tags");
+            let language = tags
+                .and_then(|tags| tags.get("language"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "und")
+                .map(str::to_string);
+            let title = tags
+                .and_then(|tags| tags.get("title"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let default = stream
+                .get("disposition")
+                .and_then(|value| value.get("default"))
+                .and_then(Value::as_i64)
+                .unwrap_or_default() == 1;
+            let label = title
+                .map(str::to_string)
+                .or_else(|| language.as_ref().map(|language| language.to_ascii_uppercase()))
+                .or_else(|| codec.as_ref().map(|codec| codec.to_ascii_uppercase()))
+                .unwrap_or_else(|| format!("Audio {}", index + 1));
+
+            Some(MediaAudioTrack {
+                index,
+                label,
+                codec,
+                language,
+                default,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Some(tracks)
+}
+
+/// Select the best source audio stream for the user's preferred languages.
+pub fn preferred_audio_stream_index(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
+) -> Result<Option<usize>, diesel::result::Error> {
+    let Some(file) = load_backing_media_file(conn, item_id)? else {
+        return Ok(None);
+    };
+    let tracks = audio_tracks_from_metadata_json(file.metadata_json.as_deref()).unwrap_or_default();
+    Ok(match_audio_track_index(&tracks, preferred_languages))
+}
+
+fn match_audio_track_index(
+    tracks: &[MediaAudioTrack],
+    preferred_languages: &[String],
+) -> Option<usize> {
+    if tracks.len() <= 1 {
+        return None;
+    }
+
+    let preferred = preferred_languages
+        .iter()
+        .flat_map(|language| audio_language_match_keys(language))
+        .collect::<Vec<_>>();
+    for language in preferred {
+        if let Some(track) = tracks.iter().find(|track| {
+            track
+                .language
+                .as_deref()
+                .map(audio_language_match_keys)
+                .unwrap_or_default()
+                .iter()
+                .any(|candidate| candidate == &language)
+        }) {
+            return Some(track.index);
+        }
+    }
+
+    tracks.iter().find(|track| track.default).map(|track| track.index)
+}
+
+fn audio_language_match_keys(language: &str) -> Vec<String> {
+    let normalized = language.trim().to_ascii_lowercase().replace('_', "-");
+    let primary = normalized.split('-').next().unwrap_or("").to_string();
+    let mut keys = Vec::new();
+    for key in [normalized.as_str(), primary.as_str()] {
+        if !key.is_empty() && !keys.iter().any(|entry| entry == key) {
+            keys.push(key.to_string());
+        }
+    }
+    let aliases = match primary.as_str() {
+        "en" | "eng" | "english" => &["en", "eng", "english"][..],
+        "es" | "spa" | "spanish" => &["es", "spa", "spanish"][..],
+        "fr" | "fra" | "fre" | "french" => &["fr", "fra", "fre", "french"][..],
+        "de" | "deu" | "ger" | "german" => &["de", "deu", "ger", "german"][..],
+        "it" | "ita" | "italian" => &["it", "ita", "italian"][..],
+        "ja" | "jpn" | "japanese" => &["ja", "jpn", "japanese"][..],
+        "pt" | "por" | "portuguese" => &["pt", "por", "portuguese"][..],
+        _ => &[][..],
+    };
+    for alias in aliases {
+        if !keys.iter().any(|entry| entry == alias) {
+            keys.push((*alias).to_string());
+        }
+    }
+    keys
+}
+
 fn to_persisted_file_summary(row: MediaFile) -> PersistedMediaFileSummary {
     PersistedMediaFileSummary {
         id: row.id,
@@ -3337,6 +3483,7 @@ fn to_media_item_detail(
         artwork_updated_at: None,
         trailer_title: None,
         trailer_url: None,
+        audio_tracks: Vec::new(),
         subtitle_tracks: Vec::new(),
         hierarchy: Vec::new(),
         children: Vec::new(),

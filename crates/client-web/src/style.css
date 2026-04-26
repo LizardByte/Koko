@@ -2020,6 +2020,47 @@ legend {
   z-index: 2;
 }
 
+.player-loading-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  place-items: center;
+  pointer-events: none;
+}
+
+.is-media-loading .player-loading-indicator {
+  display: grid;
+}
+
+.player-error-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  place-items: center;
+  gap: 0.25rem;
+  pointer-events: none;
+  text-align: center;
+  color: #f4f7fb;
+}
+
+.player-error-indicator span {
+  color: #b8c7df;
+}
+
+.has-media-error .player-error-indicator {
+  display: grid;
+}
+
+.player-loading-spinner {
+  width: 3.2rem;
+  height: 3.2rem;
+  color: #8bf3ca;
+  border-width: 3px;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.45));
+}
+
 .player-controls {
   position: absolute;
   z-index: 3;
@@ -2076,6 +2117,50 @@ legend {
 .player-top-actions,
 .player-control-cluster {
   gap: 0.6rem;
+}
+
+.player-menu-shell {
+  position: relative;
+}
+
+.player-track-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.65rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 2rem));
+  max-height: min(320px, 50vh);
+  overflow: auto;
+  padding: 0.35rem;
+  border-radius: 8px;
+  background: rgba(10, 14, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px);
+}
+
+.player-track-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.12rem;
+  width: 100%;
+  padding: 0.65rem 0.7rem;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  color: #f4f7fb;
+}
+
+.player-track-option:hover,
+.player-track-option.active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-track-option small {
+  color: #9ab1d1;
 }
 
 .player-badge {

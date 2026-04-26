@@ -2,6 +2,7 @@
 
 // lib imports
 use std::collections::HashMap;
+use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -9,13 +10,16 @@ use once_cell::sync::Lazy;
 use rocket::fs::NamedFile;
 use rocket::get;
 use rocket::http::{ContentType, Status};
+use rocket::outcome::Outcome;
 use rocket::post;
 use rocket::delete;
-use rocket::request::Request;
+use rocket::request::{FromRequest, Request};
 use rocket::response::{self, Responder, Response};
 use rocket::response::stream::ReaderStream;
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
+use rocket::tokio::fs::File;
+use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
 use rocket::tokio::process::ChildStdout;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
@@ -58,7 +62,12 @@ use crate::metadata::{
 use crate::utils::current_timestamp;
 
 pub enum SessionStream {
-    File(NamedFile),
+    File {
+        content_type: ContentType,
+        body: Take<File>,
+        content_length: u64,
+        content_range: Option<String>,
+    },
     Transcode {
         content_type: ContentType,
         stdout: ChildStdout,
@@ -66,15 +75,109 @@ pub enum SessionStream {
 }
 
 impl<'r> Responder<'r, 'static> for SessionStream {
-    fn respond_to(self, request: &'r Request<'_>) -> response::Result<'static> {
+    fn respond_to(self, _request: &'r Request<'_>) -> response::Result<'static> {
         match self {
-            SessionStream::File(file) => file.respond_to(request),
+            SessionStream::File { content_type, body, content_length, content_range } => {
+                let mut response = Response::build();
+                response
+                    .status(if content_range.is_some() { Status::PartialContent } else { Status::Ok })
+                    .header(content_type)
+                    .raw_header("Accept-Ranges", "bytes")
+                    .raw_header("Content-Length", content_length.to_string())
+                    .streamed_body(body);
+                if let Some(content_range) = content_range {
+                    response.raw_header("Content-Range", content_range);
+                }
+                response.ok()
+            }
             SessionStream::Transcode { content_type, stdout } => Response::build()
                 .header(content_type)
+                .raw_header("Accept-Ranges", "none")
                 .streamed_body(ReaderStream::one(stdout))
                 .ok(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct RangeHeader(Option<String>);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for RangeHeader {
+    type Error = ();
+
+    async fn from_request(request: &'r Request<'_>) -> rocket::request::Outcome<Self, Self::Error> {
+        Outcome::Success(RangeHeader(request.headers().get_one("Range").map(str::to_string)))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+}
+
+fn parse_byte_range(header: &str, total_length: u64) -> Option<ByteRange> {
+    if total_length == 0 {
+        return None;
+    }
+
+    let range = header.trim().strip_prefix("bytes=")?;
+    let range = range.split(',').next()?.trim();
+    let (start, end) = range.split_once('-')?;
+    if start.is_empty() {
+        let suffix_length = end.trim().parse::<u64>().ok()?.min(total_length);
+        let start = total_length.saturating_sub(suffix_length);
+        return Some(ByteRange { start, end: total_length - 1 });
+    }
+
+    let start = start.trim().parse::<u64>().ok()?;
+    if start >= total_length {
+        return None;
+    }
+
+    let end = if end.trim().is_empty() {
+        total_length - 1
+    } else {
+        end.trim().parse::<u64>().ok()?.min(total_length - 1)
+    };
+
+    (end >= start).then_some(ByteRange { start, end })
+}
+
+fn content_type_for_path(path: &std::path::Path) -> ContentType {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(ContentType::from_extension)
+        .unwrap_or(ContentType::Binary)
+}
+
+async fn open_file_stream(path: PathBuf, range: &RangeHeader) -> Result<SessionStream, Status> {
+    let metadata = rocket::tokio::fs::metadata(&path).await.map_err(|_| Status::NotFound)?;
+    let total_length = metadata.len();
+    let selected_range = range.0.as_deref().and_then(|header| parse_byte_range(header, total_length));
+    let byte_range = selected_range.unwrap_or_else(|| ByteRange {
+        start: 0,
+        end: total_length.saturating_sub(1),
+    });
+    let content_length = if total_length == 0 {
+        0
+    } else {
+        byte_range.end.saturating_sub(byte_range.start).saturating_add(1)
+    };
+    let mut file = File::open(&path).await.map_err(|_| Status::NotFound)?;
+    if byte_range.start > 0 {
+        file.seek(SeekFrom::Start(byte_range.start))
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+    }
+
+    Ok(SessionStream::File {
+        content_type: content_type_for_path(&path),
+        body: file.take(content_length),
+        content_length,
+        content_range: selected_range.map(|range| format!("bytes {}-{}/{}", range.start, range.end, total_length)),
+    })
 }
 
 /// Capability summary returned to clients during bootstrap.
@@ -2231,6 +2334,7 @@ pub async fn create_session(
         client_profile: payload.client_profile,
         decision,
         created_at: current_timestamp(),
+        audio_stream_index: None,
     };
 
     ACTIVE_PLAYBACK_SESSIONS.write().await.insert(session_id, session.clone());
@@ -2262,22 +2366,24 @@ pub async fn delete_session(session_id: String) -> Status {
 }
 
 /// Stream content for a session (handles transcode or direct play).
-#[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>")]
+#[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>&<audio_stream_index>")]
 pub async fn get_session_stream(
     db: DbConn,
+    range: RangeHeader,
     session_id: String,
     start_ms: Option<i64>,
+    audio_stream_index: Option<usize>,
 ) -> Result<SessionStream, Status> {
     let session = ACTIVE_PLAYBACK_SESSIONS.read().await.get(&session_id).cloned().ok_or(Status::NotFound)?;
+    let selected_audio_stream_index = audio_stream_index.or(session.audio_stream_index);
     
-    if session.decision.can_direct_play {
+    if session.decision.can_direct_play && selected_audio_stream_index.unwrap_or_default() == 0 {
         let source_path = db
             .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
             .await
             .map_err(|_| Status::InternalServerError)?
             .ok_or(Status::NotFound)?;
-        let file = NamedFile::open(source_path).await.map_err(|_| Status::NotFound)?;
-        return Ok(SessionStream::File(file));
+        return open_file_stream(source_path, &range).await;
     }
     
     let settings = current_settings();
@@ -2305,6 +2411,7 @@ pub async fn get_session_stream(
         max_height: if session.client_profile.max_video_height > 0 { Some(session.client_profile.max_video_height) } else { None },
         max_bitrate_kbps: if session.client_profile.max_bitrate_kbps > 0 { Some(session.client_profile.max_bitrate_kbps) } else { None },
         start_time_ms: start_ms.filter(|value| *value > 0),
+        audio_stream_index: selected_audio_stream_index,
     };
     
     match crate::transcode::spawn_transcode_stdout(&session_id, &spec, &settings.ffmpeg).await {
@@ -2352,8 +2459,9 @@ pub async fn get_item_playback(
 #[get("/api/v1/items/<item_id>/stream")]
 pub async fn stream_item(
     db: DbConn,
+    range: RangeHeader,
     item_id: i32,
-) -> Result<NamedFile, Status> {
+) -> Result<SessionStream, Status> {
     let decision = db
         .run(move |conn| get_playback_decision(conn, item_id, None))
         .await
@@ -2384,9 +2492,7 @@ pub async fn stream_item(
         })?
         .ok_or(Status::NotFound)?;
 
-    NamedFile::open(source_path)
-        .await
-        .map_err(|_| Status::NotFound)
+    open_file_stream(source_path, &range).await
 }
 
 /// Persist browser playback progress for a media item.

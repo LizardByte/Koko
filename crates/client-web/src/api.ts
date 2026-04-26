@@ -166,6 +166,7 @@ export interface MediaItemDetail extends MediaItemSummary {
   artwork_updated_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
+  audio_tracks: MediaAudioTrack[];
   subtitle_tracks: MediaSubtitleTrack[];
   hierarchy: MediaItemSummary[];
   children: MediaItemSummary[];
@@ -243,6 +244,14 @@ export interface MetadataSearchResult {
   next_refresh_at?: number;
   refresh_error?: string;
   updated_at?: number;
+}
+
+export interface MediaAudioTrack {
+  index: number;
+  label: string;
+  codec?: string;
+  language?: string;
+  default: boolean;
 }
 
 export interface ItemMetadataResponse {
@@ -405,6 +414,7 @@ export interface PlaybackSession {
   client_profile: ClientProfile;
   decision: PlaybackDecision;
   created_at: number;
+  audio_stream_index?: number;
 }
 
 export interface CreateSessionRequest {
@@ -705,12 +715,22 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
   if (method === 'POST' && url.pathname === '/api/v1/sessions') {
     // Basic mock for create_session
     const request = body as CreateSessionRequest;
+    const item = getMockItem(request.item_id);
+    const preferredLanguages = getMockBootstrap().current_user?.preferred_metadata_languages ?? ['en-US'];
+    const audioStreamIndex = item?.audio_tracks?.find((track) => {
+      const language = track.language?.toLowerCase();
+      return language && preferredLanguages.some((preferred) => {
+        const normalized = preferred.toLowerCase();
+        return normalized.startsWith(language) || language.startsWith(normalized.split('-')[0]);
+      });
+    })?.index;
     return {
       session_id: 'mock-session-123',
       item_id: request.item_id,
       client_profile: request.client_profile,
       decision: getMockPlayback(request.item_id),
       created_at: Date.now(),
+      audio_stream_index: audioStreamIndex,
     } as T;
   }
 
@@ -951,10 +971,13 @@ export function getStreamUrl(itemId: number): string {
   return `${getStoredApiBase()}/api/v1/items/${itemId}/stream`;
 }
 
-export function getSessionStreamUrl(sessionId: string, startMs?: number): string {
+export function getSessionStreamUrl(sessionId: string, startMs?: number, audioStreamIndex?: number): string {
   const params = new URLSearchParams();
   if (typeof startMs === 'number' && Number.isFinite(startMs) && startMs > 0) {
     params.set('start_ms', String(Math.max(0, Math.floor(startMs))));
+  }
+  if (typeof audioStreamIndex === 'number' && Number.isFinite(audioStreamIndex) && audioStreamIndex >= 0) {
+    params.set('audio_stream_index', String(Math.floor(audioStreamIndex)));
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
   return `${getStoredApiBase()}/api/v1/sessions/${sessionId}/stream${suffix}`;

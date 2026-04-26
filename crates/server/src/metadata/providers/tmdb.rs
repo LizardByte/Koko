@@ -1,5 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
+use once_cell::sync::Lazy;
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
@@ -8,10 +10,14 @@ use tmdb_client::models::{EpisodeDetails, MovieDetails, MovieObject, SeasonDetai
 use crate::config::{MetadataProviderId, MetadataSettings};
 use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataSearchResult,
-    StoredMetadataSnapshot, cleanup_movie_title, extract_release_year, movie_match_score,
-    parse_movie_name, show_search_query, tmdb_episode_external_id, tmdb_image_url,
-    tmdb_provider_settings, tmdb_season_external_id,
+    StoredMetadataSnapshot, cleanup_movie_title, extract_release_year, metadata_response_cache_key,
+    movie_match_score, parse_movie_name, read_metadata_response_cache_text, show_search_query,
+    tmdb_episode_external_id, tmdb_image_url, tmdb_provider_settings, tmdb_season_external_id,
+    write_metadata_response_cache_text,
 };
+
+static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -422,26 +428,8 @@ fn enrich_tmdb_people_payload(
         .take(40)
         .filter_map(|id| {
             let person_id = i32::try_from(id).ok()?;
-            client
-                .people_api()
-                .get_person_details(
-                    person_id,
-                    Some(language),
-                    Some(image_languages),
-                    Some("combined_credits,external_ids,images"),
-                )
-                .ok()
-                .and_then(|details| {
-                    let mut value = serde_json::to_value(details).ok()?;
-                    let known_for = tmdb_known_for_from_person_payload(&value);
-                    if let Some(map) = value.as_object_mut() {
-                        map.insert(
-                            "koko_known_for".into(),
-                            Value::Array(known_for.into_iter().map(Value::String).collect()),
-                        );
-                    }
-                    Some((id, value))
-                })
+            tmdb_cached_person_detail(client, person_id, language, image_languages)
+                .map(|details| (id, details))
         })
         .collect::<Vec<_>>();
 
@@ -466,6 +454,61 @@ fn enrich_tmdb_people_payload(
             }
         }
     }
+}
+
+fn tmdb_cached_person_detail(
+    client: &TmdbApiClient,
+    person_id: i32,
+    language: &str,
+    image_languages: &str,
+) -> Option<Value> {
+    let cache_key = metadata_response_cache_key(
+        &MetadataProviderId::Tmdb,
+        "person",
+        &[&person_id.to_string(), language, image_languages],
+    );
+    if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&cache_key).cloned())
+    {
+        return Some(cached);
+    }
+    if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
+        if let Ok(value) = serde_json::from_str::<Value>(&contents) {
+            if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
+                cache.insert(cache_key.clone(), value.clone());
+            }
+            return Some(value);
+        }
+    }
+
+    let details = client
+        .people_api()
+        .get_person_details(
+            person_id,
+            Some(language),
+            Some(image_languages),
+            Some("combined_credits,external_ids,images"),
+        )
+        .ok()?;
+    let mut value = serde_json::to_value(details).ok()?;
+    let known_for = tmdb_known_for_from_person_payload(&value);
+    if let Some(map) = value.as_object_mut() {
+        map.insert(
+            "koko_known_for".into(),
+            Value::Array(known_for.into_iter().map(Value::String).collect()),
+        );
+    }
+
+    if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
+        if cache.len() > 5000 {
+            cache.clear();
+        }
+        cache.insert(cache_key.clone(), value.clone());
+    }
+    write_metadata_response_cache_text(&cache_key, &value.to_string());
+    Some(value)
 }
 
 fn tmdb_known_for_from_person_payload(payload: &Value) -> Vec<String> {

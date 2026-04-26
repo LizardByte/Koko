@@ -968,6 +968,10 @@ export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResp
   return getMockSettings();
 }
 
+export function clearMockMetadataCache(): { removed_files: number } {
+  return { removed_files: 0 };
+}
+
 export function addMockLibrary(request: { library: MediaLibrarySettings }): SettingsResponse {
   const normalizedLibrary = structuredClone(request.library);
   normalizedLibrary.paths = normalizedLibrary.paths.length ? normalizedLibrary.paths : [normalizedLibrary.path].filter(Boolean);

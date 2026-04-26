@@ -3,6 +3,7 @@ import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
 import {
   addLibrary,
+  clearMetadataCache,
   clearStoredAuthToken,
   createUser,
   deleteLibrary,
@@ -2704,6 +2705,10 @@ function renderSettingsPage(): string {
               </select>
             </label>
           </div>
+          <div class="form-row">
+            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
+            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
+          </div>
         </section>
 
         <div class="page-actions">
@@ -4401,6 +4406,23 @@ function bindEvents(): void {
 
   document.querySelector<HTMLButtonElement>('#go-home-from-settings')?.addEventListener('click', () => {
     navigateTo('/');
+  });
+
+  document.querySelector<HTMLButtonElement>('#clear-metadata-cache')?.addEventListener('click', async () => {
+    const confirmed = window.confirm('Clear cached provider metadata responses? The next metadata refresh will fetch fresh data from providers.');
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const button = document.querySelector<HTMLButtonElement>('#clear-metadata-cache');
+      setButtonBusy(button, true);
+      const response = await clearMetadataCache();
+      state.error = `Cleared ${response.removed_files} metadata cache file${response.removed_files === 1 ? '' : 's'}.`;
+      render();
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to clear metadata cache.';
+      render();
+    }
   });
 
   document.querySelector<HTMLFormElement>('#metadata-dashboard-filter-form')?.addEventListener('submit', (event) => {

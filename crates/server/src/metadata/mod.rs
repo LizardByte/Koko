@@ -15,7 +15,7 @@ use diesel::{
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use strsim::normalized_levenshtein;
@@ -38,6 +38,7 @@ const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
 const DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS: i64 = 30 * 24 * 60 * 60;
+const METADATA_RESPONSE_CACHE_TTL_SECONDS: i64 = 24 * 60 * 60;
 /// Default Koko metadata locale used when no user preference is available.
 pub const DEFAULT_METADATA_LOCALE: &str = "en-US";
 
@@ -332,7 +333,7 @@ impl MetadataItemKind {
 }
 
 /// Stored metadata snapshot fetched from a provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMetadataSnapshot {
     /// Provider identifier.
     pub provider_id: MetadataProviderId,
@@ -356,6 +357,12 @@ pub struct StoredMetadataSnapshot {
     pub provider_locale_key: Option<String>,
     /// Raw provider payload.
     pub provider_payload_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MetadataSnapshotCacheEntry {
+    created_at: i64,
+    snapshot: StoredMetadataSnapshot,
 }
 
 /// Presentation fields derived from one stored metadata link.
@@ -455,6 +462,17 @@ pub fn provider_locale_key(
         .to_string(),
         _ => normalized,
     }
+}
+
+/// Remove provider metadata response cache files from the configured data directory.
+pub fn clear_metadata_response_cache(data_dir: &str) -> Result<usize, String> {
+    let cache_dir = metadata_response_cache_dir(data_dir);
+    if !cache_dir.exists() {
+        return Ok(0);
+    }
+    let count = count_files_recursive(&cache_dir)?;
+    fs::remove_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    Ok(count)
 }
 
 /// Provider contract for metadata implementations.
@@ -795,6 +813,15 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
     locale_key: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
     let locale_key = normalize_locale_key(locale_key);
+    let cache_key = metadata_response_cache_key(
+        &provider_id,
+        "item",
+        &[external_id, media_type, &locale_key],
+    );
+    if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
     let mut last_error = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let provider_locale = provider_locale_key(provider_id.clone(), &fetch_locale);
@@ -824,6 +851,7 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
                 snapshot.locale_key = locale_key;
                 snapshot.provider_locale_key = Some(provider_locale);
+                write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
             Ok(mut snapshot) => {
@@ -884,7 +912,26 @@ pub async fn fetch_provider_season_metadata_snapshot(
     season_number: i32,
     season_external_id: Option<&str>,
 ) -> Result<StoredMetadataSnapshot, String> {
-    match provider_id {
+    let provider_language = provider_settings(settings, provider_id.clone())
+        .map(|provider| provider.language)
+        .unwrap_or_else(|_| DEFAULT_METADATA_LOCALE.to_string());
+    let season_external_key = season_external_id.unwrap_or_default();
+    let season_number_key = season_number.to_string();
+    let cache_key = metadata_response_cache_key(
+        &provider_id,
+        "season",
+        &[
+            show_external_id,
+            &season_number_key,
+            season_external_key,
+            &provider_language,
+        ],
+    );
+    if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
+    let snapshot = match provider_id {
         MetadataProviderId::Tmdb => {
             fetch_tmdb_season_metadata_snapshot(settings, show_external_id, season_number).await
         }
@@ -904,7 +951,9 @@ pub async fn fetch_provider_season_metadata_snapshot(
             "{} season metadata fetch is not implemented.",
             provider_display_name(&provider_id)
         )),
-    }
+    }?;
+    write_metadata_snapshot_cache(&cache_key, &snapshot);
+    Ok(snapshot)
 }
 
 /// Fetch one provider episode snapshot for a linked show descendant.
@@ -916,7 +965,28 @@ pub async fn fetch_provider_episode_metadata_snapshot(
     episode_number: i32,
     episode_external_id: Option<&str>,
 ) -> Result<StoredMetadataSnapshot, String> {
-    match provider_id {
+    let provider_language = provider_settings(settings, provider_id.clone())
+        .map(|provider| provider.language)
+        .unwrap_or_else(|_| DEFAULT_METADATA_LOCALE.to_string());
+    let episode_external_key = episode_external_id.unwrap_or_default();
+    let season_number_key = season_number.to_string();
+    let episode_number_key = episode_number.to_string();
+    let cache_key = metadata_response_cache_key(
+        &provider_id,
+        "episode",
+        &[
+            show_external_id,
+            &season_number_key,
+            &episode_number_key,
+            episode_external_key,
+            &provider_language,
+        ],
+    );
+    if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
+    let snapshot = match provider_id {
         MetadataProviderId::Tmdb => {
             fetch_tmdb_episode_metadata_snapshot(
                 settings,
@@ -943,7 +1013,9 @@ pub async fn fetch_provider_episode_metadata_snapshot(
             "{} episode metadata fetch is not implemented.",
             provider_display_name(&provider_id)
         )),
-    }
+    }?;
+    write_metadata_snapshot_cache(&cache_key, &snapshot);
+    Ok(snapshot)
 }
 
 /// Guess the best provider movie match for one library item.
@@ -2299,6 +2371,109 @@ pub fn metadata_asset_uuid(
     )
 }
 
+fn metadata_response_cache_dir(data_dir: &str) -> PathBuf {
+    Path::new(data_dir)
+        .join("metadata")
+        .join("cache")
+        .join("responses")
+}
+
+pub(crate) fn metadata_response_cache_key(
+    provider_id: &MetadataProviderId,
+    kind: &str,
+    parts: &[&str],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(provider_id.as_storage_value().as_bytes());
+    hasher.update([0]);
+    hasher.update(kind.as_bytes());
+    for part in parts {
+        hasher.update([0]);
+        hasher.update(part.trim().as_bytes());
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn metadata_response_cache_path(cache_key: &str) -> PathBuf {
+    let data_dir = crate::config::current_settings().general.data_dir;
+    let (shard, file_stem) = cache_key.split_at(1);
+    metadata_response_cache_dir(&data_dir)
+        .join(shard)
+        .join(format!("{file_stem}.json"))
+}
+
+fn read_metadata_snapshot_cache(cache_key: &str) -> Option<StoredMetadataSnapshot> {
+    let contents = read_metadata_response_cache_text(cache_key)?;
+    let entry = serde_json::from_str::<MetadataSnapshotCacheEntry>(&contents).ok()?;
+    Some(entry.snapshot)
+}
+
+fn write_metadata_snapshot_cache(
+    cache_key: &str,
+    snapshot: &StoredMetadataSnapshot,
+) {
+    let entry = MetadataSnapshotCacheEntry {
+        created_at: current_timestamp(),
+        snapshot: snapshot.clone(),
+    };
+    if let Ok(contents) = serde_json::to_string(&entry) {
+        write_metadata_response_cache_text(cache_key, &contents);
+    }
+}
+
+pub(crate) fn read_metadata_response_cache_text(cache_key: &str) -> Option<String> {
+    let path = metadata_response_cache_path(cache_key);
+    let contents = fs::read_to_string(&path).ok()?;
+    let created_at = fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.elapsed().ok())
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .map(|age| current_timestamp().saturating_sub(age))
+        .unwrap_or_else(current_timestamp);
+    let age = current_timestamp().saturating_sub(created_at);
+    if age > METADATA_RESPONSE_CACHE_TTL_SECONDS {
+        let _ = fs::remove_file(path);
+        return None;
+    }
+    Some(contents)
+}
+
+pub(crate) fn write_metadata_response_cache_text(
+    cache_key: &str,
+    contents: &str,
+) {
+    let path = metadata_response_cache_path(cache_key);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let _ = fs::write(path, contents);
+}
+
+fn count_files_recursive(path: &Path) -> Result<usize, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            count += count_files_recursive(&entry_path)?;
+        } else {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn metadata_asset_type_directory(item_kind: MetadataItemKind) -> &'static str {
     item_kind.asset_directory()
 }
@@ -3499,7 +3674,6 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
             .filter_map(|(index, entry)| {
                 let person = entry.get("person").unwrap_or(entry);
                 let name = person_name(person)
-                    .or_else(|| person_name(entry))
                     .or_else(|| {
                         text_field(
                             entry,
@@ -3509,7 +3683,8 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                                 "actorName",
                             ],
                         )
-                    })?;
+                    })
+                    .or_else(|| person_name(entry))?;
                 let role =
                     text_field(entry, &["type", "role", "job"]).or_else(|| Some("Actor".into()));
                 let character_name = text_field(

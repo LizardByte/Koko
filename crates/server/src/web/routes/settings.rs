@@ -40,6 +40,13 @@ pub struct SettingsResponse {
     pub settings_path: String,
 }
 
+/// Metadata cache clear response.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MetadataCacheClearResponse {
+    /// Number of cache files removed.
+    pub removed_files: usize,
+}
+
 /// Add-library request payload.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AddLibraryRequest {
@@ -246,6 +253,18 @@ pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> 
     persist_runtime_settings(settings.clone())?;
 
     Ok(Json(merged_settings_response(settings, libraries)))
+}
+
+/// Clear cached provider metadata responses.
+#[openapi(tag = "Settings")]
+#[post("/api/v1/settings/metadata-cache/clear")]
+pub fn clear_metadata_cache() -> Result<Json<MetadataCacheClearResponse>, Status> {
+    let data_dir = current_settings().general.data_dir;
+    let removed_files = crate::metadata::clear_metadata_response_cache(&data_dir).map_err(|error| {
+        log::error!("Failed to clear metadata response cache: {}", error);
+        Status::InternalServerError
+    })?;
+    Ok(Json(MetadataCacheClearResponse { removed_files }))
 }
 
 /// Return structured application logs for the settings page.

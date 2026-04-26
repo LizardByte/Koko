@@ -8,7 +8,8 @@ use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataSearchResult,
     StoredMetadataSnapshot, TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken,
     TvdbDescendantTarget, cleanup_movie_title, extract_release_year, format_payload_snippet,
-    movie_match_score, parse_movie_name, provider_settings, show_search_query,
+    metadata_response_cache_key, movie_match_score, parse_movie_name, provider_settings,
+    read_metadata_response_cache_text, show_search_query, write_metadata_response_cache_text,
 };
 use std::time::{Duration, Instant};
 
@@ -407,6 +408,17 @@ async fn get_text(
     query: Vec<(&'static str, String)>,
     context: &str,
 ) -> Result<String, String> {
+    let query_key = query
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let cache_key =
+        metadata_response_cache_key(&MetadataProviderId::Tvdb, "http", &[path, &query_key]);
+    if let Some(payload) = read_metadata_response_cache_text(&cache_key) {
+        return Ok(payload);
+    }
+
     let retry_attempts = usize::try_from(provider.retry_attempts).unwrap_or(0);
     let base_backoff = Duration::from_millis(u64::from(provider.retry_backoff_ms.max(1)));
 
@@ -436,6 +448,7 @@ async fn get_text(
                     .map(Duration::from_secs);
                 let payload = response.text().await.map_err(|error| error.to_string())?;
                 if status.is_success() {
+                    write_metadata_response_cache_text(&cache_key, &payload);
                     return Ok(payload);
                 }
 

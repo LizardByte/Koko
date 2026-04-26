@@ -25,6 +25,7 @@ import {
   updateMockUser,
   updateMockPlaybackProgress,
   updateMockSettings,
+  clearMockMetadataCache,
 } from './mockApi';
 
 const REQUEST_TIMEOUT_MS = 15000;
@@ -564,6 +565,10 @@ export interface SettingsResponse {
   settings_path: string;
 }
 
+export interface MetadataCacheClearResponse {
+  removed_files: number;
+}
+
 export interface PlaybackProgressRequest {
   position_ms: number;
   duration_ms?: number;
@@ -734,6 +739,10 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
 
   if (method === 'POST' && url.pathname === '/api/v1/settings/libraries') {
     return addMockLibrary(body as { library: MediaLibrarySettings }) as T;
+  }
+
+  if (method === 'POST' && url.pathname === '/api/v1/settings/metadata-cache/clear') {
+    return clearMockMetadataCache() as T;
   }
 
   const removeLibraryMatch = url.pathname.match(/^\/api\/v1\/settings\/libraries\/(\d+)$/);
@@ -1016,6 +1025,10 @@ export function getLogs(filters?: {
 
 export function updateSettings(settings: SettingsSnapshot): Promise<SettingsResponse> {
   return requestJson<SettingsResponse>('PUT', '/api/v1/settings', settings);
+}
+
+export function clearMetadataCache(): Promise<MetadataCacheClearResponse> {
+  return requestJson<MetadataCacheClearResponse>('POST', '/api/v1/settings/metadata-cache/clear');
 }
 
 export function addLibrary(library: MediaLibrarySettings): Promise<SettingsResponse> {

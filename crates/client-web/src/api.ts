@@ -12,6 +12,7 @@ import {
   getMockLogs,
   getMockUsers,
   getMockPlayback,
+  getMockPerson,
   getMockSystemActivities,
   refreshMockLibraryMetadata,
   refreshMockItemMetadata,
@@ -210,6 +211,7 @@ export interface ItemMetadataMatch {
   logo_url?: string;
   cached_logo_path?: string;
   genres: string[];
+  people: ItemMetadataPerson[];
   rating?: number;
   content_rating?: string;
   trailer_title?: string;
@@ -223,6 +225,59 @@ export interface ItemMetadataMatch {
   next_refresh_at?: number;
   refresh_error?: string;
   updated_at?: number;
+}
+
+export interface ItemMetadataPerson {
+  id: number;
+  person_id: number;
+  external_id?: string;
+  locale_key?: string;
+  name: string;
+  role?: string;
+  department?: string;
+  character_name?: string;
+  profile_url?: string;
+  image_url?: string;
+  cached_image_path?: string;
+  sort_order: number;
+}
+
+export interface MetadataPersonSummary {
+  id: number;
+  provider_id: string;
+  external_id?: string;
+  locale_key: string;
+  name: string;
+  known_for: string[];
+  biography?: string;
+  gender?: string;
+  birthday?: string;
+  deathday?: string;
+  birth_place?: string;
+  profile_url?: string;
+  image_url?: string;
+  cached_image_path?: string;
+  updated_at?: number;
+}
+
+export interface MetadataPersonCreditSummary {
+  id: number;
+  metadata_link_id: number;
+  media_item_id: number;
+  role?: string;
+  department?: string;
+  character_name?: string;
+  sort_order: number;
+}
+
+export interface MetadataPersonItemCredit {
+  credit: MetadataPersonCreditSummary;
+  item: MediaItemSummary;
+}
+
+export interface MetadataPersonResponse {
+  person: MetadataPersonSummary;
+  credits: MetadataPersonItemCredit[];
 }
 
 export interface ItemMetadataResponse {
@@ -635,6 +690,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
           return getMockPlayback(Number(itemPlaybackMatch[1])) as T;
         }
 
+        const personMatch = url.pathname.match(/^\/api\/v1\/people\/(\d+)$/);
+        if (personMatch) {
+          return getMockPerson(Number(personMatch[1])) as T;
+        }
+
         const itemMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)$/);
         if (itemMatch) {
           const item = getMockItem(Number(itemMatch[1]));
@@ -858,6 +918,14 @@ export function getSystemActivities(): Promise<SystemActivitiesResponse> {
 
 export function getItemMetadata(itemId: number): Promise<ItemMetadataResponse> {
   return requestJson<ItemMetadataResponse>('GET', `/api/v1/items/${itemId}/metadata`);
+}
+
+export function getPerson(personId: number): Promise<MetadataPersonResponse> {
+  return requestJson<MetadataPersonResponse>('GET', `/api/v1/people/${personId}`);
+}
+
+export function getPersonImageUrl(personId: number): string {
+  return `${getStoredApiBase()}/api/v1/people/${personId}/image`;
 }
 
 export interface MetadataSearchOptions {

@@ -13,6 +13,7 @@ import type {
   MediaLibrary,
   MediaLibrarySettings,
   MetadataProviderStatus,
+  MetadataPersonResponse,
   MetadataSearchResult,
   LogEntriesResponse,
   PlaybackDecision,
@@ -462,6 +463,13 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         media_type: 'movie',
         match_state: 'linked',
         genres: ['Action', 'Science Fiction'],
+        people: [
+          { id: 1, person_id: 1, external_id: '6384', name: 'Keanu Reeves', role: 'Actor', department: 'Cast', character_name: 'Neo', image_url: 'https://image.tmdb.org/t/p/w185/4D0PpNI0kmP58hgrwGC3wCjxhnm.jpg', profile_url: 'https://www.themoviedb.org/person/6384', sort_order: 0 },
+          { id: 2, person_id: 2, external_id: '2975', name: 'Laurence Fishburne', role: 'Actor', department: 'Cast', character_name: 'Morpheus', image_url: 'https://image.tmdb.org/t/p/w185/8suOhUmPbfKqDQ17jQ1Gy0mI3P4.jpg', profile_url: 'https://www.themoviedb.org/person/2975', sort_order: 1 },
+          { id: 3, person_id: 3, external_id: '9340', name: 'Carrie-Anne Moss', role: 'Actor', department: 'Cast', character_name: 'Trinity', image_url: 'https://image.tmdb.org/t/p/w185/xD4jTA3KmVp5Rq3aHcymL9DUGjD.jpg', profile_url: 'https://www.themoviedb.org/person/9340', sort_order: 2 },
+          { id: 4, person_id: 4, external_id: '9339', name: 'Lana Wachowski', role: 'Director', department: 'Directing', profile_url: 'https://www.themoviedb.org/person/9339', sort_order: 10000 },
+          { id: 5, person_id: 5, external_id: '9341', name: 'Lilly Wachowski', role: 'Director', department: 'Directing', profile_url: 'https://www.themoviedb.org/person/9341', sort_order: 10001 },
+        ],
         locale_key: 'en-US',
         provider_payload_json: JSON.stringify({
           videos: {
@@ -1035,6 +1043,7 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     media_type: candidate.media_type,
     match_state: 'linked',
     genres: [],
+    people: [],
     locale_key: 'en-US',
     provider_payload_json: JSON.stringify(candidate, null, 2),
     updated_at: Math.floor(Date.now() / 1000),
@@ -1051,6 +1060,61 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
   }
 
   return linkedMatch;
+}
+
+export function getMockPerson(personId: number): MetadataPersonResponse {
+  const credits = Object.values(itemMetadata)
+    .flatMap((response) => response.matches.flatMap((match) => {
+      return match.people
+        .filter((person) => person.person_id === personId)
+        .flatMap((person) => {
+          const item = items.find((candidate) => candidate.id === response.item_id);
+          if (!item) {
+            return [];
+          }
+
+          return [{
+            credit: {
+              id: person.id,
+              metadata_link_id: match.id,
+              media_item_id: response.item_id,
+              role: person.role,
+              department: person.department,
+              character_name: person.character_name,
+              sort_order: person.sort_order,
+            },
+            item,
+          }];
+        });
+    }));
+  const firstCredit = credits[0];
+  const personCredit = Object.values(itemMetadata)
+    .flatMap((response) => response.matches)
+    .flatMap((match) => match.people)
+    .find((person) => person.person_id === personId);
+  if (!firstCredit || !personCredit) {
+    throw new Error('404 Not Found');
+  }
+
+  return {
+    person: {
+      id: personCredit.person_id,
+      provider_id: 'tmdb',
+      external_id: personCredit.external_id,
+      locale_key: 'en-US',
+      name: personCredit.name,
+      known_for: ['The Matrix'],
+      biography: personCredit.name === 'Keanu Reeves'
+        ? 'Canadian actor known for action films, science fiction, and understated dramatic work.'
+        : undefined,
+      gender: personCredit.name === 'Carrie-Anne Moss' ? 'Female' : 'Male',
+      birthday: personCredit.name === 'Keanu Reeves' ? '1964-09-02' : undefined,
+      birth_place: personCredit.name === 'Keanu Reeves' ? 'Beirut, Lebanon' : undefined,
+      profile_url: personCredit.profile_url,
+      image_url: personCredit.image_url,
+    },
+    credits,
+  };
 }
 
 export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {

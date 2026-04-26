@@ -70,6 +70,40 @@ table! {
 }
 
 table! {
+    metadata_people (id) {
+        id -> Integer,
+        provider_id -> Text,
+        external_id -> Nullable<Text>,
+        identity_key -> Text,
+        locale_key -> Text,
+        name -> Text,
+        known_for_json -> Nullable<Text>,
+        biography -> Nullable<Text>,
+        gender -> Nullable<Text>,
+        birthday -> Nullable<Text>,
+        deathday -> Nullable<Text>,
+        birth_place -> Nullable<Text>,
+        profile_url -> Nullable<Text>,
+        image_url -> Nullable<Text>,
+        cached_image_path -> Nullable<Text>,
+        provider_payload_json -> Nullable<Text>,
+        updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
+    metadata_person_credits (id) {
+        id -> Integer,
+        metadata_link_id -> Integer,
+        person_id -> Integer,
+        role -> Nullable<Text>,
+        department -> Nullable<Text>,
+        character_name -> Nullable<Text>,
+        sort_order -> Integer,
+    }
+}
+
+table! {
     media_files (id) {
         id -> Integer,
         library_id -> Integer,
@@ -160,6 +194,8 @@ table! {
 joinable!(item_metadata_collections -> item_metadata_links (metadata_link_id));
 joinable!(item_metadata_links -> media_items (media_item_id));
 joinable!(item_metadata_people -> item_metadata_links (metadata_link_id));
+joinable!(metadata_person_credits -> item_metadata_links (metadata_link_id));
+joinable!(metadata_person_credits -> metadata_people (person_id));
 joinable!(media_files -> media_libraries (library_id));
 joinable!(media_files -> media_items (media_item_id));
 joinable!(media_items -> media_libraries (library_id));
@@ -171,6 +207,8 @@ allow_tables_to_appear_in_same_query!(
     item_metadata_collections,
     item_metadata_links,
     item_metadata_people,
+    metadata_people,
+    metadata_person_credits,
     media_files,
     media_items,
     media_libraries,

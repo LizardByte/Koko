@@ -1417,6 +1417,85 @@ legend {
   gap: 0.2rem;
 }
 
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.4rem;
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  text-decoration: none;
+}
+
+.people-groups {
+  display: grid;
+  gap: 1rem;
+}
+
+.people-group h4 {
+  margin: 0 0 0.7rem;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.people-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 142px;
+  gap: 0.8rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  align-items: start;
+}
+
+.person-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: stretch;
+  width: 142px;
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.person-card-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 2 / 3;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+  color: #dfe9ff;
+  font-size: 2.2rem;
+  font-weight: 700;
+}
+
+.person-card-title,
+.person-card-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-card-title {
+  font-weight: 700;
+}
+
+.person-card-subtitle {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.person-poster {
+  max-width: 240px;
+}
+
 .section-heading-actions {
   display: flex;
   justify-content: space-between;

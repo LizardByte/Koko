@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
@@ -96,7 +98,7 @@ pub(crate) async fn fetch_snapshot(
                     external_id_number,
                     Some(&language),
                     Some(&image_languages),
-                    Some("videos,images,release_dates,external_ids"),
+                    Some("videos,images,release_dates,external_ids,credits"),
                 )
                 .map_err(|error| {
                     format!(
@@ -104,7 +106,10 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            Ok(movie_snapshot_from_details(&external_id_string, &details))
+            let payload_json = enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let mut snapshot = movie_snapshot_from_details(&external_id_string, &details);
+            snapshot.provider_payload_json = payload_json;
+            Ok(snapshot)
         }
         "tv" => {
             let client = TmdbApiClient::new_with_api_key(api_key);
@@ -114,7 +119,7 @@ pub(crate) async fn fetch_snapshot(
                     external_id_number,
                     Some(&language),
                     Some(&image_languages),
-                    Some("videos,images,content_ratings,external_ids"),
+                    Some("videos,images,content_ratings,external_ids,credits"),
                 )
                 .map_err(|error| {
                     format!(
@@ -122,7 +127,10 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            Ok(tv_snapshot_from_details(&external_id_string, &details))
+            let payload_json = enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let mut snapshot = tv_snapshot_from_details(&external_id_string, &details);
+            snapshot.provider_payload_json = payload_json;
+            Ok(snapshot)
         }
         other => Err(format!("Unsupported TMDB media type: {}", other)),
     })
@@ -270,18 +278,27 @@ pub(crate) async fn fetch_season_snapshot(
         let client = TmdbApiClient::new_with_api_key(api_key);
         let details = client
             .tv_seasons_api()
-            .get_tv_season_details(show_id, season_number, Some(&language), None, None)
+            .get_tv_season_details(
+                show_id,
+                season_number,
+                Some(&language),
+                None,
+                Some("credits"),
+            )
             .map_err(|error| {
                 format!(
                     "TMDB season lookup for tv:{}:season:{} failed: {}",
                     show_external_id, season_number, error
                 )
             })?;
-        Ok(season_snapshot_from_details(
+        let payload_json = enriched_tmdb_payload_json(&client, &details, &language, "null");
+        let mut snapshot = season_snapshot_from_details(
             &show_external_id,
             season_number,
             &details,
-        ))
+        );
+        snapshot.provider_payload_json = payload_json;
+        Ok(snapshot)
     })
     .await
 }
@@ -307,7 +324,7 @@ pub(crate) async fn fetch_episode_snapshot(
                 episode_number,
                 Some(&language),
                 None,
-                None,
+                Some("credits"),
             )
             .map_err(|error| {
                 format!(
@@ -315,12 +332,15 @@ pub(crate) async fn fetch_episode_snapshot(
                     show_external_id, season_number, episode_number, error
                 )
             })?;
-        Ok(episode_snapshot_from_details(
+        let payload_json = enriched_tmdb_payload_json(&client, &details, &language, "null");
+        let mut snapshot = episode_snapshot_from_details(
             &show_external_id,
             season_number,
             episode_number,
             &details,
-        ))
+        );
+        snapshot.provider_payload_json = payload_json;
+        Ok(snapshot)
     })
     .await
 }
@@ -357,6 +377,139 @@ where
     tokio::task::spawn_blocking(operation)
         .await
         .map_err(|error| format!("TMDB request task failed: {}", error))?
+}
+
+fn enriched_tmdb_payload_json<T: serde::Serialize>(
+    client: &TmdbApiClient,
+    details: &T,
+    language: &str,
+    image_languages: &str,
+) -> Option<String> {
+    let mut payload = serde_json::to_value(details).ok()?;
+    enrich_tmdb_people_payload(client, &mut payload, language, image_languages);
+    serde_json::to_string(&payload).ok()
+}
+
+fn enrich_tmdb_people_payload(
+    client: &TmdbApiClient,
+    payload: &mut Value,
+    language: &str,
+    image_languages: &str,
+) {
+    let mut person_ids = Vec::new();
+    if let Some(cast) = payload
+        .get("credits")
+        .and_then(|credits| credits.get("cast"))
+        .and_then(Value::as_array)
+    {
+        person_ids.extend(cast.iter().filter_map(|entry| entry.get("id").and_then(Value::as_i64)));
+    }
+    if let Some(crew) = payload
+        .get("credits")
+        .and_then(|credits| credits.get("crew"))
+        .and_then(Value::as_array)
+    {
+        person_ids.extend(crew.iter().filter_map(|entry| {
+            let job = entry.get("job").and_then(Value::as_str)?;
+            matches_important_tmdb_crew_role(job).then(|| entry.get("id").and_then(Value::as_i64)).flatten()
+        }));
+    }
+
+    let mut seen = HashSet::new();
+    let people = person_ids
+        .into_iter()
+        .filter(|id| seen.insert(*id))
+        .take(40)
+        .filter_map(|id| {
+            let person_id = i32::try_from(id).ok()?;
+            client
+                .people_api()
+                .get_person_details(
+                    person_id,
+                    Some(language),
+                    Some(image_languages),
+                    Some("combined_credits,external_ids,images"),
+                )
+                .ok()
+                .and_then(|details| {
+                    let mut value = serde_json::to_value(details).ok()?;
+                    let known_for = tmdb_known_for_from_person_payload(&value);
+                    if let Some(map) = value.as_object_mut() {
+                        map.insert(
+                            "koko_known_for".into(),
+                            Value::Array(known_for.into_iter().map(Value::String).collect()),
+                        );
+                    }
+                    Some((id, value))
+                })
+        })
+        .collect::<Vec<_>>();
+
+    if people.is_empty() {
+        return;
+    }
+
+    if let Some(credits) = payload.get_mut("credits") {
+        for collection_key in ["cast", "crew"] {
+            if let Some(entries) = credits.get_mut(collection_key).and_then(Value::as_array_mut) {
+                for entry in entries {
+                    let Some(id) = entry.get("id").and_then(Value::as_i64) else {
+                        continue;
+                    };
+                    let Some((_, person)) = people.iter().find(|(person_id, _)| *person_id == id) else {
+                        continue;
+                    };
+                    if let Some(map) = entry.as_object_mut() {
+                        map.insert("koko_person".into(), person.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn tmdb_known_for_from_person_payload(payload: &Value) -> Vec<String> {
+    let Some(combined_credits) = payload.get("combined_credits") else {
+        return Vec::new();
+    };
+    let mut titles = Vec::new();
+    for key in ["cast", "crew"] {
+        if let Some(entries) = combined_credits.get(key).and_then(Value::as_array) {
+            for entry in entries {
+                if let Some(title) = entry
+                    .get("title")
+                    .or_else(|| entry.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|title| !title.is_empty())
+                {
+                    if !titles.iter().any(|existing| existing == title) {
+                        titles.push(title.to_string());
+                    }
+                }
+                if titles.len() >= 8 {
+                    return titles;
+                }
+            }
+        }
+    }
+    titles
+}
+
+fn matches_important_tmdb_crew_role(role: &str) -> bool {
+    matches!(
+        role,
+        "Director"
+            | "Writer"
+            | "Screenplay"
+            | "Story"
+            | "Creator"
+            | "Executive Producer"
+            | "Producer"
+            | "Original Music Composer"
+            | "Composer"
+            | "Director of Photography"
+    )
 }
 
 fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {

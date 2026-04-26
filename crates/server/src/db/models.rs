@@ -6,7 +6,7 @@ use diesel::prelude::*;
 // local imports
 use crate::db::schema::{
     item_metadata_collections, item_metadata_links, item_metadata_people, media_files, media_items,
-    media_libraries, playback_progress, scan_state, users,
+    media_libraries, metadata_people, metadata_person_credits, playback_progress, scan_state, users,
 };
 
 #[derive(Queryable, Selectable, Insertable, Debug)]
@@ -254,6 +254,76 @@ pub struct NewItemMetadataPerson {
     pub character_name: Option<String>,
     pub profile_url: Option<String>,
     pub image_url: Option<String>,
+    pub sort_order: i32,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = metadata_people)]
+pub struct MetadataPerson {
+    pub id: i32,
+    pub provider_id: String,
+    pub external_id: Option<String>,
+    pub identity_key: String,
+    pub locale_key: String,
+    pub name: String,
+    pub known_for_json: Option<String>,
+    pub biography: Option<String>,
+    pub gender: Option<String>,
+    pub birthday: Option<String>,
+    pub deathday: Option<String>,
+    pub birth_place: Option<String>,
+    pub profile_url: Option<String>,
+    pub image_url: Option<String>,
+    pub cached_image_path: Option<String>,
+    pub provider_payload_json: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = metadata_people)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMetadataPerson {
+    pub provider_id: String,
+    pub external_id: Option<String>,
+    pub identity_key: String,
+    pub locale_key: String,
+    pub name: String,
+    pub known_for_json: Option<String>,
+    pub biography: Option<String>,
+    pub gender: Option<String>,
+    pub birthday: Option<String>,
+    pub deathday: Option<String>,
+    pub birth_place: Option<String>,
+    pub profile_url: Option<String>,
+    pub image_url: Option<String>,
+    pub cached_image_path: Option<String>,
+    pub provider_payload_json: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
+#[diesel(belongs_to(ItemMetadataLink, foreign_key = metadata_link_id))]
+#[diesel(belongs_to(MetadataPerson, foreign_key = person_id))]
+#[diesel(table_name = metadata_person_credits)]
+pub struct MetadataPersonCredit {
+    pub id: i32,
+    pub metadata_link_id: i32,
+    pub person_id: i32,
+    pub role: Option<String>,
+    pub department: Option<String>,
+    pub character_name: Option<String>,
+    pub sort_order: i32,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = metadata_person_credits)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMetadataPersonCredit {
+    pub metadata_link_id: i32,
+    pub person_id: i32,
+    pub role: Option<String>,
+    pub department: Option<String>,
+    pub character_name: Option<String>,
     pub sort_order: i32,
 }
 

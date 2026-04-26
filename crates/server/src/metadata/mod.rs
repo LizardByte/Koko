@@ -28,8 +28,9 @@ use crate::config::{
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
-    ItemMetadataCollection, ItemMetadataLink, MediaItem, NewItemMetadataCollection,
-    NewItemMetadataLink,
+    ItemMetadataCollection, ItemMetadataLink, MediaItem, MetadataPerson, MetadataPersonCredit,
+    NewItemMetadataCollection, NewItemMetadataLink, NewItemMetadataPerson, NewMetadataPerson,
+    NewMetadataPersonCredit,
 };
 use crate::utils::current_timestamp;
 
@@ -132,6 +133,8 @@ pub struct ItemMetadataSummary {
     pub cached_logo_path: Option<String>,
     /// Provider genre labels stored directly for querying and UI use.
     pub genres: Vec<String>,
+    /// People credited by the provider, including cast and crew.
+    pub people: Vec<ItemMetadataPersonSummary>,
     /// Provider-supplied user/community rating, when available.
     pub rating: Option<f32>,
     /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
@@ -158,6 +161,89 @@ pub struct ItemMetadataSummary {
     pub refresh_error: Option<String>,
     /// Last update timestamp as Unix seconds, if available.
     pub updated_at: Option<i64>,
+}
+
+/// Provider-neutral person credit linked to stored metadata.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ItemMetadataPersonSummary {
+    /// Stable row identifier for the stored person credit.
+    pub id: i32,
+    /// Stable database identifier for this normalized person.
+    pub person_id: i32,
+    /// Provider-side person identifier, when available.
+    pub external_id: Option<String>,
+    /// Koko locale key for this localized person row.
+    pub locale_key: String,
+    /// Display name.
+    pub name: String,
+    /// Job or credit role such as Actor, Director, or Writer.
+    pub role: Option<String>,
+    /// High-level department such as Cast, Directing, or Writing.
+    pub department: Option<String>,
+    /// Character name for acting credits.
+    pub character_name: Option<String>,
+    /// Provider person page URL, when available.
+    pub profile_url: Option<String>,
+    /// Provider image URL, when available.
+    pub image_url: Option<String>,
+    /// Cached local image path, when available.
+    pub cached_image_path: Option<String>,
+    /// Provider/source order for stable presentation.
+    pub sort_order: i32,
+}
+
+/// Normalized provider-scoped person stored in Koko.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MetadataPersonSummary {
+    /// Stable person identifier.
+    pub id: i32,
+    /// Provider identifier.
+    pub provider_id: MetadataProviderId,
+    /// Provider-side person identifier, when available.
+    pub external_id: Option<String>,
+    /// Koko locale key for this localized person row.
+    pub locale_key: String,
+    /// Display name.
+    pub name: String,
+    /// Titles this person is known for.
+    pub known_for: Vec<String>,
+    /// Provider biography or description.
+    pub biography: Option<String>,
+    /// Provider-neutral gender label, when known.
+    pub gender: Option<String>,
+    /// Birth date as provider-supplied ISO date, when known.
+    pub birthday: Option<String>,
+    /// Death date as provider-supplied ISO date, when known.
+    pub deathday: Option<String>,
+    /// Birth place, when known.
+    pub birth_place: Option<String>,
+    /// Provider person page URL, when available.
+    pub profile_url: Option<String>,
+    /// Provider image URL, when available.
+    pub image_url: Option<String>,
+    /// Cached local image path, when available.
+    pub cached_image_path: Option<String>,
+    /// Last update timestamp as Unix seconds, if available.
+    pub updated_at: Option<i64>,
+}
+
+/// One credit connecting a normalized person to an item metadata link.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MetadataPersonCreditSummary {
+    /// Stable credit identifier.
+    pub id: i32,
+    /// Linked metadata row identifier.
+    pub metadata_link_id: i32,
+    /// Media item represented by the metadata row.
+    pub media_item_id: i32,
+    /// Job or credit role such as Actor, Director, or Writer.
+    pub role: Option<String>,
+    /// High-level department such as Cast, Directing, or Writing.
+    pub department: Option<String>,
+    /// Character name for acting credits.
+    pub character_name: Option<String>,
+    /// Provider/source order for stable presentation.
+    pub sort_order: i32,
 }
 
 /// Search result returned by a metadata provider.
@@ -477,7 +563,162 @@ pub fn get_item_metadata_summaries(
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?;
 
-    Ok(rows.into_iter().map(to_item_metadata_summary).collect())
+    rows.into_iter()
+        .map(|row| to_item_metadata_summary_with_people(conn, row))
+        .collect()
+}
+
+/// Sort stored metadata rows so the current user's preferred locale appears first.
+pub fn sort_item_metadata_summaries_for_languages(
+    summaries: &mut [ItemMetadataSummary],
+    preferred_languages: &[String],
+) {
+    let rank = preferred_language_rank(preferred_languages);
+    let fallback_rank = rank.len();
+    summaries.sort_by(|left, right| {
+        let left_rank = rank
+            .get(&normalize_locale_key(&left.locale_key))
+            .copied()
+            .unwrap_or(fallback_rank);
+        let right_rank = rank
+            .get(&normalize_locale_key(&right.locale_key))
+            .copied()
+            .unwrap_or(fallback_rank);
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| {
+                left.provider_id
+                    .as_storage_value()
+                    .cmp(right.provider_id.as_storage_value())
+            })
+            .then_with(|| left.updated_at.cmp(&right.updated_at).reverse())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+/// Return one normalized metadata person.
+pub fn get_metadata_person(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+) -> Result<Option<MetadataPersonSummary>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    people_dsl::metadata_people
+        .filter(people_dsl::id.eq(person_id))
+        .select(MetadataPerson::as_select())
+        .first(conn)
+        .optional()
+        .map(|person| person.map(to_metadata_person_summary))
+}
+
+/// Return the best localized row for the same provider person as `person_id`.
+pub fn get_metadata_person_for_languages(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+    preferred_languages: &[String],
+) -> Result<Option<MetadataPersonSummary>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    let Some(source_person) = people_dsl::metadata_people
+        .filter(people_dsl::id.eq(person_id))
+        .select(MetadataPerson::as_select())
+        .first(conn)
+        .optional()?
+    else {
+        return Ok(None);
+    };
+
+    let rows = people_dsl::metadata_people
+        .filter(people_dsl::provider_id.eq(&source_person.provider_id))
+        .filter(people_dsl::identity_key.eq(&source_person.identity_key))
+        .select(MetadataPerson::as_select())
+        .load::<MetadataPerson>(conn)?;
+    Ok(preferred_person_row(rows, preferred_languages).map(to_metadata_person_summary))
+}
+
+/// Return all localized person ids for the same provider person as `person_id`.
+pub fn get_metadata_person_locale_peer_ids(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+) -> Result<Vec<i32>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    let Some(source_person) = people_dsl::metadata_people
+        .filter(people_dsl::id.eq(person_id))
+        .select(MetadataPerson::as_select())
+        .first(conn)
+        .optional()?
+    else {
+        return Ok(Vec::new());
+    };
+
+    people_dsl::metadata_people
+        .filter(people_dsl::provider_id.eq(&source_person.provider_id))
+        .filter(people_dsl::identity_key.eq(&source_person.identity_key))
+        .select(people_dsl::id)
+        .load::<i32>(conn)
+}
+
+/// Return all item credits for one normalized metadata person.
+pub fn list_metadata_person_credit_summaries(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+) -> Result<Vec<MetadataPersonCreditSummary>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as link_dsl;
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    let rows = credit_dsl::metadata_person_credits
+        .inner_join(link_dsl::item_metadata_links)
+        .filter(credit_dsl::person_id.eq(person_id))
+        .order((credit_dsl::sort_order.asc(), link_dsl::updated_at.desc()))
+        .select((MetadataPersonCredit::as_select(), ItemMetadataLink::as_select()))
+        .load::<(MetadataPersonCredit, ItemMetadataLink)>(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(credit, link)| MetadataPersonCreditSummary {
+            id: credit.id,
+            metadata_link_id: credit.metadata_link_id,
+            media_item_id: link.media_item_id,
+            role: credit.role,
+            department: credit.department,
+            character_name: credit.character_name,
+            sort_order: credit.sort_order,
+        })
+        .collect())
+}
+
+/// Return all item credits for localized rows representing the same provider person.
+pub fn list_metadata_person_credit_summaries_for_person_ids(
+    conn: &mut SqliteConnection,
+    person_ids: &[i32],
+) -> Result<Vec<MetadataPersonCreditSummary>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as link_dsl;
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    if person_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = credit_dsl::metadata_person_credits
+        .inner_join(link_dsl::item_metadata_links)
+        .filter(credit_dsl::person_id.eq_any(person_ids))
+        .order((credit_dsl::sort_order.asc(), link_dsl::updated_at.desc()))
+        .select((MetadataPersonCredit::as_select(), ItemMetadataLink::as_select()))
+        .load::<(MetadataPersonCredit, ItemMetadataLink)>(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(credit, link)| MetadataPersonCreditSummary {
+            id: credit.id,
+            metadata_link_id: credit.metadata_link_id,
+            media_item_id: link.media_item_id,
+            role: credit.role,
+            department: credit.department,
+            character_name: credit.character_name,
+            sort_order: credit.sort_order,
+        })
+        .collect())
 }
 
 /// Return primary metadata links that were left pending without an active in-memory worker.
@@ -1087,8 +1328,9 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             .first(conn)?;
 
         sync_item_metadata_collections(conn, row.id, snapshot)?;
+        sync_item_metadata_people(conn, row.id, snapshot)?;
 
-        Ok(to_item_metadata_summary(row))
+        to_item_metadata_summary_with_people(conn, row)
     })
 }
 
@@ -1207,7 +1449,7 @@ pub fn set_item_metadata_refresh_state(
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 
-        Ok(to_item_metadata_summary(row))
+        to_item_metadata_summary_with_people(conn, row)
     })
 }
 
@@ -1410,6 +1652,48 @@ pub fn get_preferred_item_metadata_link_for_languages(
         .or_else(|| rows.into_iter().next()))
 }
 
+fn preferred_language_rank(preferred_languages: &[String]) -> HashMap<String, usize> {
+    let mut languages = preferred_languages
+        .iter()
+        .map(|language| normalize_locale_key(language))
+        .filter(|language| !language.is_empty())
+        .collect::<Vec<_>>();
+    if !languages
+        .iter()
+        .any(|language| language == DEFAULT_METADATA_LOCALE)
+    {
+        languages.push(DEFAULT_METADATA_LOCALE.to_string());
+    }
+
+    languages
+        .into_iter()
+        .enumerate()
+        .map(|(index, language)| (language, index))
+        .collect()
+}
+
+fn preferred_person_row(
+    rows: Vec<MetadataPerson>,
+    preferred_languages: &[String],
+) -> Option<MetadataPerson> {
+    let rank = preferred_language_rank(preferred_languages);
+    let fallback_rank = rank.len();
+    rows.into_iter().min_by(|left, right| {
+        let left_rank = rank
+            .get(&normalize_locale_key(&left.locale_key))
+            .copied()
+            .unwrap_or(fallback_rank);
+        let right_rank = rank
+            .get(&normalize_locale_key(&right.locale_key))
+            .copied()
+            .unwrap_or(fallback_rank);
+        left_rank
+            .cmp(&right_rank)
+            .then_with(|| left.updated_at.cmp(&right.updated_at).reverse())
+            .then_with(|| left.id.cmp(&right.id))
+    })
+}
+
 /// Return an already stored metadata snapshot matching one provider item.
 pub fn get_stored_metadata_snapshot(
     conn: &mut SqliteConnection,
@@ -1563,11 +1847,7 @@ fn provider_logo_url(payload: &Value) -> Option<String> {
             })
         })
         .or_else(|| provider_tvdb_logo_artwork(payload))
-        .or_else(|| {
-            payload
-                .get("data")
-                .and_then(provider_tvdb_logo_artwork)
-        })
+        .or_else(|| payload.get("data").and_then(provider_tvdb_logo_artwork))
 }
 
 fn provider_tagline(payload: &Value) -> Option<String> {
@@ -1841,6 +2121,145 @@ pub async fn persist_item_metadata_assets(
     };
 
     Ok((poster_path, backdrop_path, logo_path))
+}
+
+/// Cache person artwork referenced by a metadata payload and return a snapshot with cached paths embedded.
+pub async fn persist_metadata_people_assets(
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    let Some(payload_json) = snapshot.provider_payload_json.as_deref() else {
+        return Ok(snapshot.clone());
+    };
+    let mut payload = serde_json::from_str::<Value>(payload_json).map_err(|error| error.to_string())?;
+    match snapshot.provider_id {
+        MetadataProviderId::Tmdb => {
+            cache_tmdb_people_payload_images(&mut payload, snapshot, data_dir).await?;
+        }
+        MetadataProviderId::Tvdb => {
+            cache_tvdb_people_payload_images(&mut payload, snapshot, data_dir).await?;
+        }
+        _ => {}
+    }
+
+    let mut next_snapshot = snapshot.clone();
+    next_snapshot.provider_payload_json = Some(payload.to_string());
+    Ok(next_snapshot)
+}
+
+async fn cache_tmdb_people_payload_images(
+    payload: &mut Value,
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) -> Result<(), String> {
+    let Some(credits) = payload.get_mut("credits") else {
+        return Ok(());
+    };
+    for collection_key in ["cast", "crew"] {
+        let Some(entries) = credits.get_mut(collection_key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for entry in entries {
+            let external_id = entry
+                .get("id")
+                .and_then(Value::as_i64)
+                .map(|id| id.to_string());
+            let Some(external_id) = external_id else {
+                continue;
+            };
+            let image_url = entry
+                .get("koko_person")
+                .and_then(|person| person.get("profile_path"))
+                .or_else(|| entry.get("profile_path"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(|path| {
+                    if path.starts_with("http://") || path.starts_with("https://") {
+                        path.to_string()
+                    } else {
+                        tmdb_image_url(path, "w185")
+                    }
+                });
+            let Some(image_url) = image_url else {
+                continue;
+            };
+            let person_dir = managed_metadata_asset_dir(
+                data_dir,
+                snapshot.provider_id.clone(),
+                &external_id,
+                Some("person"),
+                &snapshot.locale_key,
+            );
+            let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
+            let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await else {
+                continue;
+            };
+            let cached_path = path.to_string_lossy().to_string();
+            if let Some(map) = entry.as_object_mut() {
+                map.insert(
+                    "koko_cached_image_path".into(),
+                    Value::String(cached_path.clone()),
+                );
+                if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
+                    person.insert(
+                        "koko_cached_image_path".into(),
+                        Value::String(cached_path),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cache_tvdb_people_payload_images(
+    payload: &mut Value,
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) -> Result<(), String> {
+    let data = match payload {
+        Value::Object(map) if map.contains_key("data") => map.get_mut("data").unwrap(),
+        _ => payload,
+    };
+    let entries = if data.get("characters").is_some() {
+        data.get_mut("characters").and_then(Value::as_array_mut)
+    } else {
+        data.get_mut("people").and_then(Value::as_array_mut)
+    };
+    let Some(entries) = entries else {
+        return Ok(());
+    };
+    for entry in entries {
+        let person = entry.get("person").unwrap_or(entry);
+        let external_id = person_external_id(person).or_else(|| person_external_id(entry));
+        let Some(external_id) = external_id else {
+            continue;
+        };
+        let image_url = text_field(person, &["image", "image_url", "thumbnail"])
+            .or_else(|| text_field(entry, &["image", "image_url", "thumbnail"]));
+        let Some(image_url) = image_url else {
+            continue;
+        };
+        let person_dir = managed_metadata_asset_dir(
+            data_dir,
+            snapshot.provider_id.clone(),
+            &external_id,
+            Some("person"),
+            &snapshot.locale_key,
+        );
+        let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
+        let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await else {
+            continue;
+        };
+        if let Some(map) = entry.as_object_mut() {
+            map.insert(
+                "koko_cached_image_path".into(),
+                Value::String(path.to_string_lossy().to_string()),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Return the deterministic provider-uuid based asset path for metadata payloads.
@@ -2189,6 +2608,7 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
             .as_deref()
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .unwrap_or_default(),
+        people: Vec::new(),
         rating: link.rating,
         content_rating: link.content_rating,
         trailer_title: link.trailer_title,
@@ -2202,6 +2622,70 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         next_refresh_at: link.next_refresh_at,
         refresh_error: link.refresh_error,
         updated_at: link.updated_at,
+    }
+}
+
+fn to_item_metadata_summary_with_people(
+    conn: &mut SqliteConnection,
+    link: ItemMetadataLink,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    let people = credit_dsl::metadata_person_credits
+        .inner_join(people_dsl::metadata_people)
+        .filter(credit_dsl::metadata_link_id.eq(link.id))
+        .order(credit_dsl::sort_order.asc())
+        .select((MetadataPersonCredit::as_select(), MetadataPerson::as_select()))
+        .load::<(MetadataPersonCredit, MetadataPerson)>(conn)?
+        .into_iter()
+        .map(to_item_metadata_person_summary)
+        .collect();
+    let mut summary = to_item_metadata_summary(link);
+    summary.people = people;
+    Ok(summary)
+}
+
+fn to_item_metadata_person_summary(
+    (credit, person): (MetadataPersonCredit, MetadataPerson)
+) -> ItemMetadataPersonSummary {
+    ItemMetadataPersonSummary {
+        id: credit.id,
+        person_id: person.id,
+        external_id: person.external_id,
+        locale_key: person.locale_key,
+        name: person.name,
+        role: credit.role,
+        department: credit.department,
+        character_name: credit.character_name,
+        profile_url: person.profile_url,
+        image_url: person.image_url,
+        cached_image_path: person.cached_image_path,
+        sort_order: credit.sort_order,
+    }
+}
+
+fn to_metadata_person_summary(person: MetadataPerson) -> MetadataPersonSummary {
+    MetadataPersonSummary {
+        id: person.id,
+        provider_id: metadata_provider_id_from_db(&person.provider_id),
+        external_id: person.external_id,
+        locale_key: person.locale_key,
+        name: person.name,
+        known_for: person
+            .known_for_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .unwrap_or_default(),
+        biography: person.biography,
+        gender: person.gender,
+        birthday: person.birthday,
+        deathday: person.deathday,
+        birth_place: person.birth_place,
+        profile_url: person.profile_url,
+        image_url: person.image_url,
+        cached_image_path: person.cached_image_path,
+        updated_at: person.updated_at,
     }
 }
 
@@ -2718,6 +3202,123 @@ fn sync_item_metadata_collections(
     Ok(())
 }
 
+fn sync_item_metadata_people(
+    conn: &mut SqliteConnection,
+    metadata_link_id: i32,
+    snapshot: &StoredMetadataSnapshot,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::item_metadata_people::dsl as people_dsl;
+    use crate::db::schema::metadata_people::dsl as normalized_people_dsl;
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    diesel::delete(
+        people_dsl::item_metadata_people.filter(people_dsl::metadata_link_id.eq(metadata_link_id)),
+    )
+    .execute(conn)?;
+    diesel::delete(
+        credit_dsl::metadata_person_credits
+            .filter(credit_dsl::metadata_link_id.eq(metadata_link_id)),
+    )
+    .execute(conn)?;
+
+    let Some(payload) = snapshot
+        .provider_payload_json
+        .as_deref()
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+    else {
+        return Ok(());
+    };
+    let people = provider_people(&snapshot.provider_id, &payload);
+    if people.is_empty() {
+        return Ok(());
+    }
+
+    let rows = people
+        .iter()
+        .cloned()
+        .map(|person| NewItemMetadataPerson {
+            metadata_link_id,
+            external_id: person.external_id,
+            name: person.name,
+            role: person.role,
+            department: person.department,
+            character_name: person.character_name,
+            profile_url: person.profile_url,
+            image_url: person.image_url,
+            sort_order: person.sort_order,
+        })
+        .collect::<Vec<_>>();
+
+    diesel::insert_into(people_dsl::item_metadata_people)
+        .values(&rows)
+        .execute(conn)?;
+
+    for person in people {
+        let identity_key = person_identity_key(&person);
+        let provider_id = snapshot.provider_id.as_storage_value().to_string();
+        let payload = NewMetadataPerson {
+            provider_id: provider_id.clone(),
+            external_id: person.external_id.clone(),
+            identity_key: identity_key.clone(),
+            locale_key: snapshot.locale_key.clone(),
+            name: person.name.clone(),
+            known_for_json: serde_json::to_string(&person.known_for).ok(),
+            biography: person.biography.clone(),
+            gender: person.gender.clone(),
+            birthday: person.birthday.clone(),
+            deathday: person.deathday.clone(),
+            birth_place: person.birth_place.clone(),
+            profile_url: person.profile_url.clone(),
+            image_url: person.image_url.clone(),
+            cached_image_path: person.cached_image_path.clone(),
+            provider_payload_json: person.provider_payload_json.clone(),
+            updated_at: Some(current_timestamp()),
+        };
+        let existing_person = normalized_people_dsl::metadata_people
+            .filter(normalized_people_dsl::provider_id.eq(&provider_id))
+            .filter(normalized_people_dsl::identity_key.eq(&identity_key))
+            .filter(normalized_people_dsl::locale_key.eq(&snapshot.locale_key))
+            .select(MetadataPerson::as_select())
+            .first(conn)
+            .optional()?;
+        let normalized_person = if let Some(existing_person) = existing_person {
+            diesel::update(
+                normalized_people_dsl::metadata_people
+                    .filter(normalized_people_dsl::id.eq(existing_person.id)),
+            )
+            .set(&payload)
+            .execute(conn)?;
+            normalized_people_dsl::metadata_people
+                .filter(normalized_people_dsl::id.eq(existing_person.id))
+                .select(MetadataPerson::as_select())
+                .first(conn)?
+        } else {
+            diesel::insert_into(normalized_people_dsl::metadata_people)
+                .values(&payload)
+                .execute(conn)?;
+            normalized_people_dsl::metadata_people
+                .filter(normalized_people_dsl::provider_id.eq(&provider_id))
+                .filter(normalized_people_dsl::identity_key.eq(&identity_key))
+                .filter(normalized_people_dsl::locale_key.eq(&snapshot.locale_key))
+                .select(MetadataPerson::as_select())
+                .first(conn)?
+        };
+
+        diesel::insert_into(credit_dsl::metadata_person_credits)
+            .values(&NewMetadataPersonCredit {
+                metadata_link_id,
+                person_id: normalized_person.id,
+                role: person.role,
+                department: person.department,
+                character_name: person.character_name,
+                sort_order: person.sort_order,
+            })
+            .execute(conn)?;
+    }
+
+    Ok(())
+}
+
 fn parse_tmdb_collection_payload(payload_json: &str) -> Option<ParsedTmdbCollection> {
     let payload = serde_json::from_str::<Value>(payload_json).ok()?;
     let collection = payload.get("belongs_to_collection")?;
@@ -2756,6 +3357,334 @@ struct ParsedTmdbCollection {
     artwork_url: Option<String>,
     backdrop_url: Option<String>,
     provider_payload_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedProviderPerson {
+    external_id: Option<String>,
+    name: String,
+    known_for: Vec<String>,
+    biography: Option<String>,
+    gender: Option<String>,
+    birthday: Option<String>,
+    deathday: Option<String>,
+    birth_place: Option<String>,
+    role: Option<String>,
+    department: Option<String>,
+    character_name: Option<String>,
+    profile_url: Option<String>,
+    image_url: Option<String>,
+    cached_image_path: Option<String>,
+    provider_payload_json: Option<String>,
+    sort_order: i32,
+}
+
+fn provider_people(
+    provider_id: &MetadataProviderId,
+    payload: &Value,
+) -> Vec<ParsedProviderPerson> {
+    let mut people = match provider_id {
+        MetadataProviderId::Tmdb => tmdb_people(payload),
+        MetadataProviderId::Tvdb => tvdb_people(payload),
+        _ => Vec::new(),
+    };
+    people.sort_by(|left, right| {
+        left.sort_order
+            .cmp(&right.sort_order)
+            .then_with(|| left.department.cmp(&right.department))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    people.truncate(80);
+    people
+}
+
+fn tmdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
+    let Some(credits) = payload.get("credits") else {
+        return Vec::new();
+    };
+
+    let mut people = Vec::new();
+    if let Some(cast) = credits.get("cast").and_then(Value::as_array) {
+        people.extend(cast.iter().enumerate().filter_map(|(index, entry)| {
+            let name = person_name(entry)?;
+            Some(ParsedProviderPerson {
+                external_id: person_external_id(entry),
+                name,
+                known_for: tmdb_person_known_for(payload, entry),
+                biography: tmdb_person_detail(entry, "biography"),
+                gender: tmdb_person_gender(entry),
+                birthday: tmdb_person_detail(entry, "birthday"),
+                deathday: tmdb_person_detail(entry, "deathday"),
+                birth_place: tmdb_person_detail(entry, "place_of_birth"),
+                role: Some("Actor".into()),
+                department: Some("Cast".into()),
+                character_name: text_field(entry, &["character"]),
+                profile_url: person_external_id(entry)
+                    .map(|id| format!("https://www.themoviedb.org/person/{id}")),
+                image_url: entry
+                    .get("profile_path")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|path| tmdb_image_url(path, "w185")),
+                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                provider_payload_json: entry
+                    .get("koko_person")
+                    .map(Value::to_string),
+                sort_order: entry
+                    .get("order")
+                    .and_then(Value::as_i64)
+                    .and_then(|order| i32::try_from(order).ok())
+                    .unwrap_or_else(|| i32::try_from(index).unwrap_or(i32::MAX)),
+            })
+        }));
+    }
+
+    if let Some(crew) = credits.get("crew").and_then(Value::as_array) {
+        let mut crew_order = 10_000;
+        people.extend(crew.iter().filter_map(|entry| {
+            let job = text_field(entry, &["job"])?;
+            if !matches_important_crew_role(&job) {
+                return None;
+            }
+            let name = person_name(entry)?;
+            let sort_order = crew_order;
+            crew_order += 1;
+            Some(ParsedProviderPerson {
+                external_id: person_external_id(entry),
+                name,
+                known_for: tmdb_person_known_for(payload, entry),
+                biography: tmdb_person_detail(entry, "biography"),
+                gender: tmdb_person_gender(entry),
+                birthday: tmdb_person_detail(entry, "birthday"),
+                deathday: tmdb_person_detail(entry, "deathday"),
+                birth_place: tmdb_person_detail(entry, "place_of_birth"),
+                role: Some(job),
+                department: text_field(entry, &["department"]).or_else(|| Some("Crew".into())),
+                character_name: None,
+                profile_url: person_external_id(entry)
+                    .map(|id| format!("https://www.themoviedb.org/person/{id}")),
+                image_url: entry
+                    .get("profile_path")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|path| tmdb_image_url(path, "w185")),
+                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                provider_payload_json: entry
+                    .get("koko_person")
+                    .map(Value::to_string),
+                sort_order,
+            })
+        }));
+    }
+
+    dedupe_people(people)
+}
+
+fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
+    let data = payload.get("data").unwrap_or(payload);
+    let characters = data
+        .get("characters")
+        .or_else(|| data.get("people"))
+        .and_then(Value::as_array);
+    let Some(characters) = characters else {
+        return Vec::new();
+    };
+
+    dedupe_people(
+        characters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let person = entry.get("person").unwrap_or(entry);
+                let name = person_name(person)
+                    .or_else(|| person_name(entry))
+                    .or_else(|| {
+                        text_field(
+                            entry,
+                            &[
+                                "personName",
+                                "peopleName",
+                                "actorName",
+                            ],
+                        )
+                    })?;
+                let role =
+                    text_field(entry, &["type", "role", "job"]).or_else(|| Some("Actor".into()));
+                let character_name = text_field(
+                    entry,
+                    &[
+                        "name",
+                        "character",
+                        "characterName",
+                    ],
+                )
+                .filter(|character| character != &name);
+                Some(ParsedProviderPerson {
+                    external_id: person_external_id(person).or_else(|| person_external_id(entry)),
+                    name,
+                    known_for: Vec::new(),
+                    biography: text_field(person, &["biography", "description", "overview"])
+                        .or_else(|| text_field(entry, &["biography", "description", "overview"])),
+                    gender: text_field(person, &["gender"])
+                        .or_else(|| text_field(entry, &["gender"])),
+                    birthday: text_field(person, &["birthday", "birthDate"])
+                        .or_else(|| text_field(entry, &["birthday", "birthDate"])),
+                    deathday: text_field(person, &["deathday", "deathDate"])
+                        .or_else(|| text_field(entry, &["deathday", "deathDate"])),
+                    birth_place: text_field(person, &["birthPlace", "placeOfBirth"])
+                        .or_else(|| text_field(entry, &["birthPlace", "placeOfBirth"])),
+                    department: Some(if role.as_deref() == Some("Actor") {
+                        "Cast".into()
+                    } else {
+                        "Crew".into()
+                    }),
+                    role,
+                    character_name,
+                    profile_url: person_external_id(person)
+                        .or_else(|| person_external_id(entry))
+                        .map(|id| format!("https://thetvdb.com/people/{id}")),
+                    image_url: text_field(
+                        person,
+                        &[
+                            "image",
+                            "image_url",
+                            "thumbnail",
+                        ],
+                    )
+                    .or_else(|| {
+                        text_field(
+                            entry,
+                            &[
+                                "image",
+                                "image_url",
+                                "thumbnail",
+                            ],
+                        )
+                    }),
+                    cached_image_path: text_field(person, &["koko_cached_image_path"])
+                        .or_else(|| text_field(entry, &["koko_cached_image_path"])),
+                    provider_payload_json: Some(person.to_string()),
+                    sort_order: i32::try_from(index).unwrap_or(i32::MAX),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn matches_important_crew_role(role: &str) -> bool {
+    matches!(
+        role,
+        "Director"
+            | "Writer"
+            | "Screenplay"
+            | "Story"
+            | "Creator"
+            | "Executive Producer"
+            | "Producer"
+            | "Original Music Composer"
+            | "Composer"
+            | "Director of Photography"
+    )
+}
+
+fn tmdb_person_detail(
+    credit: &Value,
+    key: &str,
+) -> Option<String> {
+    credit
+        .get("koko_person")
+        .and_then(|person| person.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tmdb_person_gender(credit: &Value) -> Option<String> {
+    let gender = credit
+        .get("koko_person")
+        .and_then(|person| person.get("gender"))
+        .and_then(Value::as_i64)?;
+    match gender {
+        1 => Some("Female".into()),
+        2 => Some("Male".into()),
+        3 => Some("Non-binary".into()),
+        _ => None,
+    }
+}
+
+fn tmdb_person_known_for(
+    _payload: &Value,
+    credit: &Value,
+) -> Vec<String> {
+    credit
+        .get("koko_person")
+        .and_then(|person| person.get("koko_known_for"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn person_name(value: &Value) -> Option<String> {
+    text_field(
+        value,
+        &[
+            "name",
+            "original_name",
+            "fullName",
+        ],
+    )
+}
+
+fn person_external_id(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .or_else(|| value.get("peopleId"))
+        .or_else(|| value.get("personId"))
+        .and_then(|id| {
+            id.as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| id.as_str().map(str::to_string))
+        })
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+fn person_identity_key(person: &ParsedProviderPerson) -> String {
+    person
+        .external_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|external_id| !external_id.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("name:{}", person.name.trim().to_ascii_lowercase()))
+}
+
+fn dedupe_people(people: Vec<ParsedProviderPerson>) -> Vec<ParsedProviderPerson> {
+    let mut seen = HashSet::new();
+    people
+        .into_iter()
+        .filter(|person| {
+            let key = format!(
+                "{}:{}:{}",
+                person.external_id.as_deref().unwrap_or(""),
+                person.name.to_ascii_lowercase(),
+                person.role.as_deref().unwrap_or("")
+            );
+            seen.insert(key)
+        })
+        .collect()
 }
 
 fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {

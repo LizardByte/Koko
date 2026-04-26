@@ -15,6 +15,8 @@ import {
   getItemMetadata,
   getItems,
   getLibraries,
+  getPerson,
+  getPersonImageUrl,
   getMetadataProviders,
   getLogs,
   getPlaybackDecision,
@@ -41,6 +43,7 @@ import {
   type CreateUserRequest,
   type UpdateUserRequest,
   type MediaCollectionSummary,
+  type ItemMetadataPerson,
   type ItemMetadataResponse,
   type LoginRequest,
   type MediaHome,
@@ -49,6 +52,7 @@ import {
   type MediaLibrary,
   type MediaLibrarySettings,
   type MetadataProviderStatus,
+  type MetadataPersonResponse,
   type MetadataSearchResult,
   type LogEntriesResponse,
   type PlaybackDecision,
@@ -67,6 +71,7 @@ type AppRoute =
   | { page: 'home'; libraryId?: number }
   | { page: 'browse-detail'; kind: 'category' | 'collection' | 'playlist'; key: string; libraryId?: number }
   | { page: 'item'; itemId: number }
+  | { page: 'person'; personId: number }
   | { page: 'settings'; section?: SettingsSection };
 
 type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
@@ -104,6 +109,7 @@ interface AppState {
   logsResponse?: LogEntriesResponse;
   selectedItem?: MediaItemDetail;
   selectedItemMetadata?: ItemMetadataResponse;
+  selectedPerson?: MetadataPersonResponse;
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
   searchQuery: string;
@@ -360,6 +366,11 @@ function parseRoute(): AppRoute {
   const itemMatch = normalizedPath.match(/^\/items\/(\d+)$/);
   if (itemMatch) {
     return { page: 'item', itemId: Number(itemMatch[1]) };
+  }
+
+  const personMatch = normalizedPath.match(/^\/people\/(\d+)$/);
+  if (personMatch) {
+    return { page: 'person', personId: Number(personMatch[1]) };
   }
 
   const libraryBrowseMatch = normalizedPath.match(/^\/libraries\/(\d+)\/items\/(collections|categories|playlists)\/(.+)$/);
@@ -2195,6 +2206,128 @@ function renderSettingsSectionNav(): string {
   `;
 }
 
+function selectedItemPeople(): ItemMetadataPerson[] {
+  return state.selectedItemMetadata?.matches[0]?.people ?? [];
+}
+
+function formatPersonDate(value?: string): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function personAgeLabel(birthday?: string, deathday?: string): string | undefined {
+  if (!birthday) {
+    return undefined;
+  }
+  const birthDate = new Date(`${birthday}T00:00:00`);
+  const endDate = deathday ? new Date(`${deathday}T00:00:00`) : new Date();
+  if (Number.isNaN(birthDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return undefined;
+  }
+  let age = endDate.getFullYear() - birthDate.getFullYear();
+  const birthdayThisYear = new Date(endDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
+  if (endDate < birthdayThisYear) {
+    age -= 1;
+  }
+  return deathday ? `${age} at death` : `${age} years old`;
+}
+
+function renderPersonCredit(person: ItemMetadataPerson): string {
+  const imageUrl = person.cached_image_path
+    ? getPersonImageUrl(person.person_id)
+    : person.image_url ? resolveApiUrl(person.image_url) : undefined;
+  const subtitle = person.character_name || person.role || person.department || '';
+  return `
+    <button class="person-card" type="button" data-person-id="${person.person_id}">
+      <span class="person-card-art ${imageUrl ? 'has-image' : ''}" ${imageUrl ? `style="background-image: url('${escapeHtml(imageUrl)}');"` : ''}>
+        ${imageUrl ? '' : `<span>${escapeHtml(person.name.slice(0, 1).toUpperCase())}</span>`}
+      </span>
+      <span class="person-card-title">${escapeHtml(person.name)}</span>
+      ${subtitle ? `<span class="person-card-subtitle">${escapeHtml(subtitle)}</span>` : ''}
+    </button>
+  `;
+}
+
+function renderPeopleRail(): string {
+  const people = selectedItemPeople();
+  if (!people.length) {
+    return '';
+  }
+
+  return `
+    <section class="panel page-panel item-section item-people-section">
+      <div class="section-heading section-heading-actions">
+        <h3>People</h3>
+        <span class="muted">${people.length} credit${people.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="shelf-row-shell people-row-shell">
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="people:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+        <div class="people-row" data-shelf-row="people">
+          ${people.map(renderPersonCredit).join('')}
+        </div>
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="people:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderPersonPage(): string {
+  const response = state.selectedPerson;
+  if (!response) {
+    return '<section class="panel page-panel"><div class="empty-state">Loading person details…</div></section>';
+  }
+
+  const personImageUrl = response.person.cached_image_path
+    ? getPersonImageUrl(response.person.id)
+    : response.person.image_url ? resolveApiUrl(response.person.image_url) : undefined;
+  const credits = response.credits;
+  const age = personAgeLabel(response.person.birthday, response.person.deathday);
+
+  return `
+    <section class="item-page person-page">
+      <section class="item-hero person-hero">
+        <div class="detail-art item-poster person-poster ${personImageUrl ? 'has-image' : ''}">
+          ${personImageUrl ? `<img src="${escapeHtml(personImageUrl)}" alt="${escapeHtml(response.person.name)}" />` : `<span>${escapeHtml(response.person.name.slice(0, 1).toUpperCase())}</span>`}
+        </div>
+        <div class="detail-summary item-summary">
+          <h2 class="item-title-fallback">${escapeHtml(response.person.name)}</h2>
+          <div class="hero-meta-row">
+            <span class="tag">${escapeHtml(metadataProviderLabels[response.person.provider_id] ?? response.person.provider_id)}</span>
+            <span class="tag">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
+            ${response.person.birthday ? `<span class="tag">${escapeHtml([formatPersonDate(response.person.birthday), age].filter(Boolean).join(' · '))}</span>` : ''}
+            ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
+          </div>
+          ${response.person.birth_place ? `<p class="hero-tagline">${escapeHtml(response.person.birth_place)}</p>` : ''}
+          ${response.person.biography ? `<p class="hero-description">${escapeHtml(response.person.biography)}</p>` : ''}
+          ${response.person.known_for.length ? `<div class="hero-meta-row">${response.person.known_for.map((title) => `<span class="tag">${escapeHtml(title)}</span>`).join('')}</div>` : ''}
+          <div class="detail-actions">
+            <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent('Back', 'arrow-left')}</button>
+            ${response.person.profile_url ? `<a class="button-link secondary-button" href="${escapeHtml(response.person.profile_url)}" target="_blank" rel="noreferrer">Provider page</a>` : ''}
+          </div>
+        </div>
+      </section>
+
+      <section class="panel page-panel item-section">
+        <div class="section-heading section-heading-actions">
+          <h3>Credits</h3>
+          <span class="muted">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
+        </div>
+        ${credits.length
+          ? `<div class="item-grid">${credits.map((entry) => renderItemCard(entry.item)).join('')}</div>`
+          : '<div class="empty-state tight">No linked items are stored for this person yet.</div>'}
+      </section>
+    </section>
+  `;
+}
+
 function renderItemPage(): string {
   if (!state.selectedItem) {
     return '<section class="panel page-panel"><div class="empty-state">Loading item details…</div></section>';
@@ -2304,6 +2437,8 @@ function renderItemPage(): string {
           </div>
         </div>
       </section>
+
+      ${renderPeopleRail()}
 
       ${children.length ? `
         <section class="panel page-panel item-section">
@@ -2612,6 +2747,8 @@ function renderCurrentPage(): string {
   switch (state.route.page) {
     case 'item':
       return renderItemPage();
+    case 'person':
+      return renderPersonPage();
     case 'settings':
       return renderSettingsPage();
     default:
@@ -2923,6 +3060,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.logsResponse = undefined;
       state.selectedItem = undefined;
       state.selectedItemMetadata = undefined;
+      state.selectedPerson = undefined;
       state.selectedPlayback = undefined;
       state.metadataSearchResults = [];
       state.users = [];
@@ -2959,6 +3097,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.searchResults = searchResults;
       state.selectedItem = undefined;
       state.selectedItemMetadata = undefined;
+      state.selectedPerson = undefined;
       state.selectedPlayback = undefined;
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
@@ -2997,6 +3136,30 @@ async function refreshData(showLoading = true): Promise<void> {
       state.selectedItem = item;
       state.selectedItemMetadata = metadata;
       state.selectedPlayback = playback;
+      state.selectedPerson = undefined;
+    } else if (state.route.page === 'person') {
+      state.home = undefined;
+      state.libraryItems = [];
+      state.searchResults = [];
+      state.showFullSearchResults = false;
+      state.selectedItem = undefined;
+      state.selectedItemMetadata = undefined;
+      state.selectedPlayback = undefined;
+      state.metadataSearchResults = [];
+      state.metadataSearchQuery = '';
+      state.metadataSearchYear = '';
+      state.metadataSearchLanguage = '';
+      state.metadataSearchProviders = [];
+      state.isPlayerOpen = false;
+      state.activePlaybackSession = undefined;
+      state.activePlaybackStartMs = 0;
+      state.activeAudioStreamIndex = undefined;
+      state.isAudioTrackMenuOpen = false;
+      state.isTrailerMenuOpen = false;
+      state.activeTrailer = undefined;
+      state.dashboardItems = [];
+      state.logsResponse = undefined;
+      state.selectedPerson = await getPerson(state.route.personId);
     } else {
       state.home = undefined;
       state.libraryItems = [];
@@ -3004,6 +3167,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.showFullSearchResults = false;
       state.selectedItem = undefined;
       state.selectedItemMetadata = undefined;
+      state.selectedPerson = undefined;
       state.selectedPlayback = undefined;
       state.metadataSearchResults = [];
       state.metadataSearchQuery = '';
@@ -3972,7 +4136,23 @@ function bindEvents(): void {
     });
   });
 
+  document.querySelectorAll<HTMLElement>('[data-person-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const personId = Number(button.dataset.personId);
+      if (!Number.isFinite(personId)) {
+        return;
+      }
+
+      navigateTo(`/people/${personId}`);
+    });
+  });
+
   document.querySelector<HTMLButtonElement>('#back-to-library')?.addEventListener('click', () => {
+    if (state.route.page === 'person') {
+      window.history.back();
+      return;
+    }
+
     navigateTo(backNavigationTarget().path);
   });
 

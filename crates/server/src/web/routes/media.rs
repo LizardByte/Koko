@@ -52,12 +52,16 @@ use crate::metadata::{
     StoredMetadataSnapshot, expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
     fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot, fetch_themerr_youtube_theme_url_for_database,
-    get_item_metadata_summaries, get_primary_item_metadata_link, get_stored_metadata_snapshot,
-    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    get_item_metadata_summaries, get_metadata_person_for_languages,
+    get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
+    get_stored_metadata_snapshot, guess_provider_movie_match, guess_provider_show_match,
+    list_due_item_metadata_links, list_metadata_person_credit_summaries_for_person_ids,
     list_pending_item_metadata_links, list_provider_statuses, load_tvdb_show_descendant_targets,
     managed_metadata_asset_dir, normalize_locale_key, persist_item_metadata_assets,
-    search_provider, set_item_metadata_refresh_state, update_cached_artwork_path,
-    upsert_item_metadata_snapshot_with_refresh_interval,
+    persist_metadata_people_assets, search_provider, set_item_metadata_refresh_state,
+    sort_item_metadata_summaries_for_languages, update_cached_artwork_path,
+    upsert_item_metadata_snapshot_with_refresh_interval, MetadataPersonCreditSummary,
+    MetadataPersonSummary,
 };
 use crate::utils::current_timestamp;
 
@@ -268,6 +272,24 @@ pub struct ItemMetadataResponse {
     pub matches: Vec<ItemMetadataSummary>,
 }
 
+/// Browser-facing person detail with related media credits.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MetadataPersonResponse {
+    /// Normalized person record.
+    pub person: MetadataPersonSummary,
+    /// Media items linked to this person.
+    pub credits: Vec<MetadataPersonItemCredit>,
+}
+
+/// One media item credit for a person.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MetadataPersonItemCredit {
+    /// Stored credit details.
+    pub credit: MetadataPersonCreditSummary,
+    /// Related media item.
+    pub item: MediaItemSummary,
+}
+
 /// Active backend activity summary that the browser can poll.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SystemActivity {
@@ -396,8 +418,18 @@ async fn persist_snapshot_for_item(
     snapshot: &StoredMetadataSnapshot,
     settings: &Settings,
 ) -> Result<ItemMetadataSummary, Status> {
+    let snapshot = persist_metadata_people_assets(snapshot, &settings.general.data_dir)
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to persist metadata people assets for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::BadGateway
+        })?;
     let (poster_path, backdrop_path, logo_path) =
-        persist_item_metadata_assets(snapshot, item_id, &settings.general.data_dir)
+        persist_item_metadata_assets(&snapshot, item_id, &settings.general.data_dir)
             .await
             .map_err(|error| {
                 log::error!(
@@ -2676,9 +2708,11 @@ pub async fn update_item_progress(
 #[get("/api/v1/items/<item_id>/metadata")]
 pub async fn get_item_metadata(
     db: DbConn,
+    user_guard: Option<UserGuard>,
     item_id: i32,
 ) -> Result<Json<ItemMetadataResponse>, Status> {
     let data_dir = current_settings().general.data_dir;
+    let user_id = current_user_id(user_guard.as_ref())?;
 
     let item_exists = db
         .run(move |conn| get_media_item(conn, item_id, &data_dir))
@@ -2697,7 +2731,12 @@ pub async fn get_item_metadata(
     }
 
     let matches = db
-        .run(move |conn| get_item_metadata_summaries(conn, item_id))
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            let mut summaries = get_item_metadata_summaries(conn, item_id)?;
+            sort_item_metadata_summaries_for_languages(&mut summaries, &languages);
+            Ok::<_, diesel::result::Error>(summaries)
+        })
         .await
         .map_err(|error| {
             log::error!(
@@ -2713,6 +2752,97 @@ pub async fn get_item_metadata(
         providers: list_provider_statuses(&current_settings().metadata),
         matches,
     }))
+}
+
+/// Return one normalized person and the media items they are credited on.
+#[openapi(tag = "Media")]
+#[get("/api/v1/people/<person_id>")]
+pub async fn get_person(
+    db: DbConn,
+    user_guard: Option<UserGuard>,
+    person_id: i32,
+) -> Result<Json<MetadataPersonResponse>, Status> {
+    let user_id = current_user_id(user_guard.as_ref())?;
+    let response = db
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            let person = get_metadata_person_for_languages(conn, person_id, &languages)?
+                .ok_or(diesel::result::Error::NotFound)?;
+            let person_ids = get_metadata_person_locale_peer_ids(conn, person_id)?;
+            let mut credits = Vec::new();
+            let mut seen_items = std::collections::HashSet::new();
+            for credit in list_metadata_person_credit_summaries_for_person_ids(conn, &person_ids)? {
+                if !seen_items.insert(credit.media_item_id) {
+                    continue;
+                }
+                if let Some(item) = crate::media::get_media_item_summary_with_preferred_languages(
+                    conn,
+                    credit.media_item_id,
+                    &languages,
+                )? {
+                    credits.push(MetadataPersonItemCredit { credit, item });
+                }
+            }
+            Ok::<_, diesel::result::Error>(MetadataPersonResponse { person, credits })
+        })
+        .await
+        .map_err(|error| match error {
+            diesel::result::Error::NotFound => Status::NotFound,
+            error => {
+                log::error!(
+                    "Failed to load metadata person {} detail: {}",
+                    person_id,
+                    error
+                );
+                Status::InternalServerError
+            }
+        })?;
+
+    Ok(Json(response))
+}
+
+/// Serve a cached local person profile image.
+#[get("/api/v1/people/<person_id>/image")]
+pub async fn get_person_image(
+    db: DbConn,
+    user_guard: Option<UserGuard>,
+    person_id: i32,
+) -> Result<NamedFile, Status> {
+    let user_id = current_user_id(user_guard.as_ref())?;
+    let data_dir = current_settings().general.data_dir;
+    let image_path = db
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            let person = get_metadata_person_for_languages(conn, person_id, &languages)?
+                .ok_or(diesel::result::Error::NotFound)?;
+            Ok::<_, diesel::result::Error>(person.cached_image_path)
+        })
+        .await
+        .map_err(|error| match error {
+            diesel::result::Error::NotFound => Status::NotFound,
+            error => {
+                log::error!(
+                    "Failed to load metadata person {} image path: {}",
+                    person_id,
+                    error
+                );
+                Status::InternalServerError
+            }
+        })?
+        .ok_or(Status::NotFound)?;
+    let image_path = PathBuf::from(image_path);
+    let expected_root = PathBuf::from(data_dir).join("metadata").join("people");
+    if !image_path.starts_with(&expected_root) {
+        log::warn!(
+            "Refusing to serve metadata person image outside managed people cache: {:?}",
+            image_path
+        );
+        return Err(Status::NotFound);
+    }
+
+    NamedFile::open(image_path)
+        .await
+        .map_err(|_| Status::NotFound)
 }
 
 /// Search a configured provider for metadata candidates for a media item.

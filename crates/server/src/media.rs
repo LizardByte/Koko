@@ -2528,6 +2528,22 @@ pub fn get_media_item_summary(
     }
 }
 
+/// Return one browser-facing media item summary using the caller's metadata language order.
+pub fn get_media_item_summary_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
+) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
+    match load_media_item_row(conn, item_id)? {
+        Some(row) => Ok(Some(media_item_summary_with_preferred_languages(
+            conn,
+            row,
+            preferred_languages,
+        )?)),
+        None => Ok(None),
+    }
+}
+
 fn container_matches(
     file_container: &str,
     profile_container: &str,

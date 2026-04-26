@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 // lib imports
 use tokio::process::Command;
+use tokio::process::Child;
 use tokio::fs;
 
 // local imports
@@ -62,6 +63,15 @@ pub struct TranscodeSpec {
 impl TranscodeSpec {
     /// Generate the FFmpeg command-line arguments for this specification.
     pub fn to_ffmpeg_args(&self) -> Vec<String> {
+        self.to_ffmpeg_args_for_output(self.output_path.to_string_lossy().as_ref())
+    }
+
+    /// Generate FFmpeg command-line arguments using stdout as the output target.
+    pub fn to_ffmpeg_stdout_args(&self) -> Vec<String> {
+        self.to_ffmpeg_args_for_output("pipe:1")
+    }
+
+    fn to_ffmpeg_args_for_output(&self, output_target: &str) -> Vec<String> {
         let mut args = Vec::new();
 
         // Avoid writing banner and stats
@@ -126,14 +136,14 @@ impl TranscodeSpec {
 
         // Fast start for mp4
         if self.container == "mp4" {
-            // Because we're streaming or writing to pipe, mp4 needs frag_keyframe for streaming
+            // Fragmented MP4 can be consumed while FFmpeg is still producing it.
             args.push("-movflags".into());
-            args.push("frag_keyframe+empty_moov".into());
+            args.push("frag_keyframe+empty_moov+default_base_moof".into());
         }
 
         // Output path or stdout
         args.push("-y".into());
-        args.push(self.output_path.to_string_lossy().into_owned());
+        args.push(output_target.into());
 
         args
     }
@@ -144,7 +154,7 @@ pub async fn spawn_transcode(
     _session_id: &str,
     spec: &TranscodeSpec,
     settings: &FfmpegSettings,
-) -> Result<tokio::process::Child, std::io::Error> {
+) -> Result<Child, std::io::Error> {
     if let Some(parent) = spec.output_path.parent() {
         fs::create_dir_all(parent).await?;
     }
@@ -157,6 +167,26 @@ pub async fn spawn_transcode(
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    Ok(child)
+}
+
+/// Spawns a transcode process that writes a fragmented stream to stdout.
+pub async fn spawn_transcode_stdout(
+    _session_id: &str,
+    spec: &TranscodeSpec,
+    settings: &FfmpegSettings,
+) -> Result<Child, std::io::Error> {
+    let args = spec.to_ffmpeg_stdout_args();
+
+    log::info!("Starting FFmpeg stdout stream: {} {}", settings.ffmpeg_path, args.join(" "));
+
+    let child = Command::new(&settings.ffmpeg_path)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 

@@ -8,11 +8,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 use rocket::fs::NamedFile;
 use rocket::get;
-use rocket::http::Status;
+use rocket::http::{ContentType, Status};
 use rocket::post;
 use rocket::delete;
+use rocket::request::Request;
+use rocket::response::{self, Responder, Response};
+use rocket::response::stream::ReaderStream;
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
+use rocket::tokio::process::ChildStdout;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -37,7 +41,7 @@ use crate::media::{
     mark_metadata_match_attempted, resolve_item_subtitle_path, resolve_item_theme_song_path,
     resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
-    upsert_playback_progress,
+    upsert_playback_progress, get_user_playback_progress,
 };
 use crate::metadata::{
     ArtworkKind, ItemMetadataSummary, MetadataProviderStatus, MetadataSearchResult,
@@ -52,6 +56,26 @@ use crate::metadata::{
     upsert_item_metadata_snapshot_with_refresh_interval,
 };
 use crate::utils::current_timestamp;
+
+pub enum SessionStream {
+    File(NamedFile),
+    Transcode {
+        content_type: ContentType,
+        stdout: ChildStdout,
+    },
+}
+
+impl<'r> Responder<'r, 'static> for SessionStream {
+    fn respond_to(self, request: &'r Request<'_>) -> response::Result<'static> {
+        match self {
+            SessionStream::File(file) => file.respond_to(request),
+            SessionStream::Transcode { content_type, stdout } => Response::build()
+                .header(content_type)
+                .streamed_body(ReaderStream::one(stdout))
+                .ok(),
+        }
+    }
+}
 
 /// Capability summary returned to clients during bootstrap.
 #[derive(Debug, Serialize, JsonSchema)]
@@ -2119,6 +2143,22 @@ pub async fn get_item(
         })?;
 
     let mut item = item.ok_or(Status::NotFound)?;
+    if let Some(progress) = db
+        .run(move |conn| get_user_playback_progress(conn, user_id, item_id))
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to load playback progress for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?
+    {
+        item.playback_position_ms = Some(progress.position_ms);
+        item.playback_duration_ms = progress.duration_ms;
+    }
+
     if item.theme_song_url.is_none() {
         let theme_references = db
             .run(move |conn| get_item_theme_song_themerr_references(conn, item_id))
@@ -2222,11 +2262,12 @@ pub async fn delete_session(session_id: String) -> Status {
 }
 
 /// Stream content for a session (handles transcode or direct play).
-#[rocket::get("/api/v1/sessions/<session_id>/stream")]
+#[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>")]
 pub async fn get_session_stream(
     db: DbConn,
     session_id: String,
-) -> Result<NamedFile, Status> {
+    start_ms: Option<i64>,
+) -> Result<SessionStream, Status> {
     let session = ACTIVE_PLAYBACK_SESSIONS.read().await.get(&session_id).cloned().ok_or(Status::NotFound)?;
     
     if session.decision.can_direct_play {
@@ -2235,7 +2276,8 @@ pub async fn get_session_stream(
             .await
             .map_err(|_| Status::InternalServerError)?
             .ok_or(Status::NotFound)?;
-        return NamedFile::open(source_path).await.map_err(|_| Status::NotFound);
+        let file = NamedFile::open(source_path).await.map_err(|_| Status::NotFound)?;
+        return Ok(SessionStream::File(file));
     }
     
     let settings = current_settings();
@@ -2247,14 +2289,6 @@ pub async fn get_session_stream(
     let container = session.decision.transcode_container.clone().unwrap_or_else(|| "mp4".into());
     let output_path = session_dir.join(format!("output.{}", container));
     
-    // If output exists and is non-empty, we can stream it
-    if let Ok(metadata) = tokio::fs::metadata(&output_path).await {
-        if metadata.len() > 0 {
-            return NamedFile::open(&output_path).await.map_err(|_| Status::NotFound);
-        }
-    }
-    
-    // Otherwise we need to spawn FFmpeg
     let source_path = db
         .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
         .await
@@ -2270,20 +2304,20 @@ pub async fn get_session_stream(
         max_width: if session.client_profile.max_video_width > 0 { Some(session.client_profile.max_video_width) } else { None },
         max_height: if session.client_profile.max_video_height > 0 { Some(session.client_profile.max_video_height) } else { None },
         max_bitrate_kbps: if session.client_profile.max_bitrate_kbps > 0 { Some(session.client_profile.max_bitrate_kbps) } else { None },
-        start_time_ms: None, // Seeking could be implemented via query params
+        start_time_ms: start_ms.filter(|value| *value > 0),
     };
     
-    match crate::transcode::spawn_transcode(&session_id, &spec, &settings.ffmpeg).await {
+    match crate::transcode::spawn_transcode_stdout(&session_id, &spec, &settings.ffmpeg).await {
         Ok(mut child) => {
-            // We just let it run in the background. In a real app we'd wait for it to write some data first,
-            // or return a chunked stream attached to stdout.
+            let stdout = child.stdout.take().ok_or(Status::InternalServerError)?;
             tokio::spawn(async move {
                 let _ = child.wait().await;
             });
-            
-            // Wait briefly for ffmpeg to create the file and write headers
-            tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
-            NamedFile::open(&output_path).await.map_err(|_| Status::NotFound)
+
+            Ok(SessionStream::Transcode {
+                content_type: ContentType::MP4,
+                stdout,
+            })
         }
         Err(e) => {
             log::error!("Failed to spawn transcode: {}", e);

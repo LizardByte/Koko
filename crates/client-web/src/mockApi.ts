@@ -504,6 +504,20 @@ const playbackProgress = new Map<string, PlaybackProgressRequest>();
 playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false });
 playbackProgress.set('1:103', { position_ms: 74_000, duration_ms: 215_000, completed: false });
 
+function applyMockPlaybackProgress<T extends { id: number }>(item: T): T {
+  const userId = activeMockUserId();
+  const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
+  if (!progress || progress.completed) {
+    return item;
+  }
+
+  return {
+    ...item,
+    playback_position_ms: progress.position_ms,
+    playback_duration_ms: progress.duration_ms,
+  };
+}
+
 const collections: MediaCollectionSummary[] = [
   {
     id: 'tmdb:2344',
@@ -823,7 +837,8 @@ export function getMockLogs(
 }
 
 export function getMockItem(itemId: number): MediaItemDetail | undefined {
-  return items.find((item) => item.id === itemId);
+  const item = items.find((item) => item.id === itemId);
+  return item ? applyMockPlaybackProgress(item) : undefined;
 }
 
 export function getMockItemMetadata(itemId: number): ItemMetadataResponse | undefined {
@@ -901,7 +916,7 @@ export function getMockHome(libraryId?: number): MediaHome {
 export function getMockItems(libraryId?: number): MediaItemSummary[] {
   return items
     .filter((item) => (typeof libraryId === 'number' ? item.library_id === libraryId : true))
-    .map(({ file_size: _fileSize, container: _container, bit_rate: _bitRate, video_codec: _videoCodec, audio_codec: _audioCodec, metadata_json: _metadataJson, metadata_updated_at: _metadataUpdatedAt, ...summary }) => summary);
+    .map(({ file_size: _fileSize, container: _container, bit_rate: _bitRate, video_codec: _videoCodec, audio_codec: _audioCodec, metadata_json: _metadataJson, metadata_updated_at: _metadataUpdatedAt, ...summary }) => applyMockPlaybackProgress(summary));
 }
 
 export function searchMockItems(query: string, libraryId?: number): MediaItemSummary[] {

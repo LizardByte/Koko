@@ -1866,18 +1866,34 @@ legend {
 }
 
 .trailer-overlay {
-  padding: 1rem;
-  background: rgba(5, 8, 16, 0.86);
+  padding: 0;
+  background: #000;
 }
 
 .trailer-shell {
-  width: min(100%, 1200px);
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+
+.trailer-shell .player-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.76), rgba(0, 0, 0, 0));
 }
 
 .trailer-frame-shell {
   position: relative;
-  aspect-ratio: 16 / 9;
-  border-radius: 20px;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   overflow: hidden;
   background: #000;
 }
@@ -2042,6 +2058,14 @@ legend {
   overflow-wrap: anywhere;
 }
 
+.player-title-logo {
+  display: block;
+  max-width: min(360px, 52vw);
+  max-height: 70px;
+  object-fit: contain;
+  object-position: left center;
+}
+
 .player-top-actions,
 .player-control-row,
 .player-control-cluster {
@@ -2114,8 +2138,9 @@ legend {
 }
 
 .player-icon-button {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 2.55rem;
   height: 2.55rem;
   padding: 0;
@@ -2144,6 +2169,7 @@ legend {
 }
 
 .player-control-icon svg {
+  display: block;
   width: 1.25rem;
   height: 1.25rem;
   stroke-width: 2.2;
@@ -2175,6 +2201,18 @@ legend {
 .player-volume {
   width: min(10vw, 110px);
   min-width: 72px;
+}
+
+.media-player-shell.is-picture-in-picture {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.media-player-overlay:has(.is-picture-in-picture) {
+  pointer-events: none;
+  background: transparent;
 }
 
 .player-header {

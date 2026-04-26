@@ -137,6 +137,8 @@ export interface MediaItemSummary {
   metadata_refresh_error?: string;
   artwork_updated_at?: number;
   modified_at?: number;
+  playback_position_ms?: number;
+  playback_duration_ms?: number;
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
@@ -162,6 +164,8 @@ export interface MediaItemDetail extends MediaItemSummary {
   trailer_title?: string;
   trailer_url?: string;
   artwork_updated_at?: number;
+  playback_position_ms?: number;
+  playback_duration_ms?: number;
   subtitle_tracks: MediaSubtitleTrack[];
   hierarchy: MediaItemSummary[];
   children: MediaItemSummary[];
@@ -315,12 +319,76 @@ export interface ClientProfile {
 }
 
 export function getWebClientProfile(): ClientProfile {
+  const videoProbe = document.createElement('video');
+  const audioProbe = document.createElement('audio');
+  const supportsVideoType = (type: string): boolean => videoProbe.canPlayType(type) === 'probably';
+  const supportsAudioType = (type: string): boolean => audioProbe.canPlayType(type) !== '';
+  const supportedContainers = new Set<string>();
+  const supportedVideoCodecs = new Set<string>();
+  const supportedAudioCodecs = new Set<string>();
+
+  if (supportsVideoType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')) {
+    supportedContainers.add('mp4');
+    supportedContainers.add('m4v');
+    supportedVideoCodecs.add('h264');
+    supportedAudioCodecs.add('aac');
+  }
+  if (supportsVideoType('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"')) {
+    supportedContainers.add('mp4');
+    supportedContainers.add('m4v');
+    supportedVideoCodecs.add('hevc');
+    supportedAudioCodecs.add('aac');
+  }
+  if (supportsVideoType('video/mp4; codecs="av01.0.05M.08, mp4a.40.2"')) {
+    supportedContainers.add('mp4');
+    supportedVideoCodecs.add('av1');
+    supportedAudioCodecs.add('aac');
+  }
+  if (supportsVideoType('video/webm; codecs="vp8, vorbis"')) {
+    supportedContainers.add('webm');
+    supportedVideoCodecs.add('vp8');
+    supportedAudioCodecs.add('vorbis');
+  }
+  if (supportsVideoType('video/webm; codecs="vp9, opus"')) {
+    supportedContainers.add('webm');
+    supportedVideoCodecs.add('vp9');
+    supportedAudioCodecs.add('opus');
+  }
+  if (supportsVideoType('video/webm; codecs="av01.0.05M.08, opus"')) {
+    supportedContainers.add('webm');
+    supportedVideoCodecs.add('av1');
+    supportedAudioCodecs.add('opus');
+  }
+  if (supportsAudioType('audio/mpeg')) {
+    supportedContainers.add('mp3');
+    supportedAudioCodecs.add('mp3');
+  }
+  if (supportsAudioType('audio/mp4; codecs="mp4a.40.2"')) {
+    supportedContainers.add('m4a');
+    supportedAudioCodecs.add('aac');
+  }
+  if (supportsAudioType('audio/ogg; codecs="vorbis"')) {
+    supportedContainers.add('ogg');
+    supportedAudioCodecs.add('vorbis');
+  }
+  if (supportsAudioType('audio/ogg; codecs="opus"')) {
+    supportedContainers.add('ogg');
+    supportedAudioCodecs.add('opus');
+  }
+  if (supportsAudioType('audio/wav')) {
+    supportedContainers.add('wav');
+  }
+  if (supportsAudioType('audio/flac')) {
+    supportedContainers.add('flac');
+    supportedAudioCodecs.add('flac');
+  }
+
   return {
     client_type: 'web',
     client_name: `Koko Web (${navigator.userAgent.split(' ').pop()})`,
-    supported_containers: ['mp4', 'webm', 'mp3', 'flac', 'ogg', 'wav', 'm4a'],
-    supported_video_codecs: ['h264', 'av1', 'vp8', 'vp9'],
-    supported_audio_codecs: ['aac', 'mp3', 'opus', 'vorbis', 'flac'],
+    supported_containers: [...supportedContainers],
+    supported_video_codecs: [...supportedVideoCodecs],
+    supported_audio_codecs: [...supportedAudioCodecs],
     supported_subtitle_formats: ['vtt'],
     max_video_width: 0,
     max_video_height: 0,
@@ -883,8 +951,13 @@ export function getStreamUrl(itemId: number): string {
   return `${getStoredApiBase()}/api/v1/items/${itemId}/stream`;
 }
 
-export function getSessionStreamUrl(sessionId: string): string {
-  return `${getStoredApiBase()}/api/v1/sessions/${sessionId}/stream`;
+export function getSessionStreamUrl(sessionId: string, startMs?: number): string {
+  const params = new URLSearchParams();
+  if (typeof startMs === 'number' && Number.isFinite(startMs) && startMs > 0) {
+    params.set('start_ms', String(Math.max(0, Math.floor(startMs))));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return `${getStoredApiBase()}/api/v1/sessions/${sessionId}/stream${suffix}`;
 }
 
 export function createPlaybackSession(request: CreateSessionRequest): Promise<PlaybackSession> {

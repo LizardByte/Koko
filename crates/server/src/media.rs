@@ -237,6 +237,10 @@ pub struct MediaItemSummary {
     pub artwork_updated_at: Option<i64>,
     /// Last modified timestamp as Unix seconds, when available.
     pub modified_at: Option<i64>,
+    /// Last saved playback position for the current user.
+    pub playback_position_ms: Option<i64>,
+    /// Last saved playback duration for the current user.
+    pub playback_duration_ms: Option<i64>,
 }
 
 /// Detailed browser-facing media item response.
@@ -328,6 +332,10 @@ pub struct MediaItemDetail {
     pub hierarchy: Vec<MediaItemSummary>,
     /// Direct child items for hierarchical browsing.
     pub children: Vec<MediaItemSummary>,
+    /// Last saved playback position for the current user.
+    pub playback_position_ms: Option<i64>,
+    /// Last saved playback duration for the current user.
+    pub playback_duration_ms: Option<i64>,
 }
 
 /// Subtitle track discovered for one media item.
@@ -2026,10 +2034,10 @@ pub fn get_playback_decision(
         let can_direct_play = item.playable && can_client_direct_play(&row, p);
         let mime_type = detect_mime_type(&row);
 
-        let video_codec = row.video_codec.as_deref().unwrap_or("").to_lowercase();
-        let audio_codec = row.audio_codec.as_deref().unwrap_or("").to_lowercase();
-        let video_transcode_required = !video_codec.is_empty() && !p.supported_video_codecs.iter().any(|c| c.eq_ignore_ascii_case(&video_codec));
-        let audio_transcode_required = !audio_codec.is_empty() && !p.supported_audio_codecs.iter().any(|c| c.eq_ignore_ascii_case(&audio_codec));
+        let video_codec = row.video_codec.as_deref().unwrap_or("");
+        let audio_codec = row.audio_codec.as_deref().unwrap_or("");
+        let video_transcode_required = !video_codec.is_empty() && !p.supported_video_codecs.iter().any(|c| codec_matches(video_codec, c));
+        let audio_transcode_required = !audio_codec.is_empty() && !p.supported_audio_codecs.iter().any(|c| codec_matches(audio_codec, c));
         
         // Target codecs when transcoding is required
         let transcode_video_codec = if video_transcode_required { Some("h264".into()) } else { None };
@@ -2299,6 +2307,32 @@ pub fn upsert_playback_progress(
     Ok(())
 }
 
+/// Return saved playback progress for a user and item.
+pub fn get_user_playback_progress(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    item_id: i32,
+) -> Result<Option<PlaybackProgress>, diesel::result::Error> {
+    use crate::db::schema::playback_progress::dsl as playback_progress_dsl;
+
+    let Some(user_id) = user_id else {
+        return Ok(None);
+    };
+
+    playback_progress_dsl::playback_progress
+        .filter(playback_progress_dsl::user_id.eq(user_id))
+        .filter(playback_progress_dsl::media_item_id.eq(item_id))
+        .filter(playback_progress_dsl::completed.eq(false))
+        .select(PlaybackProgress::as_select())
+        .first(conn)
+        .optional()
+}
+
+fn apply_playback_progress_to_summary(summary: &mut MediaItemSummary, progress: &PlaybackProgress) {
+    summary.playback_position_ms = Some(progress.position_ms);
+    summary.playback_duration_ms = progress.duration_ms;
+}
+
 fn get_continue_watching_items(
     conn: &mut SqliteConnection,
     user_id: Option<i32>,
@@ -2321,7 +2355,8 @@ fn get_continue_watching_items(
     let mut items = Vec::new();
     for progress in progress_rows {
         if let Some(row) = load_media_item_row(conn, progress.media_item_id)? {
-            let item = media_item_summary_with_preferred_languages(conn, row, preferred_languages)?;
+            let mut item = media_item_summary_with_preferred_languages(conn, row, preferred_languages)?;
+            apply_playback_progress_to_summary(&mut item, &progress);
             if library_id.is_none() || Some(item.library_id) == library_id {
                 items.push(item);
             }
@@ -2446,8 +2481,45 @@ pub fn get_media_item_summary(
 }
 
 fn container_matches(file_container: &str, profile_container: &str) -> bool {
-    // Sometimes containers are reported as e.g. "matroska,webm". We check if our profile container is in there.
-    file_container.to_ascii_lowercase().contains(&profile_container.to_ascii_lowercase())
+    file_container
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .any(|value| {
+            value == profile_container.to_ascii_lowercase()
+                || (value == "mov" && matches!(profile_container, "mp4" | "m4v"))
+                || (value == "matroska" && profile_container == "mkv")
+        })
+}
+
+fn codec_matches(file_codec: &str, profile_codec: &str) -> bool {
+    let normalized_file_codec = normalize_codec_name(file_codec);
+    let normalized_profile_codec = normalize_codec_name(profile_codec);
+    normalized_file_codec == normalized_profile_codec
+}
+
+fn normalize_codec_name(codec: &str) -> String {
+    let normalized = codec
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "")
+        .replace('_', "");
+
+    match normalized.as_str() {
+        "avc1" | "avc" | "h264" | "x264" => "h264".into(),
+        "hev1" | "hvc1" | "hevc" | "h265" | "x265" => "hevc".into(),
+        "mpeg4" | "mp4v" => "mpeg4".into(),
+        "aac" | "aaclc" | "mp4a" => "aac".into(),
+        "eac3" | "eac" => "eac3".into(),
+        "ac3" | "ac-3" => "ac3".into(),
+        "vorbis" => "vorbis".into(),
+        "opus" => "opus".into(),
+        "flac" => "flac".into(),
+        "mp3" | "mpeg3" | "mpga" => "mp3".into(),
+        "vp8" => "vp8".into(),
+        "vp9" => "vp9".into(),
+        "av1" => "av1".into(),
+        _ => normalized,
+    }
 }
 
 fn within_resolution_limits(file: &MediaFile, profile: &ClientProfile) -> bool {
@@ -2478,13 +2550,13 @@ fn can_client_direct_play(file: &MediaFile, profile: &ClientProfile) -> bool {
     };
 
     let is_supported_video = if let Some(codec) = file.video_codec.as_deref() {
-        profile.supported_video_codecs.iter().any(|c| c.eq_ignore_ascii_case(codec))
+        profile.supported_video_codecs.iter().any(|c| codec_matches(codec, c))
     } else {
         true // No video track -> skip check
     };
 
     let is_supported_audio = if let Some(codec) = file.audio_codec.as_deref() {
-        profile.supported_audio_codecs.iter().any(|c| c.eq_ignore_ascii_case(codec))
+        profile.supported_audio_codecs.iter().any(|c| codec_matches(codec, c))
     } else {
         true // No audio track -> skip check
     };
@@ -2943,6 +3015,8 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         metadata_refresh_error: None,
         artwork_updated_at: None,
         modified_at: item.modified_at,
+        playback_position_ms: None,
+        playback_duration_ms: None,
     }
 }
 
@@ -3266,6 +3340,8 @@ fn to_media_item_detail(
         subtitle_tracks: Vec::new(),
         hierarchy: Vec::new(),
         children: Vec::new(),
+        playback_position_ms: None,
+        playback_duration_ms: None,
     }
 }
 

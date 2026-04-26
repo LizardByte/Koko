@@ -117,6 +117,7 @@ interface AppState {
   isLoading: boolean;
   isPlayerOpen: boolean;
   activePlaybackSession?: PlaybackSession;
+  activePlaybackStartMs: number;
   isTrailerMenuOpen: boolean;
   activeTrailer?: { title: string; url: string };
   error?: string;
@@ -155,6 +156,7 @@ type AppIconName =
   | 'music'
   | 'maximize'
   | 'pause'
+  | 'picture-in-picture'
   | 'play'
   | 'plus'
   | 'refresh-cw'
@@ -194,6 +196,7 @@ const state: AppState = {
   isLoading: true,
   hasDeferredAutoRefreshRender: false,
   isPlayerOpen: false,
+  activePlaybackStartMs: 0,
   isTrailerMenuOpen: false,
   activeTrailer: undefined,
   metadataDashboardFilters: {
@@ -534,6 +537,19 @@ function formatMediaTime(seconds: number): string {
   }
 
   return formatDuration(Math.floor(seconds * 1000));
+}
+
+function resumablePlaybackPositionMs(item: MediaItemDetail): number {
+  const positionMs = item.playback_position_ms ?? 0;
+  const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
+  if (positionMs < 30_000) {
+    return 0;
+  }
+  if (durationMs > 0 && durationMs - positionMs < 30_000) {
+    return 0;
+  }
+
+  return positionMs;
 }
 
 function formatFileSize(fileSize?: number): string {
@@ -2220,6 +2236,7 @@ function renderItemPage(): string {
   const backTarget = backNavigationTarget();
   const supportsManualLinking = canManuallyLinkMetadata(state.selectedItem);
   const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
+  const resumeMs = resumablePlaybackPositionMs(state.selectedItem);
   const childSectionTitle = state.selectedItem.item_type === 'show'
     ? 'Seasons'
     : state.selectedItem.item_type === 'season'
@@ -2253,7 +2270,8 @@ function renderItemPage(): string {
           </div>
           <p class="hero-description">${escapeHtml(overview)}</p>
           <div class="detail-actions">
-            ${state.selectedItem.playable ? `<button type="button" id="play-selected-item">${renderButtonContent('Play now', 'play')}</button>` : ''}
+            ${state.selectedItem.playable && resumeMs > 0 ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>` : ''}
+            ${state.selectedItem.playable ? `<button type="button" class="${resumeMs > 0 ? 'secondary-button' : ''}" data-play-selected-item-start-ms="0">${renderButtonContent(resumeMs > 0 ? 'Start over' : 'Play now', 'play')}</button>` : ''}
             ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
           </div>
@@ -2631,13 +2649,14 @@ function renderPlayerOverlay(): string {
 
   const isAudio = state.selectedItem.media_kind === 'audio';
   const tag = isAudio ? 'audio' : 'video';
-  const source = getSessionStreamUrl(state.activePlaybackSession.session_id);
+  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs);
   const posterUrl = state.selectedItem.poster_url
     ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
     : undefined;
   const backdropUrl = state.selectedItem.backdrop_url
     ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
     : posterUrl;
+  const logoUrl = state.selectedItem.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
   const trackMarkup = tag === 'video'
     ? state.selectedItem.subtitle_tracks
         .map((track) => `<track kind="subtitles" label="${escapeHtml(track.label)}" srclang="${escapeHtml(subtitleLanguage(track.label))}" src="${escapeHtml(resolveApiUrl(track.url))}" />`)
@@ -2664,7 +2683,9 @@ function renderPlayerOverlay(): string {
         <div class="player-top-controls player-controls">
           <div class="player-title-block">
             <span class="eyebrow">Now playing</span>
-            <h2>${escapeHtml(state.selectedItem.display_title)}</h2>
+            ${logoUrl
+              ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
+              : `<h2>${escapeHtml(state.selectedItem.display_title)}</h2>`}
           </div>
           <div class="player-top-actions">
             ${transcodeBadge}
@@ -2674,7 +2695,7 @@ function renderPlayerOverlay(): string {
         <div class="player-center-controls player-controls">
           <button class="player-icon-button player-large-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
           <button id="player-play-toggle" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-          <button class="player-icon-button player-large-button" type="button" data-player-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+          <button class="player-icon-button player-large-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
         </div>
         <div class="player-bottom-controls player-controls">
           <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
@@ -2686,6 +2707,7 @@ function renderPlayerOverlay(): string {
             <div class="player-control-cluster">
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
+              ${isAudio ? '' : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`}
               <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
             </div>
           </div>
@@ -2908,6 +2930,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.activePlaybackSession = undefined;
+      state.activePlaybackStartMs = 0;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -2950,6 +2973,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
       state.activePlaybackSession = undefined;
+      state.activePlaybackStartMs = 0;
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
@@ -3329,6 +3353,7 @@ function closeActivePlaybackSession(): void {
   document.body.style.cursor = '';
   const sessionToClose = state.activePlaybackSession;
   state.activePlaybackSession = undefined;
+  state.activePlaybackStartMs = 0;
   render();
   if (sessionToClose) {
     deletePlaybackSession(sessionToClose.session_id).catch((error) => {
@@ -3351,8 +3376,16 @@ function bindPlayerProgress(): void {
   const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#player-play-toggle, #player-play-toggle-small'));
   const muteButton = document.querySelector<HTMLButtonElement>('#player-mute-toggle');
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#player-fullscreen');
+  const pipButton = document.querySelector<HTMLButtonElement>('#player-pip');
+  const isTranscoding = state.activePlaybackSession?.decision.transcode_required ?? false;
+  const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
+  const playbackBaseOffsetSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
+  let lastSkipDirection = 0;
+  let lastSkipAt = 0;
+  let skipStepIndex = 0;
 
   const setButtonIcon = (button: HTMLButtonElement | null | undefined, iconName: AppIconName, label: string): void => {
     if (!button) {
@@ -3377,15 +3410,28 @@ function bindPlayerProgress(): void {
     }
   };
 
+  const updatePipButton = (): void => {
+    if (!pipButton || !(player instanceof HTMLVideoElement)) {
+      return;
+    }
+    const isSupported = document.pictureInPictureEnabled && !player.disablePictureInPicture;
+    pipButton.disabled = !isSupported;
+    pipButton.title = isSupported ? 'Picture in picture' : 'Picture in picture is not available in this browser';
+    pipButton.setAttribute('aria-label', pipButton.title);
+  };
+
   const updateTimeline = (): void => {
-    const duration = Number.isFinite(player.duration) && player.duration > 0
-      ? player.duration
-      : (state.selectedItem?.duration_ms ?? 0) / 1000;
+    const duration = sourceDurationSeconds > 0
+      ? sourceDurationSeconds
+      : Number.isFinite(player.duration) && player.duration > 0
+        ? player.duration
+        : 0;
+    const currentPosition = Math.min(duration || Number.POSITIVE_INFINITY, playbackBaseOffsetSeconds + player.currentTime);
     if (progress && !isScrubbing) {
-      progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (player.currentTime / duration) * 1000))) : '0';
+      progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (currentPosition / duration) * 1000))) : '0';
     }
     if (currentTimeLabel) {
-      currentTimeLabel.textContent = formatMediaTime(player.currentTime);
+      currentTimeLabel.textContent = formatMediaTime(currentPosition);
     }
     if (durationLabel) {
       durationLabel.textContent = formatMediaTime(duration);
@@ -3409,11 +3455,18 @@ function bindPlayerProgress(): void {
   };
 
   const seekBy = (seconds: number): void => {
-    if (!Number.isFinite(player.duration)) {
-      player.currentTime = Math.max(0, player.currentTime + seconds);
+    const currentPosition = playbackBaseOffsetSeconds + player.currentTime;
+    const targetPosition = Math.max(0, currentPosition + seconds);
+    if (isTranscoding) {
+      state.activePlaybackStartMs = Math.floor(targetPosition * 1000);
+      render(false);
       return;
     }
-    player.currentTime = Math.min(player.duration, Math.max(0, player.currentTime + seconds));
+    if (!Number.isFinite(player.duration)) {
+      player.currentTime = targetPosition;
+      return;
+    }
+    player.currentTime = Math.min(player.duration, targetPosition);
   };
 
   const togglePlayback = (): void => {
@@ -3470,7 +3523,17 @@ function bindPlayerProgress(): void {
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-player-seek]').forEach((button) => {
     button.addEventListener('click', () => {
-      seekBy(Number(button.dataset.playerSeek));
+      const requestedSeconds = Number(button.dataset.playerSeek);
+      const direction = Math.sign(requestedSeconds);
+      const now = Date.now();
+      if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
+        skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
+      } else {
+        skipStepIndex = 0;
+      }
+      lastSkipDirection = direction;
+      lastSkipAt = now;
+      seekBy(direction * skipSteps[skipStepIndex]);
       showControls();
     });
   });
@@ -3489,9 +3552,35 @@ function bindPlayerProgress(): void {
     toggleFullscreen();
     showControls();
   });
+  pipButton?.addEventListener('click', async () => {
+    if (!(player instanceof HTMLVideoElement) || !document.pictureInPictureEnabled) {
+      state.error = 'Picture in picture is not available in this browser.';
+      render();
+      return;
+    }
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+      if (player.paused) {
+        void player.play();
+      }
+      await player.requestPictureInPicture();
+      shell?.classList.add('is-picture-in-picture');
+      document.body.style.cursor = '';
+    } catch (error) {
+      console.error('Failed to enter picture-in-picture', error);
+      state.error = error instanceof Error ? error.message : 'Failed to enter picture in picture.';
+      render();
+    }
+  });
+  player.addEventListener('leavepictureinpicture', () => {
+    shell?.classList.remove('is-picture-in-picture');
+    showControls();
+  });
   progress?.addEventListener('input', () => {
     isScrubbing = true;
-    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    const duration = sourceDurationSeconds > 0 ? sourceDurationSeconds : Number.isFinite(player.duration) ? player.duration : 0;
     if (duration > 0) {
       const previewSeconds = (Number(progress.value) / 1000) * duration;
       if (currentTimeLabel) {
@@ -3501,9 +3590,15 @@ function bindPlayerProgress(): void {
     showControls();
   });
   progress?.addEventListener('change', () => {
-    const duration = Number.isFinite(player.duration) ? player.duration : 0;
+    const duration = sourceDurationSeconds > 0 ? sourceDurationSeconds : Number.isFinite(player.duration) ? player.duration : 0;
     if (duration > 0) {
-      player.currentTime = (Number(progress.value) / 1000) * duration;
+      const targetPosition = (Number(progress.value) / 1000) * duration;
+      if (isTranscoding) {
+        state.activePlaybackStartMs = Math.floor(targetPosition * 1000);
+        render(false);
+        return;
+      }
+      player.currentTime = targetPosition;
     }
     isScrubbing = false;
     updateTimeline();
@@ -3530,8 +3625,8 @@ function bindPlayerProgress(): void {
 
     lastSentSeconds = currentSeconds;
     void updatePlaybackProgress(state.selectedItem!.id, {
-      position_ms: Math.floor(player.currentTime * 1000),
-      duration_ms: Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : state.selectedItem?.duration_ms,
+      position_ms: Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000),
+      duration_ms: state.selectedItem?.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: false,
     });
   });
@@ -3540,14 +3635,15 @@ function bindPlayerProgress(): void {
     updatePlayButtons();
     showControls();
     void updatePlaybackProgress(state.selectedItem!.id, {
-      position_ms: Math.floor((Number.isFinite(player.duration) ? player.duration : 0) * 1000),
-      duration_ms: Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : state.selectedItem?.duration_ms,
+      position_ms: state.selectedItem?.duration_ms ?? Math.floor((playbackBaseOffsetSeconds + (Number.isFinite(player.duration) ? player.duration : 0)) * 1000),
+      duration_ms: state.selectedItem?.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: true,
     });
   });
 
   updatePlayButtons();
   updateMuteButton();
+  updatePipButton();
   updateTimeline();
   showControls();
 }
@@ -3908,12 +4004,14 @@ function bindEvents(): void {
     render();
   });
 
-  document.querySelector<HTMLButtonElement>('#play-selected-item')?.addEventListener('click', async () => {
+  document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => button.addEventListener('click', async () => {
     if (!state.selectedItem) {
       return;
     }
 
     try {
+      const startMs = Number(button.dataset.playSelectedItemStartMs);
+      state.activePlaybackStartMs = Number.isFinite(startMs) ? Math.max(0, startMs) : 0;
       state.isPlayerOpen = true;
       render();
       state.activePlaybackSession = await createPlaybackSession({
@@ -3926,7 +4024,7 @@ function bindEvents(): void {
       state.isPlayerOpen = false;
       render();
     }
-  });
+  }));
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
     closeActivePlaybackSession();

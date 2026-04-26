@@ -2731,17 +2731,15 @@ function renderPlayerOverlay(): string {
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
               ${!isAudio && audioTracks.length > 1 ? `
                 <div class="player-menu-shell">
-                  <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track">${renderIcon('languages', 'player-control-icon')}</button>
-                  ${state.isAudioTrackMenuOpen ? `
-                    <div class="player-track-menu" role="menu" aria-label="Audio tracks">
-                      ${audioTracks.map((track) => `
-                        <button class="player-track-option ${track.index === activeAudioTrack?.index ? 'active' : ''}" type="button" role="menuitemradio" aria-checked="${track.index === activeAudioTrack?.index ? 'true' : 'false'}" data-player-audio-track-index="${track.index}">
-                          <span>${escapeHtml(track.label)}</span>
-                          <small>${escapeHtml([track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ') || (track.default ? 'Default' : 'Audio'))}</small>
-                        </button>
-                      `).join('')}
-                    </div>
-                  ` : ''}
+                  <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track" aria-expanded="${state.isAudioTrackMenuOpen ? 'true' : 'false'}" aria-haspopup="menu">${renderIcon('languages', 'player-control-icon')}</button>
+                  <div id="player-audio-track-menu" class="player-track-menu ${state.isAudioTrackMenuOpen ? '' : 'is-hidden'}" role="menu" aria-label="Audio tracks" ${state.isAudioTrackMenuOpen ? '' : 'hidden'}>
+                    ${audioTracks.map((track) => `
+                      <button class="player-track-option ${track.index === activeAudioTrack?.index ? 'active' : ''}" type="button" role="menuitemradio" aria-checked="${track.index === activeAudioTrack?.index ? 'true' : 'false'}" data-player-audio-track-index="${track.index}">
+                        <span>${escapeHtml(track.label)}</span>
+                        <small>${escapeHtml([track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ') || (track.default ? 'Default' : 'Audio'))}</small>
+                      </button>
+                    `).join('')}
+                  </div>
                 </div>
               ` : ''}
               ${isAudio ? '' : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`}
@@ -3421,7 +3419,9 @@ function bindPlayerProgress(): void {
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#player-fullscreen');
   const pipButton = document.querySelector<HTMLButtonElement>('#player-pip');
   const audioTrackToggle = document.querySelector<HTMLButtonElement>('#player-audio-track-toggle');
+  const audioTrackMenu = document.querySelector<HTMLElement>('#player-audio-track-menu');
   const selectedAudioStreamIndex = state.activeAudioStreamIndex ?? state.activePlaybackSession?.audio_stream_index;
+  const currentAudioTrackIndex = selectedAudioStreamIndex ?? 0;
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
   const isTranscoding = (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
   const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
@@ -3479,6 +3479,13 @@ function bindPlayerProgress(): void {
     pipButton.disabled = !isSupported;
     pipButton.title = isSupported ? 'Picture in picture' : 'Picture in picture is not available in this browser';
     pipButton.setAttribute('aria-label', pipButton.title);
+  };
+
+  const setAudioTrackMenuOpen = (open: boolean): void => {
+    state.isAudioTrackMenuOpen = open;
+    audioTrackToggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    audioTrackMenu?.classList.toggle('is-hidden', !open);
+    audioTrackMenu?.toggleAttribute('hidden', !open);
   };
 
   const updateTimeline = (): void => {
@@ -3614,8 +3621,8 @@ function bindPlayerProgress(): void {
     showControls();
   });
   audioTrackToggle?.addEventListener('click', () => {
-    state.isAudioTrackMenuOpen = !state.isAudioTrackMenuOpen;
-    render(false);
+    setAudioTrackMenuOpen(!state.isAudioTrackMenuOpen);
+    showControls();
   });
   document.querySelectorAll<HTMLButtonElement>('[data-player-audio-track-index]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -3623,9 +3630,14 @@ function bindPlayerProgress(): void {
       if (!Number.isFinite(nextAudioTrackIndex)) {
         return;
       }
+      if (nextAudioTrackIndex === currentAudioTrackIndex) {
+        setAudioTrackMenuOpen(false);
+        showControls();
+        return;
+      }
       state.activeAudioStreamIndex = nextAudioTrackIndex;
       state.activePlaybackStartMs = Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000);
-      state.isAudioTrackMenuOpen = false;
+      setAudioTrackMenuOpen(false);
       render(false);
     });
   });

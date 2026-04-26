@@ -2140,6 +2140,11 @@ legend {
   backdrop-filter: blur(18px);
 }
 
+.player-track-menu.is-hidden,
+.player-track-menu[hidden] {
+  display: none;
+}
+
 .player-track-option {
   display: flex;
   flex-direction: column;

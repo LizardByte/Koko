@@ -128,6 +128,7 @@ interface AppState {
   isAudioTrackMenuOpen: boolean;
   isTrailerMenuOpen: boolean;
   activeTrailer?: { title: string; url: string };
+  expandedTextKeys: Set<string>;
   error?: string;
   hasDeferredAutoRefreshRender: boolean;
   metadataDashboardFilters: {
@@ -210,6 +211,7 @@ const state: AppState = {
   isAudioTrackMenuOpen: false,
   isTrailerMenuOpen: false,
   activeTrailer: undefined,
+  expandedTextKeys: new Set(),
   metadataDashboardFilters: {
     libraryId: '',
     itemType: '',
@@ -607,6 +609,25 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+const COLLAPSIBLE_TEXT_LENGTH = 520;
+const COLLAPSIBLE_TEXT_LINE_COUNT = 6;
+
+function renderCollapsibleText(text: string, key: string, className = 'hero-description'): string {
+  const normalized = text.trim();
+  const lineCount = normalized.split(/\r\n|\r|\n/).length;
+  const shouldCollapse = normalized.length > COLLAPSIBLE_TEXT_LENGTH || lineCount > COLLAPSIBLE_TEXT_LINE_COUNT;
+  const isExpanded = state.expandedTextKeys.has(key);
+  const stateClass = shouldCollapse && !isExpanded ? 'is-collapsed' : '';
+  const toggle = shouldCollapse
+    ? `<button type="button" class="text-toggle-button" data-toggle-text="${escapeHtml(key)}" aria-expanded="${isExpanded ? 'true' : 'false'}">${isExpanded ? 'show less' : '... see more'}</button>`
+    : '';
+
+  return `
+    <div class="collapsible-text ${className} ${stateClass}" data-collapsible-text="${escapeHtml(key)}">${escapeHtml(normalized)}</div>
+    ${toggle}
+  `;
 }
 
 function extractYouTubeVideoId(url: string): string | undefined {
@@ -2306,7 +2327,7 @@ function renderPersonPage(): string {
             ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
           </div>
           ${response.person.birth_place ? `<p class="hero-tagline">${escapeHtml(response.person.birth_place)}</p>` : ''}
-          ${response.person.biography ? `<p class="hero-description">${escapeHtml(response.person.biography)}</p>` : ''}
+          ${response.person.biography ? renderCollapsibleText(response.person.biography, `person-biography:${response.person.id}`) : ''}
           ${response.person.known_for.length ? `<div class="hero-meta-row">${response.person.known_for.map((title) => `<span class="tag">${escapeHtml(title)}</span>`).join('')}</div>` : ''}
           <div class="detail-actions">
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent('Back', 'arrow-left')}</button>
@@ -2406,7 +2427,7 @@ function renderItemPage(): string {
             ${typeof state.selectedItem.rating === 'number' ? `<span class="tag">${escapeHtml(state.selectedItem.rating.toFixed(1))}</span>` : ''}
             ${genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('')}
           </div>
-          <p class="hero-description">${escapeHtml(overview)}</p>
+          ${renderCollapsibleText(overview, `item-overview:${state.selectedItem.id}`)}
           <div class="detail-actions">
             ${state.selectedItem.playable && resumeMs > 0 ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>` : ''}
             ${state.selectedItem.playable ? `<button type="button" class="${resumeMs > 0 ? 'secondary-button' : ''}" data-play-selected-item-start-ms="0">${renderButtonContent(resumeMs > 0 ? 'Start over' : 'Play now', 'play')}</button>` : ''}
@@ -4144,6 +4165,21 @@ function bindEvents(): void {
       }
 
       navigateTo(`/people/${personId}`);
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-toggle-text]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.toggleText;
+      if (!key) {
+        return;
+      }
+      if (state.expandedTextKeys.has(key)) {
+        state.expandedTextKeys.delete(key);
+      } else {
+        state.expandedTextKeys.add(key);
+      }
+      render();
     });
   });
 

@@ -1243,6 +1243,37 @@ legend {
   color: #dbe7ff;
 }
 
+.collapsible-text {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.collapsible-text.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+}
+
+.text-toggle-button {
+  align-self: flex-start;
+  margin-top: -0.1rem;
+  padding: 0;
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #9fc2ff;
+  font-weight: 700;
+}
+
+.text-toggle-button:hover {
+  color: #ffffff;
+  background: transparent;
+  transform: none;
+}
+
 .metadata-refresh-error {
   display: block;
   margin-top: 0.25rem;

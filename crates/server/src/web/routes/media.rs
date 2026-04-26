@@ -215,6 +215,29 @@ async fn open_ranged_file(
     })
 }
 
+async fn stop_active_transcode(session_id: &str) -> bool {
+    let handle = ACTIVE_TRANSCODE_TASKS.lock().await.remove(session_id);
+    if let Some(handle) = handle {
+        handle.abort();
+        true
+    } else {
+        false
+    }
+}
+
+async fn replace_active_transcode(
+    session_id: String,
+    handle: tokio::task::JoinHandle<()>,
+) {
+    if let Some(previous_handle) = ACTIVE_TRANSCODE_TASKS
+        .lock()
+        .await
+        .insert(session_id, handle)
+    {
+        previous_handle.abort();
+    }
+}
+
 /// Capability summary returned to clients during bootstrap.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ServerCapabilitiesResponse {
@@ -343,6 +366,9 @@ static ACTIVE_METADATA_REFRESH_ITEMS: Lazy<tokio::sync::RwLock<HashMap<i32, Stri
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static ACTIVE_TRANSCODE_TASKS: Lazy<
+    tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+> = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 const LIBRARY_MONITOR_INTERVAL_SECONDS: u64 = 20;
 
 #[derive(Debug, Clone)]
@@ -2399,6 +2425,8 @@ pub async fn delete_session(session_id: String) -> Status {
     let removed = ACTIVE_PLAYBACK_SESSIONS.write().await.remove(&session_id);
 
     if removed.is_some() {
+        stop_active_transcode(&session_id).await;
+
         let settings = current_settings();
         let session_dir = PathBuf::from(&settings.general.data_dir)
             .join("transcode_cache")
@@ -2433,6 +2461,8 @@ pub async fn get_session_stream(
     let selected_audio_stream_index = audio_stream_index.or(session.audio_stream_index);
 
     if session.decision.can_direct_play && selected_audio_stream_index.unwrap_or_default() == 0 {
+        stop_active_transcode(&session_id).await;
+
         let source_path = db
             .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
             .await
@@ -2501,11 +2531,14 @@ pub async fn get_session_stream(
         audio_stream_index: selected_audio_stream_index,
     };
 
+    stop_active_transcode(&session_id).await;
+
     match crate::transcode::spawn_transcode_stdout(&session_id, &spec, &settings.ffmpeg).await {
         Ok(mut child) => {
             let stdout = child.stdout.take().ok_or(Status::InternalServerError)?;
             let stderr = child.stderr.take();
-            tokio::spawn(async move {
+            let transcode_session_id = session_id.clone();
+            let handle = tokio::spawn(async move {
                 let mut stderr_text = Vec::new();
                 if let Some(mut stderr) = stderr {
                     let _ = stderr.read_to_end(&mut stderr_text).await;
@@ -2523,6 +2556,7 @@ pub async fn get_session_stream(
                     }
                 }
             });
+            replace_active_transcode(transcode_session_id, handle).await;
 
             Ok(SessionStream::Transcode {
                 content_type: ContentType::MP4,

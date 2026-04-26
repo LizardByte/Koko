@@ -2223,8 +2223,18 @@ legend {
 }
 
 .player-control-row {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 1fr) auto minmax(7.5rem, 1fr);
   gap: 1rem;
+  width: 100%;
+}
+
+.player-transport-cluster {
+  justify-content: center;
+}
+
+.player-tool-cluster {
+  justify-content: flex-end;
 }
 
 .player-icon-button {
@@ -2430,5 +2440,20 @@ legend {
 
   .item-poster {
     width: min(220px, 100%);
+  }
+
+  .player-control-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .player-time-cluster,
+  .player-transport-cluster,
+  .player-tool-cluster {
+    justify-content: center;
+  }
+
+  .player-tool-cluster {
+    flex-wrap: wrap;
   }
 }

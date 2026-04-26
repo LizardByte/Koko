@@ -2720,13 +2720,15 @@ function renderPlayerOverlay(): string {
         <div class="player-bottom-controls player-controls">
           <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
           <div class="player-control-row">
-            <div class="player-control-cluster">
-              <button class="player-icon-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
-              <button id="player-play-toggle-small" class="player-icon-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-              <button class="player-icon-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+            <div class="player-control-cluster player-time-cluster">
               <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(state.selectedItem.duration_ms))}</span></span>
             </div>
-            <div class="player-control-cluster">
+            <div class="player-control-cluster player-transport-cluster">
+              <button class="player-icon-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
+              <button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+              <button class="player-icon-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+            </div>
+            <div class="player-control-cluster player-tool-cluster">
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
               ${!isAudio && audioTracks.length > 1 ? `
@@ -3522,6 +3524,18 @@ function bindPlayerProgress(): void {
     }, 3200);
   };
 
+  const seekWithEscalation = (direction: number): void => {
+    const now = Date.now();
+    if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
+      skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
+    } else {
+      skipStepIndex = 0;
+    }
+    lastSkipDirection = direction;
+    lastSkipAt = now;
+    seekBy(direction * skipSteps[skipStepIndex]);
+  };
+
   const seekBy = (seconds: number): void => {
     const currentPosition = playbackBaseOffsetSeconds + player.currentTime;
     const targetPosition = Math.max(0, currentPosition + seconds);
@@ -3593,15 +3607,9 @@ function bindPlayerProgress(): void {
     button.addEventListener('click', () => {
       const requestedSeconds = Number(button.dataset.playerSeek);
       const direction = Math.sign(requestedSeconds);
-      const now = Date.now();
-      if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
-        skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
-      } else {
-        skipStepIndex = 0;
+      if (direction !== 0) {
+        seekWithEscalation(direction);
       }
-      lastSkipDirection = direction;
-      lastSkipAt = now;
-      seekBy(direction * skipSteps[skipStepIndex]);
       showControls();
     });
   });
@@ -3616,6 +3624,14 @@ function bindPlayerProgress(): void {
     updateMuteButton();
     showControls();
   });
+  volume?.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 0.05 : -0.05;
+    player.volume = Math.min(1, Math.max(0, player.volume + delta));
+    player.muted = player.volume === 0;
+    updateMuteButton();
+    showControls();
+  }, { passive: false });
   fullscreenButton?.addEventListener('click', () => {
     toggleFullscreen();
     showControls();
@@ -3678,6 +3694,13 @@ function bindPlayerProgress(): void {
     }
     showControls();
   });
+  progress?.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    seekWithEscalation(direction);
+    updateTimeline();
+    showControls();
+  }, { passive: false });
   progress?.addEventListener('change', () => {
     const duration = sourceDurationSeconds > 0 ? sourceDurationSeconds : Number.isFinite(player.duration) ? player.duration : 0;
     if (duration > 0) {

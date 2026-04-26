@@ -6,9 +6,9 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // lib imports
-use tokio::process::Command;
-use tokio::process::Child;
 use tokio::fs;
+use tokio::process::Child;
+use tokio::process::Command;
 
 // local imports
 use crate::config::FfmpegSettings;
@@ -73,13 +73,18 @@ impl TranscodeSpec {
         self.to_ffmpeg_args_for_output("pipe:1")
     }
 
-    fn to_ffmpeg_args_for_output(&self, output_target: &str) -> Vec<String> {
+    fn to_ffmpeg_args_for_output(
+        &self,
+        output_target: &str,
+    ) -> Vec<String> {
         let mut args = Vec::new();
 
         // Avoid writing banner and stats
         args.push("-hide_banner".into());
         args.push("-loglevel".into());
         args.push("warning".into());
+        args.push("-fflags".into());
+        args.push("+genpts".into());
 
         if let Some(start_time) = self.start_time_ms {
             let start_sec = start_time as f64 / 1000.0;
@@ -101,14 +106,22 @@ impl TranscodeSpec {
         args.push("-c:v".into());
         if let Some(vc) = &self.video_codec {
             args.push(vc.clone());
-            
+            if vc == "libx264" {
+                args.push("-preset".into());
+                args.push("veryfast".into());
+                args.push("-pix_fmt".into());
+                args.push("yuv420p".into());
+            }
+
             // Add scale filter if we need resizing
             if self.max_width.unwrap_or(0) > 0 || self.max_height.unwrap_or(0) > 0 {
                 let w = self.max_width.unwrap_or(u32::MAX);
                 let h = self.max_height.unwrap_or(u32::MAX);
                 // Simple scale filter that preserves aspect ratio and doesn't up-scale
                 args.push("-vf".into());
-                args.push(format!("scale=w='min({w}\\,iw)':h='min({h}\\,ih)':force_original_aspect_ratio=decrease"));
+                args.push(format!(
+                    "scale=w='min({w}\\,iw)':h='min({h}\\,ih)':force_original_aspect_ratio=decrease"
+                ));
             }
         } else {
             args.push("copy".into());
@@ -118,6 +131,12 @@ impl TranscodeSpec {
         args.push("-c:a".into());
         if let Some(ac) = &self.audio_codec {
             args.push(ac.clone());
+            if ac == "aac" {
+                args.push("-ac".into());
+                args.push("2".into());
+                args.push("-b:a".into());
+                args.push("192k".into());
+            }
         } else {
             args.push("copy".into());
         }
@@ -141,6 +160,12 @@ impl TranscodeSpec {
             // Fragmented MP4 can be consumed while FFmpeg is still producing it.
             args.push("-movflags".into());
             args.push("frag_keyframe+empty_moov+default_base_moof".into());
+            args.push("-avoid_negative_ts".into());
+            args.push("make_zero".into());
+            args.push("-muxdelay".into());
+            args.push("0".into());
+            args.push("-muxpreload".into());
+            args.push("0".into());
         }
 
         // Output path or stdout
@@ -162,8 +187,12 @@ pub async fn spawn_transcode(
     }
 
     let args = spec.to_ffmpeg_args();
-    
-    log::info!("Starting FFmpeg: {} {}", settings.ffmpeg_path, args.join(" "));
+
+    log::info!(
+        "Starting FFmpeg: {} {}",
+        settings.ffmpeg_path,
+        args.join(" ")
+    );
 
     let mut command = Command::new(&settings.ffmpeg_path);
     command
@@ -185,14 +214,18 @@ pub async fn spawn_transcode_stdout(
 ) -> Result<Child, std::io::Error> {
     let args = spec.to_ffmpeg_stdout_args();
 
-    log::info!("Starting FFmpeg stdout stream: {} {}", settings.ffmpeg_path, args.join(" "));
+    log::info!(
+        "Starting FFmpeg stdout stream: {} {}",
+        settings.ffmpeg_path,
+        args.join(" ")
+    );
 
     let mut command = Command::new(&settings.ffmpeg_path);
     command
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     let child = command.spawn()?;
 

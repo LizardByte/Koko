@@ -24,7 +24,6 @@ import {
   getSettings,
   getStoredAuthToken,
   getStoredApiBase,
-  getStreamUrl,
   getUsers,
   linkItemMetadata,
   loginUser,
@@ -2655,12 +2654,11 @@ function renderPlayerOverlay(): string {
 
   const isAudio = state.selectedItem.media_kind === 'audio';
   const tag = isAudio ? 'audio' : 'video';
-  const selectedAudioStreamIndex = state.activeAudioStreamIndex;
   const isExplicitAudioTrackSelection = state.activeAudioStreamIndex !== undefined;
-  const shouldUseDirectItemStream = state.activePlaybackSession.decision.can_direct_play && !isExplicitAudioTrackSelection;
-  const source = shouldUseDirectItemStream
-    ? getStreamUrl(state.selectedItem.id)
-    : getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs, selectedAudioStreamIndex);
+  const selectedAudioStreamIndex = isExplicitAudioTrackSelection
+    ? state.activeAudioStreamIndex
+    : state.activePlaybackSession.audio_stream_index;
+  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs, selectedAudioStreamIndex);
   const posterUrl = state.selectedItem.poster_url
     ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
     : undefined;
@@ -2674,16 +2672,18 @@ function renderPlayerOverlay(): string {
         .join('')
     : '';
 
-  const transcodeBadge = state.activePlaybackSession.decision.transcode_required
-    ? `<span class="player-badge is-transcoding" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Transcoding</span>`
+  const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
+  const isRemuxingForAudio = isAudioStreamOverride && !state.activePlaybackSession.decision.transcode_required;
+  const transcodeBadge = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
+    ? `<span class="player-badge is-transcoding" title="${escapeHtml(isRemuxingForAudio ? 'Using a non-default audio track requires a remuxed stream.' : state.activePlaybackSession.decision.reason)}">Transcoding</span>`
     : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
   const audioTracks = state.selectedItem.audio_tracks ?? [];
   const activeAudioTrack = audioTracks.find((track) => track.index === selectedAudioStreamIndex)
     ?? audioTracks.find((track) => track.default)
     ?? audioTracks[0];
-  const audioTrackMenuTitle = !isExplicitAudioTrackSelection
-    ? 'Audio track changes may require remuxing'
-    : `Audio track: ${activeAudioTrack?.label ?? 'Default'}`;
+  const audioTrackMenuTitle = activeAudioTrack
+    ? `Audio track: ${activeAudioTrack.label}`
+    : 'Audio track changes may require remuxing';
 
   return `
     <div class="player-overlay media-player-overlay">
@@ -3421,11 +3421,11 @@ function bindPlayerProgress(): void {
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#player-fullscreen');
   const pipButton = document.querySelector<HTMLButtonElement>('#player-pip');
   const audioTrackToggle = document.querySelector<HTMLButtonElement>('#player-audio-track-toggle');
-  const isTranscoding = state.activePlaybackSession?.decision.transcode_required ?? false;
-  const isDirectItemStream = Boolean(state.activePlaybackSession?.decision.can_direct_play && state.activeAudioStreamIndex === undefined);
+  const selectedAudioStreamIndex = state.activeAudioStreamIndex ?? state.activePlaybackSession?.audio_stream_index;
+  const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
+  const isTranscoding = (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
   const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
-  const playbackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
-  const playbackBaseOffsetSeconds = isDirectItemStream ? 0 : playbackStartSeconds;
+  const playbackBaseOffsetSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
   const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
@@ -3693,12 +3693,7 @@ function bindPlayerProgress(): void {
     setPlayerError();
     console.error('Media playback failed', player.error);
   });
-  player.addEventListener('loadedmetadata', () => {
-    if (isDirectItemStream && playbackStartSeconds > 0 && Number.isFinite(player.duration)) {
-      player.currentTime = Math.min(playbackStartSeconds, Math.max(0, player.duration - 0.25));
-    }
-    updateTimeline();
-  });
+  player.addEventListener('loadedmetadata', updateTimeline);
   player.addEventListener('play', () => {
     updatePlayButtons();
     showControls();

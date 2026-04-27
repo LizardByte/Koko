@@ -923,10 +923,10 @@ fn test_item_detail_uses_primary_metadata_link_only() {
     diesel::sql_query(
         "INSERT INTO item_metadata_links (\
             media_item_id, provider_id, external_id, title, overview, tagline, artwork_url, backdrop_url, \
-            release_year, media_type, relation_kind, match_state, provider_payload_json, cached_artwork_path, \
+            release_year, media_type, relation_kind, match_state, cached_artwork_path, \
             cached_backdrop_path, refresh_state, refresh_interval_seconds, last_refreshed_at, next_refresh_at, \
             refresh_error, updated_at\
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, ?, 0, NULL, NULL, NULL, ?)",
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?, 0, NULL, NULL, NULL, ?)",
     )
     .bind::<diesel::sql_types::Integer, _>(movie.id)
     .bind::<diesel::sql_types::Text, _>("musicbrainz")
@@ -1391,7 +1391,7 @@ fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
     assert_eq!(
         get_item_theme_song_themerr_references(&mut connection, movie.id).unwrap(),
         vec![
-            ("movie".into(), "themoviedb".into(), "603".into()),
+            ("movie".into(), "tmdb".into(), "603".into()),
             ("movie".into(), "imdb".into(), "tt0133093".into()),
         ]
     );

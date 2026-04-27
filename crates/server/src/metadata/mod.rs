@@ -395,7 +395,7 @@ pub struct ProviderMetadataDetails {
 /// Provider-normalized external identifier for cross-provider lookups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderExternalId {
-    /// Stable source/database key such as `imdb`, `themoviedb`, or `thetvdb`.
+    /// Stable source/database key such as `imdb`, `tmdb`, or `thetvdb`.
     pub source: String,
     /// External identifier within the source/database.
     pub external_id: String,
@@ -414,8 +414,6 @@ pub struct ProviderMetadataCollection {
     pub artwork_url: Option<String>,
     /// Collection backdrop URL.
     pub backdrop_url: Option<String>,
-    /// Optional provider payload retained for diagnostics.
-    pub provider_payload_json: Option<String>,
 }
 
 /// Provider-normalized person credit ready for persistence.
@@ -449,8 +447,6 @@ pub struct ProviderMetadataPerson {
     pub image_url: Option<String>,
     /// Cached local image path.
     pub cached_image_path: Option<String>,
-    /// Optional provider payload retained for diagnostics.
-    pub provider_payload_json: Option<String>,
     /// Provider/source order for stable presentation.
     pub sort_order: i32,
 }
@@ -1208,7 +1204,6 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             media_type: snapshot.media_type.clone(),
             relation_kind: "primary".into(),
             match_state: "linked".into(),
-            provider_payload_json: snapshot.provider_payload_json.clone(),
             logo_url,
             cached_logo_path: if keep_cached_logo {
                 existing
@@ -1328,9 +1323,6 @@ pub fn set_item_metadata_refresh_state(
                 .as_ref()
                 .map(|row| row.match_state.clone())
                 .unwrap_or_else(|| "linked".into()),
-            provider_payload_json: existing
-                .as_ref()
-                .and_then(|row| row.provider_payload_json.clone()),
             logo_url: existing.as_ref().and_then(|row| row.logo_url.clone()),
             cached_logo_path: existing
                 .as_ref()
@@ -1644,32 +1636,6 @@ fn preferred_person_row(
     })
 }
 
-/// Return an already stored metadata snapshot matching one provider item.
-pub fn get_stored_metadata_snapshot(
-    conn: &mut SqliteConnection,
-    provider_id: MetadataProviderId,
-    external_id: &str,
-    media_type: Option<&str>,
-) -> Result<Option<StoredMetadataSnapshot>, diesel::result::Error> {
-    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
-
-    let mut query = metadata_links_dsl::item_metadata_links
-        .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
-        .filter(metadata_links_dsl::external_id.eq(external_id))
-        .into_boxed();
-    if let Some(media_type) = media_type {
-        query = query.filter(metadata_links_dsl::media_type.eq(media_type));
-    }
-
-    let row = query
-        .order(metadata_links_dsl::updated_at.desc())
-        .select(ItemMetadataLink::as_select())
-        .first(conn)
-        .optional()?;
-
-    Ok(row.and_then(stored_snapshot_from_link))
-}
-
 /// Extract presentation-ready metadata from a stored link payload.
 pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadataPresentation {
     let tagline = link.tagline.clone();
@@ -1707,6 +1673,16 @@ pub async fn persist_item_metadata_assets(
     _item_id: i32,
     data_dir: &str,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>, Option<PathBuf>), String> {
+    persist_item_metadata_assets_with_logo(snapshot, _item_id, data_dir, None).await
+}
+
+/// Persist stored metadata artwork with an optional logo URL already loaded from the database.
+pub async fn persist_item_metadata_assets_with_logo(
+    snapshot: &StoredMetadataSnapshot,
+    _item_id: i32,
+    data_dir: &str,
+    logo_url_override: Option<&str>,
+) -> Result<(Option<PathBuf>, Option<PathBuf>, Option<PathBuf>), String> {
     let item_dir = managed_metadata_asset_dir(
         data_dir,
         snapshot.provider_id.clone(),
@@ -1716,7 +1692,9 @@ pub async fn persist_item_metadata_assets(
     );
     fs::create_dir_all(&item_dir).map_err(|error| error.to_string())?;
 
-    let logo_url = provider_metadata_details(snapshot).logo_url;
+    let logo_url = logo_url_override
+        .map(str::to_string)
+        .or_else(|| provider_metadata_details(snapshot).logo_url);
 
     let poster_cache_key = format!("{}_poster", snapshot.provider_id.as_storage_value());
     let poster_path = if let Some(url) = &snapshot.artwork_url {
@@ -1780,6 +1758,25 @@ pub fn managed_metadata_asset_dir(
         .join(metadata_asset_type_directory(item_kind))
         .join(shard)
         .join(directory_name)
+}
+
+/// Convert an absolute managed asset path into a data-dir-relative database value.
+pub fn metadata_asset_db_path(
+    data_dir: &str,
+    path: &Path,
+) -> String {
+    let data_dir = Path::new(data_dir);
+    let relative_path = path.strip_prefix(data_dir).unwrap_or(path);
+    relative_path.to_string_lossy().replace('\\', "/")
+}
+
+/// Resolve a stored metadata asset path against the current data directory.
+pub fn resolve_metadata_asset_db_path(
+    data_dir: &str,
+    stored_path: &str,
+) -> PathBuf {
+    let path = PathBuf::from(stored_path);
+    if path.is_absolute() { path } else { Path::new(data_dir).join(path) }
 }
 
 /// Return the stable provider UUID used to derive metadata paths.
@@ -1909,9 +1906,11 @@ pub fn update_cached_artwork_path(
     link_id: i32,
     kind: ArtworkKind,
     cache_path: &Path,
+    data_dir: &str,
 ) -> Result<(), diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
     configure_sqlite_connection(conn)?;
+    let stored_cache_path = metadata_asset_db_path(data_dir, cache_path);
     retry_sqlite_write(|| {
         match kind {
             ArtworkKind::Poster => {
@@ -1919,10 +1918,7 @@ pub fn update_cached_artwork_path(
                     metadata_links_dsl::item_metadata_links
                         .filter(metadata_links_dsl::id.eq(link_id)),
                 )
-                .set(
-                    metadata_links_dsl::cached_artwork_path
-                        .eq(cache_path.to_string_lossy().to_string()),
-                )
+                .set(metadata_links_dsl::cached_artwork_path.eq(stored_cache_path.clone()))
                 .execute(conn)?;
             }
             ArtworkKind::Backdrop => {
@@ -1930,10 +1926,7 @@ pub fn update_cached_artwork_path(
                     metadata_links_dsl::item_metadata_links
                         .filter(metadata_links_dsl::id.eq(link_id)),
                 )
-                .set(
-                    metadata_links_dsl::cached_backdrop_path
-                        .eq(cache_path.to_string_lossy().to_string()),
-                )
+                .set(metadata_links_dsl::cached_backdrop_path.eq(stored_cache_path.clone()))
                 .execute(conn)?;
             }
             ArtworkKind::Logo => {
@@ -1941,10 +1934,7 @@ pub fn update_cached_artwork_path(
                     metadata_links_dsl::item_metadata_links
                         .filter(metadata_links_dsl::id.eq(link_id)),
                 )
-                .set(
-                    metadata_links_dsl::cached_logo_path
-                        .eq(cache_path.to_string_lossy().to_string()),
-                )
+                .set(metadata_links_dsl::cached_logo_path.eq(stored_cache_path.clone()))
                 .execute(conn)?;
             }
         }
@@ -2220,24 +2210,6 @@ fn to_metadata_person_summary(person: MetadataPerson) -> MetadataPersonSummary {
         cached_image_path: person.cached_image_path,
         updated_at: person.updated_at,
     }
-}
-
-fn stored_snapshot_from_link(link: ItemMetadataLink) -> Option<StoredMetadataSnapshot> {
-    link.provider_payload_json.as_ref()?;
-
-    Some(StoredMetadataSnapshot {
-        provider_id: metadata_provider_id_from_db(&link.provider_id),
-        external_id: link.external_id,
-        media_type: link.media_type,
-        title: link.title,
-        overview: link.overview,
-        artwork_url: link.artwork_url,
-        backdrop_url: link.backdrop_url,
-        release_year: link.release_year,
-        locale_key: link.locale_key,
-        provider_locale_key: link.provider_locale_key,
-        provider_payload_json: link.provider_payload_json,
-    })
 }
 
 pub(crate) async fn try_cache_item_artwork(
@@ -2551,7 +2523,6 @@ fn sync_item_metadata_collections(
             overview: collection.overview,
             artwork_url: collection.artwork_url,
             backdrop_url: collection.backdrop_url,
-            provider_payload_json: collection.provider_payload_json,
             updated_at: Some(current_timestamp()),
         })
         .collect::<Vec<_>>();
@@ -2675,7 +2646,6 @@ fn sync_item_metadata_people(
             profile_url: person.profile_url.clone(),
             image_url: person.image_url.clone(),
             cached_image_path: person.cached_image_path.clone(),
-            provider_payload_json: person.provider_payload_json.clone(),
             updated_at: Some(current_timestamp()),
         };
         let existing_person = normalized_people_dsl::metadata_people
@@ -2809,19 +2779,6 @@ mod tests {
             media_type: Some("movie".into()),
             relation_kind: "primary".into(),
             match_state: "linked".into(),
-            provider_payload_json: Some(
-                serde_json::json!({
-                    "data": {
-                        "translations": [
-                            {
-                                "language": "rus",
-                                "name": "rus"
-                            }
-                        ]
-                    }
-                })
-                .to_string(),
-            ),
             logo_url: None,
             cached_logo_path: None,
             genres_json: Some(serde_json::json!(["Drama", "Mystery"]).to_string()),

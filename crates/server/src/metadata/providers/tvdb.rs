@@ -8,9 +8,10 @@ use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
     MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataDetails,
     ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
-    format_payload_snippet, managed_metadata_asset_dir, metadata_response_cache_key,
-    movie_match_score, parse_movie_name, provider_settings, read_metadata_response_cache_text,
-    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
+    format_payload_snippet, managed_metadata_asset_dir, metadata_asset_db_path,
+    metadata_response_cache_key, movie_match_score, parse_movie_name, provider_settings,
+    read_metadata_response_cache_text, show_search_query, try_cache_item_artwork,
+    write_metadata_response_cache_text,
 };
 use std::time::{Duration, Instant};
 
@@ -892,7 +893,7 @@ fn normalize_tvdb_external_id_source(source: &str) -> Option<&'static str> {
     let source = source.trim().to_ascii_lowercase();
     match source.as_str() {
         "imdb" | "imdb.com" => Some("imdb"),
-        "themoviedb" | "themoviedb.com" | "tmdb" | "tmdb.com" => Some("themoviedb"),
+        "themoviedb" | "themoviedb.com" | "tmdb" | "tmdb.com" => Some("tmdb"),
         "thetvdb" | "thetvdb.com" | "tvdb" => Some("thetvdb"),
         _ => None,
     }
@@ -977,17 +978,17 @@ async fn cache_tvdb_people_payload_images(
         if let Some(map) = entry.as_object_mut() {
             map.insert(
                 "koko_cached_image_path".into(),
-                Value::String(path.to_string_lossy().to_string()),
+                Value::String(metadata_asset_db_path(data_dir, &path)),
             );
             if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
                 person.insert(
                     "koko_cached_image_path".into(),
-                    Value::String(path.to_string_lossy().to_string()),
+                    Value::String(metadata_asset_db_path(data_dir, &path)),
                 );
             } else if let Some(person) = map.get_mut("person").and_then(Value::as_object_mut) {
                 person.insert(
                     "koko_cached_image_path".into(),
-                    Value::String(path.to_string_lossy().to_string()),
+                    Value::String(metadata_asset_db_path(data_dir, &path)),
                 );
             }
         }
@@ -1234,7 +1235,6 @@ fn tvdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                     image_url: tvdb_person_image_url(entry, person),
                     cached_image_path: text_field(person_for_details, &["koko_cached_image_path"])
                         .or_else(|| text_field(entry, &["koko_cached_image_path"])),
-                    provider_payload_json: Some(person_for_details.to_string()),
                     sort_order: i32::try_from(index).unwrap_or(i32::MAX),
                 })
             })

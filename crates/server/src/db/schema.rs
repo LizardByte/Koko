@@ -28,7 +28,6 @@ table! {
         media_type -> Nullable<Text>,
         relation_kind -> Text,
         match_state -> Text,
-        provider_payload_json -> Nullable<Text>,
         logo_url -> Nullable<Text>,
         cached_logo_path -> Nullable<Text>,
         genres_json -> Nullable<Text>,
@@ -59,7 +58,6 @@ table! {
         overview -> Nullable<Text>,
         artwork_url -> Nullable<Text>,
         backdrop_url -> Nullable<Text>,
-        provider_payload_json -> Nullable<Text>,
         updated_at -> Nullable<BigInt>,
     }
 }
@@ -96,7 +94,6 @@ table! {
         profile_url -> Nullable<Text>,
         image_url -> Nullable<Text>,
         cached_image_path -> Nullable<Text>,
-        provider_payload_json -> Nullable<Text>,
         updated_at -> Nullable<BigInt>,
     }
 }

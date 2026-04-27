@@ -171,7 +171,6 @@ pub struct ItemMetadataLink {
     pub media_type: Option<String>,
     pub relation_kind: String,
     pub match_state: String,
-    pub provider_payload_json: Option<String>,
     pub logo_url: Option<String>,
     pub cached_logo_path: Option<String>,
     pub genres_json: Option<String>,
@@ -207,7 +206,6 @@ pub struct NewItemMetadataLink {
     pub media_type: Option<String>,
     pub relation_kind: String,
     pub match_state: String,
-    pub provider_payload_json: Option<String>,
     pub logo_url: Option<String>,
     pub cached_logo_path: Option<String>,
     pub genres_json: Option<String>,
@@ -297,7 +295,6 @@ pub struct MetadataPerson {
     pub profile_url: Option<String>,
     pub image_url: Option<String>,
     pub cached_image_path: Option<String>,
-    pub provider_payload_json: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -319,7 +316,6 @@ pub struct NewMetadataPerson {
     pub profile_url: Option<String>,
     pub image_url: Option<String>,
     pub cached_image_path: Option<String>,
-    pub provider_payload_json: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -361,7 +357,6 @@ pub struct ItemMetadataCollection {
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
-    pub provider_payload_json: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -376,7 +371,6 @@ pub struct NewItemMetadataCollection {
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
-    pub provider_payload_json: Option<String>,
     pub updated_at: Option<i64>,
 }
 

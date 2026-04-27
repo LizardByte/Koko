@@ -55,13 +55,14 @@ use crate::metadata::{
     fetch_provider_season_metadata_snapshot, fetch_provider_youtube_theme_url,
     get_item_metadata_summaries, get_metadata_person_for_languages,
     get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
-    get_stored_metadata_snapshot, guess_provider_movie_match, guess_provider_show_match,
-    list_due_item_metadata_links, list_metadata_person_credit_summaries_for_person_ids,
-    list_pending_item_metadata_links, list_provider_statuses,
-    load_provider_show_descendant_targets, managed_metadata_asset_dir, normalize_locale_key,
-    persist_item_metadata_assets, persist_metadata_people_assets, search_provider,
+    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
+    list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
+    metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
+    persist_metadata_people_assets, resolve_metadata_asset_db_path, search_provider,
     set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
-    update_cached_artwork_path, upsert_item_metadata_snapshot_with_refresh_interval,
+    try_cache_item_artwork, update_cached_artwork_path,
+    upsert_item_metadata_snapshot_with_refresh_interval,
 };
 use crate::utils::current_timestamp;
 
@@ -465,9 +466,16 @@ async fn persist_snapshot_for_item(
 
     if let Some(poster_path) = poster_path {
         let summary_id = summary.id;
-        let poster_path_string = poster_path.to_string_lossy().to_string();
+        let poster_path_string = metadata_asset_db_path(&settings.general.data_dir, &poster_path);
+        let data_dir = settings.general.data_dir.clone();
         db.run(move |conn| {
-            update_cached_artwork_path(conn, summary_id, ArtworkKind::Poster, &poster_path)
+            update_cached_artwork_path(
+                conn,
+                summary_id,
+                ArtworkKind::Poster,
+                &poster_path,
+                &data_dir,
+            )
         })
         .await
         .map_err(|error| {
@@ -483,9 +491,17 @@ async fn persist_snapshot_for_item(
 
     if let Some(backdrop_path) = backdrop_path {
         let summary_id = summary.id;
-        let backdrop_path_string = backdrop_path.to_string_lossy().to_string();
+        let backdrop_path_string =
+            metadata_asset_db_path(&settings.general.data_dir, &backdrop_path);
+        let data_dir = settings.general.data_dir.clone();
         db.run(move |conn| {
-            update_cached_artwork_path(conn, summary_id, ArtworkKind::Backdrop, &backdrop_path)
+            update_cached_artwork_path(
+                conn,
+                summary_id,
+                ArtworkKind::Backdrop,
+                &backdrop_path,
+                &data_dir,
+            )
         })
         .await
         .map_err(|error| {
@@ -501,9 +517,10 @@ async fn persist_snapshot_for_item(
 
     if let Some(logo_path) = logo_path {
         let summary_id = summary.id;
-        let logo_path_string = logo_path.to_string_lossy().to_string();
+        let logo_path_string = metadata_asset_db_path(&settings.general.data_dir, &logo_path);
+        let data_dir = settings.general.data_dir.clone();
         db.run(move |conn| {
-            update_cached_artwork_path(conn, summary_id, ArtworkKind::Logo, &logo_path)
+            update_cached_artwork_path(conn, summary_id, ArtworkKind::Logo, &logo_path, &data_dir)
         })
         .await
         .map_err(|error| {
@@ -2835,7 +2852,7 @@ pub async fn get_person_image(
             }
         })?
         .ok_or(Status::NotFound)?;
-    let image_path = PathBuf::from(image_path);
+    let image_path = resolve_metadata_asset_db_path(&data_dir, &image_path);
     let expected_root = PathBuf::from(data_dir).join("metadata").join("people");
     if !image_path.starts_with(&expected_root) {
         log::warn!(
@@ -3021,35 +3038,14 @@ pub async fn link_item_metadata(
         return Err(Status::BadRequest);
     }
 
-    let provider_id = request.provider_id.clone();
-    let external_id = request.external_id.clone();
-    let media_type = request.media_type.clone();
-    let stored_snapshot = db
-        .run(move |conn| {
-            get_stored_metadata_snapshot(conn, provider_id, &external_id, Some(&media_type))
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to inspect stored metadata snapshot for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-
-    let snapshots = if let Some(stored_snapshot) = stored_snapshot {
-        vec![stored_snapshot]
-    } else {
-        fetch_snapshots_for_all_user_languages(
-            &db,
-            &settings,
-            request.provider_id,
-            &request.external_id,
-            &request.media_type,
-        )
-        .await?
-    };
+    let snapshots = fetch_snapshots_for_all_user_languages(
+        &db,
+        &settings,
+        request.provider_id,
+        &request.external_id,
+        &request.media_type,
+    )
+    .await?;
 
     let summary = persist_snapshot_tree_for_languages(&db, item_id, &snapshots, &settings).await?;
 
@@ -3262,7 +3258,7 @@ pub async fn get_item_artwork(
             link.media_type.as_deref(),
             &link.locale_key,
         );
-        let existing_path = std::path::PathBuf::from(existing_cache);
+        let existing_path = resolve_metadata_asset_db_path(&data_dir, &existing_cache);
         let current_artwork_url = match artwork_kind {
             ArtworkKind::Poster => link.artwork_url.as_deref(),
             ArtworkKind::Backdrop => link.backdrop_url.as_deref(),
@@ -3289,51 +3285,51 @@ pub async fn get_item_artwork(
         );
     }
 
-    let snapshot = StoredMetadataSnapshot {
-        provider_id: MetadataProviderId::from_storage_value(&link.provider_id)
-            .unwrap_or(MetadataProviderId::Tmdb),
-        external_id: link.external_id.clone(),
-        media_type: link.media_type.clone(),
-        title: link.title.clone(),
-        overview: link.overview.clone(),
-        artwork_url: link.artwork_url.clone(),
-        backdrop_url: link.backdrop_url.clone(),
-        release_year: link.release_year,
-        locale_key: link.locale_key.clone(),
-        provider_locale_key: link.provider_locale_key.clone(),
-        provider_payload_json: link.provider_payload_json.clone(),
-    };
-    let data_dir = current_settings().general.data_dir;
-    let (poster_path, backdrop_path, logo_path) =
-        persist_item_metadata_assets(&snapshot, item_id, &data_dir)
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to cache artwork for media item {}: {}",
-                    item_id,
-                    error
-                );
-                Status::BadGateway
-            })?;
-    let cached_path = match artwork_kind {
-        ArtworkKind::Poster => poster_path,
-        ArtworkKind::Backdrop => backdrop_path,
-        ArtworkKind::Logo => logo_path,
+    let provider_id = MetadataProviderId::from_storage_value(&link.provider_id)
+        .unwrap_or(MetadataProviderId::Tmdb);
+    let item_dir = managed_metadata_asset_dir(
+        &data_dir,
+        provider_id.clone(),
+        &link.external_id,
+        link.media_type.as_deref(),
+        &link.locale_key,
+    );
+    let current_artwork_url = match artwork_kind {
+        ArtworkKind::Poster => link.artwork_url.as_deref(),
+        ArtworkKind::Backdrop => link.backdrop_url.as_deref(),
+        ArtworkKind::Logo => link.logo_url.as_deref(),
     }
     .ok_or(Status::NotFound)?;
+    let cache_key = match artwork_kind {
+        ArtworkKind::Poster => format!("{}_poster", provider_id.as_storage_value()),
+        ArtworkKind::Backdrop => format!("{}_backdrop", provider_id.as_storage_value()),
+        ArtworkKind::Logo => format!("{}_logo", provider_id.as_storage_value()),
+    };
+    let cached_path = try_cache_item_artwork(current_artwork_url, &item_dir, &cache_key)
+        .await
+        .ok_or(Status::BadGateway)?;
 
     let link_id = link.id;
     let stored_path = cached_path.clone();
-    db.run(move |conn| update_cached_artwork_path(conn, link_id, artwork_kind, &stored_path))
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to persist cached artwork path for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
+    let data_dir_for_update = data_dir.clone();
+    db.run(move |conn| {
+        update_cached_artwork_path(
+            conn,
+            link_id,
+            artwork_kind,
+            &stored_path,
+            &data_dir_for_update,
+        )
+    })
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to persist cached artwork path for media item {}: {}",
+            item_id,
+            error
+        );
+        Status::InternalServerError
+    })?;
 
     NamedFile::open(cached_path)
         .await

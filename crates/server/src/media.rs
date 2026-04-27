@@ -2249,7 +2249,7 @@ pub fn get_item_theme_song_themerr_references(
                     if matches!(media_type, "movie" | "tv") {
                         let mut references = vec![(
                             media_type.to_string(),
-                            "themoviedb".to_string(),
+                            "tmdb".to_string(),
                             link.external_id.clone(),
                         )];
                         if media_type == "movie" {

@@ -12,9 +12,9 @@ use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
     MetadataSearchResult, ProviderExternalId, ProviderMetadataCollection, ProviderMetadataDetails,
     ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
-    managed_metadata_asset_dir, metadata_response_cache_key, movie_match_score, parse_movie_name,
-    provider_settings, read_metadata_response_cache_text, show_search_query,
-    try_cache_item_artwork, write_metadata_response_cache_text,
+    managed_metadata_asset_dir, metadata_asset_db_path, metadata_response_cache_key,
+    movie_match_score, parse_movie_name, provider_settings, read_metadata_response_cache_text,
+    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
@@ -881,7 +881,7 @@ fn tmdb_external_ids(
     snapshot: &StoredMetadataSnapshot,
 ) -> Vec<ProviderExternalId> {
     let mut external_ids = Vec::new();
-    push_external_id(&mut external_ids, "themoviedb", Some(&snapshot.external_id));
+    push_external_id(&mut external_ids, "tmdb", Some(&snapshot.external_id));
     push_external_id(
         &mut external_ids,
         "imdb",
@@ -989,7 +989,7 @@ async fn cache_tmdb_people_payload_images(
             else {
                 continue;
             };
-            let cached_path = path.to_string_lossy().to_string();
+            let cached_path = metadata_asset_db_path(data_dir, &path);
             if let Some(map) = entry.as_object_mut() {
                 map.insert(
                     "koko_cached_image_path".into(),
@@ -1147,7 +1147,6 @@ fn tmdb_collections(payload: &Value) -> Vec<ProviderMetadataCollection> {
             .get("backdrop_path")
             .and_then(Value::as_str)
             .map(|path| tmdb_image_url(path, "w1280")),
-        provider_payload_json: Some(collection.to_string()),
     }]
 }
 
@@ -1181,7 +1180,6 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
                 cached_image_path: text_field(entry, &["koko_cached_image_path"]),
-                provider_payload_json: entry.get("koko_person").map(Value::to_string),
                 sort_order: entry
                     .get("order")
                     .and_then(Value::as_i64)
@@ -1222,7 +1220,6 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
                 cached_image_path: text_field(entry, &["koko_cached_image_path"]),
-                provider_payload_json: entry.get("koko_person").map(Value::to_string),
                 sort_order,
             })
         }));

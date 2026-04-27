@@ -689,7 +689,10 @@ pub fn list_metadata_person_credit_summaries(
         .inner_join(link_dsl::item_metadata_links)
         .filter(credit_dsl::person_id.eq(person_id))
         .order((credit_dsl::sort_order.asc(), link_dsl::updated_at.desc()))
-        .select((MetadataPersonCredit::as_select(), ItemMetadataLink::as_select()))
+        .select((
+            MetadataPersonCredit::as_select(),
+            ItemMetadataLink::as_select(),
+        ))
         .load::<(MetadataPersonCredit, ItemMetadataLink)>(conn)?;
 
     Ok(rows
@@ -722,7 +725,10 @@ pub fn list_metadata_person_credit_summaries_for_person_ids(
         .inner_join(link_dsl::item_metadata_links)
         .filter(credit_dsl::person_id.eq_any(person_ids))
         .order((credit_dsl::sort_order.asc(), link_dsl::updated_at.desc()))
-        .select((MetadataPersonCredit::as_select(), ItemMetadataLink::as_select()))
+        .select((
+            MetadataPersonCredit::as_select(),
+            ItemMetadataLink::as_select(),
+        ))
         .load::<(MetadataPersonCredit, ItemMetadataLink)>(conn)?;
 
     Ok(rows
@@ -816,7 +822,11 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "item",
-        &[external_id, media_type, &locale_key],
+        &[
+            external_id,
+            media_type,
+            &locale_key,
+        ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
         return Ok(snapshot);
@@ -2203,7 +2213,8 @@ pub async fn persist_metadata_people_assets(
     let Some(payload_json) = snapshot.provider_payload_json.as_deref() else {
         return Ok(snapshot.clone());
     };
-    let mut payload = serde_json::from_str::<Value>(payload_json).map_err(|error| error.to_string())?;
+    let mut payload =
+        serde_json::from_str::<Value>(payload_json).map_err(|error| error.to_string())?;
     match snapshot.provider_id {
         MetadataProviderId::Tmdb => {
             cache_tmdb_people_payload_images(&mut payload, snapshot, data_dir).await?;
@@ -2228,7 +2239,10 @@ async fn cache_tmdb_people_payload_images(
         return Ok(());
     };
     for collection_key in ["cast", "crew"] {
-        let Some(entries) = credits.get_mut(collection_key).and_then(Value::as_array_mut) else {
+        let Some(entries) = credits
+            .get_mut(collection_key)
+            .and_then(Value::as_array_mut)
+        else {
             continue;
         };
         for entry in entries {
@@ -2264,7 +2278,8 @@ async fn cache_tmdb_people_payload_images(
                 &snapshot.locale_key,
             );
             let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
-            let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await else {
+            let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await
+            else {
                 continue;
             };
             let cached_path = path.to_string_lossy().to_string();
@@ -2274,10 +2289,7 @@ async fn cache_tmdb_people_payload_images(
                     Value::String(cached_path.clone()),
                 );
                 if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
-                    person.insert(
-                        "koko_cached_image_path".into(),
-                        Value::String(cached_path),
-                    );
+                    person.insert("koko_cached_image_path".into(), Value::String(cached_path));
                 }
             }
         }
@@ -2303,13 +2315,14 @@ async fn cache_tvdb_people_payload_images(
         return Ok(());
     };
     for entry in entries {
-        let person = entry.get("person").unwrap_or(entry);
-        let external_id = person_external_id(person).or_else(|| person_external_id(entry));
+        let person = entry.get("koko_person").or_else(|| entry.get("person"));
+        let external_id = person
+            .and_then(person_external_id)
+            .or_else(|| tvdb_person_external_id(entry));
         let Some(external_id) = external_id else {
             continue;
         };
-        let image_url = text_field(person, &["image", "image_url", "thumbnail"])
-            .or_else(|| text_field(entry, &["image", "image_url", "thumbnail"]));
+        let image_url = tvdb_person_image_url(entry, person);
         let Some(image_url) = image_url else {
             continue;
         };
@@ -2329,6 +2342,17 @@ async fn cache_tvdb_people_payload_images(
                 "koko_cached_image_path".into(),
                 Value::String(path.to_string_lossy().to_string()),
             );
+            if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
+                person.insert(
+                    "koko_cached_image_path".into(),
+                    Value::String(path.to_string_lossy().to_string()),
+                );
+            } else if let Some(person) = map.get_mut("person").and_then(Value::as_object_mut) {
+                person.insert(
+                    "koko_cached_image_path".into(),
+                    Value::String(path.to_string_lossy().to_string()),
+                );
+            }
         }
     }
     Ok(())
@@ -2811,7 +2835,10 @@ fn to_item_metadata_summary_with_people(
         .inner_join(people_dsl::metadata_people)
         .filter(credit_dsl::metadata_link_id.eq(link.id))
         .order(credit_dsl::sort_order.asc())
-        .select((MetadataPersonCredit::as_select(), MetadataPerson::as_select()))
+        .select((
+            MetadataPersonCredit::as_select(),
+            MetadataPerson::as_select(),
+        ))
         .load::<(MetadataPersonCredit, MetadataPerson)>(conn)?
         .into_iter()
         .map(to_item_metadata_person_summary)
@@ -3603,9 +3630,7 @@ fn tmdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
                 cached_image_path: text_field(entry, &["koko_cached_image_path"]),
-                provider_payload_json: entry
-                    .get("koko_person")
-                    .map(Value::to_string),
+                provider_payload_json: entry.get("koko_person").map(Value::to_string),
                 sort_order: entry
                     .get("order")
                     .and_then(Value::as_i64)
@@ -3646,9 +3671,7 @@ fn tmdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
                 cached_image_path: text_field(entry, &["koko_cached_image_path"]),
-                provider_payload_json: entry
-                    .get("koko_person")
-                    .map(Value::to_string),
+                provider_payload_json: entry.get("koko_person").map(Value::to_string),
                 sort_order,
             })
         }));
@@ -3672,8 +3695,10 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                let person = entry.get("person").unwrap_or(entry);
-                let name = person_name(person)
+                let person = entry.get("koko_person").or_else(|| entry.get("person"));
+                let person_for_details = person.unwrap_or(entry);
+                let name = person
+                    .and_then(person_name)
                     .or_else(|| {
                         text_field(
                             entry,
@@ -3684,7 +3709,11 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                             ],
                         )
                     })
-                    .or_else(|| person_name(entry))?;
+                    .filter(|name| {
+                        text_field(entry, &["name"])
+                            .map(|character| character != *name)
+                            .unwrap_or(true)
+                    })?;
                 let role =
                     text_field(entry, &["type", "role", "job"]).or_else(|| Some("Actor".into()));
                 let character_name = text_field(
@@ -3697,18 +3726,36 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                 )
                 .filter(|character| character != &name);
                 Some(ParsedProviderPerson {
-                    external_id: person_external_id(person).or_else(|| person_external_id(entry)),
+                    external_id: person
+                        .and_then(person_external_id)
+                        .or_else(|| tvdb_person_external_id(entry)),
                     name,
                     known_for: Vec::new(),
-                    biography: text_field(person, &["biography", "description", "overview"])
-                        .or_else(|| text_field(entry, &["biography", "description", "overview"])),
-                    gender: text_field(person, &["gender"])
+                    biography: text_field(
+                        person_for_details,
+                        &[
+                            "biography",
+                            "description",
+                            "overview",
+                        ],
+                    )
+                    .or_else(|| {
+                        text_field(
+                            entry,
+                            &[
+                                "biography",
+                                "description",
+                                "overview",
+                            ],
+                        )
+                    }),
+                    gender: text_field(person_for_details, &["gender"])
                         .or_else(|| text_field(entry, &["gender"])),
-                    birthday: text_field(person, &["birthday", "birthDate"])
+                    birthday: text_field(person_for_details, &["birthday", "birthDate"])
                         .or_else(|| text_field(entry, &["birthday", "birthDate"])),
-                    deathday: text_field(person, &["deathday", "deathDate"])
+                    deathday: text_field(person_for_details, &["deathday", "deathDate"])
                         .or_else(|| text_field(entry, &["deathday", "deathDate"])),
-                    birth_place: text_field(person, &["birthPlace", "placeOfBirth"])
+                    birth_place: text_field(person_for_details, &["birthPlace", "placeOfBirth"])
                         .or_else(|| text_field(entry, &["birthPlace", "placeOfBirth"])),
                     department: Some(if role.as_deref() == Some("Actor") {
                         "Cast".into()
@@ -3717,30 +3764,14 @@ fn tvdb_people(payload: &Value) -> Vec<ParsedProviderPerson> {
                     }),
                     role,
                     character_name,
-                    profile_url: person_external_id(person)
-                        .or_else(|| person_external_id(entry))
+                    profile_url: person
+                        .and_then(person_external_id)
+                        .or_else(|| tvdb_person_external_id(entry))
                         .map(|id| format!("https://thetvdb.com/people/{id}")),
-                    image_url: text_field(
-                        person,
-                        &[
-                            "image",
-                            "image_url",
-                            "thumbnail",
-                        ],
-                    )
-                    .or_else(|| {
-                        text_field(
-                            entry,
-                            &[
-                                "image",
-                                "image_url",
-                                "thumbnail",
-                            ],
-                        )
-                    }),
-                    cached_image_path: text_field(person, &["koko_cached_image_path"])
+                    image_url: tvdb_person_image_url(entry, person),
+                    cached_image_path: text_field(person_for_details, &["koko_cached_image_path"])
                         .or_else(|| text_field(entry, &["koko_cached_image_path"])),
-                    provider_payload_json: Some(person.to_string()),
+                    provider_payload_json: Some(person_for_details.to_string()),
                     sort_order: i32::try_from(index).unwrap_or(i32::MAX),
                 })
             })
@@ -3834,6 +3865,82 @@ fn person_external_id(value: &Value) -> Option<String> {
         })
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
+}
+
+fn tvdb_person_external_id(value: &Value) -> Option<String> {
+    value
+        .get("peopleId")
+        .or_else(|| value.get("personId"))
+        .and_then(|id| {
+            id.as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| id.as_str().map(str::to_string))
+        })
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .or_else(|| person_external_id(value))
+}
+
+fn tvdb_person_image_url(
+    entry: &Value,
+    person: Option<&Value>,
+) -> Option<String> {
+    person
+        .and_then(|person| {
+            tvdb_image_field(
+                person,
+                &[
+                    "image",
+                    "image_url",
+                    "thumbnail",
+                ],
+            )
+        })
+        .or_else(|| {
+            tvdb_image_field(
+                entry,
+                &[
+                    "personImgURL",
+                    "peopleImgURL",
+                    "personImage",
+                    "peopleImage",
+                ],
+            )
+        })
+        .or_else(|| {
+            if entry
+                .get("peopleId")
+                .or_else(|| entry.get("personId"))
+                .is_some()
+                || person.is_some()
+            {
+                None
+            } else {
+                tvdb_image_field(
+                    entry,
+                    &[
+                        "image",
+                        "image_url",
+                        "thumbnail",
+                    ],
+                )
+            }
+        })
+}
+
+fn tvdb_image_field(
+    value: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    text_field(value, keys).map(|url| {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            url
+        } else if url.starts_with('/') {
+            format!("https://artworks.thetvdb.com{url}")
+        } else {
+            format!("https://artworks.thetvdb.com/{url}")
+        }
+    })
 }
 
 fn person_identity_key(person: &ParsedProviderPerson) -> String {
@@ -3982,6 +4089,41 @@ mod tests {
         assert_eq!(
             presentation_from_metadata_link(&link).overview.as_deref(),
             Some("English TVDB description.")
+        );
+    }
+
+    #[test]
+    fn tvdb_people_use_person_name_not_character_name() {
+        let payload = serde_json::json!({
+            "data": {
+                "characters": [
+                    {
+                        "id": 12242840,
+                        "name": "Brian Flanagan",
+                        "image": "https://example.test/character-brian-flanagan.jpg",
+                        "peopleId": 254032,
+                        "peopleType": "Actor",
+                        "personName": "Tom Cruise",
+                        "personImgURL": "https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "image": "https://example.test/person-tom-cruise.jpg"
+                        }
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people(&payload);
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].name, "Tom Cruise");
+        assert_eq!(people[0].character_name.as_deref(), Some("Brian Flanagan"));
+        assert_eq!(people[0].external_id.as_deref(), Some("254032"));
+        assert_eq!(
+            people[0].image_url.as_deref(),
+            Some("https://example.test/person-tom-cruise.jpg")
         );
     }
 

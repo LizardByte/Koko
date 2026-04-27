@@ -6,7 +6,8 @@ use diesel::prelude::*;
 // local imports
 use crate::db::schema::{
     item_metadata_collections, item_metadata_links, item_metadata_people, media_files, media_items,
-    media_libraries, metadata_people, metadata_person_credits, playback_progress, scan_state, users,
+    media_libraries, metadata_people, metadata_person_credits, playback_progress, scan_state,
+    users,
 };
 
 #[derive(Queryable, Selectable, Insertable, Debug)]

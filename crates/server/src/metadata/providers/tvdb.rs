@@ -196,13 +196,14 @@ pub(crate) async fn fetch_season_snapshot(
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
     let season_id = parse_tvdb_external_id(season_external_id, "season")?;
-    let payload = get_json(
+    let mut payload = get_json(
         &provider,
         &format!("seasons/{season_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!("season lookup for series:{show_external_id}:season:{season_external_id}"),
     )
     .await?;
+    enrich_tvdb_people_payload(&provider, &mut payload).await;
     let translation =
         fetch_translation_payload(&provider, "seasons", season_external_id, &provider.language)
             .await;
@@ -226,7 +227,7 @@ pub(crate) async fn fetch_episode_snapshot(
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
     let episode_id = parse_tvdb_external_id(episode_external_id, "episode")?;
-    let payload = get_json(
+    let mut payload = get_json(
         &provider,
         &format!("episodes/{episode_id}/extended"),
         vec![("meta", "translations".to_string())],
@@ -235,6 +236,7 @@ pub(crate) async fn fetch_episode_snapshot(
         ),
     )
     .await?;
+    enrich_tvdb_people_payload(&provider, &mut payload).await;
     let translation = fetch_translation_payload(
         &provider,
         "episodes",
@@ -528,6 +530,75 @@ async fn get_json(
         .map_err(|error| format!("TheTVDB {} returned invalid JSON: {}", context, error))
 }
 
+async fn enrich_tvdb_people_payload(
+    provider: &MetadataProviderSettings,
+    payload: &mut Value,
+) {
+    let data = match payload {
+        Value::Object(map) if map.contains_key("data") => map.get_mut("data").unwrap(),
+        _ => payload,
+    };
+    let entries = if data.get("characters").is_some() {
+        data.get_mut("characters").and_then(Value::as_array_mut)
+    } else {
+        data.get_mut("people").and_then(Value::as_array_mut)
+    };
+    let Some(entries) = entries else {
+        return;
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let person_ids = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("peopleId")
+                .or_else(|| entry.get("personId"))
+                .and_then(Value::as_i64)
+        })
+        .filter(|id| seen.insert(*id))
+        .take(80)
+        .collect::<Vec<_>>();
+    if person_ids.is_empty() {
+        return;
+    }
+
+    let mut people = std::collections::HashMap::new();
+    for person_id in person_ids {
+        let Ok(person) = get_json(
+            provider,
+            &format!("people/{person_id}/extended"),
+            Vec::new(),
+            &format!("people lookup for {person_id}"),
+        )
+        .await
+        else {
+            continue;
+        };
+        let person = person.get("data").cloned().unwrap_or(person);
+        people.insert(person_id, person);
+    }
+    if people.is_empty() {
+        return;
+    }
+
+    for entry in entries {
+        let Some(person_id) = entry
+            .get("peopleId")
+            .or_else(|| entry.get("personId"))
+            .and_then(Value::as_i64)
+        else {
+            continue;
+        };
+        let Some(person) = people.get(&person_id) else {
+            continue;
+        };
+        if let Some(map) = entry.as_object_mut() {
+            map.insert("koko_person".into(), person.clone());
+        }
+    }
+}
+
 fn parse_retry_after_seconds(value: &str) -> Option<u64> {
     value.trim().parse::<u64>().ok()
 }
@@ -539,13 +610,15 @@ async fn fetch_movie_payload(
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
     let movie_id = parse_tvdb_external_id(external_id, "movie")?;
-    get_json(
+    let mut payload = get_json(
         &provider,
         &format!("movies/{movie_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!("movie details lookup for {external_id}"),
     )
-    .await
+    .await?;
+    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    Ok(payload)
 }
 
 async fn fetch_series_payload(
@@ -555,13 +628,15 @@ async fn fetch_series_payload(
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
     let series_id = parse_tvdb_external_id(external_id, "series")?;
-    get_json(
+    let mut payload = get_json(
         &provider,
         &format!("series/{series_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!("series details lookup for {external_id}"),
     )
-    .await
+    .await?;
+    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    Ok(payload)
 }
 
 async fn fetch_translation_payload(
@@ -731,7 +806,10 @@ fn payload_with_translation(
                 .or_else(|| translation.get("languageCode"))
                 .and_then(Value::as_str)
             {
-                data.insert("koko_provider_language".into(), Value::String(language.to_string()));
+                data.insert(
+                    "koko_provider_language".into(),
+                    Value::String(language.to_string()),
+                );
             }
         }
     } else if let Some(map) = payload.as_object_mut() {
@@ -742,7 +820,10 @@ fn payload_with_translation(
                 .or_else(|| translation.get("languageCode"))
                 .and_then(Value::as_str)
             {
-                map.insert("koko_provider_language".into(), Value::String(language.to_string()));
+                map.insert(
+                    "koko_provider_language".into(),
+                    Value::String(language.to_string()),
+                );
             }
         }
     }

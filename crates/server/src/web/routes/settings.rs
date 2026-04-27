@@ -260,10 +260,11 @@ pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> 
 #[post("/api/v1/settings/metadata-cache/clear")]
 pub fn clear_metadata_cache() -> Result<Json<MetadataCacheClearResponse>, Status> {
     let data_dir = current_settings().general.data_dir;
-    let removed_files = crate::metadata::clear_metadata_response_cache(&data_dir).map_err(|error| {
-        log::error!("Failed to clear metadata response cache: {}", error);
-        Status::InternalServerError
-    })?;
+    let removed_files =
+        crate::metadata::clear_metadata_response_cache(&data_dir).map_err(|error| {
+            log::error!("Failed to clear metadata response cache: {}", error);
+            Status::InternalServerError
+        })?;
     Ok(Json(MetadataCacheClearResponse { removed_files }))
 }
 

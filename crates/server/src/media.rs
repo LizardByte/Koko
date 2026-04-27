@@ -31,6 +31,22 @@ use crate::metadata::{
 };
 use crate::utils::current_timestamp;
 
+#[derive(Debug, Clone)]
+struct SummaryMetadataLink {
+    media_item_id: i32,
+    title: Option<String>,
+    overview: Option<String>,
+    genres_json: Option<String>,
+    logo_url: Option<String>,
+    cached_logo_path: Option<String>,
+    backdrop_url: Option<String>,
+    cached_backdrop_path: Option<String>,
+    refresh_state: String,
+    refresh_error: Option<String>,
+    updated_at: Option<i64>,
+    locale_key: String,
+}
+
 /// Scan status for a configured media library.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -3292,14 +3308,32 @@ fn media_item_summary_with_preferred_languages(
     } else {
         get_preferred_item_metadata_link_for_languages(conn, summary.id, preferred_languages)?
     };
+    let link = link.as_ref().map(summary_metadata_link_from_full_link);
     apply_primary_metadata_link(&mut summary, link.as_ref());
 
     Ok(summary)
 }
 
+fn summary_metadata_link_from_full_link(link: &ItemMetadataLink) -> SummaryMetadataLink {
+    SummaryMetadataLink {
+        media_item_id: link.media_item_id,
+        title: link.title.clone(),
+        overview: link.overview.clone(),
+        genres_json: link.genres_json.clone(),
+        logo_url: link.logo_url.clone(),
+        cached_logo_path: link.cached_logo_path.clone(),
+        backdrop_url: link.backdrop_url.clone(),
+        cached_backdrop_path: link.cached_backdrop_path.clone(),
+        refresh_state: link.refresh_state.clone(),
+        refresh_error: link.refresh_error.clone(),
+        updated_at: link.updated_at,
+        locale_key: link.locale_key.clone(),
+    }
+}
+
 fn apply_primary_metadata_link(
     summary: &mut MediaItemSummary,
-    link: Option<&ItemMetadataLink>,
+    link: Option<&SummaryMetadataLink>,
 ) {
     let Some(link) = link else {
         return;
@@ -3313,16 +3347,19 @@ fn apply_primary_metadata_link(
     {
         summary.display_title = title.to_string();
     }
-    let presentation = presentation_from_metadata_link(link);
-    summary.genres = presentation.genres;
-    summary.overview = presentation.overview;
-    if presentation.backdrop_available {
+    summary.genres = link
+        .genres_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    summary.overview = link.overview.clone();
+    if link.cached_backdrop_path.is_some() || link.backdrop_url.is_some() {
         summary.backdrop_url = Some(format!(
             "/api/v1/items/{}/artwork?kind=backdrop",
             summary.id
         ));
     }
-    if presentation.logo_url.is_some() {
+    if link.cached_logo_path.is_some() || link.logo_url.is_some() {
         summary.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", summary.id));
     }
     summary.has_metadata = true;
@@ -3335,7 +3372,7 @@ fn preferred_metadata_links_by_item_id(
     conn: &mut SqliteConnection,
     item_ids: &[i32],
     preferred_languages: &[String],
-) -> Result<HashMap<i32, ItemMetadataLink>, diesel::result::Error> {
+) -> Result<HashMap<i32, SummaryMetadataLink>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
 
     if item_ids.is_empty() {
@@ -3350,8 +3387,65 @@ fn preferred_metadata_links_by_item_id(
             item_metadata_links_dsl::updated_at.desc(),
             item_metadata_links_dsl::id.desc(),
         ))
-        .select(ItemMetadataLink::as_select())
-        .load::<ItemMetadataLink>(conn)?;
+        .select((
+            item_metadata_links_dsl::media_item_id,
+            item_metadata_links_dsl::title,
+            item_metadata_links_dsl::overview,
+            item_metadata_links_dsl::genres_json,
+            item_metadata_links_dsl::logo_url,
+            item_metadata_links_dsl::cached_logo_path,
+            item_metadata_links_dsl::backdrop_url,
+            item_metadata_links_dsl::cached_backdrop_path,
+            item_metadata_links_dsl::refresh_state,
+            item_metadata_links_dsl::refresh_error,
+            item_metadata_links_dsl::updated_at,
+            item_metadata_links_dsl::locale_key,
+        ))
+        .load::<(
+            i32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<i64>,
+            String,
+        )>(conn)?
+        .into_iter()
+        .map(
+            |(
+                media_item_id,
+                title,
+                overview,
+                genres_json,
+                logo_url,
+                cached_logo_path,
+                backdrop_url,
+                cached_backdrop_path,
+                refresh_state,
+                refresh_error,
+                updated_at,
+                locale_key,
+            )| SummaryMetadataLink {
+                media_item_id,
+                title,
+                overview,
+                genres_json,
+                logo_url,
+                cached_logo_path,
+                backdrop_url,
+                cached_backdrop_path,
+                refresh_state,
+                refresh_error,
+                updated_at,
+                locale_key,
+            },
+        )
+        .collect::<Vec<_>>();
 
     let language_rank = preferred_languages
         .iter()

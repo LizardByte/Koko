@@ -112,7 +112,8 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            let payload_json = enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let payload_json =
+                enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
             let mut snapshot = movie_snapshot_from_details(&external_id_string, &details);
             snapshot.provider_payload_json = payload_json;
             Ok(snapshot)
@@ -133,7 +134,8 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            let payload_json = enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let payload_json =
+                enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
             let mut snapshot = tv_snapshot_from_details(&external_id_string, &details);
             snapshot.provider_payload_json = payload_json;
             Ok(snapshot)
@@ -298,11 +300,7 @@ pub(crate) async fn fetch_season_snapshot(
                 )
             })?;
         let payload_json = enriched_tmdb_payload_json(&client, &details, &language, "null");
-        let mut snapshot = season_snapshot_from_details(
-            &show_external_id,
-            season_number,
-            &details,
-        );
+        let mut snapshot = season_snapshot_from_details(&show_external_id, season_number, &details);
         snapshot.provider_payload_json = payload_json;
         Ok(snapshot)
     })
@@ -408,7 +406,10 @@ fn enrich_tmdb_people_payload(
         .and_then(|credits| credits.get("cast"))
         .and_then(Value::as_array)
     {
-        person_ids.extend(cast.iter().filter_map(|entry| entry.get("id").and_then(Value::as_i64)));
+        person_ids.extend(
+            cast.iter()
+                .filter_map(|entry| entry.get("id").and_then(Value::as_i64)),
+        );
     }
     if let Some(crew) = payload
         .get("credits")
@@ -417,7 +418,9 @@ fn enrich_tmdb_people_payload(
     {
         person_ids.extend(crew.iter().filter_map(|entry| {
             let job = entry.get("job").and_then(Value::as_str)?;
-            matches_important_tmdb_crew_role(job).then(|| entry.get("id").and_then(Value::as_i64)).flatten()
+            matches_important_tmdb_crew_role(job)
+                .then(|| entry.get("id").and_then(Value::as_i64))
+                .flatten()
         }));
     }
 
@@ -439,12 +442,16 @@ fn enrich_tmdb_people_payload(
 
     if let Some(credits) = payload.get_mut("credits") {
         for collection_key in ["cast", "crew"] {
-            if let Some(entries) = credits.get_mut(collection_key).and_then(Value::as_array_mut) {
+            if let Some(entries) = credits
+                .get_mut(collection_key)
+                .and_then(Value::as_array_mut)
+            {
                 for entry in entries {
                     let Some(id) = entry.get("id").and_then(Value::as_i64) else {
                         continue;
                     };
-                    let Some((_, person)) = people.iter().find(|(person_id, _)| *person_id == id) else {
+                    let Some((_, person)) = people.iter().find(|(person_id, _)| *person_id == id)
+                    else {
                         continue;
                     };
                     if let Some(map) = entry.as_object_mut() {
@@ -465,7 +472,11 @@ fn tmdb_cached_person_detail(
     let cache_key = metadata_response_cache_key(
         &MetadataProviderId::Tmdb,
         "person",
-        &[&person_id.to_string(), language, image_languages],
+        &[
+            &person_id.to_string(),
+            language,
+            image_languages,
+        ],
     );
     if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
         .lock()

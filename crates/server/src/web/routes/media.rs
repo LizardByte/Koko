@@ -48,8 +48,9 @@ use crate::media::{
     upsert_playback_progress,
 };
 use crate::metadata::{
-    ArtworkKind, ItemMetadataSummary, MetadataProviderStatus, MetadataSearchResult,
-    StoredMetadataSnapshot, expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
+    ArtworkKind, ItemMetadataSummary, MetadataPersonCreditSummary, MetadataPersonSummary,
+    MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
+    expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
     fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot, fetch_themerr_youtube_theme_url_for_database,
     get_item_metadata_summaries, get_metadata_person_for_languages,
@@ -60,8 +61,7 @@ use crate::metadata::{
     managed_metadata_asset_dir, normalize_locale_key, persist_item_metadata_assets,
     persist_metadata_people_assets, search_provider, set_item_metadata_refresh_state,
     sort_item_metadata_summaries_for_languages, update_cached_artwork_path,
-    upsert_item_metadata_snapshot_with_refresh_interval, MetadataPersonCreditSummary,
-    MetadataPersonSummary,
+    upsert_item_metadata_snapshot_with_refresh_interval,
 };
 use crate::utils::current_timestamp;
 

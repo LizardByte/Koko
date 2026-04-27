@@ -101,6 +101,7 @@ interface AppState {
   libraries: MediaLibrary[];
   home?: MediaHome;
   libraryItems: MediaItemSummary[];
+  libraryItemsLoading: boolean;
   searchResults: MediaItemSummary[];
   homePreviewItemId?: number;
   metadataProviders: MetadataProviderStatus[];
@@ -191,6 +192,7 @@ const state: AppState = {
   users: [],
   libraries: [],
   libraryItems: [],
+  libraryItemsLoading: false,
   searchResults: [],
   homePreviewItemId: undefined,
   metadataProviders: [],
@@ -1288,6 +1290,45 @@ function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   return items.filter((item) => allowedIds.has(item.id));
 }
 
+async function loadLibraryItemsForCurrentRoute(): Promise<void> {
+  const route = parseRoute();
+  if (route.page !== 'home' && route.page !== 'browse-detail') {
+    return;
+  }
+  const libraryId = route.libraryId;
+  const searchQuery = state.searchQuery.trim();
+  state.libraryItemsLoading = true;
+  render(true);
+
+  try {
+    const [libraryItems, searchResults] = await Promise.all([
+      getItems(libraryId),
+      searchQuery ? searchItems(searchQuery, libraryId) : Promise.resolve([]),
+    ]);
+    const nextRoute = parseRoute();
+    if (
+      (nextRoute.page !== 'home' && nextRoute.page !== 'browse-detail')
+      || nextRoute.libraryId !== libraryId
+    ) {
+      return;
+    }
+    state.libraryItems = libraryItems;
+    state.searchResults = searchResults;
+    state.error = undefined;
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : 'Failed to load library items.';
+  } finally {
+    const nextRoute = parseRoute();
+    if (
+      (nextRoute.page === 'home' || nextRoute.page === 'browse-detail')
+      && nextRoute.libraryId === libraryId
+    ) {
+      state.libraryItemsLoading = false;
+      render(true);
+    }
+  }
+}
+
 function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
   const segment = kind === 'collection' ? 'collections' : kind === 'playlist' ? 'playlists' : 'categories';
   const encodedKey = encodeURIComponent(key);
@@ -1342,6 +1383,9 @@ function browseFilterForRoute(): BrowseFilter | undefined {
 function renderBrowseFilterDetail(): string {
   const filter = state.route.page === 'browse-detail' ? browseFilterForRoute() : state.browseFilter;
   if (!filter) {
+    if (state.libraryItemsLoading) {
+      return '<div class="empty-state">Loading library items…</div>';
+    }
     return '<div class="empty-state">This page is no longer available for the current library.</div>';
   }
 
@@ -1650,6 +1694,10 @@ function renderLibraryTab(): string {
   const isSpecificLibrary = state.route.page === 'home' && typeof state.route.libraryId === 'number';
 
   if (!items.length) {
+    if (state.libraryItemsLoading) {
+      return '<div class="empty-state">Loading library items…</div>';
+    }
+
     if (state.browseFilter) {
       return `<div class="empty-state">No items matched the current ${escapeHtml(state.browseFilter.kind)} filter.</div>`;
     }
@@ -3111,16 +3159,11 @@ async function refreshData(showLoading = true): Promise<void> {
 
     if (state.route.page === 'home' || state.route.page === 'browse-detail') {
       const libraryId = state.route.libraryId;
-      const [home, libraryItems, searchResults] = await Promise.all([
-        getHome(libraryId),
-        getItems(libraryId),
-        state.searchQuery.trim()
-          ? searchItems(state.searchQuery, libraryId)
-          : Promise.resolve([]),
-      ]);
+      const home = await getHome(libraryId);
       state.home = home;
-      state.libraryItems = libraryItems;
-      state.searchResults = searchResults;
+      state.libraryItems = [];
+      state.searchResults = [];
+      state.libraryItemsLoading = true;
       state.selectedItem = undefined;
       state.selectedItemMetadata = undefined;
       state.selectedPerson = undefined;
@@ -3140,9 +3183,11 @@ async function refreshData(showLoading = true): Promise<void> {
       state.hasDeferredAutoRefreshRender = false;
       state.dashboardItems = [];
       state.logsResponse = undefined;
+      void loadLibraryItemsForCurrentRoute();
     } else if (state.route.page === 'item') {
       state.home = undefined;
       state.libraryItems = [];
+      state.libraryItemsLoading = false;
       state.searchResults = [];
       state.showFullSearchResults = false;
       state.metadataSearchResults = [];
@@ -3166,6 +3211,7 @@ async function refreshData(showLoading = true): Promise<void> {
     } else if (state.route.page === 'person') {
       state.home = undefined;
       state.libraryItems = [];
+      state.libraryItemsLoading = false;
       state.searchResults = [];
       state.showFullSearchResults = false;
       state.selectedItem = undefined;
@@ -3189,6 +3235,7 @@ async function refreshData(showLoading = true): Promise<void> {
     } else {
       state.home = undefined;
       state.libraryItems = [];
+      state.libraryItemsLoading = false;
       state.searchResults = [];
       state.showFullSearchResults = false;
       state.selectedItem = undefined;

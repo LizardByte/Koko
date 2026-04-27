@@ -1596,9 +1596,24 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
         let items = list_media_items(&mut connection, Some(summary.id))
             .expect("Expected scoped media items for duplicate show library");
         assert_eq!(items.len(), 3);
-        assert_eq!(items.iter().filter(|item| item.item_type == "show").count(), 1);
-        assert_eq!(items.iter().filter(|item| item.item_type == "season").count(), 1);
-        assert_eq!(items.iter().filter(|item| item.item_type == "episode").count(), 1);
+        assert_eq!(
+            items.iter().filter(|item| item.item_type == "show").count(),
+            1
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item.item_type == "season")
+                .count(),
+            1
+        );
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item.item_type == "episode")
+                .count(),
+            1
+        );
 
         let files = get_library_files(&mut connection, summary.id)
             .expect("Expected scoped media files for duplicate show library");

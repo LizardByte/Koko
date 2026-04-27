@@ -4,6 +4,16 @@
 use diesel::{allow_tables_to_appear_in_same_query, joinable, table};
 
 table! {
+    item_metadata_external_ids (id) {
+        id -> Integer,
+        metadata_link_id -> Integer,
+        source -> Text,
+        external_id -> Text,
+        updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
     item_metadata_links (id) {
         id -> Integer,
         media_item_id -> Integer,
@@ -192,6 +202,7 @@ table! {
 }
 
 joinable!(item_metadata_collections -> item_metadata_links (metadata_link_id));
+joinable!(item_metadata_external_ids -> item_metadata_links (metadata_link_id));
 joinable!(item_metadata_links -> media_items (media_item_id));
 joinable!(item_metadata_people -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> item_metadata_links (metadata_link_id));
@@ -205,6 +216,7 @@ joinable!(scan_state -> media_libraries (library_id));
 
 allow_tables_to_appear_in_same_query!(
     item_metadata_collections,
+    item_metadata_external_ids,
     item_metadata_links,
     item_metadata_people,
     metadata_people,

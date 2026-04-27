@@ -120,6 +120,15 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             retry_attempts: default_provider_retry_attempts(),
             retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
+        MetadataProviderId::Themerr => MetadataProviderSettings {
+            id: MetadataProviderId::Themerr,
+            enabled: true,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
     }
 }
 
@@ -228,6 +237,8 @@ pub enum MetadataProviderId {
     OpenLibrary,
     /// Local NFO files and sidecar metadata.
     LocalNfo,
+    /// ThemerrDB theme-song metadata extension provider.
+    Themerr,
 }
 
 impl MetadataProviderId {
@@ -239,6 +250,7 @@ impl MetadataProviderId {
             MetadataProviderId::MusicBrainz => "musicbrainz",
             MetadataProviderId::OpenLibrary => "open_library",
             MetadataProviderId::LocalNfo => "local_nfo",
+            MetadataProviderId::Themerr => "themerr",
         }
     }
 
@@ -250,6 +262,7 @@ impl MetadataProviderId {
             "musicbrainz" => Some(MetadataProviderId::MusicBrainz),
             "open_library" => Some(MetadataProviderId::OpenLibrary),
             "local_nfo" => Some(MetadataProviderId::LocalNfo),
+            "themerr" => Some(MetadataProviderId::Themerr),
             _ => None,
         }
     }

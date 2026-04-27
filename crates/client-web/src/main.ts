@@ -696,68 +696,7 @@ function buildYouTubeEmbedUrl(
   return embedUrl.toString();
 }
 
-function parseTrailerOptionsFromPayload(payloadJson?: string): TrailerOption[] {
-  if (!payloadJson) {
-    return [];
-  }
-
-  try {
-    const payload = JSON.parse(payloadJson) as { videos?: { results?: Array<Record<string, unknown>> } };
-    const results = Array.isArray(payload.videos?.results) ? payload.videos.results : [];
-    const seenVideoIds = new Set<string>();
-
-    return results
-      .filter((entry) => entry.site === 'YouTube' && (entry.type === 'Trailer' || entry.type === 'Teaser'))
-      .sort((left, right) => {
-        const score = (entry: Record<string, unknown>): number => {
-          const type = entry.type === 'Trailer' ? 'Trailer' : entry.type === 'Teaser' ? 'Teaser' : '';
-          const official = entry.official === true;
-          if (official && type === 'Trailer') {
-            return 0;
-          }
-
-          if (official && type === 'Teaser') {
-            return 1;
-          }
-
-          if (type === 'Trailer') {
-            return 2;
-          }
-
-          if (type === 'Teaser') {
-            return 3;
-          }
-
-          return 4;
-        };
-
-        return score(left) - score(right);
-      })
-      .flatMap((entry, index) => {
-        const videoId = typeof entry.key === 'string' ? entry.key.trim() : '';
-        if (!videoId || seenVideoIds.has(videoId)) {
-          return [];
-        }
-
-        seenVideoIds.add(videoId);
-        return [{
-          title: typeof entry.name === 'string' && entry.name.trim()
-            ? entry.name.trim()
-            : `Trailer ${index + 1}`,
-          url: `https://www.youtube.com/watch?v=${videoId}`,
-        } satisfies TrailerOption];
-      });
-  } catch {
-    return [];
-  }
-}
-
 function currentTrailerOptions(): TrailerOption[] {
-  const parsedOptions = parseTrailerOptionsFromPayload(state.selectedItemMetadata?.matches[0]?.provider_payload_json);
-  if (parsedOptions.length) {
-    return parsedOptions;
-  }
-
   if (!state.selectedItem?.trailer_url) {
     return [];
   }

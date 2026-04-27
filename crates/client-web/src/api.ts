@@ -208,7 +208,6 @@ export interface ItemMetadataMatch {
   release_year?: number;
   media_type?: string;
   match_state: string;
-  provider_payload_json?: string;
   logo_url?: string;
   cached_logo_path?: string;
   genres: string[];

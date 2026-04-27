@@ -5,13 +5,27 @@ use tvdb4::models::LoginPostRequest;
 
 use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
-    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataSearchResult,
-    StoredMetadataSnapshot, TVDB_API_BASE, TVDB_AUTH_TOKEN, TVDB_RATE_LIMITER, TvdbCachedToken,
-    TvdbDescendantTarget, cleanup_movie_title, extract_release_year, format_payload_snippet,
-    metadata_response_cache_key, movie_match_score, parse_movie_name, provider_settings,
-    read_metadata_response_cache_text, show_search_query, write_metadata_response_cache_text,
+    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
+    MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataDetails,
+    ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
+    format_payload_snippet, managed_metadata_asset_dir, metadata_response_cache_key,
+    movie_match_score, parse_movie_name, provider_settings, read_metadata_response_cache_text,
+    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
 };
 use std::time::{Duration, Instant};
+
+const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
+
+static TVDB_RATE_LIMITER: once_cell::sync::Lazy<tokio::sync::Mutex<Instant>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
+static TVDB_AUTH_TOKEN: once_cell::sync::Lazy<tokio::sync::Mutex<Option<TvdbCachedToken>>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(None));
+
+#[derive(Debug, Clone)]
+struct TvdbCachedToken {
+    token: String,
+    expires_at: Instant,
+}
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -21,6 +35,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         supported_kinds: vec![MediaLibraryKind::Movies, MediaLibraryKind::Shows],
         requires_api_key: true,
         implemented: true,
+        role: MetadataProviderRole::Primary,
+        extends_provider_ids: Vec::new(),
         attribution_text: "Metadata and artwork provided by TheTVDB.".into(),
         attribution_url: "https://thetvdb.com/".into(),
         logo_light_url: Some("https://thetvdb.com/images/attribution/logo2.png".into()),
@@ -50,6 +66,7 @@ pub(crate) fn metadata_item_kind(media_type: Option<&str>) -> MetadataItemKind {
 pub(crate) async fn search(
     settings: &MetadataSettings,
     query: &str,
+    media_type: Option<&str>,
 ) -> Result<Vec<MetadataSearchResult>, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
@@ -69,10 +86,24 @@ pub(crate) async fn search(
         .cloned()
         .unwrap_or_default();
 
+    let expected_media_type = media_type.map(normalize_tvdb_search_media_type);
     Ok(results
         .into_iter()
         .filter_map(search_result_from_value)
+        .filter(|result| {
+            expected_media_type
+                .as_deref()
+                .map(|expected| result.media_type == expected)
+                .unwrap_or(true)
+        })
         .collect())
+}
+
+fn normalize_tvdb_search_media_type(media_type: &str) -> String {
+    match media_type {
+        "tv" => "series".into(),
+        other => other.into(),
+    }
 }
 
 pub(crate) async fn fetch_snapshot(
@@ -125,7 +156,7 @@ pub(crate) async fn guess_movie_match(
         return Ok(None);
     }
 
-    if let Some(tvdb_id) = parsed.tvdb_id.clone() {
+    if let Some(tvdb_id) = parsed.provider_id("tvdb").map(str::to_string) {
         let snapshot = fetch_snapshot(settings, &tvdb_id, "movie").await?;
         return Ok(Some(MetadataSearchResult {
             provider_id: MetadataProviderId::Tvdb,
@@ -142,7 +173,7 @@ pub(crate) async fn guess_movie_match(
 
     let mut best_result = None;
     let mut best_score = 0.0;
-    for result in search(settings, &parsed.title).await? {
+    for result in search(settings, &parsed.title, Some("movie")).await? {
         if result.media_type != "movie" {
             continue;
         }
@@ -169,7 +200,7 @@ pub(crate) async fn guess_show_match(
 
     let mut best_result = None;
     let mut best_score = 0.0;
-    for result in search(settings, &query).await? {
+    for result in search(settings, &query, Some("series")).await? {
         if result.media_type != "series" {
             continue;
         }
@@ -258,7 +289,7 @@ pub(crate) async fn fetch_episode_snapshot(
 pub(crate) async fn load_show_descendant_targets(
     settings: &MetadataSettings,
     show_external_id: &str,
-) -> Result<Vec<TvdbDescendantTarget>, String> {
+) -> Result<Vec<ProviderDescendantTarget>, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
     let show_id = parse_tvdb_external_id(show_external_id, "series")?;
@@ -305,7 +336,7 @@ pub(crate) async fn load_show_descendant_targets(
             let Some(episode_number) = episode_number(&episode) else {
                 continue;
             };
-            targets.push(TvdbDescendantTarget {
+            targets.push(ProviderDescendantTarget {
                 season_number,
                 episode_number,
                 season_external_id: season_id.to_string(),
@@ -793,6 +824,549 @@ fn episode_snapshot_from_value(
     }
 }
 
+pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMetadataDetails {
+    let Some(payload) = snapshot
+        .provider_payload_json
+        .as_deref()
+        .and_then(|payload| serde_json::from_str::<Value>(payload).ok())
+    else {
+        return ProviderMetadataDetails::default();
+    };
+    let data = payload.get("data").unwrap_or(&payload);
+    let language = data
+        .get("koko_provider_language")
+        .and_then(Value::as_str)
+        .or(snapshot.provider_locale_key.as_deref())
+        .unwrap_or("eng");
+
+    ProviderMetadataDetails {
+        external_ids: tvdb_external_ids(data, snapshot),
+        tagline: tvdb_tagline(data),
+        logo_url: tvdb_logo_url(data, language),
+        genres: tvdb_genres(data),
+        rating: data
+            .get("score")
+            .and_then(Value::as_f64)
+            .map(|value| value as f32),
+        content_rating: tvdb_content_rating(data),
+        people: tvdb_people(&payload),
+        ..ProviderMetadataDetails::default()
+    }
+}
+
+fn tvdb_external_ids(
+    data: &Value,
+    snapshot: &StoredMetadataSnapshot,
+) -> Vec<ProviderExternalId> {
+    let mut external_ids = Vec::new();
+    push_external_id(&mut external_ids, "thetvdb", Some(&snapshot.external_id));
+    let Some(remote_ids) = data
+        .get("remoteIds")
+        .or_else(|| data.get("remote_ids"))
+        .and_then(Value::as_array)
+    else {
+        return external_ids;
+    };
+
+    for remote_id in remote_ids {
+        let source = remote_id
+            .get("sourceName")
+            .or_else(|| remote_id.get("source"))
+            .or_else(|| remote_id.get("type"))
+            .and_then(Value::as_str)
+            .and_then(normalize_tvdb_external_id_source);
+        let external_id = remote_id
+            .get("id")
+            .or_else(|| remote_id.get("externalId"))
+            .or_else(|| remote_id.get("external_id"))
+            .and_then(Value::as_str);
+        if let Some(source) = source {
+            push_external_id(&mut external_ids, source, external_id);
+        }
+    }
+
+    external_ids
+}
+
+fn normalize_tvdb_external_id_source(source: &str) -> Option<&'static str> {
+    let source = source.trim().to_ascii_lowercase();
+    match source.as_str() {
+        "imdb" | "imdb.com" => Some("imdb"),
+        "themoviedb" | "themoviedb.com" | "tmdb" | "tmdb.com" => Some("themoviedb"),
+        "thetvdb" | "thetvdb.com" | "tvdb" => Some("thetvdb"),
+        _ => None,
+    }
+}
+
+fn push_external_id(
+    external_ids: &mut Vec<ProviderExternalId>,
+    source: &str,
+    external_id: Option<&str>,
+) {
+    let Some(external_id) = external_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if external_ids
+        .iter()
+        .any(|existing| existing.source == source && existing.external_id == external_id)
+    {
+        return;
+    }
+    external_ids.push(ProviderExternalId {
+        source: source.to_string(),
+        external_id: external_id.to_string(),
+    });
+}
+
+pub(crate) async fn cache_person_assets(
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    let Some(payload_json) = snapshot.provider_payload_json.as_deref() else {
+        return Ok(snapshot.clone());
+    };
+    let mut payload =
+        serde_json::from_str::<Value>(payload_json).map_err(|error| error.to_string())?;
+    cache_tvdb_people_payload_images(&mut payload, snapshot, data_dir).await?;
+
+    let mut next_snapshot = snapshot.clone();
+    next_snapshot.provider_payload_json = Some(payload.to_string());
+    Ok(next_snapshot)
+}
+
+async fn cache_tvdb_people_payload_images(
+    payload: &mut Value,
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) -> Result<(), String> {
+    let data = match payload {
+        Value::Object(map) if map.contains_key("data") => map.get_mut("data").unwrap(),
+        _ => payload,
+    };
+    let entries = if data.get("characters").is_some() {
+        data.get_mut("characters").and_then(Value::as_array_mut)
+    } else {
+        data.get_mut("people").and_then(Value::as_array_mut)
+    };
+    let Some(entries) = entries else {
+        return Ok(());
+    };
+    for entry in entries {
+        let person = entry.get("koko_person").or_else(|| entry.get("person"));
+        let external_id = person
+            .and_then(person_external_id)
+            .or_else(|| tvdb_person_external_id(entry));
+        let Some(external_id) = external_id else {
+            continue;
+        };
+        let image_url = tvdb_person_image_url(entry, person);
+        let Some(image_url) = image_url else {
+            continue;
+        };
+        let person_dir = managed_metadata_asset_dir(
+            data_dir,
+            snapshot.provider_id.clone(),
+            &external_id,
+            Some("person"),
+            &snapshot.locale_key,
+        );
+        let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
+        let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await else {
+            continue;
+        };
+        if let Some(map) = entry.as_object_mut() {
+            map.insert(
+                "koko_cached_image_path".into(),
+                Value::String(path.to_string_lossy().to_string()),
+            );
+            if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
+                person.insert(
+                    "koko_cached_image_path".into(),
+                    Value::String(path.to_string_lossy().to_string()),
+                );
+            } else if let Some(person) = map.get_mut("person").and_then(Value::as_object_mut) {
+                person.insert(
+                    "koko_cached_image_path".into(),
+                    Value::String(path.to_string_lossy().to_string()),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tvdb_tagline(value: &Value) -> Option<String> {
+    text_field(value, &["tagline"]).or_else(|| {
+        value
+            .get("koko_translation")
+            .and_then(|translation| text_field(translation, &["tagline"]))
+    })
+}
+
+fn tvdb_logo_url(
+    value: &Value,
+    provider_language: &str,
+) -> Option<String> {
+    tvdb_artwork_url_with_language(value, &[23, 25], provider_language)
+}
+
+fn tvdb_artwork_url_with_language(
+    value: &Value,
+    preferred_types: &[i64],
+    provider_language: &str,
+) -> Option<String> {
+    let preferred = tvdb_language_preference(provider_language);
+    let artworks = value
+        .get("artworks")
+        .or_else(|| value.get("artwork"))
+        .and_then(Value::as_array)?;
+    preferred_types.iter().find_map(|preferred_type| {
+        artworks
+            .iter()
+            .filter(|artwork| artwork.get("type").and_then(Value::as_i64) == Some(*preferred_type))
+            .filter(|artwork| {
+                artwork
+                    .get("language")
+                    .or_else(|| artwork.get("languageCode"))
+                    .or_else(|| artwork.get("iso_639_1"))
+                    .and_then(Value::as_str)
+                    .map(|language| {
+                        preferred
+                            .iter()
+                            .any(|entry| language.eq_ignore_ascii_case(entry))
+                    })
+                    .unwrap_or(true)
+            })
+            .max_by(|left, right| {
+                let left_score = left.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                let right_score = right.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+                left_score
+                    .partial_cmp(&right_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .and_then(|artwork| {
+                artwork
+                    .get("image")
+                    .or_else(|| artwork.get("thumbnail"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+    })
+}
+
+fn tvdb_genres(value: &Value) -> Vec<String> {
+    let mut genres = Vec::new();
+    collect_tvdb_genres(value.get("genres"), &mut genres);
+    genres
+}
+
+fn collect_tvdb_genres(
+    value: Option<&Value>,
+    genres: &mut Vec<String>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    match value {
+        Value::Array(entries) => {
+            for entry in entries {
+                let genre = entry
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        entry
+                            .get("name")
+                            .or_else(|| entry.get("label"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    });
+                if let Some(genre) = genre {
+                    push_unique_genre(genres, genre);
+                }
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                if let Some(genre) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                {
+                    push_unique_genre(genres, genre);
+                }
+            }
+        }
+        Value::String(value) => push_unique_genre(genres, value.trim().to_string()),
+        _ => {}
+    }
+}
+
+fn push_unique_genre(
+    genres: &mut Vec<String>,
+    genre: String,
+) {
+    if !genre.is_empty()
+        && !genres
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&genre))
+    {
+        genres.push(genre);
+    }
+}
+
+fn tvdb_content_rating(value: &Value) -> Option<String> {
+    value
+        .get("contentRatings")
+        .or_else(|| value.get("content_ratings"))
+        .and_then(Value::as_array)
+        .and_then(|ratings| {
+            ratings
+                .iter()
+                .find(|rating| {
+                    rating.get("country").and_then(Value::as_str) == Some("usa")
+                        || rating.get("country").and_then(Value::as_str) == Some("us")
+                        || rating.get("country").and_then(Value::as_str) == Some("US")
+                })
+                .or_else(|| ratings.first())
+        })
+        .and_then(|rating| rating.get("name").or_else(|| rating.get("fullName")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tvdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
+    let data = payload.get("data").unwrap_or(payload);
+    let characters = data
+        .get("characters")
+        .or_else(|| data.get("people"))
+        .and_then(Value::as_array);
+    let Some(characters) = characters else {
+        return Vec::new();
+    };
+
+    sort_and_dedupe_people(
+        characters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let person = entry.get("koko_person").or_else(|| entry.get("person"));
+                let person_for_details = person.unwrap_or(entry);
+                let name = person
+                    .and_then(person_name)
+                    .or_else(|| {
+                        text_field(
+                            entry,
+                            &[
+                                "personName",
+                                "peopleName",
+                                "actorName",
+                            ],
+                        )
+                    })
+                    .filter(|name| {
+                        text_field(entry, &["name"])
+                            .map(|character| character != *name)
+                            .unwrap_or(true)
+                    })?;
+                let role =
+                    text_field(entry, &["type", "role", "job"]).or_else(|| Some("Actor".into()));
+                let character_name = text_field(
+                    entry,
+                    &[
+                        "name",
+                        "character",
+                        "characterName",
+                    ],
+                )
+                .filter(|character| character != &name);
+                Some(ProviderMetadataPerson {
+                    external_id: person
+                        .and_then(person_external_id)
+                        .or_else(|| tvdb_person_external_id(entry)),
+                    name,
+                    known_for: Vec::new(),
+                    biography: text_field(
+                        person_for_details,
+                        &[
+                            "biography",
+                            "description",
+                            "overview",
+                        ],
+                    )
+                    .or_else(|| {
+                        text_field(
+                            entry,
+                            &[
+                                "biography",
+                                "description",
+                                "overview",
+                            ],
+                        )
+                    }),
+                    gender: text_field(person_for_details, &["gender"])
+                        .or_else(|| text_field(entry, &["gender"])),
+                    birthday: text_field(person_for_details, &["birthday", "birthDate"])
+                        .or_else(|| text_field(entry, &["birthday", "birthDate"])),
+                    deathday: text_field(person_for_details, &["deathday", "deathDate"])
+                        .or_else(|| text_field(entry, &["deathday", "deathDate"])),
+                    birth_place: text_field(person_for_details, &["birthPlace", "placeOfBirth"])
+                        .or_else(|| text_field(entry, &["birthPlace", "placeOfBirth"])),
+                    department: Some(if role.as_deref() == Some("Actor") {
+                        "Cast".into()
+                    } else {
+                        "Crew".into()
+                    }),
+                    role,
+                    character_name,
+                    profile_url: person
+                        .and_then(person_external_id)
+                        .or_else(|| tvdb_person_external_id(entry))
+                        .map(|id| format!("https://thetvdb.com/people/{id}")),
+                    image_url: tvdb_person_image_url(entry, person),
+                    cached_image_path: text_field(person_for_details, &["koko_cached_image_path"])
+                        .or_else(|| text_field(entry, &["koko_cached_image_path"])),
+                    provider_payload_json: Some(person_for_details.to_string()),
+                    sort_order: i32::try_from(index).unwrap_or(i32::MAX),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn person_name(value: &Value) -> Option<String> {
+    text_field(
+        value,
+        &[
+            "name",
+            "original_name",
+            "fullName",
+        ],
+    )
+}
+
+fn person_external_id(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .or_else(|| value.get("peopleId"))
+        .or_else(|| value.get("personId"))
+        .and_then(|id| {
+            id.as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| id.as_str().map(str::to_string))
+        })
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+fn tvdb_person_external_id(value: &Value) -> Option<String> {
+    value
+        .get("peopleId")
+        .or_else(|| value.get("personId"))
+        .and_then(|id| {
+            id.as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| id.as_str().map(str::to_string))
+        })
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .or_else(|| person_external_id(value))
+}
+
+fn tvdb_person_image_url(
+    entry: &Value,
+    person: Option<&Value>,
+) -> Option<String> {
+    person
+        .and_then(|person| {
+            tvdb_image_field(
+                person,
+                &[
+                    "image",
+                    "image_url",
+                    "thumbnail",
+                ],
+            )
+        })
+        .or_else(|| {
+            tvdb_image_field(
+                entry,
+                &[
+                    "personImgURL",
+                    "peopleImgURL",
+                    "personImage",
+                    "peopleImage",
+                ],
+            )
+        })
+        .or_else(|| {
+            if entry
+                .get("peopleId")
+                .or_else(|| entry.get("personId"))
+                .is_some()
+                || person.is_some()
+            {
+                None
+            } else {
+                tvdb_image_field(
+                    entry,
+                    &[
+                        "image",
+                        "image_url",
+                        "thumbnail",
+                    ],
+                )
+            }
+        })
+}
+
+fn tvdb_image_field(
+    value: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    text_field(value, keys).map(|url| {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            url
+        } else if url.starts_with('/') {
+            format!("https://artworks.thetvdb.com{url}")
+        } else {
+            format!("https://artworks.thetvdb.com/{url}")
+        }
+    })
+}
+
+fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMetadataPerson> {
+    let mut seen = std::collections::HashSet::new();
+    let mut people = people
+        .into_iter()
+        .filter(|person| {
+            let key = format!(
+                "{}:{}:{}",
+                person.external_id.as_deref().unwrap_or(""),
+                person.name.to_ascii_lowercase(),
+                person.role.as_deref().unwrap_or("")
+            );
+            seen.insert(key)
+        })
+        .collect::<Vec<_>>();
+    people.sort_by(|left, right| {
+        left.sort_order
+            .cmp(&right.sort_order)
+            .then_with(|| left.department.cmp(&right.department))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    people.truncate(80);
+    people
+}
+
 fn payload_with_translation(
     payload: &Value,
     translation: Option<&Value>,
@@ -1179,7 +1753,7 @@ fn episode_number(value: &Value) -> Option<i32> {
 mod tests {
     use super::{
         artwork_url, backdrop_url, best_overview, movie_snapshot_from_value,
-        search_result_from_value,
+        search_result_from_value, tvdb_people,
     };
     use serde_json::json;
 
@@ -1295,6 +1869,41 @@ mod tests {
         assert_eq!(
             backdrop_url(&payload).as_deref(),
             Some("https://example.test/backdrop.jpg")
+        );
+    }
+
+    #[test]
+    fn tvdb_people_use_person_name_not_character_name() {
+        let payload = json!({
+            "data": {
+                "characters": [
+                    {
+                        "id": 12242840,
+                        "name": "Brian Flanagan",
+                        "image": "https://example.test/character-brian-flanagan.jpg",
+                        "peopleId": 254032,
+                        "peopleType": "Actor",
+                        "personName": "Tom Cruise",
+                        "personImgURL": "https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "image": "https://example.test/person-tom-cruise.jpg"
+                        }
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people(&payload);
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].name, "Tom Cruise");
+        assert_eq!(people[0].character_name.as_deref(), Some("Brian Flanagan"));
+        assert_eq!(people[0].external_id.as_deref(), Some("254032"));
+        assert_eq!(
+            people[0].image_url.as_deref(),
+            Some("https://example.test/person-tom-cruise.jpg")
         );
     }
 }

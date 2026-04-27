@@ -5,9 +5,9 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    item_metadata_collections, item_metadata_links, item_metadata_people, media_files, media_items,
-    media_libraries, metadata_people, metadata_person_credits, playback_progress, scan_state,
-    users,
+    item_metadata_collections, item_metadata_external_ids, item_metadata_links,
+    item_metadata_people, media_files, media_items, media_libraries, metadata_people,
+    metadata_person_credits, playback_progress, scan_state, users,
 };
 
 #[derive(Queryable, Selectable, Insertable, Debug)]
@@ -224,6 +224,27 @@ pub struct NewItemMetadataLink {
     pub last_refreshed_at: Option<i64>,
     pub next_refresh_at: Option<i64>,
     pub refresh_error: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
+#[diesel(belongs_to(ItemMetadataLink, foreign_key = metadata_link_id))]
+#[diesel(table_name = item_metadata_external_ids)]
+pub struct ItemMetadataExternalId {
+    pub id: i32,
+    pub metadata_link_id: i32,
+    pub source: String,
+    pub external_id: String,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = item_metadata_external_ids)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewItemMetadataExternalId {
+    pub metadata_link_id: i32,
+    pub source: String,
+    pub external_id: String,
     pub updated_at: Option<i64>,
 }
 

@@ -462,6 +462,8 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         release_year: 1999,
         media_type: 'movie',
         match_state: 'linked',
+        trailer_title: 'Official Trailer',
+        trailer_url: 'https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0',
         genres: ['Action', 'Science Fiction'],
         people: [
           { id: 1, person_id: 1, external_id: '6384', name: 'Keanu Reeves', role: 'Actor', department: 'Cast', character_name: 'Neo', image_url: 'https://image.tmdb.org/t/p/w185/4D0PpNI0kmP58hgrwGC3wCjxhnm.jpg', profile_url: 'https://www.themoviedb.org/person/6384', sort_order: 0 },
@@ -471,26 +473,6 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
           { id: 5, person_id: 5, external_id: '9341', name: 'Lilly Wachowski', role: 'Director', department: 'Directing', profile_url: 'https://www.themoviedb.org/person/9341', sort_order: 10001 },
         ],
         locale_key: 'en-US',
-        provider_payload_json: JSON.stringify({
-          videos: {
-            results: [
-              {
-                site: 'YouTube',
-                type: 'Trailer',
-                official: true,
-                name: 'Official Trailer',
-                key: 'vKQi3bBA1y8',
-              },
-              {
-                site: 'YouTube',
-                type: 'Teaser',
-                official: false,
-                name: 'Legacy Teaser',
-                key: 'm8e-FF8MsqU',
-              },
-            ],
-          },
-        }),
         refresh_state: 'fresh',
         last_refreshed_at: 1760923200,
         updated_at: 1760923200,
@@ -1049,7 +1031,6 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     genres: [],
     people: [],
     locale_key: 'en-US',
-    provider_payload_json: JSON.stringify(candidate, null, 2),
     updated_at: Math.floor(Date.now() / 1000),
   };
 

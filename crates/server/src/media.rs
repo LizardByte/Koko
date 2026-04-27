@@ -2253,7 +2253,7 @@ pub fn get_item_theme_song_themerr_references(
                             link.external_id.clone(),
                         )];
                         if media_type == "movie" {
-                            if let Some(imdb_id) = themerr_imdb_id_from_payload(&link) {
+                            if let Some(imdb_id) = metadata_external_id(conn, link.id, "imdb")? {
                                 references.push((
                                     media_type.to_string(),
                                     "imdb".to_string(),
@@ -2278,14 +2278,19 @@ pub fn get_item_theme_song_themerr_references(
     Ok(Vec::new())
 }
 
-fn themerr_imdb_id_from_payload(link: &ItemMetadataLink) -> Option<String> {
-    let value = serde_json::from_str::<Value>(link.provider_payload_json.as_ref()?).ok()?;
-    value
-        .get("imdb_id")?
-        .as_str()
-        .map(str::trim)
-        .filter(|value| value.starts_with("tt"))
-        .map(ToOwned::to_owned)
+fn metadata_external_id(
+    conn: &mut SqliteConnection,
+    metadata_link_id: i32,
+    source: &str,
+) -> Result<Option<String>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_external_ids::dsl as external_ids_dsl;
+
+    external_ids_dsl::item_metadata_external_ids
+        .filter(external_ids_dsl::metadata_link_id.eq(metadata_link_id))
+        .filter(external_ids_dsl::source.eq(source))
+        .select(external_ids_dsl::external_id)
+        .first::<String>(conn)
+        .optional()
 }
 
 /// Resolve a local subtitle asset path for a media item by track index.

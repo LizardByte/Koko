@@ -52,16 +52,16 @@ use crate::metadata::{
     MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
     expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
     fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
-    fetch_provider_season_metadata_snapshot, fetch_themerr_youtube_theme_url_for_database,
+    fetch_provider_season_metadata_snapshot, fetch_provider_youtube_theme_url,
     get_item_metadata_summaries, get_metadata_person_for_languages,
     get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
     get_stored_metadata_snapshot, guess_provider_movie_match, guess_provider_show_match,
     list_due_item_metadata_links, list_metadata_person_credit_summaries_for_person_ids,
-    list_pending_item_metadata_links, list_provider_statuses, load_tvdb_show_descendant_targets,
-    managed_metadata_asset_dir, normalize_locale_key, persist_item_metadata_assets,
-    persist_metadata_people_assets, search_provider, set_item_metadata_refresh_state,
-    sort_item_metadata_summaries_for_languages, update_cached_artwork_path,
-    upsert_item_metadata_snapshot_with_refresh_interval,
+    list_pending_item_metadata_links, list_provider_statuses,
+    load_provider_show_descendant_targets, managed_metadata_asset_dir, normalize_locale_key,
+    persist_item_metadata_assets, persist_metadata_people_assets, search_provider,
+    set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
+    update_cached_artwork_path, upsert_item_metadata_snapshot_with_refresh_interval,
 };
 use crate::utils::current_timestamp;
 
@@ -854,16 +854,20 @@ async fn load_tvdb_show_descendant_refresh_targets(
     show_item_id: i32,
     show_external_id: &str,
 ) -> Result<Vec<MetadataRefreshTarget>, Status> {
-    let lookup = load_tvdb_show_descendant_targets(&settings.metadata, show_external_id)
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to load TheTVDB descendant metadata for show item {}: {}",
-                show_item_id,
-                error
-            );
-            Status::ServiceUnavailable
-        })?;
+    let lookup = load_provider_show_descendant_targets(
+        &settings.metadata,
+        MetadataProviderId::Tvdb,
+        show_external_id,
+    )
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to load TheTVDB descendant metadata for show item {}: {}",
+            show_item_id,
+            error
+        );
+        Status::ServiceUnavailable
+    })?;
 
     let seasons = db
         .run(move |conn| list_media_item_children(conn, show_item_id))
@@ -2369,7 +2373,8 @@ pub async fn get_item(
             })?;
 
         for (media_type, database_id, external_id) in theme_references {
-            match fetch_themerr_youtube_theme_url_for_database(
+            match fetch_provider_youtube_theme_url(
+                MetadataProviderId::Themerr,
                 &media_type,
                 &database_id,
                 &external_id,
@@ -2927,6 +2932,7 @@ pub async fn search_item_metadata(
             &search_metadata_settings,
             provider_id.clone(),
             &effective_query,
+            Some(expected_media_type),
         )
         .await
         {

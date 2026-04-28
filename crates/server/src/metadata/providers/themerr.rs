@@ -40,7 +40,7 @@ pub(crate) async fn fetch_youtube_theme_url(
     let Some(database_path) = database_path_for_media_type(media_type) else {
         return Ok(None);
     };
-    let Some(database_id) = normalize_database_id(database_id) else {
+    let Some(database_id) = normalize_database_id(media_type, database_id) else {
         return Ok(None);
     };
     let normalized_external_id = external_id.trim();
@@ -79,10 +79,14 @@ fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_database_id(database_id: &str) -> Option<&'static str> {
+fn normalize_database_id(
+    media_type: &str,
+    database_id: &str,
+) -> Option<&'static str> {
+    let normalized_media_type = media_type.trim().to_ascii_lowercase();
     match database_id.trim().to_ascii_lowercase().as_str() {
         "themoviedb" | "tmdb" => Some("themoviedb"),
-        "imdb" => Some("imdb"),
+        "imdb" if normalized_media_type == "movie" => Some("imdb"),
         _ => None,
     }
 }

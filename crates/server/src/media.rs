@@ -28,7 +28,7 @@ use crate::db::models::{
     NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
-    ArtworkKind, DEFAULT_METADATA_LOCALE, MetadataCollectionSummary,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, MetadataCollectionSummary, MetadataRegistry,
     list_metadata_collection_summaries_with_preferred_languages, normalize_locale_key,
     presentation_from_metadata_links,
 };
@@ -2326,21 +2326,28 @@ pub fn resolve_item_theme_song_path(
     Ok(discover_item_assets(item_id, &source_path, data_dir).theme_song_path)
 }
 
-/// Return the TMDB movie or show identifier to use for ThemerrDB theme-song lookups.
-pub fn get_item_theme_song_themerr_reference(
+/// Return ordered YouTube theme-song lookup candidates for a secondary metadata provider.
+pub fn get_item_youtube_theme_provider_references(
     conn: &mut SqliteConnection,
     item_id: i32,
-) -> Result<Option<(String, String)>, diesel::result::Error> {
-    Ok(get_item_theme_song_themerr_references(conn, item_id)?
-        .into_iter()
-        .next()
-        .map(|(media_type, _database_id, external_id)| (media_type, external_id)))
+    provider_id: MetadataProviderId,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    let registry = MetadataRegistry::new();
+    let Some(provider) = registry.provider(&provider_id) else {
+        return Ok(Vec::new());
+    };
+    let source_provider_ids = provider.descriptor().extends_provider_ids;
+    if source_provider_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    get_item_theme_song_source_references(conn, item_id, &source_provider_ids)
 }
 
-/// Return ordered ThemerrDB lookup candidates for a media item.
-pub fn get_item_theme_song_themerr_references(
+fn get_item_theme_song_source_references(
     conn: &mut SqliteConnection,
     item_id: i32,
+    source_provider_ids: &[MetadataProviderId],
 ) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
@@ -2352,20 +2359,15 @@ pub fn get_item_theme_song_themerr_references(
             break;
         }
 
-        if let Some(link) = get_item_themerr_source_metadata_link(conn, current_item_id)? {
-            if let Some(media_type) = link.media_type.as_deref() {
-                let mut references = vec![(
-                    media_type.to_string(),
-                    "tmdb".to_string(),
-                    link.external_id.clone(),
-                )];
-                if media_type == "movie" {
-                    if let Some(imdb_id) = metadata_external_id(conn, link.id, "imdb")? {
-                        references.push((media_type.to_string(), "imdb".to_string(), imdb_id));
-                    }
-                }
-                return Ok(references);
+        let links =
+            get_item_theme_song_source_metadata_links(conn, current_item_id, source_provider_ids)?;
+        if !links.is_empty() {
+            let mut references = Vec::new();
+            let mut seen = HashSet::new();
+            for link in links {
+                append_theme_song_source_references(conn, &link, &mut references, &mut seen)?;
             }
+            return Ok(references);
         }
 
         current_id = media_items_dsl::media_items
@@ -2379,51 +2381,94 @@ pub fn get_item_theme_song_themerr_references(
     Ok(Vec::new())
 }
 
-fn get_item_themerr_source_metadata_link(
+fn append_theme_song_source_references(
+    conn: &mut SqliteConnection,
+    link: &ItemMetadataLink,
+    references: &mut Vec<(String, String, String)>,
+    seen: &mut HashSet<(String, String, String)>,
+) -> Result<(), diesel::result::Error> {
+    if let Some(media_type) = link
+        .media_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let source_reference = (
+            media_type.to_string(),
+            link.provider_id.clone(),
+            link.external_id.clone(),
+        );
+        if seen.insert(source_reference.clone()) {
+            references.push(source_reference);
+        }
+
+        for (database_id, external_id) in metadata_external_ids(conn, link.id)? {
+            let external_reference = (media_type.to_string(), database_id, external_id);
+            if seen.insert(external_reference.clone()) {
+                references.push(external_reference);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn get_item_theme_song_source_metadata_links(
     conn: &mut SqliteConnection,
     item_id: i32,
-) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    source_provider_ids: &[MetadataProviderId],
+) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
 
-    metadata_links_dsl::item_metadata_links
+    let source_provider_values = source_provider_ids
+        .iter()
+        .map(|provider_id| provider_id.as_storage_value().to_string())
+        .collect::<Vec<_>>();
+    let source_provider_rank = source_provider_values
+        .iter()
+        .enumerate()
+        .map(|(index, provider_id)| (provider_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_provider_rank = source_provider_rank.len();
+
+    let mut links = metadata_links_dsl::item_metadata_links
         .filter(metadata_links_dsl::media_item_id.eq(item_id))
-        .filter(metadata_links_dsl::provider_id.eq(MetadataProviderId::Tmdb.as_storage_value()))
+        .filter(metadata_links_dsl::provider_id.eq_any(&source_provider_values))
         .filter(metadata_links_dsl::relation_kind.eq("primary"))
-        .filter(metadata_links_dsl::media_type.eq_any(["movie", "tv"]))
-        .order((
-            metadata_links_dsl::updated_at.desc(),
-            metadata_links_dsl::id.desc(),
-        ))
+        .filter(metadata_links_dsl::media_type.is_not_null())
         .select(ItemMetadataLink::as_select())
-        .first(conn)
-        .optional()
+        .load::<ItemMetadataLink>(conn)?;
+
+    links.sort_by(|left, right| {
+        let left_provider_rank = source_provider_rank
+            .get(&left.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+        let right_provider_rank = source_provider_rank
+            .get(&right.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+
+        left_provider_rank
+            .cmp(&right_provider_rank)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+
+    Ok(links)
 }
 
-/// Return ordered YouTube theme-song lookup candidates for a secondary metadata provider.
-pub fn get_item_youtube_theme_provider_references(
-    conn: &mut SqliteConnection,
-    item_id: i32,
-    provider_id: MetadataProviderId,
-) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
-    match provider_id {
-        MetadataProviderId::Themerr => get_item_theme_song_themerr_references(conn, item_id),
-        _ => Ok(Vec::new()),
-    }
-}
-
-fn metadata_external_id(
+fn metadata_external_ids(
     conn: &mut SqliteConnection,
     metadata_link_id: i32,
-    source: &str,
-) -> Result<Option<String>, diesel::result::Error> {
+) -> Result<Vec<(String, String)>, diesel::result::Error> {
     use crate::db::schema::item_metadata_external_ids::dsl as external_ids_dsl;
 
     external_ids_dsl::item_metadata_external_ids
         .filter(external_ids_dsl::metadata_link_id.eq(metadata_link_id))
-        .filter(external_ids_dsl::source.eq(source))
-        .select(external_ids_dsl::external_id)
-        .first::<String>(conn)
-        .optional()
+        .order((external_ids_dsl::source.asc(), external_ids_dsl::id.asc()))
+        .select((external_ids_dsl::source, external_ids_dsl::external_id))
+        .load::<(String, String)>(conn)
 }
 
 /// Resolve a local subtitle asset path for a media item by track index.

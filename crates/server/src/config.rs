@@ -238,14 +238,6 @@ impl MediaLibrarySettings {
         if self.metadata_providers.is_empty() {
             self.metadata_providers = default_library_metadata_providers();
         }
-        if self
-            .metadata_providers
-            .contains(&MetadataProviderId::Themerr)
-            && !self.metadata_providers.contains(&MetadataProviderId::Tmdb)
-        {
-            self.metadata_providers
-                .retain(|provider| provider != &MetadataProviderId::Themerr);
-        }
         if self.metadata_providers.is_empty() {
             self.metadata_providers = default_library_metadata_providers();
         }

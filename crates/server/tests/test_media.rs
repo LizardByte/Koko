@@ -13,14 +13,13 @@ use diesel_migrations::MigrationHarness;
 use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
 use koko::db::MIGRATIONS;
 use koko::media::{
-    LibraryScanStatus, get_item_theme_song_themerr_reference,
-    get_item_theme_song_themerr_references, get_library_files, get_media_home, get_media_item,
-    get_persisted_library_summaries, get_preferred_item_metadata_link, infer_episode_number,
-    infer_season_number, inspect_libraries, inspect_transcoding_capability,
-    list_automatic_metadata_candidates, list_library_settings, list_media_items,
-    remove_library_setting, replace_library_settings, resolve_local_item_artwork_path,
-    resolve_media_item_source_path, search_media_items, sync_library_catalog,
-    upsert_playback_progress,
+    LibraryScanStatus, get_item_youtube_theme_provider_references, get_library_files,
+    get_media_home, get_media_item, get_persisted_library_summaries,
+    get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
+    inspect_transcoding_capability, list_automatic_metadata_candidates, list_library_settings,
+    list_media_items, remove_library_setting, replace_library_settings,
+    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
+    sync_library_catalog, upsert_playback_progress,
 };
 use koko::metadata::{
     ArtworkKind, StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
@@ -1493,8 +1492,8 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
 }
 
 #[test]
-fn test_themerr_theme_song_reference_inherits_from_linked_show() {
-    let root = unique_temp_dir("themerr_theme_song_reference_show");
+fn test_secondary_theme_song_reference_inherits_from_linked_show() {
+    let root = unique_temp_dir("secondary_theme_song_reference_show");
     let season_dir = root.join("Mock Show").join("Season 1");
     fs::create_dir_all(&season_dir).unwrap();
     fs::write(
@@ -1515,7 +1514,8 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
         allowed_user_ids: vec![],
     }];
 
-    let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_show_db");
+    let (mut connection, db_path) =
+        create_test_connection("secondary_theme_song_reference_show_db");
     let persisted =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
@@ -1550,16 +1550,31 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
     .unwrap();
 
     assert_eq!(
-        get_item_theme_song_themerr_reference(&mut connection, show.id).unwrap(),
-        Some(("tv".into(), "1399".into()))
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            show.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
+        vec![("tv".into(), "tmdb".into(), "1399".into())]
     );
     assert_eq!(
-        get_item_theme_song_themerr_reference(&mut connection, season.id).unwrap(),
-        Some(("tv".into(), "1399".into()))
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            season.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
+        vec![("tv".into(), "tmdb".into(), "1399".into())]
     );
     assert_eq!(
-        get_item_theme_song_themerr_reference(&mut connection, episode.id).unwrap(),
-        Some(("tv".into(), "1399".into()))
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            episode.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
+        vec![("tv".into(), "tmdb".into(), "1399".into())]
     );
 
     drop(connection);
@@ -1568,8 +1583,8 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
 }
 
 #[test]
-fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
-    let root = unique_temp_dir("themerr_theme_song_reference_movie");
+fn test_secondary_theme_song_reference_includes_external_id_fallbacks() {
+    let root = unique_temp_dir("secondary_theme_song_reference_movie");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
 
@@ -1585,7 +1600,8 @@ fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
         allowed_user_ids: vec![],
     }];
 
-    let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_movie_db");
+    let (mut connection, db_path) =
+        create_test_connection("secondary_theme_song_reference_movie_db");
     let persisted =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
@@ -1618,15 +1634,16 @@ fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
     .unwrap();
 
     assert_eq!(
-        get_item_theme_song_themerr_references(&mut connection, movie.id).unwrap(),
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            movie.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
         vec![
             ("movie".into(), "tmdb".into(), "603".into()),
             ("movie".into(), "imdb".into(), "tt0133093".into()),
         ]
-    );
-    assert_eq!(
-        get_item_theme_song_themerr_reference(&mut connection, movie.id).unwrap(),
-        Some(("movie".into(), "603".into()))
     );
 
     drop(connection);

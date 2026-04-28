@@ -1365,6 +1365,20 @@ function collectionSummaries(): MediaCollectionSummary[] {
   return state.home?.collections ?? [];
 }
 
+function collectionForRoute(): MediaCollectionSummary | undefined {
+  const route = state.route;
+  if (route.page !== 'browse-detail' || route.kind !== 'collection') {
+    return undefined;
+  }
+
+  return collectionSummaries().find((entry) => entry.id === route.key);
+}
+
+function itemsForCollection(collection: MediaCollectionSummary): MediaItemSummary[] {
+  const allowedIds = new Set(collection.item_ids);
+  return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+}
+
 function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   const items = topLevelLibraryItems();
   if (!state.browseFilter) {
@@ -1500,6 +1514,52 @@ function renderBrowseFilterDetail(): string {
         </div>
       </div>
       <div class="item-grid">${items.map(renderItemCard).join('')}</div>
+    </section>
+  `;
+}
+
+function renderCollectionDetailPage(): string {
+  const collection = collectionForRoute();
+  if (!collection) {
+    if (state.libraryItemsLoading) {
+      return '<div class="empty-state">Loading collection…</div>';
+    }
+    return '<div class="empty-state">This collection is no longer available for the current library.</div>';
+  }
+
+  const items = itemsForCollection(collection);
+  const posterUrl = collection.artwork_url ? resolveApiUrl(collection.artwork_url) : undefined;
+  const themeSongOption = currentThemeSongYouTubeTarget();
+
+  return `
+    <section class="item-page collection-page">
+      <section class="item-hero collection-hero">
+        <div class="detail-art item-poster collection-poster ${posterUrl ? 'has-image' : ''}">
+          ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(collection.name)}" />` : renderIcon('image', 'audio-player-art-icon')}
+        </div>
+        <div class="detail-summary item-summary">
+          <p class="eyebrow">Collection</p>
+          <h2 class="item-title-fallback">${escapeHtml(collection.name)}</h2>
+          <div class="hero-meta-row">
+            <span class="tag">${items.length} title${items.length === 1 ? '' : 's'}</span>
+          </div>
+          ${collection.overview ? renderCollapsibleText(collection.overview, `collection-overview:${collection.id}`) : '<p>No overview is stored for this collection yet.</p>'}
+          <div class="detail-actions">
+            ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
+            <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel page-panel item-section">
+        <div class="section-heading section-heading-actions">
+          <h3>Titles</h3>
+          <span class="muted">${items.length} item${items.length === 1 ? '' : 's'}</span>
+        </div>
+        ${items.length
+          ? `<div class="item-grid hierarchy-item-grid">${items.map(renderItemCard).join('')}</div>`
+          : '<div class="empty-state tight">No titles are currently linked to this collection.</div>'}
+      </section>
     </section>
   `;
 }
@@ -1839,7 +1899,7 @@ function renderCollectionsTab(): string {
             <strong>${escapeHtml(collection.name)}</strong>
             <span class="tag">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
           </div>
-          <p class="muted">${escapeHtml(collection.overview ?? 'Open this collection to filter the library view.')}</p>
+          <p class="muted">${escapeHtml(collection.overview ?? 'Open this collection.')}</p>
         </button>
       `).join('')}
     </section>
@@ -1880,6 +1940,10 @@ function renderCategoriesTab(): string {
 }
 
 function renderHomeTabContent(): string {
+  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
+    return renderCollectionDetailPage();
+  }
+
   if (state.route.page === 'browse-detail' || state.browseFilter) {
     return renderBrowseFilterDetail();
   }
@@ -1916,6 +1980,13 @@ function renderPageNavbar(eyebrow: string, title: string, description: string, a
 }
 
 function renderHomePage(): string {
+  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
+    return `
+      ${renderHomeNavbar()}
+      ${renderCollectionDetailPage()}
+    `;
+  }
+
   return `
     ${renderHomeNavbar()}
     ${state.route.page === 'browse-detail' ? '' : renderHomeFeature()}
@@ -3565,13 +3636,14 @@ function render(preserveScroll = true): void {
     return;
   }
 
+  const activeCollection = collectionForRoute();
   const homeFeatureItem = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? homePreviewItem()
     : undefined;
   const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
     && (state.selectedItem.backdrop_url || state.selectedItemMetadata?.matches.some((match) => Boolean(match.backdrop_url || match.cached_backdrop_path)))
       ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
-      : pageBackdropUrlForItem(homeFeatureItem);
+      : activeCollection?.backdrop_url ? resolveApiUrl(activeCollection.backdrop_url) : pageBackdropUrlForItem(homeFeatureItem);
   const railCollapsed = isRailCollapsed();
   const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? ' home-page-backdrop'

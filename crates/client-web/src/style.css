@@ -1380,9 +1380,17 @@ legend {
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
 }
 
+.collection-hero {
+  min-height: min(48vh, 560px);
+}
+
 .item-poster {
   width: min(100%, 220px);
   box-shadow: 0 24px 44px rgba(0, 0, 0, 0.34);
+}
+
+.collection-poster {
+  position: relative;
 }
 
 .item-thumbnail {

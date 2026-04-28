@@ -340,9 +340,9 @@ pub struct MediaItemDetail {
     pub metadata_refresh_error: Option<String>,
     /// Revision timestamp for artwork cache-busting when linked metadata changes.
     pub artwork_updated_at: Option<i64>,
-    /// Browser-embeddable trailer title, when available.
+    /// Trailer title, when available.
     pub trailer_title: Option<String>,
-    /// Browser-embeddable trailer URL, when available.
+    /// Trailer URL, when available.
     pub trailer_url: Option<String>,
     /// Audio streams discovered in the source container.
     pub audio_tracks: Vec<MediaAudioTrack>,

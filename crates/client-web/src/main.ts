@@ -90,6 +90,43 @@ interface BrowseFilter {
 interface TrailerOption {
   title: string;
   url: string;
+  label?: string;
+  titleSuffix?: string;
+}
+
+type ThemeSongSource =
+  | { kind: 'audio'; src: string; title: string }
+  | { kind: 'youtube'; src: string; title: string; videoId: string };
+
+interface YouTubePlayer {
+  loadVideoById(videoId: string): void;
+  pauseVideo(): void;
+  setPlaybackQuality(suggestedQuality: string): void;
+  destroy(): void;
+}
+
+interface YouTubeIframeApi {
+  Player: new (
+    elementId: string,
+    options: {
+      height: string;
+      width: string;
+      videoId?: string;
+      playerVars?: Record<string, number>;
+      events?: {
+        onReady?: (event: { target: YouTubePlayer }) => void;
+        onStateChange?: () => void;
+        onError?: (event: { data: number }) => void;
+      };
+    },
+  ) => YouTubePlayer;
+}
+
+declare global {
+  interface Window {
+    YT?: YouTubeIframeApi;
+    onYouTubeIframeAPIReady?: () => void;
+  }
 }
 
 interface AppState {
@@ -130,7 +167,7 @@ interface AppState {
   activeAudioStreamIndex?: number;
   isAudioTrackMenuOpen: boolean;
   isTrailerMenuOpen: boolean;
-  activeTrailer?: { title: string; url: string };
+  activeTrailer?: TrailerOption;
   expandedTextKeys: Set<string>;
   error?: string;
   hasDeferredAutoRefreshRender: boolean;
@@ -236,9 +273,14 @@ if (!app) {
   throw new Error('Failed to find app container');
 }
 const appRoot = app;
+const YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID = 'dQw4w9WgXcQ';
 let pendingLibraryRefreshHandle: number | undefined;
 let pendingMetadataRefreshHandle: number | undefined;
 let pendingLiveSearchHandle: number | undefined;
+let youtubeIframeApiPromise: Promise<YouTubeIframeApi> | undefined;
+let themeSongYouTubePlayer: YouTubePlayer | undefined;
+let themeSongYouTubePlayerReady: Promise<YouTubePlayer> | undefined;
+let activeThemeSongYouTubeVideoId: string | undefined;
 const activeGamepadButtons = new Set<string>();
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
@@ -640,27 +682,51 @@ function extractYouTubeVideoId(url: string): string | undefined {
     return undefined;
   }
 
-  if (/^[A-Za-z0-9_-]{11}$/.test(normalizedUrl)) {
+  const videoIdPattern = /^[A-Za-z0-9_-]{11}$/;
+  if (videoIdPattern.test(normalizedUrl)) {
     return normalizedUrl;
   }
 
+  let parseTarget = normalizedUrl;
+  if (
+    normalizedUrl.startsWith('//youtube.com/')
+    || normalizedUrl.startsWith('//www.youtube.com/')
+    || normalizedUrl.startsWith('//youtu.be/')
+    || normalizedUrl.startsWith('//youtube-nocookie.com/')
+    || normalizedUrl.startsWith('//www.youtube-nocookie.com/')
+  ) {
+    parseTarget = `https:${normalizedUrl}`;
+  } else if (
+    normalizedUrl.startsWith('youtube.com/')
+    || normalizedUrl.startsWith('www.youtube.com/')
+    || normalizedUrl.startsWith('youtu.be/')
+    || normalizedUrl.startsWith('youtube-nocookie.com/')
+    || normalizedUrl.startsWith('www.youtube-nocookie.com/')
+  ) {
+    parseTarget = `https://${normalizedUrl}`;
+  }
+
   try {
-    const parsed = new URL(normalizedUrl);
-    const host = parsed.hostname.toLowerCase();
+    const parsed = new URL(parseTarget);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     if (host === 'youtu.be') {
       const videoId = parsed.pathname.split('/').filter(Boolean)[0];
-      return /^[A-Za-z0-9_-]{11}$/.test(videoId ?? '') ? videoId : undefined;
+      return videoIdPattern.test(videoId ?? '') ? videoId : undefined;
     }
 
-    if (host.endsWith('youtube.com')) {
+    const isYouTubeHost = host === 'youtube.com'
+      || host.endsWith('.youtube.com')
+      || host === 'youtube-nocookie.com'
+      || host.endsWith('.youtube-nocookie.com');
+    if (isYouTubeHost) {
       if (parsed.pathname.startsWith('/watch')) {
         const videoId = parsed.searchParams.get('v')?.trim();
-        return /^[A-Za-z0-9_-]{11}$/.test(videoId ?? '') ? videoId : undefined;
+        return videoIdPattern.test(videoId ?? '') ? videoId : undefined;
       }
 
-      if (parsed.pathname.startsWith('/embed/')) {
-        const videoId = parsed.pathname.split('/')[2]?.trim();
-        return /^[A-Za-z0-9_-]{11}$/.test(videoId ?? '') ? videoId : undefined;
+      const [kind, videoId] = parsed.pathname.split('/').filter(Boolean);
+      if (['embed', 'shorts', 'live'].includes(kind ?? '')) {
+        return videoIdPattern.test(videoId ?? '') ? videoId : undefined;
       }
     }
   } catch {
@@ -684,7 +750,7 @@ function buildYouTubeEmbedUrl(
   embedUrl.searchParams.set('playsinline', '1');
   embedUrl.searchParams.set('modestbranding', '1');
   embedUrl.searchParams.set('enablejsapi', '1');
-  if (window.location.origin) {
+  if (window.location.origin.startsWith('http')) {
     embedUrl.searchParams.set('origin', window.location.origin);
   }
   embedUrl.searchParams.set('autoplay', options.autoplay ? '1' : '0');
@@ -695,6 +761,11 @@ function buildYouTubeEmbedUrl(
   }
 
   return embedUrl.toString();
+}
+
+function buildYouTubeWatchUrl(url: string): string | undefined {
+  const videoId = extractYouTubeVideoId(url);
+  return videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
 }
 
 function currentTrailerOptions(): TrailerOption[] {
@@ -708,7 +779,40 @@ function currentTrailerOptions(): TrailerOption[] {
   }];
 }
 
-function openTrailer(option: TrailerOption | undefined): void {
+function currentThemeSongTarget(): { title: string; url: string } | undefined {
+  const route = state.route;
+  if (route.page === 'browse-detail' && route.kind === 'collection') {
+    const collection = collectionSummaries().find((entry) => entry.id === route.key);
+    return collection?.theme_song_url
+      ? { title: collection.name, url: collection.theme_song_url }
+      : undefined;
+  }
+
+  if (route.page !== 'item' || !state.selectedItem?.theme_song_url) {
+    return undefined;
+  }
+
+  return {
+    title: state.selectedItem.display_title,
+    url: state.selectedItem.theme_song_url,
+  };
+}
+
+function currentThemeSongYouTubeTarget(): { title: string; url: string; videoId: string } | undefined {
+  const target = currentThemeSongTarget();
+  const videoId = target ? extractYouTubeVideoId(target.url) : undefined;
+  if (!target || !videoId) {
+    return undefined;
+  }
+
+  return {
+    title: target.title,
+    url: target.url,
+    videoId,
+  };
+}
+
+function openVideoOverlay(option: TrailerOption | undefined): void {
   if (!option) {
     return;
   }
@@ -716,6 +820,10 @@ function openTrailer(option: TrailerOption | undefined): void {
   state.activeTrailer = option;
   state.isTrailerMenuOpen = false;
   render();
+}
+
+function openTrailer(option: TrailerOption | undefined): void {
+  openVideoOverlay(option);
 }
 
 function libraryRefreshProgress(library: MediaLibrary): { completed: number; total: number; percent: number; failed: number } | undefined {
@@ -1334,6 +1442,7 @@ function renderBrowseFilterDetail(): string {
   const artworkStyle = filter.artworkUrl
     ? `style="--home-feature-image: url('${escapeHtml(filter.artworkUrl)}');"`
     : '';
+  const themeSongOption = currentThemeSongYouTubeTarget();
 
   return `
     <section class="browse-filter-detail">
@@ -1346,9 +1455,12 @@ function renderBrowseFilterDetail(): string {
             <span class="tag">${items.length} title${items.length === 1 ? '' : 's'}</span>
           </div>
         </div>
-        <button type="button" class="secondary-button home-feature-action" id="clear-browse-filter">
-          ${renderButtonContent('Back', 'arrow-left')}
-        </button>
+        <div class="home-feature-actions">
+          ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
+          <button type="button" class="secondary-button" id="clear-browse-filter">
+            ${renderButtonContent('Back', 'arrow-left')}
+          </button>
+        </div>
       </div>
       <div class="item-grid">${items.map(renderItemCard).join('')}</div>
     </section>
@@ -2370,6 +2482,7 @@ function renderItemPage(): string {
   const trailerOptions = currentTrailerOptions();
   const preferredTrailer = trailerOptions[0];
   const hasMultipleTrailers = trailerOptions.length > 1;
+  const themeSongOption = currentThemeSongYouTubeTarget();
   const trailerButtonTitle = hasMultipleTrailers
     ? 'Click to play the first trailer. Right-click or press and hold to choose another trailer.'
     : 'Play Trailer';
@@ -2442,6 +2555,7 @@ function renderItemPage(): string {
             ${state.selectedItem.playable && resumeMs > 0 ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>` : ''}
             ${state.selectedItem.playable ? `<button type="button" class="${resumeMs > 0 ? 'secondary-button' : ''}" data-play-selected-item-start-ms="0">${renderButtonContent(resumeMs > 0 ? 'Start over' : 'Play now', 'play')}</button>` : ''}
             ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
+            ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
           </div>
           ${hasMultipleTrailers && state.isTrailerMenuOpen ? `
@@ -2611,7 +2725,7 @@ function metadataProviderCheckboxes(prefix: string, selectedProviders: string[],
 
   return `
     <div class="metadata-provider-list" data-provider-list="${prefix}">
-      ${providers.map((provider, index) => `
+      ${providers.map((provider) => `
       ${(() => {
         const providerId = provider.id;
         const label = provider.display_name;
@@ -2938,21 +3052,27 @@ function renderPlayerOverlay(): string {
   if (state.activeTrailer) {
     const trailerUrl = buildYouTubeEmbedUrl(state.activeTrailer.url, { autoplay: true, controls: true })
       ?? state.activeTrailer.url;
+    const watchUrl = buildYouTubeWatchUrl(state.activeTrailer.url);
+    const label = state.activeTrailer.label ?? 'Trailer';
+    const titleSuffix = state.activeTrailer.titleSuffix ?? 'trailer';
     return `
       <div class="player-overlay trailer-overlay">
         <div class="player-shell trailer-shell">
           <div class="player-header">
             <div>
-              <p class="eyebrow">Trailer</p>
+              <p class="eyebrow">${escapeHtml(label)}</p>
               <h2>${escapeHtml(state.activeTrailer.title)}</h2>
             </div>
-            <button id="close-trailer" class="secondary-button" type="button">${renderButtonContent('Close', 'x')}</button>
+            <div class="player-header-actions">
+              ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}
+              <button id="close-trailer" class="secondary-button" type="button">${renderButtonContent('Close', 'x')}</button>
+            </div>
           </div>
           <div class="trailer-frame-shell">
             <iframe
               id="trailer-player"
               src="${escapeHtml(trailerUrl)}"
-              title="${escapeHtml(state.activeTrailer.title)} trailer"
+              title="${escapeHtml(`${state.activeTrailer.title} ${titleSuffix}`)}"
               allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
               referrerpolicy="origin"
               allowfullscreen
@@ -3641,41 +3761,30 @@ function themeSongLayer(): HTMLElement {
   return layer;
 }
 
-function currentThemeSongSource(): { kind: 'audio' | 'youtube'; src: string; title: string } | undefined {
+function currentThemeSongSource(): ThemeSongSource | undefined {
   if (state.isPlayerOpen || state.activeTrailer) {
     return undefined;
   }
 
-  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
-    const collection = collectionSummaries().find((entry) => entry.id === state.route.key);
-    return collection?.theme_song_url
-      ? themeSongSourceFromUrl(collection.theme_song_url, collection.name)
-      : undefined;
-  }
-
-  if (state.route.page !== 'item' || !state.selectedItem) {
-    return undefined;
-  }
-
-  return state.selectedItem.theme_song_url
-    ? themeSongSourceFromUrl(state.selectedItem.theme_song_url, state.selectedItem.display_title)
-    : undefined;
+  const target = currentThemeSongTarget();
+  return target ? themeSongSourceFromUrl(target.url, target.title) : undefined;
 }
 
 function themeSongSourceFromUrl(
   themeSongUrl: string,
   title: string,
-): { kind: 'audio' | 'youtube'; src: string; title: string } | undefined {
+): ThemeSongSource | undefined {
   if (!themeSongUrl) {
     return undefined;
   }
 
-  const youtubeUrl = buildYouTubeEmbedUrl(themeSongUrl, { autoplay: true, controls: false });
-  if (youtubeUrl) {
+  const videoId = extractYouTubeVideoId(themeSongUrl);
+  if (videoId) {
     return {
       kind: 'youtube',
-      src: youtubeUrl,
+      src: videoId,
       title,
+      videoId,
     };
   }
 
@@ -3686,10 +3795,117 @@ function themeSongSourceFromUrl(
   };
 }
 
+function loadYouTubeIframeApi(): Promise<YouTubeIframeApi> {
+  if (window.YT?.Player) {
+    return Promise.resolve(window.YT);
+  }
+
+  if (youtubeIframeApiPromise) {
+    return youtubeIframeApiPromise;
+  }
+
+  youtubeIframeApiPromise = new Promise((resolve) => {
+    const existingReadyHandler = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      existingReadyHandler?.();
+      if (window.YT?.Player) {
+        resolve(window.YT);
+      }
+    };
+
+    if (!document.querySelector<HTMLScriptElement>('script[src="https://www.youtube.com/iframe_api"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      const firstScript = document.getElementsByTagName('script')[0];
+      firstScript.parentNode?.insertBefore(script, firstScript);
+    }
+  });
+
+  return youtubeIframeApiPromise;
+}
+
+function destroyThemeSongYouTubePlayer(): void {
+  themeSongYouTubePlayerReady = undefined;
+  if (!themeSongYouTubePlayer) {
+    return;
+  }
+
+  try {
+    themeSongYouTubePlayer.pauseVideo();
+    themeSongYouTubePlayer.destroy();
+  } catch {
+    // The YouTube iframe may already have been removed during a render.
+  } finally {
+    themeSongYouTubePlayer = undefined;
+    activeThemeSongYouTubeVideoId = undefined;
+  }
+}
+
+function ensureThemeSongYouTubePlayer(): Promise<YouTubePlayer> {
+  if (themeSongYouTubePlayer) {
+    return Promise.resolve(themeSongYouTubePlayer);
+  }
+
+  if (themeSongYouTubePlayerReady) {
+    return themeSongYouTubePlayerReady;
+  }
+
+  const layer = themeSongLayer();
+  if (!document.querySelector('#theme-song-youtube-player')) {
+    layer.innerHTML = '<div id="theme-song-youtube-player" class="theme-song-iframe"></div>';
+  }
+
+  themeSongYouTubePlayerReady = loadYouTubeIframeApi().then((api) => new Promise<YouTubePlayer>((resolve) => {
+    themeSongYouTubePlayer = new api.Player('theme-song-youtube-player', {
+      height: '0',
+      width: '0',
+      videoId: YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID,
+      playerVars: {
+        autoplay: 0,
+        controls: 2,
+        loop: 0,
+      },
+      events: {
+        onReady: (event) => {
+          event.target.setPlaybackQuality('small');
+          resolve(event.target);
+        },
+        onStateChange: () => {
+          if (state.hasDeferredAutoRefreshRender) {
+            state.hasDeferredAutoRefreshRender = false;
+            render();
+          }
+        },
+        onError: (event) => {
+          console.warn('YouTube theme song playback failed', {
+            videoId: activeThemeSongYouTubeVideoId,
+            errorCode: event.data,
+          });
+        },
+      },
+    });
+  }));
+
+  return themeSongYouTubePlayerReady;
+}
+
+function playYouTubeThemeSong(videoId: string): void {
+  activeThemeSongYouTubeVideoId = videoId;
+  if (themeSongYouTubePlayer) {
+    themeSongYouTubePlayer.loadVideoById(videoId);
+    return;
+  }
+
+  void ensureThemeSongYouTubePlayer().then((player) => {
+    player.loadVideoById(videoId);
+  });
+}
+
 function syncThemeSongPlayer(): void {
   const layer = themeSongLayer();
   const source = currentThemeSongSource();
   if (!source) {
+    destroyThemeSongYouTubePlayer();
     layer.replaceChildren();
     delete layer.dataset.themeKind;
     delete layer.dataset.themeSrc;
@@ -3703,20 +3919,14 @@ function syncThemeSongPlayer(): void {
   layer.dataset.themeKind = source.kind;
   layer.dataset.themeSrc = source.src;
   if (source.kind === 'youtube') {
-    layer.innerHTML = `
-      <iframe
-        id="theme-song-youtube-player"
-        class="theme-song-iframe"
-        src="${escapeHtml(source.src)}"
-        title="${escapeHtml(source.title)} theme song"
-        allow="autoplay; encrypted-media; picture-in-picture"
-        referrerpolicy="origin"
-        tabindex="-1"
-      ></iframe>
-    `;
+    if (!document.querySelector('#theme-song-youtube-player')) {
+      layer.innerHTML = '<div id="theme-song-youtube-player" class="theme-song-iframe"></div>';
+    }
+    playYouTubeThemeSong(source.videoId);
     return;
   }
 
+  destroyThemeSongYouTubePlayer();
   layer.innerHTML = `<audio id="theme-song-player" autoplay preload="auto" src="${escapeHtml(source.src)}"></audio>`;
   const themePlayer = layer.querySelector<HTMLAudioElement>('#theme-song-player');
   if (!themePlayer) {
@@ -4565,6 +4775,13 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>('#close-trailer')?.addEventListener('click', () => {
     state.activeTrailer = undefined;
     render();
+  });
+
+  document.querySelector<HTMLButtonElement>('#play-youtube-theme-song')?.addEventListener('click', () => {
+    const target = currentThemeSongYouTubeTarget();
+    if (target) {
+      playYouTubeThemeSong(target.videoId);
+    }
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => button.addEventListener('click', async () => {

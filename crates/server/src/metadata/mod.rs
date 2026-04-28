@@ -152,7 +152,7 @@ pub struct ItemMetadataSummary {
     pub content_rating: Option<String>,
     /// Human-friendly trailer title, when available.
     pub trailer_title: Option<String>,
-    /// Browser-embeddable trailer URL, when available.
+    /// Trailer URL, when available.
     pub trailer_url: Option<String>,
     /// Theme-song URL, when supplied by provider metadata.
     pub theme_song_url: Option<String>,
@@ -390,7 +390,7 @@ pub struct ProviderMetadataDetails {
     pub content_rating: Option<String>,
     /// Human-friendly trailer title.
     pub trailer_title: Option<String>,
-    /// Browser-embeddable trailer URL.
+    /// Trailer URL.
     pub trailer_url: Option<String>,
     /// Theme-song URL.
     pub theme_song_url: Option<String>,
@@ -492,7 +492,7 @@ pub struct LinkedMetadataPresentation {
     pub content_rating: Option<String>,
     /// Human-friendly trailer title, when available.
     pub trailer_title: Option<String>,
-    /// Browser-embeddable trailer URL, when available.
+    /// Trailer URL, when available.
     pub trailer_url: Option<String>,
     /// Theme-song URL, when available.
     pub theme_song_url: Option<String>,

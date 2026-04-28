@@ -142,7 +142,7 @@ const items: MediaItemDetail[] = [
     metadata_refresh_state: 'fresh',
     artwork_updated_at: 1760923200,
     trailer_title: 'Official Trailer',
-    trailer_url: 'https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0',
+    trailer_url: 'https://www.youtube.com/watch?v=vKQi3bBA1y8',
     audio_tracks: [
       { index: 0, label: 'Japanese', codec: 'aac', language: 'jpn', default: true },
       { index: 1, label: 'English', codec: 'aac', language: 'eng', default: false },
@@ -484,7 +484,7 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         relation_kind: 'primary',
         match_state: 'linked',
         trailer_title: 'Official Trailer',
-        trailer_url: 'https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0',
+        trailer_url: 'https://www.youtube.com/watch?v=vKQi3bBA1y8',
         genres: ['Action', 'Science Fiction'],
         people: [
           { id: 1, person_id: 1, external_id: '6384', name: 'Keanu Reeves', role: 'Actor', department: 'Cast', character_name: 'Neo', image_url: 'https://image.tmdb.org/t/p/w185/4D0PpNI0kmP58hgrwGC3wCjxhnm.jpg', profile_url: 'https://www.themoviedb.org/person/6384', sort_order: 0 },

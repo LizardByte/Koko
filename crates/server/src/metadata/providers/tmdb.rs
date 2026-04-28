@@ -955,7 +955,7 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
                     .and_then(Value::as_str)
                     .zip(entry.get("key").and_then(Value::as_str))
             })
-            .and_then(|(site, key)| youtube_embed_url(site, key)),
+            .and_then(|(site, key)| youtube_watch_url(site, key)),
         collections: tmdb_collections(&payload),
         people: tmdb_people(&payload),
         ..ProviderMetadataDetails::default()
@@ -1120,14 +1120,14 @@ fn tmdb_trailer_entry(payload: &Value) -> Option<&Value> {
         })
 }
 
-fn youtube_embed_url(
+fn youtube_watch_url(
     site: &str,
     key: &str,
 ) -> Option<String> {
     site.eq_ignore_ascii_case("YouTube")
         .then(|| key.trim())
         .filter(|key| !key.is_empty())
-        .and_then(|key| crate::metadata::youtube_embed_url(key, true))
+        .and_then(crate::metadata::youtube_watch_url)
 }
 
 fn tmdb_logo_url(payload: &Value) -> Option<String> {

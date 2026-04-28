@@ -1082,10 +1082,18 @@ legend {
   object-position: left center;
 }
 
-.home-feature-action {
+.home-feature-action,
+.home-feature-actions {
   position: relative;
   z-index: 2;
   align-self: end;
+}
+
+.home-feature-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
 }
 
 .search-results-section,
@@ -2482,6 +2490,13 @@ legend {
   justify-content: space-between;
   gap: 1rem;
   align-items: start;
+}
+
+.player-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
 }
 
 #theme-song-player {

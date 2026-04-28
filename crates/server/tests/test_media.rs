@@ -953,7 +953,7 @@ fn test_item_detail_includes_linked_metadata_presentation() {
     assert_eq!(detail.trailer_title.as_deref(), Some("Official Trailer"));
     assert_eq!(
         detail.trailer_url.as_deref(),
-        Some("https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0")
+        Some("https://www.youtube.com/watch?v=vKQi3bBA1y8")
     );
     assert_eq!(
         detail.poster_url.as_deref(),

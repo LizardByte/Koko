@@ -1,0 +1,1 @@
+-- Data-only normalization; no schema change to reverse.

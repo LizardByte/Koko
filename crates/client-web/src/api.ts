@@ -188,6 +188,8 @@ export interface MetadataProviderStatus {
   supported_kinds: string[];
   requires_api_key: boolean;
   implemented: boolean;
+  role: 'primary' | 'secondary';
+  extends_provider_ids: string[];
   enabled: boolean;
   configured: boolean;
   language: string;
@@ -532,6 +534,9 @@ export interface MediaLibrarySettings {
   recursive: boolean;
   kind: string;
   metadata_providers: string[];
+  metadata_language_mode: 'auto' | 'manual';
+  metadata_languages: string[];
+  allowed_user_ids: number[];
 }
 
 export interface SettingsSnapshot {

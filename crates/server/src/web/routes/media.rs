@@ -35,17 +35,17 @@ use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_item_theme_song_themerr_references, get_library_files, get_library_metadata_providers,
-    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
-    get_media_item_with_preferred_languages, get_persisted_library_summaries,
-    get_playback_decision, get_preferred_item_metadata_link, get_user_playback_progress,
-    infer_episode_number, inspect_transcoding_capability, library_exists,
-    list_automatic_metadata_candidates, list_library_settings, list_media_item_children,
-    list_media_items, list_media_items_with_preferred_languages, mark_metadata_match_attempted,
-    preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
-    resolve_local_item_artwork_path, resolve_media_item_source_path,
+    get_item_theme_song_themerr_references, get_library_files, get_library_metadata_languages,
+    get_library_metadata_providers, get_media_home_with_preferred_languages, get_media_item,
+    get_media_item_summary, get_media_item_with_preferred_languages,
+    get_persisted_library_summaries, get_playback_decision, get_preferred_item_metadata_link,
+    get_user_playback_progress, infer_episode_number, inspect_transcoding_capability,
+    library_exists, list_automatic_metadata_candidates, list_library_settings,
+    list_media_item_children, list_media_items, list_media_items_with_preferred_languages,
+    mark_metadata_match_attempted, preferred_audio_stream_index, resolve_item_subtitle_path,
+    resolve_item_theme_song_path, resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
-    upsert_playback_progress,
+    upsert_playback_progress, user_can_access_library,
 };
 use crate::metadata::{
     ArtworkKind, ItemMetadataSummary, MetadataPersonCreditSummary, MetadataPersonSummary,
@@ -1070,11 +1070,7 @@ async fn execute_metadata_refresh_target(
     );
     let snapshot_result = match &target.fetch_kind {
         MetadataRefreshFetchKind::Direct => {
-            match db
-                .run(all_user_preferred_metadata_languages)
-                .await
-                .map_err(|error| error.to_string())
-            {
+            match load_refresh_target_metadata_languages(db, settings, target.item_id).await {
                 Ok(languages) => {
                     let mut snapshots = Vec::new();
                     let mut error = None;
@@ -1538,17 +1534,12 @@ async fn persist_snapshot_tree_for_item(
 async fn fetch_snapshots_for_all_user_languages(
     db: &DbConn,
     settings: &crate::config::Settings,
+    library_id: i32,
     provider_id: MetadataProviderId,
     external_id: &str,
     media_type: &str,
 ) -> Result<Vec<StoredMetadataSnapshot>, Status> {
-    let languages = db
-        .run(all_user_preferred_metadata_languages)
-        .await
-        .map_err(|error| {
-            log::error!("Failed to load preferred metadata languages: {}", error);
-            Status::InternalServerError
-        })?;
+    let languages = load_item_library_metadata_languages(db, settings, library_id).await?;
     let mut snapshots = Vec::new();
     for language in languages {
         snapshots.push(
@@ -1651,7 +1642,7 @@ async fn run_automatic_movie_metadata_linking(
 ) {
     let ready_providers = list_provider_statuses(&settings.metadata)
         .into_iter()
-        .filter(|provider| provider.enabled && provider.configured && provider.implemented)
+        .filter(|provider| provider.configured && provider.implemented)
         .map(|provider| provider.id)
         .collect::<std::collections::HashSet<_>>();
 
@@ -1919,30 +1910,6 @@ fn user_preferred_metadata_languages(
     Ok(crate::web::routes::user::parse_preferred_metadata_languages(&stored))
 }
 
-fn all_user_preferred_metadata_languages(
-    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection
-) -> Result<Vec<String>, diesel::result::Error> {
-    use crate::db::schema::users::dsl as users_dsl;
-    use diesel::{QueryDsl, RunQueryDsl};
-
-    let rows = users_dsl::users
-        .select(users_dsl::preferred_metadata_languages_json)
-        .load::<String>(conn)?;
-    let mut languages = Vec::new();
-    for row in rows {
-        for language in crate::web::routes::user::parse_preferred_metadata_languages(&row) {
-            let language = normalize_locale_key(&language);
-            if !languages.contains(&language) {
-                languages.push(language);
-            }
-        }
-    }
-    if languages.is_empty() {
-        languages.push(crate::metadata::DEFAULT_METADATA_LOCALE.to_string());
-    }
-    Ok(languages)
-}
-
 async fn load_item_library_metadata_providers(
     db: &DbConn,
     settings: &Settings,
@@ -1965,6 +1932,45 @@ async fn load_item_library_metadata_providers(
         })?;
 
     providers.ok_or(Status::NotFound)
+}
+
+async fn load_item_library_metadata_languages(
+    db: &DbConn,
+    settings: &Settings,
+    library_id: i32,
+) -> Result<Vec<String>, Status> {
+    let legacy_libraries = settings.media.libraries.clone();
+    let languages = db
+        .run({
+            let legacy_libraries = legacy_libraries.clone();
+            move |conn| get_library_metadata_languages(conn, library_id, &legacy_libraries)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to load library metadata languages for library {}: {}",
+                library_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
+
+    Ok(languages.unwrap_or_else(|| vec![crate::metadata::DEFAULT_METADATA_LOCALE.to_string()]))
+}
+
+async fn load_refresh_target_metadata_languages(
+    db: &DbConn,
+    settings: &Settings,
+    item_id: i32,
+) -> Result<Vec<String>, String> {
+    let item = db
+        .run(move |conn| get_media_item_summary(conn, item_id))
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "media item was not found".to_string())?;
+    load_item_library_metadata_languages(db, settings, item.library_id)
+        .await
+        .map_err(|status| format!("{status:?}"))
 }
 
 async fn load_library_refresh_jobs(
@@ -2234,12 +2240,28 @@ pub fn get_metadata_locales() -> Json<Vec<MetadataLocale>> {
 /// Return lightweight scan summaries for the configured media libraries.
 #[openapi(tag = "Media")]
 #[get("/api/v1/libraries")]
-pub async fn get_libraries(db: DbConn) -> Result<Json<Vec<PersistedLibrarySummary>>, Status> {
+pub async fn get_libraries(
+    db: DbConn,
+    user_guard: Option<UserGuard>,
+) -> Result<Json<Vec<PersistedLibrarySummary>>, Status> {
     let settings = current_settings();
     let legacy_libraries = settings.media.libraries.clone();
+    let user_id = current_user_id(user_guard.as_ref())?;
 
     let libraries = db
-        .run(move |conn| get_persisted_library_summaries(conn, &legacy_libraries))
+        .run(move |conn| {
+            let libraries = get_persisted_library_summaries(conn, &legacy_libraries)?;
+            libraries
+                .into_iter()
+                .filter_map(
+                    |library| match user_can_access_library(conn, library.id, user_id) {
+                        Ok(true) => Some(Ok(library)),
+                        Ok(false) => None,
+                        Err(error) => Some(Err(error)),
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to load media library summaries: {}", error);
@@ -2258,6 +2280,22 @@ pub async fn get_home(
     library_id: Option<i32>,
 ) -> Result<Json<MediaHome>, Status> {
     let user_id = current_user_id(user_guard.as_ref())?;
+    if let Some(library_id) = library_id {
+        let can_access = db
+            .run(move |conn| user_can_access_library(conn, library_id, user_id))
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to check library access for {}: {}",
+                    library_id,
+                    error
+                );
+                Status::InternalServerError
+            })?;
+        if !can_access {
+            return Err(Status::NotFound);
+        }
+    }
 
     let home = db
         .run(move |conn| {
@@ -2322,6 +2360,22 @@ pub async fn get_items(
     library_id: Option<i32>,
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
     let user_id = current_user_id(user_guard.as_ref())?;
+    if let Some(library_id) = library_id {
+        let can_access = db
+            .run(move |conn| user_can_access_library(conn, library_id, user_id))
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to check library access for {}: {}",
+                    library_id,
+                    error
+                );
+                Status::InternalServerError
+            })?;
+        if !can_access {
+            return Err(Status::NotFound);
+        }
+    }
 
     let items = db
         .run(move |conn| {
@@ -2345,7 +2399,8 @@ pub async fn get_item(
     user_guard: Option<UserGuard>,
     item_id: i32,
 ) -> Result<Json<MediaItemDetail>, Status> {
-    let data_dir = current_settings().general.data_dir;
+    let settings = current_settings();
+    let data_dir = settings.general.data_dir.clone();
     let user_id = current_user_id(user_guard.as_ref())?;
 
     let item = db
@@ -2360,6 +2415,23 @@ pub async fn get_item(
         })?;
 
     let mut item = item.ok_or(Status::NotFound)?;
+    let can_access = db
+        .run({
+            let library_id = item.library_id;
+            move |conn| user_can_access_library(conn, library_id, user_id)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to check library access for item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
+    if !can_access {
+        return Err(Status::NotFound);
+    }
     if let Some(progress) = db
         .run(move |conn| get_user_playback_progress(conn, user_id, item_id))
         .await
@@ -2376,7 +2448,17 @@ pub async fn get_item(
         item.playback_duration_ms = progress.duration_ms;
     }
 
-    if item.theme_song_url.is_none() {
+    let library_providers =
+        load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let themerr_available = library_providers.contains(&MetadataProviderId::Themerr)
+        && list_provider_statuses(&settings.metadata)
+            .into_iter()
+            .any(|provider| {
+                provider.id == MetadataProviderId::Themerr
+                    && provider.configured
+                    && provider.implemented
+            });
+    if item.theme_song_url.is_none() && themerr_available {
         let theme_references = db
             .run(move |conn| get_item_theme_song_themerr_references(conn, item_id))
             .await
@@ -2899,8 +2981,11 @@ pub async fn search_item_metadata(
     let library_providers =
         load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
     let requested_providers = parse_metadata_provider_selection(providers);
-    let providers =
-        if requested_providers.is_empty() { library_providers } else { requested_providers };
+    let providers = if requested_providers.is_empty() {
+        library_providers.clone()
+    } else {
+        requested_providers
+    };
     let fallback_query = item.display_title.clone();
     let search_title = query
         .map(|value| value.trim().to_string())
@@ -2910,6 +2995,11 @@ pub async fn search_item_metadata(
     let requested_language = language
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let library_languages =
+        load_item_library_metadata_languages(&db, &settings, item.library_id).await?;
+    let search_language = requested_language
+        .or_else(|| library_languages.first().cloned())
+        .unwrap_or_else(|| crate::metadata::DEFAULT_METADATA_LOCALE.to_string());
     let mut search_metadata_settings = metadata_settings.clone();
     let provider_statuses = list_provider_statuses(&metadata_settings)
         .into_iter()
@@ -2928,21 +3018,19 @@ pub async fn search_item_metadata(
             continue;
         };
         saw_provider = true;
-        if !status.enabled || !status.configured || !status.implemented {
+        if !library_providers.contains(&provider_id) || !status.configured || !status.implemented {
             continue;
         }
 
-        if let Some(language) = requested_language.as_deref() {
-            if let Some(provider) = search_metadata_settings
-                .providers
-                .iter_mut()
-                .find(|provider| provider.id == provider_id)
-            {
-                provider.language = crate::metadata::provider_locale_key(
-                    provider_id.clone(),
-                    &normalize_locale_key(language),
-                );
-            }
+        if let Some(provider) = search_metadata_settings
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        {
+            provider.language = crate::metadata::provider_locale_key(
+                provider_id.clone(),
+                &normalize_locale_key(&search_language),
+            );
         }
 
         match search_provider(
@@ -3028,10 +3116,12 @@ pub async fn link_item_metadata(
         .into_iter()
         .find(|status| status.id == request.provider_id)
         .ok_or(Status::BadRequest)?;
-    if !provider_status.enabled || !provider_status.configured || !provider_status.implemented {
+    if !library_providers.contains(&request.provider_id)
+        || !provider_status.configured
+        || !provider_status.implemented
+    {
         return Err(Status::BadRequest);
     }
-    let _library_default_provider = library_providers.contains(&request.provider_id);
     if Some(request.media_type.as_str())
         != provider_search_media_type(request.provider_id.clone(), &item)
     {
@@ -3041,6 +3131,7 @@ pub async fn link_item_metadata(
     let snapshots = fetch_snapshots_for_all_user_languages(
         &db,
         &settings,
+        item.library_id,
         request.provider_id,
         &request.external_id,
         &request.media_type,
@@ -3422,6 +3513,22 @@ pub async fn search_items(
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
     let query = query.unwrap_or_default().to_string();
     let user_id = current_user_id(user_guard.as_ref())?;
+    if let Some(library_id) = library_id {
+        let can_access = db
+            .run(move |conn| user_can_access_library(conn, library_id, user_id))
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to check library access for {}: {}",
+                    library_id,
+                    error
+                );
+                Status::InternalServerError
+            })?;
+        if !can_access {
+            return Err(Status::NotFound);
+        }
+    }
     let items = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;

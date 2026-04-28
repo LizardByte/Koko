@@ -109,6 +109,9 @@ fn test_settings_persistence_clears_library_definitions() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     });
 
     let persisted = settings_for_persistence(&settings);

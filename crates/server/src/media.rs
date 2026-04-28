@@ -19,10 +19,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // local imports
-use crate::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
+use crate::config::{
+    FfmpegSettings, MediaLibraryKind, MediaLibraryMetadataLanguageMode, MediaLibrarySettings,
+    MetadataProviderId,
+};
 use crate::db::models::{
     ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, NewMediaFile, NewMediaItem,
-    NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState,
+    NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
     ArtworkKind, MetadataCollectionSummary, get_preferred_item_metadata_link_for_languages,
@@ -669,6 +672,101 @@ pub fn get_library_metadata_providers(
     Ok(library.map(|row| media_library_settings_from_row(row).metadata_providers))
 }
 
+/// Return metadata languages configured for a persisted library id.
+pub fn get_library_metadata_languages(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    legacy_libraries: &[MediaLibrarySettings],
+) -> Result<Option<Vec<String>>, diesel::result::Error> {
+    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
+
+    migrate_legacy_library_settings(conn, legacy_libraries)?;
+
+    let library = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::id.eq(library_id))
+        .select(MediaLibrary::as_select())
+        .first::<MediaLibrary>(conn)
+        .optional()?;
+
+    let Some(row) = library else {
+        return Ok(None);
+    };
+    let settings = media_library_settings_from_row(row);
+    if settings.metadata_language_mode == MediaLibraryMetadataLanguageMode::Manual {
+        return Ok(Some(settings.metadata_languages));
+    }
+
+    Ok(Some(user_metadata_languages_for_library(
+        conn,
+        &settings.allowed_user_ids,
+    )?))
+}
+
+fn user_metadata_languages_for_library(
+    conn: &mut SqliteConnection,
+    allowed_user_ids: &[i32],
+) -> Result<Vec<String>, diesel::result::Error> {
+    use crate::db::schema::users::dsl as users_dsl;
+
+    let rows = users_dsl::users
+        .select(User::as_select())
+        .load::<User>(conn)?;
+    let mut languages = Vec::new();
+    for user in rows {
+        let has_access =
+            allowed_user_ids.is_empty() || user.admin || allowed_user_ids.contains(&user.id);
+        if !has_access {
+            continue;
+        }
+        let preferred =
+            serde_json::from_str::<Vec<String>>(&user.preferred_metadata_languages_json)
+                .unwrap_or_default();
+        for language in preferred {
+            let language = normalize_locale_key(&language);
+            if !language.is_empty() && !languages.contains(&language) {
+                languages.push(language);
+            }
+        }
+    }
+    if languages.is_empty() {
+        languages.push(crate::metadata::DEFAULT_METADATA_LOCALE.to_string());
+    }
+    Ok(languages)
+}
+
+/// Return whether a user can view a library. Empty access lists are public.
+pub fn user_can_access_library(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    user_id: Option<i32>,
+) -> Result<bool, diesel::result::Error> {
+    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
+    use crate::db::schema::users::dsl as users_dsl;
+
+    let library = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::id.eq(library_id))
+        .select(MediaLibrary::as_select())
+        .first::<MediaLibrary>(conn)
+        .optional()?;
+    let Some(library) = library else {
+        return Ok(false);
+    };
+    let settings = media_library_settings_from_row(library);
+    if settings.allowed_user_ids.is_empty() {
+        return Ok(true);
+    }
+    let Some(user_id) = user_id else {
+        return Ok(false);
+    };
+    let is_admin = users_dsl::users
+        .filter(users_dsl::id.eq(user_id))
+        .select(users_dsl::admin)
+        .first::<bool>(conn)
+        .optional()?
+        .unwrap_or(false);
+    Ok(is_admin || settings.allowed_user_ids.contains(&user_id))
+}
+
 /// Replace the persisted media-library settings stored in the database.
 pub fn replace_library_settings(
     conn: &mut SqliteConnection,
@@ -895,6 +993,15 @@ pub fn sync_library_catalog(
                     .collect::<Vec<_>>(),
             )
             .unwrap_or_else(|_| "[\"tmdb\"]".into()),
+            metadata_language_mode: match library.metadata_language_mode {
+                MediaLibraryMetadataLanguageMode::Auto => "auto",
+                MediaLibraryMetadataLanguageMode::Manual => "manual",
+            }
+            .into(),
+            metadata_languages_json: serde_json::to_string(&library.metadata_languages)
+                .unwrap_or_else(|_| "[\"en-US\"]".into()),
+            allowed_user_ids_json: serde_json::to_string(&library.allowed_user_ids)
+                .unwrap_or_else(|_| "[]".into()),
         };
 
         let existing_library = existing_library_rows.get(index).cloned();
@@ -2879,6 +2986,14 @@ fn media_library_settings_from_row(row: MediaLibrary) -> MediaLibrarySettings {
     if metadata_providers.is_empty() {
         metadata_providers.push(MetadataProviderId::Tmdb);
     }
+    let metadata_languages = serde_json::from_str::<Vec<String>>(&row.metadata_languages_json)
+        .unwrap_or_else(|_| vec!["en-US".into()]);
+    let allowed_user_ids =
+        serde_json::from_str::<Vec<i32>>(&row.allowed_user_ids_json).unwrap_or_default();
+    let metadata_language_mode = match row.metadata_language_mode.as_str() {
+        "manual" => MediaLibraryMetadataLanguageMode::Manual,
+        _ => MediaLibraryMetadataLanguageMode::Auto,
+    };
 
     let mut library = MediaLibrarySettings {
         name: row.name,
@@ -2887,6 +3002,9 @@ fn media_library_settings_from_row(row: MediaLibrary) -> MediaLibrarySettings {
         recursive: row.recursive,
         kind: MediaLibraryKind::from_storage_value(&row.kind),
         metadata_providers,
+        metadata_language_mode,
+        metadata_languages,
+        allowed_user_ids,
     };
     library.normalize();
     library
@@ -2911,6 +3029,15 @@ fn media_library_record_values(library: &MediaLibrarySettings) -> NewMediaLibrar
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|_| "[\"tmdb\"]".into()),
+        metadata_language_mode: match normalized.metadata_language_mode {
+            MediaLibraryMetadataLanguageMode::Auto => "auto",
+            MediaLibraryMetadataLanguageMode::Manual => "manual",
+        }
+        .into(),
+        metadata_languages_json: serde_json::to_string(&normalized.metadata_languages)
+            .unwrap_or_else(|_| "[\"en-US\"]".into()),
+        allowed_user_ids_json: serde_json::to_string(&normalized.allowed_user_ids)
+            .unwrap_or_else(|_| "[]".into()),
     }
 }
 

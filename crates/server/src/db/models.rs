@@ -34,6 +34,9 @@ pub struct MediaLibrary {
     pub kind: String,
     pub recursive: bool,
     pub metadata_providers_json: String,
+    pub metadata_language_mode: String,
+    pub metadata_languages_json: String,
+    pub allowed_user_ids_json: String,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
@@ -45,6 +48,9 @@ pub struct NewMediaLibrary {
     pub kind: String,
     pub recursive: bool,
     pub metadata_providers_json: String,
+    pub metadata_language_mode: String,
+    pub metadata_languages_json: String,
+    pub allowed_user_ids_json: String,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug)]

@@ -140,7 +140,10 @@ fn reconcile_legacy_migration_records(
             WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'locale_key');\
         INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000016', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'logo_url');",
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'logo_url');\
+        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            SELECT '0000021', CURRENT_TIMESTAMP
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'metadata_language_mode');",
     )?;
 
     ensure_sqlite_column(
@@ -156,7 +159,54 @@ fn reconcile_legacy_migration_records(
         Some("logo_url"),
         "genres_json",
         "ALTER TABLE item_metadata_links ADD COLUMN genres_json TEXT DEFAULT NULL",
-    )
+    )?;
+
+    if sqlite_migration_record_exists(conn, "0000021")? {
+        ensure_sqlite_column(
+            conn,
+            "media_libraries",
+            Some("metadata_providers_json"),
+            "metadata_language_mode",
+            "ALTER TABLE media_libraries ADD COLUMN metadata_language_mode TEXT NOT NULL DEFAULT 'auto'",
+        )?;
+        ensure_sqlite_column(
+            conn,
+            "media_libraries",
+            Some("metadata_providers_json"),
+            "metadata_languages_json",
+            "ALTER TABLE media_libraries ADD COLUMN metadata_languages_json TEXT NOT NULL DEFAULT '[\"en-US\"]'",
+        )?;
+        ensure_sqlite_column(
+            conn,
+            "media_libraries",
+            Some("metadata_providers_json"),
+            "allowed_user_ids_json",
+            "ALTER TABLE media_libraries ADD COLUMN allowed_user_ids_json TEXT NOT NULL DEFAULT '[]'",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn sqlite_migration_record_exists(
+    conn: &mut diesel::SqliteConnection,
+    version: &str,
+) -> diesel::result::QueryResult<bool> {
+    use diesel::prelude::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let escaped_version = version.replace('\'', "''");
+    let row = diesel::sql_query(format!(
+        "SELECT COUNT(*) AS count FROM __diesel_schema_migrations WHERE version = '{escaped_version}'"
+    ))
+    .get_result::<CountRow>(conn)?;
+
+    Ok(row.count > 0)
 }
 
 fn ensure_sqlite_column(

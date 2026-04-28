@@ -166,6 +166,9 @@ table! {
         kind -> Text,
         recursive -> Bool,
         metadata_providers_json -> Text,
+        metadata_language_mode -> Text,
+        metadata_languages_json -> Text,
+        allowed_user_ids_json -> Text,
     }
 }
 

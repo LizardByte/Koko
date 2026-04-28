@@ -71,6 +71,9 @@ fn test_inspect_libraries_counts_media_types() {
         recursive: true,
         kind: MediaLibraryKind::Mixed,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let summaries = inspect_libraries(&libraries);
@@ -102,6 +105,9 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
             recursive: true,
             kind: MediaLibraryKind::Mixed,
             metadata_providers: vec![],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
             name: "Missing".into(),
@@ -110,6 +116,9 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
             recursive: true,
             kind: MediaLibraryKind::Movies,
             metadata_providers: vec![],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
     ];
 
@@ -135,6 +144,9 @@ fn test_movie_library_ignores_sidecar_audio_and_json_files() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let summaries = inspect_libraries(&libraries);
@@ -180,6 +192,9 @@ fn test_sync_library_catalog_persists_library_and_inventory() {
         recursive: true,
         kind: MediaLibraryKind::Mixed,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("media_catalog");
@@ -225,6 +240,9 @@ fn test_sync_library_catalog_updates_incrementally() {
         recursive: true,
         kind: MediaLibraryKind::Mixed,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("media_catalog_incremental");
@@ -292,6 +310,9 @@ fn test_item_queries_and_search_work_on_persisted_catalog() {
         recursive: true,
         kind: MediaLibraryKind::Mixed,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("media_catalog_item_queries");
@@ -336,6 +357,9 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("shows_library_hierarchy_db");
@@ -421,6 +445,9 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("automatic_show_metadata_candidates_db");
@@ -478,6 +505,9 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("show_recently_added_collapsed_db");
@@ -536,6 +566,9 @@ fn test_home_includes_real_collection_summaries() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("home_collection_summaries_db");
@@ -599,6 +632,9 @@ fn test_sync_restores_file_name_as_display_title() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("media_catalog_title_policy_refresh");
@@ -649,6 +685,9 @@ fn test_movie_scan_strips_year_provider_tags_and_format_from_display_title() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("movie_title_parser_db");
@@ -688,6 +727,9 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) =
@@ -814,6 +856,9 @@ fn test_metadata_links_can_store_multiple_locales_for_same_provider() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("metadata_link_locales_db");
@@ -891,6 +936,9 @@ fn test_item_detail_uses_primary_metadata_link_only() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) =
@@ -977,6 +1025,9 @@ fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) =
@@ -1063,6 +1114,9 @@ fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_e
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("preferred_episode_metadata_link_db");
@@ -1145,6 +1199,9 @@ fn test_resolve_media_item_source_path_rejects_mismatched_backing_file() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) =
@@ -1196,6 +1253,9 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("library_refresh_progress_db");
@@ -1287,6 +1347,9 @@ fn test_themerr_theme_song_reference_inherits_from_linked_show() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_show_db");
@@ -1354,6 +1417,9 @@ fn test_themerr_theme_song_reference_includes_movie_imdb_fallback() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("themerr_theme_song_reference_movie_db");
@@ -1419,6 +1485,9 @@ fn test_library_settings_are_persisted_in_database() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("persisted_library_settings_db");
@@ -1435,6 +1504,9 @@ fn test_library_settings_are_persisted_in_database() {
             recursive: false,
             kind: MediaLibraryKind::Shows,
             metadata_providers: vec![MetadataProviderId::Tmdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         }],
     )
     .unwrap();
@@ -1473,6 +1545,9 @@ fn test_replace_library_settings_allows_duplicate_paths() {
                 recursive: true,
                 kind: MediaLibraryKind::Movies,
                 metadata_providers: vec![MetadataProviderId::Tmdb],
+                metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+                metadata_languages: vec![],
+                allowed_user_ids: vec![],
             },
             MediaLibrarySettings {
                 name: "Shows".into(),
@@ -1484,6 +1559,9 @@ fn test_replace_library_settings_allows_duplicate_paths() {
                     MetadataProviderId::Tmdb,
                     MetadataProviderId::Tvdb,
                 ],
+                metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+                metadata_languages: vec![],
+                allowed_user_ids: vec![],
             },
         ],
     );
@@ -1513,6 +1591,9 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
             recursive: true,
             kind: MediaLibraryKind::Movies,
             metadata_providers: vec![MetadataProviderId::Tmdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
             name: "Shows".into(),
@@ -1521,6 +1602,9 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
             recursive: true,
             kind: MediaLibraryKind::Shows,
             metadata_providers: vec![MetadataProviderId::Tvdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
     ];
 
@@ -1565,6 +1649,9 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
             recursive: true,
             kind: MediaLibraryKind::Shows,
             metadata_providers: vec![MetadataProviderId::Tmdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
             name: "TV Shows - TVDB".into(),
@@ -1573,6 +1660,9 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
             recursive: true,
             kind: MediaLibraryKind::Shows,
             metadata_providers: vec![MetadataProviderId::Tvdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
         },
     ];
 
@@ -1640,6 +1730,9 @@ fn test_latest_metadata_migration_preserves_existing_library_catalog_rows() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     };
 
     let (mut connection, db_path) = create_test_connection("migration_13_preserves_catalog_db");
@@ -1705,6 +1798,9 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
         recursive: true,
         kind: MediaLibraryKind::Shows,
         metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("episode_artwork_id_collision_db");
@@ -1782,6 +1878,9 @@ fn test_playback_progress_is_scoped_per_user() {
         recursive: true,
         kind: MediaLibraryKind::Movies,
         metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
     }];
 
     let (mut connection, db_path) = create_test_connection("playback_progress_per_user_db");

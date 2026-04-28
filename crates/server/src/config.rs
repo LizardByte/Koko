@@ -61,6 +61,10 @@ fn default_metadata_language() -> String {
     "en-US".into()
 }
 
+fn default_metadata_languages() -> Vec<String> {
+    vec![default_metadata_language()]
+}
+
 fn default_provider_enabled() -> bool {
     true
 }
@@ -136,6 +140,10 @@ fn default_library_metadata_providers() -> Vec<MetadataProviderId> {
     vec![MetadataProviderId::Tmdb]
 }
 
+fn default_library_metadata_language_mode() -> MediaLibraryMetadataLanguageMode {
+    MediaLibraryMetadataLanguageMode::Auto
+}
+
 fn normalized_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut normalized = Vec::new();
@@ -153,6 +161,17 @@ fn normalized_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<St
     }
 
     normalized
+}
+
+/// How metadata languages are chosen for a library.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaLibraryMetadataLanguageMode {
+    /// Use every language preferred by users who can access the library.
+    #[default]
+    Auto,
+    /// Use the explicit language list configured on the library.
+    Manual,
 }
 
 /// A configured media-library root.
@@ -176,6 +195,15 @@ pub struct MediaLibrarySettings {
     /// Ordered metadata providers to use for this library.
     #[serde(default = "default_library_metadata_providers")]
     pub metadata_providers: Vec<MetadataProviderId>,
+    /// Whether metadata languages are inferred from library users or set manually.
+    #[serde(default = "default_library_metadata_language_mode")]
+    pub metadata_language_mode: MediaLibraryMetadataLanguageMode,
+    /// Ordered metadata languages to fetch and prefer for this library.
+    #[serde(default = "default_metadata_languages")]
+    pub metadata_languages: Vec<String>,
+    /// User ids allowed to view this library. Empty means all users.
+    #[serde(default)]
+    pub allowed_user_ids: Vec<i32>,
 }
 
 impl MediaLibrarySettings {
@@ -210,6 +238,28 @@ impl MediaLibrarySettings {
         if self.metadata_providers.is_empty() {
             self.metadata_providers = default_library_metadata_providers();
         }
+        if self
+            .metadata_providers
+            .contains(&MetadataProviderId::Themerr)
+            && !self.metadata_providers.contains(&MetadataProviderId::Tmdb)
+        {
+            self.metadata_providers
+                .retain(|provider| provider != &MetadataProviderId::Themerr);
+        }
+        if self.metadata_providers.is_empty() {
+            self.metadata_providers = default_library_metadata_providers();
+        }
+        self.metadata_languages = normalized_unique_strings(
+            self.metadata_languages
+                .iter()
+                .map(|language| language.trim().to_string()),
+        );
+        if self.metadata_languages.is_empty() {
+            self.metadata_languages = default_metadata_languages();
+        }
+        self.allowed_user_ids.sort_unstable();
+        self.allowed_user_ids.dedup();
+        self.allowed_user_ids.retain(|user_id| *user_id > 0);
     }
 }
 
@@ -415,6 +465,10 @@ impl Default for MetadataSettings {
             providers: vec![
                 default_metadata_provider_settings(MetadataProviderId::Tmdb),
                 default_metadata_provider_settings(MetadataProviderId::Tvdb),
+                default_metadata_provider_settings(MetadataProviderId::MusicBrainz),
+                default_metadata_provider_settings(MetadataProviderId::OpenLibrary),
+                default_metadata_provider_settings(MetadataProviderId::LocalNfo),
+                default_metadata_provider_settings(MetadataProviderId::Themerr),
             ],
             refresh_interval_days: default_metadata_refresh_interval_days(),
         }
@@ -487,27 +541,25 @@ pub fn normalize_settings(settings: &mut Settings) {
         }
     }
 
-    if !settings
-        .metadata
-        .providers
-        .iter()
-        .any(|provider| provider.id == MetadataProviderId::Tmdb)
-    {
-        settings
+    for provider_id in [
+        MetadataProviderId::Tmdb,
+        MetadataProviderId::Tvdb,
+        MetadataProviderId::MusicBrainz,
+        MetadataProviderId::OpenLibrary,
+        MetadataProviderId::LocalNfo,
+        MetadataProviderId::Themerr,
+    ] {
+        if !settings
             .metadata
             .providers
-            .push(default_metadata_provider_settings(MetadataProviderId::Tmdb));
-    }
-    if !settings
-        .metadata
-        .providers
-        .iter()
-        .any(|provider| provider.id == MetadataProviderId::Tvdb)
-    {
-        settings
-            .metadata
-            .providers
-            .push(default_metadata_provider_settings(MetadataProviderId::Tvdb));
+            .iter()
+            .any(|provider| provider.id == provider_id)
+        {
+            settings
+                .metadata
+                .providers
+                .push(default_metadata_provider_settings(provider_id));
+        }
     }
 }
 

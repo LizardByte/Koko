@@ -372,6 +372,8 @@ const metadataProviders: MetadataProviderStatus[] = [
     supported_kinds: ['movies', 'shows'],
     requires_api_key: true,
     implemented: true,
+    role: 'primary',
+    extends_provider_ids: [],
     enabled: true,
     configured: true,
     language: 'en-US',
@@ -387,11 +389,30 @@ const metadataProviders: MetadataProviderStatus[] = [
     supported_kinds: ['music'],
     requires_api_key: false,
     implemented: false,
+    role: 'primary',
+    extends_provider_ids: [],
     enabled: false,
     configured: true,
     language: 'en-US',
     attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
     attribution_url: 'https://musicbrainz.org/',
+    logo_light_url: undefined,
+    logo_dark_url: undefined,
+  },
+  {
+    id: 'themerr',
+    display_name: 'ThemerrDB',
+    description: 'Secondary theme-song provider for linked movie and show metadata.',
+    supported_kinds: ['movies', 'shows'],
+    requires_api_key: false,
+    implemented: true,
+    role: 'secondary',
+    extends_provider_ids: ['tmdb'],
+    enabled: true,
+    configured: true,
+    language: 'en-US',
+    attribution_text: 'Theme metadata provided by ThemerrDB.',
+    attribution_url: 'https://app.lizardbyte.dev/ThemerrDB',
     logo_light_url: undefined,
     logo_dark_url: undefined,
   },
@@ -551,6 +572,9 @@ let settings: SettingsSnapshot = {
         recursive: true,
         kind: 'movies',
         metadata_providers: ['tmdb'],
+        metadata_language_mode: 'auto',
+        metadata_languages: ['en-US'],
+        allowed_user_ids: [],
       },
       {
         name: 'Shows',
@@ -559,6 +583,9 @@ let settings: SettingsSnapshot = {
         recursive: true,
         kind: 'shows',
         metadata_providers: ['tmdb'],
+        metadata_language_mode: 'auto',
+        metadata_languages: ['en-US', 'ja-JP'],
+        allowed_user_ids: [],
       },
       {
         name: 'Music',
@@ -567,6 +594,9 @@ let settings: SettingsSnapshot = {
         recursive: true,
         kind: 'music',
         metadata_providers: [],
+        metadata_language_mode: 'auto',
+        metadata_languages: ['en-US'],
+        allowed_user_ids: [],
       },
     ],
   },
@@ -584,6 +614,15 @@ let settings: SettingsSnapshot = {
       {
         id: 'tvdb',
         enabled: false,
+        api_key: '',
+        language: 'en-US',
+        rate_limit_per_second: 4,
+        retry_attempts: 3,
+        retry_backoff_ms: 1000,
+      },
+      {
+        id: 'themerr',
+        enabled: true,
         api_key: '',
         language: 'en-US',
         rate_limit_per_second: 4,
@@ -958,6 +997,9 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
   const normalizedLibrary = structuredClone(request.library);
   normalizedLibrary.paths = normalizedLibrary.paths.length ? normalizedLibrary.paths : [normalizedLibrary.path].filter(Boolean);
   normalizedLibrary.path = normalizedLibrary.paths[0] ?? normalizedLibrary.path;
+  normalizedLibrary.metadata_languages = normalizedLibrary.metadata_languages?.length ? normalizedLibrary.metadata_languages : ['en-US'];
+  normalizedLibrary.metadata_language_mode = normalizedLibrary.metadata_language_mode ?? 'auto';
+  normalizedLibrary.allowed_user_ids = normalizedLibrary.allowed_user_ids ?? [];
   settings.media.libraries.push(normalizedLibrary);
   libraries.push({
     id: nextLibraryId,

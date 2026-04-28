@@ -53,6 +53,7 @@ import {
   type MediaLibrary,
   type MediaLibrarySettings,
   type MetadataProviderStatus,
+  type MetadataProviderSettings,
   type MetadataPersonResponse,
   type MetadataSearchResult,
   type LogEntriesResponse,
@@ -76,7 +77,7 @@ type AppRoute =
   | { page: 'settings'; section?: SettingsSection };
 
 type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
-type SettingsSection = 'general' | 'libraries' | 'dashboard' | 'logs';
+type SettingsSection = 'general' | 'libraries' | 'providers' | 'dashboard' | 'logs';
 
 interface BrowseFilter {
   kind: 'category' | 'collection' | 'playlist';
@@ -363,7 +364,7 @@ function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
 function parseRoute(): AppRoute {
   const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
 
-  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|dashboard|logs))?$/);
+  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|providers|dashboard|logs))?$/);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }
@@ -1791,7 +1792,7 @@ function renderMetadataSearchResults(): string {
           <strong>${escapeHtml(result.title)}</strong>
           <p>${escapeHtml(result.overview ?? 'No overview available.')}</p>
           <div class="metadata-match-meta">
-            <span>${escapeHtml(metadataProviderLabels[result.provider_id] ?? result.provider_id)}</span>
+            <span>${escapeHtml(providerDisplayName(result.provider_id))}</span>
             ${providerAttributionLogo(result.provider_id) ? `<img class="metadata-attribution-logo" src="${escapeHtml(providerAttributionLogo(result.provider_id) ?? '')}" alt="" loading="lazy" />` : ''}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
@@ -1822,7 +1823,8 @@ function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
   const libraryKind = itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined;
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
-    .filter((provider) => provider.enabled && provider.configured && provider.implemented)
+    .filter((provider) => provider.role !== 'secondary')
+    .filter((provider) => provider.configured && provider.implemented)
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
 }
 
@@ -1848,12 +1850,12 @@ function selectedItemDefaultMetadataYear(): string {
 }
 
 function defaultMetadataSearchLanguage(): string {
+  const librarySettings = activeLibrarySettings();
+  if (librarySettings?.metadata_language_mode === 'manual') {
+    return normalizedMetadataLanguages(librarySettings.metadata_languages)[0] ?? 'en-US';
+  }
   return state.bootstrap?.current_user?.preferred_metadata_languages?.[0]
-    ?? activeLibrarySettings()
-      ?.metadata_providers
-      ?.map((providerId) => state.metadataProviders.find((provider) => provider.id === providerId)?.language)
-      .find((language) => language && language.trim())
-    ?? state.metadataProviders.find((provider) => provider.enabled && provider.configured)?.language
+    ?? state.metadataProviders.find((provider) => provider.configured)?.language
     ?? 'en-US';
 }
 
@@ -1883,7 +1885,7 @@ function renderMetadataSearchProviderControls(): string {
             value="${escapeHtml(provider.id)}"
             ${selectedProviders.includes(provider.id) ? 'checked' : ''}
           />
-          <span>${escapeHtml(metadataProviderLabels[provider.id] ?? provider.display_name)}</span>
+          <span>${escapeHtml(provider.display_name)}</span>
         </label>
       `).join('')}
     </div>
@@ -2200,6 +2202,7 @@ function renderSettingsSectionNav(): string {
   const sections: Array<{ id: SettingsSection; label: string; path: string }> = [
     { id: 'general', label: 'General', path: '/settings' },
     { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
+    { id: 'providers', label: 'Providers', path: '/settings/providers' },
     { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
     { id: 'logs', label: 'Logs', path: '/settings/logs' },
   ];
@@ -2309,7 +2312,7 @@ function renderPersonPage(): string {
         <div class="detail-summary item-summary">
           <h2 class="item-title-fallback">${escapeHtml(response.person.name)}</h2>
           <div class="hero-meta-row">
-            <span class="tag">${escapeHtml(metadataProviderLabels[response.person.provider_id] ?? response.person.provider_id)}</span>
+            <span class="tag">${escapeHtml(providerDisplayName(response.person.provider_id))}</span>
             <span class="tag">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
             ${response.person.birthday ? `<span class="tag">${escapeHtml([formatPersonDate(response.person.birthday), age].filter(Boolean).join(' · '))}</span>` : ''}
             ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
@@ -2510,38 +2513,125 @@ function renderItemPage(): string {
   `;
 }
 
-const metadataProviderKinds: Record<string, string[]> = {
-  tmdb: ['movies', 'shows'],
-  tvdb: ['movies', 'shows'],
-  musicbrainz: ['music'],
-  open_library: ['books'],
-  local_nfo: ['movies', 'shows', 'music', 'photos', 'books', 'home_videos'],
-};
+const metadataLanguageOptions: Array<{ value: string; label: string }> = [
+  { value: 'en-US', label: 'English (United States)' },
+  { value: 'en-GB', label: 'English (United Kingdom)' },
+  { value: 'es-ES', label: 'Spanish (Spain)' },
+  { value: 'fr-FR', label: 'French (France)' },
+  { value: 'de-DE', label: 'German (Germany)' },
+  { value: 'it-IT', label: 'Italian (Italy)' },
+  { value: 'ja-JP', label: 'Japanese (Japan)' },
+  { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+];
 
-const metadataProviderLabels: Record<string, string> = {
-  tmdb: 'TMDB',
-  tvdb: 'TheTVDB',
-  musicbrainz: 'MusicBrainz',
-  open_library: 'Open Library',
-  local_nfo: 'Local NFO',
-};
+function providerStatus(providerId: string): MetadataProviderStatus | undefined {
+  return state.metadataProviders.find((provider) => provider.id === providerId);
+}
+
+function providerDisplayName(providerId: string): string {
+  return providerStatus(providerId)?.display_name ?? providerId;
+}
+
+function libraryProviderOptions(libraryKind?: string): MetadataProviderStatus[] {
+  return state.metadataProviders
+    .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
+}
+
+function normalizedMetadataLanguages(languages?: string[]): string[] {
+  const normalized = (languages ?? [])
+    .map((language) => language.trim())
+    .filter(Boolean)
+    .filter((language, index, values) => values.indexOf(language) === index);
+  return normalized.length ? normalized : ['en-US'];
+}
+
+function metadataLanguageSelect(name: string, selectedLanguages?: string[]): string {
+  const selected = normalizedMetadataLanguages(selectedLanguages);
+  return `
+    <select name="${name}" multiple size="${Math.min(5, metadataLanguageOptions.length)}">
+      ${metadataLanguageOptions.map((option) => `
+        <option value="${option.value}" ${selected.includes(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>
+      `).join('')}
+    </select>
+  `;
+}
+
+function metadataLanguageModeSelect(name: string, selectedMode?: 'auto' | 'manual'): string {
+  const mode = selectedMode ?? 'auto';
+  return `
+    <select name="${name}">
+      <option value="auto" ${mode === 'auto' ? 'selected' : ''}>Auto</option>
+      <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual</option>
+    </select>
+  `;
+}
+
+function userPermissionSelect(name: string, allowedUserIds?: number[]): string {
+  const selected = new Set(allowedUserIds ?? []);
+  return `
+    <select name="${name}" multiple size="${Math.min(5, Math.max(2, state.users.length))}">
+      ${state.users.map((user) => `
+        <option value="${user.id}" ${selected.has(user.id) ? 'selected' : ''}>${escapeHtml(user.username)}${user.admin ? ' (admin)' : ''}</option>
+      `).join('')}
+    </select>
+  `;
+}
 
 function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
-  return Object.keys(metadataProviderKinds)
-    .filter((providerId) => !libraryKind || metadataProviderKinds[providerId].includes(libraryKind))
-    .map((providerId) => `
-      <label class="checkbox-inline">
-        <input
-          name="${prefix}"
-          type="checkbox"
-          value="${providerId}"
-          data-provider-kinds="${metadataProviderKinds[providerId].join(',')}"
-          ${selectedProviders.includes(providerId) ? 'checked' : ''}
-        />
-        ${metadataProviderLabels[providerId] ?? providerId}
-      </label>
-    `)
-    .join('');
+  const providers = libraryProviderOptions(libraryKind)
+    .sort((left, right) => {
+      const leftIndex = selectedProviders.indexOf(left.id);
+      const rightIndex = selectedProviders.indexOf(right.id);
+      return (left.role === right.role ? 0 : left.role === 'primary' ? -1 : 1)
+        || (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex)
+        - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex)
+        || left.display_name.localeCompare(right.display_name);
+    });
+  const selected = new Set(selectedProviders);
+  let primaryPriority = 0;
+
+  return `
+    <div class="metadata-provider-list" data-provider-list="${prefix}">
+      ${providers.map((provider, index) => `
+      ${(() => {
+        const providerId = provider.id;
+        const label = provider.display_name;
+        const isSecondary = provider.role === 'secondary';
+        if (!isSecondary) {
+          primaryPriority += 1;
+        }
+        const secondaryAvailable = !isSecondary
+          || provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId));
+        const checked = selected.has(providerId) && secondaryAvailable;
+        return `
+      <div class="metadata-provider-option" data-provider-option="${providerId}" data-provider-role="${provider.role}" data-extends-provider-ids="${provider.extends_provider_ids.join(',')}">
+        <div class="provider-option-main">
+          <label class="checkbox-inline">
+            <input
+              name="${prefix}"
+              type="checkbox"
+              value="${providerId}"
+              data-provider-kinds="${provider.supported_kinds.join(',')}"
+              ${checked ? 'checked' : ''}
+              ${secondaryAvailable ? '' : 'disabled'}
+            />
+            ${escapeHtml(label)}
+          </label>
+          <span class="muted">${isSecondary ? 'Secondary' : `Priority ${primaryPriority}`}</span>
+        </div>
+        <div class="provider-option-actions">
+          ${isSecondary ? '' : `
+            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
+          `}
+          <button type="button" class="secondary-button" data-provider-settings="${providerId}">${renderButtonContent('Settings', 'settings')}</button>
+        </div>
+      </div>
+        `;
+      })()}
+      `).join('')}
+    </div>
+    `;
 }
 
 function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
@@ -2588,9 +2678,22 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
         <div class="form-row">
           <label class="checkbox-inline"><input name="existing_library_recursive_${index}" type="checkbox" ${library.recursive ? 'checked' : ''} /> Recursive scan</label>
         </div>
+        <div class="form-row">
+          <label>Provider language mode
+            ${metadataLanguageModeSelect(`existing_library_metadata_language_mode_${index}`, library.metadata_language_mode)}
+          </label>
+          <label>Manual languages
+            ${metadataLanguageSelect(`existing_library_metadata_language_${index}`, library.metadata_languages)}
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Library access
+            ${userPermissionSelect(`existing_library_allowed_user_${index}`, library.allowed_user_ids)}
+          </label>
+        </div>
         <fieldset>
           <legend>Metadata sources</legend>
-          <div class="checkbox-row">${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}</div>
+          ${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}
         </fieldset>
       </section>
     `;
@@ -2611,14 +2714,79 @@ function libraryKindOptions(selectedKind: string): string {
     .join('');
 }
 
+function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
+  const label = providerDisplayName(provider.id);
+  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
+  const logoUrl = status?.logo_dark_url ?? status?.logo_light_url;
+  const showApiKey = Boolean(status?.requires_api_key);
+  const showRequestSettings = provider.id !== 'local_nfo';
+  return `
+    <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
+      <div class="settings-library-header">
+        <div class="provider-settings-title">
+          ${logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : ''}
+          <div>
+          <p class="eyebrow">Provider</p>
+          <h3>${escapeHtml(label)}</h3>
+          </div>
+        </div>
+        ${status?.role ? `<span class="tag">${escapeHtml(status.role === 'secondary' ? 'Secondary' : 'Primary')}</span>` : ''}
+      </div>
+      ${status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : ''}
+      ${status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : ''}
+      ${showApiKey || showRequestSettings ? `<div class="form-row">
+        ${showApiKey ? `<label>API key<input name="${provider.id}_api_key" value="${escapeHtml(provider.api_key ?? '')}" autocomplete="off" /></label>` : ''}
+        ${showRequestSettings ? `
+        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
+        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
+        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="100" value="${provider.retry_backoff_ms}" /></label>
+        ` : ''}
+      </div>` : '<p class="muted">This provider does not require provider-specific settings.</p>'}
+    </section>
+  `;
+}
+
+function renderProviderSettingsPage(settings: SettingsSnapshot): string {
+  return `
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <div class="section-heading">
+            <h3>Metadata providers</h3>
+          </div>
+          <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
+          <div class="settings-library-list">
+            ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
+          </div>
+          <div class="form-row">
+            <label>Automatic refresh
+              <select name="metadata_refresh_interval_days">
+                <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
+                <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
+                <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
+                <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-row">
+            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
+            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
+          </div>
+        </section>
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save provider settings', 'save')}</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderSettingsPage(): string {
   const settings = state.settingsResponse?.settings;
   if (!settings) {
     return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
   }
 
-  const tmdb = settings.metadata.providers.find((provider) => provider.id === 'tmdb');
-  const tvdb = settings.metadata.providers.find((provider) => provider.id === 'tvdb');
   const section = activeSettingsSection();
 
   return `
@@ -2658,44 +2826,8 @@ function renderSettingsPage(): string {
 
         <section>
           <h3>Metadata providers</h3>
-          <div class="form-row checkbox-row">
-            <label><input name="tmdb_enabled" type="checkbox" ${tmdb?.enabled ? 'checked' : ''} /> Enable TMDB</label>
-            <label><input name="tvdb_enabled" type="checkbox" ${tvdb?.enabled ? 'checked' : ''} /> Enable TheTVDB</label>
-          </div>
-          <div class="form-row">
-            <label>TMDB API key<input name="tmdb_api_key" value="${escapeHtml(tmdb?.api_key ?? '')}" /></label>
-            <label>TMDB language<input name="tmdb_language" value="${escapeHtml(tmdb?.language ?? 'en-US')}" /></label>
-          </div>
-          <div class="form-row">
-            <label>TMDB rate limit (requests/second)<input name="tmdb_rate_limit_per_second" type="number" min="1" value="${tmdb?.rate_limit_per_second ?? 4}" /></label>
-            <label>TMDB retry attempts<input name="tmdb_retry_attempts" type="number" min="0" value="${tmdb?.retry_attempts ?? 3}" /></label>
-          </div>
-          <div class="form-row">
-            <label>TMDB retry backoff (ms)<input name="tmdb_retry_backoff_ms" type="number" min="0" step="100" value="${tmdb?.retry_backoff_ms ?? 1000}" /></label>
-            <label>TheTVDB API key<input name="tvdb_api_key" value="${escapeHtml(tvdb?.api_key ?? '')}" /></label>
-          </div>
-          <div class="form-row">
-            <label>TheTVDB language<input name="tvdb_language" value="${escapeHtml(tvdb?.language ?? 'en-US')}" /></label>
-            <label>TheTVDB rate limit (requests/second)<input name="tvdb_rate_limit_per_second" type="number" min="1" value="${tvdb?.rate_limit_per_second ?? 4}" /></label>
-          </div>
-          <div class="form-row">
-            <label>TheTVDB retry attempts<input name="tvdb_retry_attempts" type="number" min="0" value="${tvdb?.retry_attempts ?? 3}" /></label>
-            <label>TheTVDB retry backoff (ms)<input name="tvdb_retry_backoff_ms" type="number" min="0" step="100" value="${tvdb?.retry_backoff_ms ?? 1000}" /></label>
-          </div>
-          <div class="form-row">
-            <label>Automatic refresh
-              <select name="metadata_refresh_interval_days">
-                <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
-                <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
-                <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
-                <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
-              </select>
-            </label>
-          </div>
-          <div class="form-row">
-            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
-            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
-          </div>
+          <p class="muted">Provider credentials and refresh behavior are configured on their own settings page.</p>
+          <button type="button" class="secondary-button" data-settings-section-path="/settings/providers">${renderButtonContent('Open provider settings', 'settings')}</button>
         </section>
 
         <div class="page-actions">
@@ -2707,6 +2839,7 @@ function renderSettingsPage(): string {
       ${renderUserManagement()}
     </section>
     ` : ''}
+    ${section === 'providers' ? renderProviderSettingsPage(settings) : ''}
     ${section === 'libraries' ? `
       <section class="panel page-panel settings-page-panel">
         <form id="settings-form" class="settings-form">
@@ -2739,9 +2872,22 @@ function renderSettingsPage(): string {
               </label>
               <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
             </div>
+            <div class="form-row">
+              <label>Provider language mode
+                ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
+              </label>
+              <label>Manual languages
+                ${metadataLanguageSelect('library_metadata_language', ['en-US'])}
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Library access
+                ${userPermissionSelect('library_allowed_user', [])}
+              </label>
+            </div>
             <fieldset>
               <legend>Metadata sources</legend>
-              <div class="checkbox-row" id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
+              <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
             </fieldset>
           </section>
           <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
@@ -3405,9 +3551,18 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
           kind: String(formData.get(`existing_library_kind_${index}`) ?? library.kind),
-          metadata_providers: formData.has(providerField)
-            ? formData.getAll(providerField).map((value) => String(value))
-            : library.metadata_providers,
+          metadata_providers: formData.getAll(providerField).map((value) => String(value)),
+          metadata_language_mode: String(formData.get(`existing_library_metadata_language_mode_${index}`) ?? library.metadata_language_mode ?? 'auto') === 'manual'
+            ? 'manual'
+            : 'auto',
+          metadata_languages: formData.has(`existing_library_metadata_language_${index}`)
+            ? normalizedMetadataLanguages(formData.getAll(`existing_library_metadata_language_${index}`).map((value) => String(value)))
+            : normalizedMetadataLanguages(library.metadata_languages),
+          allowed_user_ids: formData.has(`existing_library_allowed_user_${index}`)
+            ? formData.getAll(`existing_library_allowed_user_${index}`)
+                .map((value) => Number(value))
+                .filter((value) => Number.isFinite(value) && value > 0)
+            : library.allowed_user_ids,
         };
       }),
     },
@@ -3418,20 +3573,21 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
           : Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30)
         : current.metadata.refresh_interval_days,
       providers: current.metadata.providers.map((provider) => {
-        if (provider.id !== 'tmdb' && provider.id !== 'tvdb') {
-          return provider;
-        }
-
         const prefix = provider.id;
-        if (!formData.has(`${prefix}_api_key`) && !formData.has(`${prefix}_enabled`)) {
+        if (
+          !formData.has(`${prefix}_api_key`)
+          && !formData.has(`${prefix}_rate_limit_per_second`)
+          && !formData.has(`${prefix}_retry_attempts`)
+          && !formData.has(`${prefix}_retry_backoff_ms`)
+        ) {
           return provider;
         }
 
         return {
           ...provider,
-          enabled: settingsSection === 'general' ? formData.get(`${prefix}_enabled`) === 'on' : provider.enabled,
-          api_key: String(formData.get(`${prefix}_api_key`) ?? provider.api_key ?? ''),
-          language: String(formData.get(`${prefix}_language`) ?? provider.language),
+          api_key: formData.has(`${prefix}_api_key`)
+            ? String(formData.get(`${prefix}_api_key`) ?? '')
+            : provider.api_key,
           rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
           retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
           retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),
@@ -4042,6 +4198,39 @@ function bindEvents(): void {
       const path = button.dataset.settingsSectionPath;
       if (path) {
         navigateTo(path);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const providerId = button.dataset.providerSettings;
+      navigateTo(`/settings/providers${providerId ? `#provider-${providerId}` : ''}`);
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-provider-move]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const option = button.closest<HTMLElement>('.metadata-provider-option');
+      const list = option?.closest<HTMLElement>('.metadata-provider-list');
+      if (!option || !list) {
+        return;
+      }
+      if (button.dataset.providerMove === 'up' && option.previousElementSibling) {
+        list.insertBefore(option, option.previousElementSibling);
+      }
+      if (button.dataset.providerMove === 'down' && option.nextElementSibling) {
+        list.insertBefore(option.nextElementSibling, option);
+      }
+      syncProviderDependencyOptions(list);
+    });
+  });
+
+  document.querySelectorAll<HTMLInputElement>('.metadata-provider-list input[type="checkbox"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const list = input.closest<HTMLElement>('.metadata-provider-list');
+      if (list) {
+        syncProviderDependencyOptions(list);
       }
     });
   });
@@ -4669,6 +4858,11 @@ function bindEvents(): void {
       recursive: formData.get('library_recursive') === 'on',
       kind: String(formData.get('library_kind') ?? 'movies'),
       metadata_providers: formData.getAll('library_metadata_provider').map((value) => String(value)),
+      metadata_language_mode: String(formData.get('library_metadata_language_mode') ?? 'auto') === 'manual' ? 'manual' : 'auto',
+      metadata_languages: normalizedMetadataLanguages(formData.getAll('library_metadata_language').map((value) => String(value))),
+      allowed_user_ids: formData.getAll('library_allowed_user')
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0),
     };
 
     try {
@@ -4701,8 +4895,45 @@ function bindEvents(): void {
   const addLibraryKindSelect = document.querySelector<HTMLSelectElement>('#add-library-form select[name="library_kind"]');
   addLibraryKindSelect?.addEventListener('change', () => syncAddLibraryProviderOptions());
   syncAddLibraryProviderOptions();
+  document.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 
   bindPlayerProgress();
+}
+
+function syncProviderDependencyOptions(list: HTMLElement): void {
+  const selectedPrimaryIds = new Set(
+    Array.from(list.querySelectorAll<HTMLInputElement>('.metadata-provider-option[data-provider-role="primary"] input[type="checkbox"]:checked'))
+      .map((input) => input.value),
+  );
+  let priority = 0;
+  list.querySelectorAll<HTMLElement>('.metadata-provider-option').forEach((option) => {
+    const input = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
+    const role = option.dataset.providerRole ?? 'primary';
+    if (role === 'primary') {
+      priority += 1;
+      if (label) {
+        label.textContent = `Priority ${priority}`;
+      }
+      return;
+    }
+
+    const extendsProviderIds = (option.dataset.extendsProviderIds ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const available = extendsProviderIds.some((providerId) => selectedPrimaryIds.has(providerId));
+    if (input) {
+      input.disabled = !available;
+      if (!available) {
+        input.checked = false;
+      }
+    }
+    option.classList.toggle('is-disabled', !available);
+    if (label) {
+      label.textContent = available ? 'Secondary' : 'Requires primary provider';
+    }
+  });
 }
 
 function syncAddLibraryProviderOptions(): void {
@@ -4715,12 +4946,12 @@ function syncAddLibraryProviderOptions(): void {
   form.querySelectorAll<HTMLInputElement>('input[name="library_metadata_provider"]').forEach((input) => {
     const supportedKinds = input.dataset.providerKinds?.split(',') ?? [];
     const supported = supportedKinds.includes(kind);
-    const label = input.closest('label');
+    const option = input.closest<HTMLElement>('.metadata-provider-option');
     input.disabled = !supported;
     if (!supported) {
       input.checked = false;
     }
-    label?.classList.toggle('is-hidden', !supported);
+    option?.classList.toggle('is-hidden', !supported);
   });
 
   const visibleCheckedProvider = form.querySelector<HTMLInputElement>(
@@ -4732,6 +4963,7 @@ function syncAddLibraryProviderOptions(): void {
       firstVisibleProvider.checked = true;
     }
   }
+  form.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 }
 
 window.addEventListener('keydown', (event) => {

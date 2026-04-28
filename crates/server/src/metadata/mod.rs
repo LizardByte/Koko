@@ -2030,9 +2030,9 @@ fn provider_settings(
     let provider = settings
         .providers
         .iter()
-        .find(|provider| provider.id == provider_id && provider.enabled)
+        .find(|provider| provider.id == provider_id)
         .cloned()
-        .ok_or_else(|| "is not enabled in the current configuration.".to_string())?;
+        .ok_or_else(|| "is not configured.".to_string())?;
 
     let requires_api_key = MetadataRegistry::new()
         .provider(&provider_id)
@@ -2045,7 +2045,7 @@ fn provider_settings(
         .unwrap_or_default()
         .is_empty();
     if requires_api_key && api_key_missing {
-        return Err("is enabled but no API key is configured.".into());
+        return Err("requires an API key but none is configured.".into());
     }
 
     Ok(provider)

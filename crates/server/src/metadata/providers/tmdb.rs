@@ -1223,7 +1223,7 @@ fn tmdb_collections(payload: &Value) -> Vec<ProviderMetadataCollection> {
 
     vec![ProviderMetadataCollection {
         external_id: external_id.to_string(),
-        name: name.to_string(),
+        name: Some(name.to_string()),
         overview: text_field(collection, &["overview"]),
         artwork_url: collection
             .get("poster_path")

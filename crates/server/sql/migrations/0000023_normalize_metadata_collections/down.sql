@@ -20,7 +20,7 @@ SELECT
     metadata_collection_items.metadata_link_id,
     metadata_collections.provider_id,
     metadata_collections.external_id,
-    metadata_collections.name,
+    COALESCE(metadata_collections.name, metadata_collections.external_id),
     metadata_collections.overview,
     metadata_collections.artwork_url,
     metadata_collections.backdrop_url,

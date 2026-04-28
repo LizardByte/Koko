@@ -248,6 +248,7 @@ fn repair_metadata_collection_schema(
         sqlite_column_exists(conn, "metadata_collections", "backdrop_url")?;
     let collection_has_updated = sqlite_column_exists(conn, "metadata_collections", "updated_at")?;
     let collection_has_name = sqlite_column_exists(conn, "metadata_collections", "name")?;
+    let collection_name_is_not_null = sqlite_column_not_null(conn, "metadata_collections", "name")?;
 
     let item_table_exists = sqlite_table_exists(conn, "metadata_collection_items")?;
     let item_has_collection_id = item_table_exists
@@ -266,10 +267,12 @@ fn repair_metadata_collection_schema(
         && collection_has_locale
         && collection_has_provider_locale
         && collection_has_theme
+        && collection_has_name
         && item_table_exists
         && item_has_collection_id
         && item_has_media_item_id
         && item_has_metadata_link_id
+        && !collection_name_is_not_null
     {
         return Ok(());
     }
@@ -286,7 +289,7 @@ fn repair_metadata_collection_schema(
             relation_kind TEXT NOT NULL,\
             locale_key TEXT NOT NULL,\
             provider_locale_key TEXT DEFAULT NULL,\
-            name TEXT NOT NULL,\
+            name TEXT DEFAULT NULL,\
             overview TEXT DEFAULT NULL,\
             artwork_url TEXT DEFAULT NULL,\
             backdrop_url TEXT DEFAULT NULL,\
@@ -359,7 +362,11 @@ fn repair_metadata_collection_schema(
         "NULL"
     };
     let name_expr = if collection_has_name {
-        "COALESCE(NULLIF(TRIM(c.name), ''), c.external_id)"
+        if collection_has_relation {
+            "CASE WHEN c.provider_id = 'themerr' AND COALESCE(c.relation_kind, 'primary') = 'secondary' THEN NULL ELSE NULLIF(TRIM(c.name), '') END"
+        } else {
+            "NULLIF(TRIM(c.name), '')"
+        }
     } else {
         "c.external_id"
     };
@@ -495,6 +502,31 @@ fn sqlite_column_exists(
     .get_result::<CountRow>(conn)?;
 
     Ok(row.count > 0)
+}
+
+fn sqlite_column_not_null(
+    conn: &mut diesel::SqliteConnection,
+    table_name: &str,
+    column_name: &str,
+) -> diesel::result::QueryResult<bool> {
+    use diesel::prelude::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let escaped_table = table_name.replace('\'', "''");
+    let escaped_column = column_name.replace('\'', "''");
+    let row = diesel::sql_query(format!(
+        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count \
+         FROM pragma_table_info('{escaped_table}') \
+         WHERE name = '{escaped_column}'"
+    ))
+    .get_result::<CountRow>(conn)?;
+
+    Ok(row.count != 0)
 }
 
 fn sqlite_migration_record_exists(

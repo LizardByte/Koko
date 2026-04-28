@@ -26,7 +26,7 @@ use koko::media::{
 use koko::metadata::{
     ArtworkKind, StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
     get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
-    upsert_secondary_youtube_theme_metadata_link,
+    upsert_secondary_collection_theme_song_url, upsert_secondary_youtube_theme_metadata_link,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -663,6 +663,11 @@ fn test_home_includes_real_collection_summaries() {
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         count: i64,
     }
+    #[derive(diesel::QueryableByName)]
+    struct TextRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        value: Option<String>,
+    }
     let collection_count = diesel::sql_query("SELECT COUNT(*) AS count FROM metadata_collections")
         .get_result::<CountRow>(&mut connection)
         .unwrap()
@@ -689,6 +694,51 @@ fn test_home_includes_real_collection_summaries() {
         ),
         ("collection", "tmdb", "4242")
     );
+    upsert_secondary_collection_theme_song_url(
+        &mut connection,
+        collection_references[0].0,
+        MetadataProviderId::Themerr,
+        collection_references[0].1.as_str(),
+        collection_references[0].2.as_str(),
+        collection_references[0].3.as_str(),
+        "https://youtu.be/SLBACEP6LsI",
+    )
+    .unwrap();
+    let themerr_collection_name = diesel::sql_query(
+        "SELECT name AS value FROM metadata_collections \
+         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+    )
+    .get_result::<TextRow>(&mut connection)
+    .unwrap()
+    .value;
+    assert_eq!(themerr_collection_name, None);
+
+    diesel::sql_query(
+        "UPDATE metadata_collections SET name = 'Test Saga' \
+         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    upsert_secondary_collection_theme_song_url(
+        &mut connection,
+        collection_references[0].0,
+        MetadataProviderId::Themerr,
+        collection_references[0].1.as_str(),
+        collection_references[0].2.as_str(),
+        collection_references[0].3.as_str(),
+        "https://youtu.be/SLBACEP6LsI",
+    )
+    .unwrap();
+    let repaired_themerr_collection_name = diesel::sql_query(
+        "SELECT name AS value FROM metadata_collections \
+         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+    )
+    .get_result::<TextRow>(&mut connection)
+    .unwrap()
+    .value;
+    assert_eq!(repaired_themerr_collection_name, None);
+    let merged_home_after_theme = get_media_home(&mut connection, None, Some(library.id)).unwrap();
+    assert_eq!(merged_home_after_theme.collections[0].name, "Test Saga");
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -2110,6 +2160,15 @@ fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
     .unwrap()
     .count;
     assert_eq!(source_column_count, 1);
+    let name_not_null = diesel::sql_query(
+        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count \
+         FROM pragma_table_info('metadata_collections') \
+         WHERE name = 'name'",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(name_not_null, 0);
 
     let locales = diesel::sql_query(
         "SELECT locale_key AS value FROM metadata_collections ORDER BY locale_key",

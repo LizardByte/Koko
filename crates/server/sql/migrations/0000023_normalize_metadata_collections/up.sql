@@ -7,7 +7,7 @@ CREATE TABLE metadata_collections (
     relation_kind TEXT NOT NULL,
     locale_key TEXT NOT NULL,
     provider_locale_key TEXT DEFAULT NULL,
-    name TEXT NOT NULL,
+    name TEXT DEFAULT NULL,
     overview TEXT DEFAULT NULL,
     artwork_url TEXT DEFAULT NULL,
     backdrop_url TEXT DEFAULT NULL,

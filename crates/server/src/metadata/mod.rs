@@ -415,7 +415,7 @@ pub struct ProviderMetadataCollection {
     /// Provider-side collection identifier.
     pub external_id: String,
     /// Collection name.
-    pub name: String,
+    pub name: Option<String>,
     /// Collection overview.
     pub overview: Option<String>,
     /// Collection poster or artwork URL.
@@ -1729,8 +1729,8 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
                 ),
                 provider_id: metadata_provider_id_from_db(&primary.provider_id),
                 external_id: primary.external_id.clone(),
-                name: first_collection_string(&collections, |collection| Some(&collection.name))
-                    .unwrap_or(primary.name),
+                name: first_collection_string(&collections, |collection| collection.name.as_ref())
+                    .unwrap_or_else(|| primary.source_external_id.clone()),
                 overview: first_collection_string(&collections, |collection| {
                     collection.overview.as_ref()
                 }),
@@ -1792,7 +1792,7 @@ pub fn upsert_secondary_collection_theme_song_url(
     let now = current_timestamp();
     let secondary_collection = ProviderMetadataCollection {
         external_id: format!("{media_type}:{database_id}:{external_id}"),
-        name: source_collection.name.clone(),
+        name: None,
         overview: None,
         artwork_url: None,
         backdrop_url: None,
@@ -2926,6 +2926,13 @@ fn upsert_metadata_collection(
         .first::<MetadataCollection>(conn)
         .optional()?;
 
+    let collection_name = collection
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let should_retain_existing_name = relation_kind == "primary" && collection_name.is_none();
     let payload = NewMetadataCollection {
         provider_id: provider_id.to_string(),
         external_id: collection.external_id.clone(),
@@ -2934,13 +2941,10 @@ fn upsert_metadata_collection(
         relation_kind: relation_kind.to_string(),
         locale_key: locale_key.to_string(),
         provider_locale_key,
-        name: if collection.name.trim().is_empty() {
-            existing
-                .as_ref()
-                .map(|row| row.name.clone())
-                .unwrap_or(collection.name)
+        name: if should_retain_existing_name {
+            existing.as_ref().and_then(|row| row.name.clone())
         } else {
-            collection.name
+            collection_name
         },
         overview: collection
             .overview

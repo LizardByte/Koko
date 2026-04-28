@@ -59,7 +59,7 @@ table! {
         relation_kind -> Text,
         locale_key -> Text,
         provider_locale_key -> Nullable<Text>,
-        name -> Text,
+        name -> Nullable<Text>,
         overview -> Nullable<Text>,
         artwork_url -> Nullable<Text>,
         backdrop_url -> Nullable<Text>,

@@ -1381,6 +1381,29 @@ function itemsForCollection(collection: MediaCollectionSummary): MediaItemSummar
   return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
 }
 
+function selectedItemRoot(): MediaItemSummary | undefined {
+  if (!state.selectedItem) {
+    return undefined;
+  }
+
+  return state.selectedItem.hierarchy[0] ?? state.selectedItem;
+}
+
+function selectedItemCollectionRails(): Array<{ collection: MediaCollectionSummary; items: MediaItemSummary[] }> {
+  const root = selectedItemRoot();
+  if (!root) {
+    return [];
+  }
+
+  return collectionSummaries()
+    .filter((collection) => collection.item_ids.includes(root.id))
+    .map((collection) => ({
+      collection,
+      items: itemsForCollection(collection).filter((item) => item.id !== root.id),
+    }))
+    .filter((rail) => rail.items.length > 0);
+}
+
 function categoryForRoute(): { genre: string; count: number; items: MediaItemSummary[] } | undefined {
   const route = state.route;
   if (route.page !== 'browse-detail' || route.kind !== 'category') {
@@ -2740,6 +2763,35 @@ function renderPeopleRail(): string {
   `;
 }
 
+function renderSelectedItemCollectionRails(): string {
+  const rails = selectedItemCollectionRails();
+  if (!rails.length) {
+    return '';
+  }
+
+  return rails
+    .map((rail, index) => {
+      const rowId = `item-collection-${index}`;
+      return `
+        <section class="panel page-panel item-section item-collection-section">
+          <div class="section-heading section-heading-actions">
+            <div>
+              <h3>${escapeHtml(rail.collection.name)}</h3>
+              <p class="muted">Also in this collection</p>
+            </div>
+            <button type="button" class="secondary-button" data-collection-filter="${escapeHtml(rail.collection.id)}">${renderButtonContent('View collection', 'arrow-right')}</button>
+          </div>
+          <div class="shelf-row-shell">
+            <button type="button" class="shelf-scroll-button" data-shelf-scroll="${rowId}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+            <div class="shelf-row" data-shelf-row="${rowId}">${rail.items.map(renderItemCard).join('')}</div>
+            <button type="button" class="shelf-scroll-button" data-shelf-scroll="${rowId}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+          </div>
+        </section>
+      `;
+    })
+    .join('');
+}
+
 interface PersonSeasonCreditGroup {
   season: MediaItemSummary;
   episodes: MediaItemSummary[];
@@ -3160,6 +3212,8 @@ function renderItemPage(): string {
           <div class="item-grid hierarchy-item-grid ${state.selectedItem.item_type === 'season' ? 'season-episodes-grid' : ''}">${children.map(renderItemCard).join('')}</div>
         </section>
       ` : ''}
+
+      ${renderSelectedItemCollectionRails()}
 
       <section class="item-support-grid">
         <section class="panel page-panel item-section">
@@ -3997,6 +4051,12 @@ async function refreshData(showLoading = true): Promise<void> {
         getItemMetadata(state.route.itemId),
         getPlaybackDecision(state.route.itemId),
       ]);
+      const [home, libraryItems] = await Promise.all([
+        getHome(item.library_id),
+        getItems(item.library_id),
+      ]);
+      state.home = home;
+      state.libraryItems = libraryItems;
       state.selectedItem = item;
       state.selectedItemMetadata = metadata;
       state.selectedPlayback = playback;
@@ -4139,6 +4199,8 @@ async function refreshPendingMetadataData(): Promise<void> {
       const previousSnapshot = snapshotJson({
         systemActivities: state.systemActivities,
         libraries: state.libraries,
+        home: state.home,
+        libraryItems: state.libraryItems,
         selectedItem: state.selectedItem,
         selectedItemMetadata: state.selectedItemMetadata,
       });
@@ -4151,15 +4213,26 @@ async function refreshPendingMetadataData(): Promise<void> {
       if (state.route.page !== 'item' || state.route.itemId !== itemId) {
         return;
       }
+      const [home, libraryItems] = await Promise.all([
+        getHome(item.library_id),
+        getItems(item.library_id),
+      ]);
+      if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+        return;
+      }
 
       state.systemActivities = activitiesResponse.activities;
       state.libraries = libraries;
+      state.home = home;
+      state.libraryItems = libraryItems;
       state.selectedItem = item;
       state.selectedItemMetadata = metadata;
       state.error = undefined;
       shouldRender = previousSnapshot !== snapshotJson({
         systemActivities: state.systemActivities,
         libraries: state.libraries,
+        home: state.home,
+        libraryItems: state.libraryItems,
         selectedItem: state.selectedItem,
         selectedItemMetadata: state.selectedItemMetadata,
       }) || previousError !== state.error;

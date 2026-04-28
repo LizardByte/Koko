@@ -1609,8 +1609,8 @@ legend {
 }
 
 .metadata-attribution img {
-  max-width: 96px;
-  max-height: 18px;
+  max-width: 36px;
+  max-height: 36px;
   object-fit: contain;
 }
 

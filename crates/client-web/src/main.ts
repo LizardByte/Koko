@@ -3093,7 +3093,6 @@ function renderPlayerOverlay(): string {
   const selectedAudioStreamIndex = isExplicitAudioTrackSelection
     ? state.activeAudioStreamIndex
     : state.activePlaybackSession.audio_stream_index;
-  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, state.activePlaybackStartMs, selectedAudioStreamIndex);
   const posterUrl = state.selectedItem.poster_url
     ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
     : undefined;
@@ -3109,6 +3108,10 @@ function renderPlayerOverlay(): string {
 
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
   const isRemuxingForAudio = isAudioStreamOverride && !state.activePlaybackSession.decision.transcode_required;
+  const streamStartMs = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
+    ? state.activePlaybackStartMs
+    : 0;
+  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, streamStartMs, selectedAudioStreamIndex);
   const transcodeBadge = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
     ? `<span class="player-badge is-transcoding" title="${escapeHtml(isRemuxingForAudio ? 'Using a non-default audio track requires a remuxed stream.' : state.activePlaybackSession.decision.reason)}">Transcoding</span>`
     : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
@@ -4006,13 +4009,16 @@ function bindPlayerProgress(): void {
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
   const isTranscoding = (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
   const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
-  const playbackBaseOffsetSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const requestedPlaybackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const playbackBaseOffsetSeconds = isTranscoding ? requestedPlaybackStartSeconds : 0;
+  const initialDirectSeekSeconds = isTranscoding ? 0 : requestedPlaybackStartSeconds;
   const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
   let lastSkipDirection = 0;
   let lastSkipAt = 0;
   let skipStepIndex = 0;
+  let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0;
 
   const setPlayerLoading = (loading: boolean): void => {
     const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
@@ -4084,6 +4090,29 @@ function bindPlayerProgress(): void {
     }
     if (durationLabel) {
       durationLabel.textContent = formatMediaTime(duration);
+    }
+  };
+
+  const applyInitialDirectSeek = (): void => {
+    if (hasAppliedInitialDirectSeek || initialDirectSeekSeconds <= 0 || player.readyState < player.HAVE_METADATA) {
+      return;
+    }
+
+    const duration = sourceDurationSeconds > 0
+      ? sourceDurationSeconds
+      : Number.isFinite(player.duration) && player.duration > 0
+        ? player.duration
+        : 0;
+    const targetPosition = duration > 0
+      ? Math.min(initialDirectSeekSeconds, Math.max(0, duration - 1))
+      : initialDirectSeekSeconds;
+
+    try {
+      player.currentTime = targetPosition;
+      hasAppliedInitialDirectSeek = true;
+      updateTimeline();
+    } catch (error) {
+      console.warn('Failed to seek direct-play item to resume position', error);
     }
   };
 
@@ -4301,13 +4330,19 @@ function bindPlayerProgress(): void {
   player.addEventListener('waiting', refreshPlayerLoading);
   player.addEventListener('stalled', refreshPlayerLoading);
   player.addEventListener('loadeddata', () => setPlayerLoading(false));
-  player.addEventListener('canplay', () => setPlayerLoading(false));
+  player.addEventListener('canplay', () => {
+    applyInitialDirectSeek();
+    setPlayerLoading(false);
+  });
   player.addEventListener('playing', () => setPlayerLoading(false));
   player.addEventListener('error', () => {
     setPlayerError();
     console.error('Media playback failed', player.error);
   });
-  player.addEventListener('loadedmetadata', updateTimeline);
+  player.addEventListener('loadedmetadata', () => {
+    applyInitialDirectSeek();
+    updateTimeline();
+  });
   player.addEventListener('play', () => {
     updatePlayButtons();
     showControls();

@@ -1379,6 +1379,15 @@ function itemsForCollection(collection: MediaCollectionSummary): MediaItemSummar
   return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
 }
 
+function categoryForRoute(): { genre: string; count: number; items: MediaItemSummary[] } | undefined {
+  const route = state.route;
+  if (route.page !== 'browse-detail' || route.kind !== 'category') {
+    return undefined;
+  }
+
+  return categorySummaries().find((entry) => entry.genre === route.key);
+}
+
 function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   const items = topLevelLibraryItems();
   if (!state.browseFilter) {
@@ -1567,6 +1576,100 @@ function renderCollectionDetailPage(): string {
       </section>
     </section>
   `;
+}
+
+function renderCategoryDetailPage(): string {
+  const category = categoryForRoute();
+  if (!category) {
+    if (state.libraryItemsLoading) {
+      return '<div class="empty-state">Loading genre…</div>';
+    }
+    return '<div class="empty-state">This genre is no longer available for the current library.</div>';
+  }
+
+  return `
+    <section class="item-page grouped-page category-detail-page">
+      <section class="item-hero collection-hero">
+        <div class="detail-art item-poster collection-poster">
+          ${renderIcon('layout-grid', 'audio-player-art-icon')}
+        </div>
+        <div class="detail-summary item-summary">
+          <p class="eyebrow">Genre</p>
+          <h2 class="item-title-fallback">${escapeHtml(category.genre)}</h2>
+          <div class="hero-meta-row">
+            <span class="tag">${category.items.length} title${category.items.length === 1 ? '' : 's'}</span>
+          </div>
+          <p>${escapeHtml(category.items.slice(0, 5).map((item) => item.display_title).join(' · ') || 'No titles are currently linked to this genre.')}</p>
+          <div class="detail-actions">
+            <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel page-panel item-section">
+        <div class="section-heading section-heading-actions">
+          <h3>Titles</h3>
+          <span class="muted">${category.items.length} item${category.items.length === 1 ? '' : 's'}</span>
+        </div>
+        ${category.items.length
+          ? `<div class="item-grid hierarchy-item-grid">${category.items.map(renderItemCard).join('')}</div>`
+          : '<div class="empty-state tight">No titles are currently linked to this genre.</div>'}
+      </section>
+    </section>
+  `;
+}
+
+function renderPlaylistDetailPage(): string {
+  const route = state.route;
+  const playlistName = route.page === 'browse-detail' && route.kind === 'playlist'
+    ? route.key
+    : 'Playlist';
+
+  return `
+    <section class="item-page grouped-page playlist-detail-page">
+      <section class="item-hero collection-hero">
+        <div class="detail-art item-poster collection-poster">
+          ${renderIcon('play', 'audio-player-art-icon')}
+        </div>
+        <div class="detail-summary item-summary">
+          <p class="eyebrow">Playlist</p>
+          <h2 class="item-title-fallback">${escapeHtml(playlistName)}</h2>
+          <div class="hero-meta-row">
+            <span class="tag">0 titles</span>
+          </div>
+          <p>No playlist items are available yet.</p>
+          <div class="detail-actions">
+            <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel page-panel item-section">
+        <div class="section-heading section-heading-actions">
+          <h3>Titles</h3>
+          <span class="muted">0 items</span>
+        </div>
+        <div class="empty-state tight">Playlist creation is planned. Items will appear here when playlists are available.</div>
+      </section>
+    </section>
+  `;
+}
+
+function renderBrowseDetailPage(): string {
+  if (state.route.page !== 'browse-detail') {
+    return renderBrowseFilterDetail();
+  }
+
+  switch (state.route.kind) {
+    case 'collection':
+      return renderCollectionDetailPage();
+    case 'category':
+      return renderCategoryDetailPage();
+    case 'playlist':
+      return renderPlaylistDetailPage();
+  }
+
+  return renderBrowseFilterDetail();
 }
 
 function metadataBadgeMarkup(item: MediaItemSummary): string {
@@ -1913,8 +2016,18 @@ function renderCollectionsTab(): string {
 
 function renderPlaylistsTab(): string {
   return `
-    <section class="placeholder-stack">
-      <div class="empty-state">Playlist creation is planned. This tab will eventually let you build reusable watch queues and listening sessions.</div>
+    <section class="category-grid">
+      <button
+        type="button"
+        class="category-card panel filter-card-button"
+        data-playlist-filter="Playlists"
+      >
+        <div class="category-card-header">
+          <strong>Playlists</strong>
+          <span class="tag">0 titles</span>
+        </div>
+        <p class="muted">Playlist creation is planned. Items will appear here when playlists are available.</p>
+      </button>
     </section>
   `;
 }
@@ -1945,11 +2058,11 @@ function renderCategoriesTab(): string {
 }
 
 function renderHomeTabContent(): string {
-  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
-    return renderCollectionDetailPage();
+  if (state.route.page === 'browse-detail') {
+    return renderBrowseDetailPage();
   }
 
-  if (state.route.page === 'browse-detail' || state.browseFilter) {
+  if (state.browseFilter) {
     return renderBrowseFilterDetail();
   }
 
@@ -1985,16 +2098,16 @@ function renderPageNavbar(eyebrow: string, title: string, description: string, a
 }
 
 function renderHomePage(): string {
-  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
+  if (state.route.page === 'browse-detail') {
     return `
       ${renderHomeNavbar()}
-      ${renderCollectionDetailPage()}
+      ${renderBrowseDetailPage()}
     `;
   }
 
   return `
     ${renderHomeNavbar()}
-    ${state.route.page === 'browse-detail' ? '' : renderHomeFeature()}
+    ${renderHomeFeature()}
     <section class="shelf-stack panel page-panel">${renderHomeTabContent()}</section>
   `;
 }
@@ -3642,13 +3755,17 @@ function render(preserveScroll = true): void {
   }
 
   const activeCollection = collectionForRoute();
+  const activeCategory = categoryForRoute();
   const homeFeatureItem = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? homePreviewItem()
     : undefined;
+  const categoryBackdropItem = activeCategory?.items.find((item) => item.backdrop_url) ?? activeCategory?.items[0];
   const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
     && (state.selectedItem.backdrop_url || state.selectedItemMetadata?.matches.some((match) => Boolean(match.backdrop_url || match.cached_backdrop_path)))
       ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
-      : activeCollection?.backdrop_url ? resolveApiUrl(activeCollection.backdrop_url) : pageBackdropUrlForItem(homeFeatureItem);
+      : activeCollection?.backdrop_url
+        ? resolveApiUrl(activeCollection.backdrop_url)
+        : pageBackdropUrlForItem(categoryBackdropItem ?? homeFeatureItem);
   const railCollapsed = isRailCollapsed();
   const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? ' home-page-backdrop'
@@ -4961,6 +5078,17 @@ function bindEvents(): void {
       }
 
       navigateTo(browseDetailPath('category', category.genre));
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-playlist-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const playlistName = button.dataset.playlistFilter;
+      if (!playlistName) {
+        return;
+      }
+
+      navigateTo(browseDetailPath('playlist', playlistName));
     });
   });
 

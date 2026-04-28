@@ -143,7 +143,11 @@ fn reconcile_legacy_migration_records(
             WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'logo_url');\
         INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000021', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'metadata_language_mode');",
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'metadata_language_mode');\
+        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            SELECT '0000022', CURRENT_TIMESTAMP
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_url')
+               OR EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_youtube_url');",
     )?;
 
     ensure_sqlite_column(
@@ -184,8 +188,50 @@ fn reconcile_legacy_migration_records(
             "ALTER TABLE media_libraries ADD COLUMN allowed_user_ids_json TEXT NOT NULL DEFAULT '[]'",
         )?;
     }
+    if sqlite_migration_record_exists(conn, "0000022")? {
+        ensure_sqlite_column(
+            conn,
+            "item_metadata_links",
+            Some("trailer_url"),
+            "theme_song_url",
+            "ALTER TABLE item_metadata_links ADD COLUMN theme_song_url TEXT DEFAULT NULL",
+        )?;
+        if sqlite_column_exists(conn, "item_metadata_links", "theme_song_url")?
+            && sqlite_column_exists(conn, "item_metadata_links", "theme_song_youtube_url")?
+        {
+            conn.batch_execute(
+                "UPDATE item_metadata_links
+                 SET theme_song_url = theme_song_youtube_url
+                 WHERE theme_song_url IS NULL
+                   AND theme_song_youtube_url IS NOT NULL",
+            )?;
+        }
+    }
 
     Ok(())
+}
+
+fn sqlite_column_exists(
+    conn: &mut diesel::SqliteConnection,
+    table_name: &str,
+    column_name: &str,
+) -> diesel::result::QueryResult<bool> {
+    use diesel::prelude::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let escaped_table = table_name.replace('\'', "''");
+    let escaped_column = column_name.replace('\'', "''");
+    let row = diesel::sql_query(format!(
+        "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = '{escaped_column}'"
+    ))
+    .get_result::<CountRow>(conn)?;
+
+    Ok(row.count > 0)
 }
 
 fn sqlite_migration_record_exists(

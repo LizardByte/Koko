@@ -35,10 +35,11 @@ use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_item_theme_song_themerr_references, get_library_files, get_library_metadata_languages,
+    get_item_youtube_theme_provider_references, get_library_files, get_library_metadata_languages,
     get_library_metadata_providers, get_media_home_with_preferred_languages, get_media_item,
     get_media_item_summary, get_media_item_with_preferred_languages,
-    get_persisted_library_summaries, get_playback_decision, get_preferred_item_metadata_link,
+    get_persisted_library_summaries, get_playback_decision,
+    get_preferred_item_artwork_metadata_link_for_languages, get_preferred_item_metadata_link,
     get_user_playback_progress, infer_episode_number, inspect_transcoding_capability,
     library_exists, list_automatic_metadata_candidates, list_library_settings,
     list_media_item_children, list_media_items, list_media_items_with_preferred_languages,
@@ -49,7 +50,7 @@ use crate::media::{
 };
 use crate::metadata::{
     ArtworkKind, ItemMetadataSummary, MetadataPersonCreditSummary, MetadataPersonSummary,
-    MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
+    MetadataProviderRole, MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
     expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
     fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot, fetch_provider_youtube_theme_url,
@@ -63,6 +64,7 @@ use crate::metadata::{
     set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
     try_cache_item_artwork, update_cached_artwork_path,
     upsert_item_metadata_snapshot_with_refresh_interval,
+    upsert_secondary_youtube_theme_metadata_link,
 };
 use crate::utils::current_timestamp;
 
@@ -413,6 +415,130 @@ fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
         .and_then(|days| i64::from(days).checked_mul(24 * 60 * 60))
 }
 
+fn secondary_theme_providers_for_library(
+    settings: &Settings,
+    library_providers: &[MetadataProviderId],
+) -> Vec<MetadataProviderId> {
+    list_provider_statuses(&settings.metadata)
+        .into_iter()
+        .filter(|provider| {
+            provider.role == MetadataProviderRole::Secondary
+                && provider.configured
+                && provider.implemented
+                && library_providers.contains(&provider.id)
+                && provider
+                    .extends_provider_ids
+                    .iter()
+                    .any(|primary_provider| library_providers.contains(primary_provider))
+        })
+        .map(|provider| provider.id)
+        .collect()
+}
+
+async fn persist_secondary_theme_metadata_for_item(
+    db: &DbConn,
+    item_id: i32,
+    settings: &Settings,
+) -> Result<(), Status> {
+    let library_id = db
+        .run(move |conn| {
+            get_media_item_summary(conn, item_id)?
+                .map(|item| item.library_id)
+                .ok_or(diesel::result::Error::NotFound)
+        })
+        .await
+        .map_err(|error| match error {
+            diesel::result::Error::NotFound => Status::NotFound,
+            error => {
+                log::error!(
+                    "Failed to load library for media item {} secondary metadata: {}",
+                    item_id,
+                    error
+                );
+                Status::InternalServerError
+            }
+        })?;
+    let library_providers = load_item_library_metadata_providers(db, settings, library_id).await?;
+    let secondary_providers = secondary_theme_providers_for_library(settings, &library_providers);
+    if secondary_providers.is_empty() {
+        return Ok(());
+    }
+
+    for provider_id in secondary_providers {
+        let references = db
+            .run({
+                let provider_id = provider_id.clone();
+                move |conn| get_item_youtube_theme_provider_references(conn, item_id, provider_id)
+            })
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to resolve secondary theme-song references for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::InternalServerError
+            })?;
+
+        for (media_type, database_id, external_id) in references {
+            match fetch_provider_youtube_theme_url(
+                provider_id.clone(),
+                &media_type,
+                &database_id,
+                &external_id,
+            )
+            .await
+            {
+                Ok(Some(url)) => {
+                    db.run({
+                        let provider_id = provider_id.clone();
+                        let media_type = media_type.clone();
+                        let database_id = database_id.clone();
+                        let external_id = external_id.clone();
+                        let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
+                        move |conn| {
+                            upsert_secondary_youtube_theme_metadata_link(
+                                conn,
+                                item_id,
+                                provider_id,
+                                &media_type,
+                                &database_id,
+                                &external_id,
+                                &url,
+                                refresh_interval_seconds,
+                            )
+                        }
+                    })
+                    .await
+                    .map_err(|error| {
+                        log::error!(
+                            "Failed to persist secondary theme-song metadata for media item {}: {}",
+                            item_id,
+                            error
+                        );
+                        Status::InternalServerError
+                    })?;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Failed to load {} theme song for media item {} ({} {} {}): {}",
+                        provider_id.as_storage_value(),
+                        item_id,
+                        media_type,
+                        database_id,
+                        external_id,
+                        error
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn persist_snapshot_for_item(
     db: &DbConn,
     item_id: i32,
@@ -533,6 +659,8 @@ async fn persist_snapshot_for_item(
         })?;
         summary.cached_logo_path = Some(logo_path_string);
     }
+
+    persist_secondary_theme_metadata_for_item(db, item_id, settings).await?;
 
     Ok(summary)
 }
@@ -2448,57 +2576,6 @@ pub async fn get_item(
         item.playback_duration_ms = progress.duration_ms;
     }
 
-    let library_providers =
-        load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
-    let themerr_available = library_providers.contains(&MetadataProviderId::Themerr)
-        && list_provider_statuses(&settings.metadata)
-            .into_iter()
-            .any(|provider| {
-                provider.id == MetadataProviderId::Themerr
-                    && provider.configured
-                    && provider.implemented
-            });
-    if item.theme_song_url.is_none() && themerr_available {
-        let theme_references = db
-            .run(move |conn| get_item_theme_song_themerr_references(conn, item_id))
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to resolve ThemerrDB theme-song reference for media item {}: {}",
-                    item_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
-
-        for (media_type, database_id, external_id) in theme_references {
-            match fetch_provider_youtube_theme_url(
-                MetadataProviderId::Themerr,
-                &media_type,
-                &database_id,
-                &external_id,
-            )
-            .await
-            {
-                Ok(Some(url)) => {
-                    item.theme_song_youtube_url = Some(url);
-                    break;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::warn!(
-                        "Failed to load ThemerrDB theme song for media item {} ({} {} {}): {}",
-                        item_id,
-                        media_type,
-                        database_id,
-                        external_id,
-                        error
-                    );
-                }
-            }
-        }
-    }
-
     Ok(Json(item))
 }
 
@@ -3321,7 +3398,12 @@ pub async fn get_item_artwork(
     let link = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
-            load_item_artwork_metadata_link(conn, item_id, &languages)
+            get_preferred_item_artwork_metadata_link_for_languages(
+                conn,
+                item_id,
+                &languages,
+                artwork_kind,
+            )
         })
         .await
         .map_err(|error| {
@@ -3425,29 +3507,6 @@ pub async fn get_item_artwork(
     NamedFile::open(cached_path)
         .await
         .map_err(|_| Status::NotFound)
-}
-
-fn load_item_artwork_metadata_link(
-    conn: &mut diesel::SqliteConnection,
-    item_id: i32,
-    preferred_languages: &[String],
-) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
-    let mut current_item_id = Some(item_id);
-    while let Some(current_id) = current_item_id {
-        let Some(item) = get_media_item_summary(conn, current_id)? else {
-            return Ok(None);
-        };
-        if let Some(link) = crate::metadata::get_preferred_item_metadata_link_for_languages(
-            conn,
-            current_id,
-            preferred_languages,
-        )? {
-            return Ok(Some(link));
-        }
-        current_item_id = item.parent_id;
-    }
-
-    Ok(None)
 }
 
 /// Serve a discovered theme-song asset for a media item.

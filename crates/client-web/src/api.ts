@@ -154,7 +154,6 @@ export interface MediaItemDetail extends MediaItemSummary {
   poster_url?: string;
   backdrop_url?: string;
   theme_song_url?: string;
-  theme_song_youtube_url?: string;
   tagline?: string;
   overview?: string;
   genres: string[];
@@ -209,6 +208,7 @@ export interface ItemMetadataMatch {
   backdrop_url?: string;
   release_year?: number;
   media_type?: string;
+  relation_kind: string;
   match_state: string;
   logo_url?: string;
   cached_logo_path?: string;
@@ -218,6 +218,7 @@ export interface ItemMetadataMatch {
   content_rating?: string;
   trailer_title?: string;
   trailer_url?: string;
+  theme_song_url?: string;
   locale_key: string;
   provider_locale_key?: string;
   cached_artwork_path?: string;

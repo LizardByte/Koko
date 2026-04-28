@@ -133,7 +133,6 @@ const items: MediaItemDetail[] = [
     poster_url: '/api/v1/items/101/artwork?kind=poster',
     backdrop_url: '/api/v1/items/101/artwork?kind=backdrop',
     theme_song_url: '/api/v1/items/101/theme',
-    theme_song_youtube_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI',
     tagline: 'Welcome to the real world.',
     overview: 'A computer hacker learns the true nature of reality and his role in the war against its controllers.',
     genres: ['Action', 'Science Fiction'],
@@ -173,7 +172,7 @@ const items: MediaItemDetail[] = [
     genres: ['Drama', 'Fantasy'],
     has_metadata: true,
     metadata_refresh_state: 'fresh',
-    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [],
@@ -211,7 +210,7 @@ const items: MediaItemDetail[] = [
     genres: ['Drama', 'Fantasy'],
     has_metadata: true,
     metadata_refresh_state: 'fresh',
-    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [
@@ -281,7 +280,7 @@ const items: MediaItemDetail[] = [
     linked_media_type: 'tv',
     has_metadata: true,
     metadata_refresh_state: 'fresh',
-    theme_song_youtube_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [
@@ -482,6 +481,7 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
         backdrop_url: 'https://image.tmdb.org/t/p/w1280/icmmSD4vTTDKOq2vvdulafOGw93.jpg',
         release_year: 1999,
         media_type: 'movie',
+        relation_kind: 'primary',
         match_state: 'linked',
         trailer_title: 'Official Trailer',
         trailer_url: 'https://www.youtube.com/embed/vKQi3bBA1y8?autoplay=1&rel=0',
@@ -493,6 +493,21 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
           { id: 4, person_id: 4, external_id: '9339', name: 'Lana Wachowski', role: 'Director', department: 'Directing', profile_url: 'https://www.themoviedb.org/person/9339', sort_order: 10000 },
           { id: 5, person_id: 5, external_id: '9341', name: 'Lilly Wachowski', role: 'Director', department: 'Directing', profile_url: 'https://www.themoviedb.org/person/9341', sort_order: 10001 },
         ],
+        locale_key: 'en-US',
+        refresh_state: 'fresh',
+        last_refreshed_at: 1760923200,
+        updated_at: 1760923200,
+      },
+      {
+        id: 2,
+        provider_id: 'themerr',
+        external_id: 'movie:tmdb:603',
+        media_type: 'movie',
+        relation_kind: 'secondary',
+        match_state: 'linked',
+        theme_song_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI',
+        genres: [],
+        people: [],
         locale_key: 'en-US',
         refresh_state: 'fresh',
         last_refreshed_at: 1760923200,
@@ -1069,6 +1084,7 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     backdrop_url: candidate.backdrop_url,
     release_year: candidate.release_year,
     media_type: candidate.media_type,
+    relation_kind: 'primary',
     match_state: 'linked',
     genres: [],
     people: [],
@@ -1146,7 +1162,8 @@ export function getMockPerson(personId: number): MetadataPersonResponse {
 
 export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
   const response = itemMetadata[itemId];
-  const existingMatch = response?.matches[0];
+  const existingMatch = response?.matches.find((match) => match.relation_kind === 'primary')
+    ?? response?.matches[0];
   if (!existingMatch) {
     throw new Error('404 Not Found');
   }
@@ -1159,7 +1176,7 @@ export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
 
   itemMetadata[itemId] = {
     ...response,
-    matches: [pendingMatch],
+    matches: response.matches.map((match) => match.id === existingMatch.id ? pendingMatch : match),
   };
 
   const item = items.find((candidate) => candidate.id === itemId);
@@ -1187,7 +1204,7 @@ export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
 
       itemMetadata[itemId] = {
         ...response,
-        matches: [refreshedMatch],
+        matches: response.matches.map((match) => match.id === existingMatch.id ? refreshedMatch : match),
       };
       item.display_title = refreshedMatch.title ?? item.display_title;
       item.overview = refreshedMatch.overview ?? item.overview;
@@ -1212,15 +1229,16 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
   refreshableItems.forEach((item) => {
     item.metadata_refresh_state = 'pending';
     const response = itemMetadata[item.id];
-    const existingMatch = response?.matches[0];
-    if (existingMatch && response) {
+    if (response) {
       itemMetadata[item.id] = {
         ...response,
-        matches: [{
-          ...existingMatch,
-          refresh_state: 'pending',
-          updated_at: Math.floor(Date.now() / 1000),
-        }],
+        matches: response.matches.map((match) => match.relation_kind === 'primary'
+          ? {
+              ...match,
+              refresh_state: 'pending',
+              updated_at: Math.floor(Date.now() / 1000),
+            }
+          : match),
       };
     }
   });
@@ -1232,15 +1250,16 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
       item.metadata_refresh_state = 'fresh';
       item.artwork_updated_at = refreshedAt;
       const response = itemMetadata[item.id];
-      const existingMatch = response?.matches[0];
-      if (existingMatch && response) {
+      if (response) {
         itemMetadata[item.id] = {
           ...response,
-          matches: [{
-            ...existingMatch,
-            refresh_state: 'fresh',
-            updated_at: refreshedAt,
-          }],
+          matches: response.matches.map((match) => match.relation_kind === 'primary'
+            ? {
+                ...match,
+                refresh_state: 'fresh',
+                updated_at: refreshedAt,
+              }
+            : match),
         };
       }
     });

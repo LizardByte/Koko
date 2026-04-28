@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 use crate::config::MetadataProviderId;
-use crate::metadata::{MediaLibraryKind, MetadataProviderDescriptor, MetadataProviderRole};
+use crate::metadata::{
+    MediaLibraryKind, MetadataProviderDescriptor, MetadataProviderRole, youtube_watch_url,
+};
 
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
 
@@ -72,7 +74,7 @@ pub(crate) async fn fetch_youtube_theme_url(
 fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
     match media_type.trim() {
         "movie" => Some("movies"),
-        "tv" | "series" | "show" => Some("tv"),
+        "tv" | "series" | "show" => Some("tv_shows"),
         _ => None,
     }
 }
@@ -92,7 +94,7 @@ fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+        .and_then(youtube_watch_url)
 }
 
 #[cfg(test)]

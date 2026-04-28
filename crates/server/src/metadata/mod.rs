@@ -134,6 +134,8 @@ pub struct ItemMetadataSummary {
     pub release_year: Option<i32>,
     /// Provider-specific media type such as `movie` or `tv`.
     pub media_type: Option<String>,
+    /// Link relation such as `primary` or `secondary`.
+    pub relation_kind: String,
     /// Current match state.
     pub match_state: String,
     /// Provider-supplied title logo URL, when available.
@@ -152,6 +154,8 @@ pub struct ItemMetadataSummary {
     pub trailer_title: Option<String>,
     /// Browser-embeddable trailer URL, when available.
     pub trailer_url: Option<String>,
+    /// Theme-song URL, when supplied by provider metadata.
+    pub theme_song_url: Option<String>,
     /// Koko locale key for this stored metadata row.
     pub locale_key: String,
     /// Provider-specific locale key used to fetch this row.
@@ -386,6 +390,8 @@ pub struct ProviderMetadataDetails {
     pub trailer_title: Option<String>,
     /// Browser-embeddable trailer URL.
     pub trailer_url: Option<String>,
+    /// Theme-song URL.
+    pub theme_song_url: Option<String>,
     /// Collections this metadata item belongs to.
     pub collections: Vec<ProviderMetadataCollection>,
     /// People credited by the provider.
@@ -484,6 +490,8 @@ pub struct LinkedMetadataPresentation {
     pub trailer_title: Option<String>,
     /// Browser-embeddable trailer URL, when available.
     pub trailer_url: Option<String>,
+    /// Theme-song URL, when available.
+    pub theme_song_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -512,12 +520,97 @@ static PARENTHETICAL_YEAR_REGEX: Lazy<Regex> =
 static SPLIT_SUFFIX_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\s*[-–]\s*(cd|disc|disk|dvd|part|pt)\s*\d+\s*$").unwrap());
 static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+").unwrap());
+static YOUTUBE_VIDEO_ID_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Za-z0-9_-]{11}$").unwrap());
 static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?i)\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|hdr|dv|webrip|web[- ]dl|bluray|brrip|dvdrip|remux|proper|repack|extended|unrated|criterion|aac|dts|truehd|atmos)\b",
     )
     .unwrap()
 });
+
+/// Extract a YouTube video id from a raw id, watch URL, short URL, embed URL, shorts URL, or live URL.
+pub fn extract_youtube_video_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if YOUTUBE_VIDEO_ID_REGEX.is_match(trimmed) {
+        return Some(trimmed.to_string());
+    }
+
+    let parse_target = if trimmed.starts_with("//youtube.com/")
+        || trimmed.starts_with("//www.youtube.com/")
+        || trimmed.starts_with("//youtu.be/")
+    {
+        format!("https:{trimmed}")
+    } else if trimmed.starts_with("youtube.com/")
+        || trimmed.starts_with("www.youtube.com/")
+        || trimmed.starts_with("youtu.be/")
+    {
+        format!("https://{trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+    let parsed = reqwest::Url::parse(&parse_target).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    if host == "youtu.be" {
+        return parsed
+            .path_segments()
+            .and_then(|mut segments| segments.next())
+            .map(str::trim)
+            .filter(|segment| YOUTUBE_VIDEO_ID_REGEX.is_match(segment))
+            .map(ToOwned::to_owned);
+    }
+
+    let is_youtube_host = host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com");
+    if !is_youtube_host {
+        return None;
+    }
+
+    if parsed.path() == "/watch" {
+        return parsed
+            .query_pairs()
+            .find(|(key, _)| key == "v")
+            .map(|(_, value)| value.trim().to_string())
+            .filter(|video_id| YOUTUBE_VIDEO_ID_REGEX.is_match(video_id));
+    }
+
+    let mut segments = parsed.path_segments()?;
+    match segments.next()? {
+        "embed" | "shorts" | "live" => segments
+            .next()
+            .map(str::trim)
+            .filter(|segment| YOUTUBE_VIDEO_ID_REGEX.is_match(segment))
+            .map(ToOwned::to_owned),
+        _ => None,
+    }
+}
+
+/// Return a canonical YouTube watch URL for a raw YouTube id or URL.
+pub fn youtube_watch_url(value: &str) -> Option<String> {
+    extract_youtube_video_id(value)
+        .map(|video_id| format!("https://www.youtube.com/watch?v={video_id}"))
+}
+
+/// Return a browser-embeddable YouTube URL for a raw YouTube id or URL.
+pub fn youtube_embed_url(
+    value: &str,
+    autoplay: bool,
+) -> Option<String> {
+    extract_youtube_video_id(value).map(|video_id| {
+        format!(
+            "https://www.youtube.com/embed/{video_id}?autoplay={}&rel=0",
+            if autoplay { 1 } else { 0 }
+        )
+    })
+}
 
 /// Normalize a Koko locale key into the canonical storage format.
 pub fn normalize_locale_key(value: &str) -> String {
@@ -649,8 +742,11 @@ pub fn sort_item_metadata_summaries_for_languages(
             .get(&normalize_locale_key(&right.locale_key))
             .copied()
             .unwrap_or(fallback_rank);
+        let left_relation_rank = if left.relation_kind == "primary" { 0 } else { 1 };
+        let right_relation_rank = if right.relation_kind == "primary" { 0 } else { 1 };
         left_rank
             .cmp(&right_rank)
+            .then_with(|| left_relation_rank.cmp(&right_relation_rank))
             .then_with(|| {
                 left.provider_id
                     .as_storage_value()
@@ -1217,6 +1313,7 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             content_rating: details.content_rating.clone(),
             trailer_title: details.trailer_title.clone(),
             trailer_url: details.trailer_url.clone(),
+            theme_song_url: details.theme_song_url.clone(),
             locale_key: snapshot.locale_key.clone(),
             provider_locale_key: snapshot.provider_locale_key.clone(),
             cached_artwork_path: if keep_cached_artwork {
@@ -1332,6 +1429,7 @@ pub fn set_item_metadata_refresh_state(
             content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
             trailer_title: existing.as_ref().and_then(|row| row.trailer_title.clone()),
             trailer_url: existing.as_ref().and_then(|row| row.trailer_url.clone()),
+            theme_song_url: existing.as_ref().and_then(|row| row.theme_song_url.clone()),
             locale_key: existing
                 .as_ref()
                 .map(|row| row.locale_key.clone())
@@ -1384,6 +1482,91 @@ pub fn set_item_metadata_refresh_state(
             .first(conn)?;
 
         to_item_metadata_summary_with_people(conn, row)
+    })
+}
+
+/// Store a secondary provider YouTube theme-song URL for one media item.
+pub fn upsert_secondary_youtube_theme_metadata_link(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+    media_type: &str,
+    database_id: &str,
+    external_id: &str,
+    url: &str,
+    refresh_interval_seconds: Option<i64>,
+) -> Result<Option<ItemMetadataSummary>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+
+    let Some(theme_song_url) = youtube_watch_url(url) else {
+        return Ok(None);
+    };
+    configure_sqlite_connection(conn)?;
+    retry_sqlite_write(|| {
+        let existing = metadata_links_dsl::item_metadata_links
+            .filter(metadata_links_dsl::media_item_id.eq(item_id))
+            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("secondary"))
+            .filter(metadata_links_dsl::locale_key.eq(DEFAULT_METADATA_LOCALE))
+            .select(ItemMetadataLink::as_select())
+            .first(conn)
+            .optional()?;
+        let now = current_timestamp();
+        let payload = NewItemMetadataLink {
+            media_item_id: item_id,
+            provider_id: provider_id.as_storage_value().to_string(),
+            external_id: format!("{media_type}:{database_id}:{external_id}"),
+            title: None,
+            overview: None,
+            tagline: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            media_type: Some(media_type.to_string()),
+            relation_kind: "secondary".into(),
+            match_state: "linked".into(),
+            logo_url: None,
+            cached_logo_path: None,
+            genres_json: None,
+            rating: None,
+            content_rating: None,
+            trailer_title: None,
+            trailer_url: None,
+            theme_song_url: Some(theme_song_url.clone()),
+            locale_key: DEFAULT_METADATA_LOCALE.to_string(),
+            provider_locale_key: None,
+            cached_artwork_path: None,
+            cached_backdrop_path: None,
+            refresh_state: "fresh".into(),
+            refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
+            last_refreshed_at: Some(now),
+            next_refresh_at: refresh_interval_seconds.map(|interval| now + interval),
+            refresh_error: None,
+            updated_at: Some(now),
+        };
+
+        if let Some(existing) = existing {
+            diesel::update(
+                metadata_links_dsl::item_metadata_links
+                    .filter(metadata_links_dsl::id.eq(existing.id)),
+            )
+            .set(&payload)
+            .execute(conn)?;
+        } else {
+            diesel::insert_into(metadata_links_dsl::item_metadata_links)
+                .values(&payload)
+                .execute(conn)?;
+        }
+
+        let row = metadata_links_dsl::item_metadata_links
+            .filter(metadata_links_dsl::media_item_id.eq(item_id))
+            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("secondary"))
+            .filter(metadata_links_dsl::locale_key.eq(DEFAULT_METADATA_LOCALE))
+            .select(ItemMetadataLink::as_select())
+            .first(conn)?;
+
+        to_item_metadata_summary_with_people(conn, row).map(Some)
     })
 }
 
@@ -1664,7 +1847,53 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         content_rating,
         trailer_title: link.trailer_title.clone(),
         trailer_url: link.trailer_url.clone(),
+        theme_song_url: link.theme_song_url.clone(),
     }
+}
+
+/// Extract merged presentation metadata from ordered stored links.
+pub fn presentation_from_metadata_links(links: &[ItemMetadataLink]) -> LinkedMetadataPresentation {
+    let mut merged = LinkedMetadataPresentation::default();
+    for link in links {
+        let presentation = presentation_from_metadata_link(link);
+        if merged.tagline.is_none() {
+            merged.tagline = presentation.tagline;
+        }
+        if merged.overview.is_none() {
+            merged.overview = presentation.overview;
+        }
+        if merged.genres.is_empty() && !presentation.genres.is_empty() {
+            merged.genres = presentation.genres;
+        }
+        if merged.release_year.is_none() {
+            merged.release_year = presentation.release_year;
+        }
+        if merged.media_type.is_none() {
+            merged.media_type = presentation.media_type;
+        }
+        merged.poster_available |= presentation.poster_available;
+        merged.backdrop_available |= presentation.backdrop_available;
+        if merged.logo_url.is_none() {
+            merged.logo_url = presentation.logo_url;
+        }
+        if merged.rating.is_none() {
+            merged.rating = presentation.rating;
+        }
+        if merged.content_rating.is_none() {
+            merged.content_rating = presentation.content_rating;
+        }
+        if merged.trailer_title.is_none() {
+            merged.trailer_title = presentation.trailer_title;
+        }
+        if merged.trailer_url.is_none() {
+            merged.trailer_url = presentation.trailer_url;
+        }
+        if merged.theme_song_url.is_none() {
+            merged.theme_song_url = presentation.theme_song_url;
+        }
+    }
+
+    merged
 }
 
 /// Persist stored metadata payload and cached artwork into the managed item asset structure.
@@ -2120,6 +2349,7 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         backdrop_url: link.backdrop_url,
         release_year: link.release_year,
         media_type: link.media_type,
+        relation_kind: link.relation_kind,
         match_state: link.match_state,
         logo_url: link.logo_url,
         cached_logo_path: link.cached_logo_path,
@@ -2133,6 +2363,7 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         content_rating: link.content_rating,
         trailer_title: link.trailer_title,
         trailer_url: link.trailer_url,
+        theme_song_url: link.theme_song_url,
         locale_key: link.locale_key,
         provider_locale_key: link.provider_locale_key,
         cached_artwork_path: link.cached_artwork_path,
@@ -2786,6 +3017,7 @@ mod tests {
             content_rating: None,
             trailer_title: None,
             trailer_url: None,
+            theme_song_url: None,
             locale_key: "en-US".into(),
             provider_locale_key: None,
             cached_artwork_path: None,
@@ -2804,6 +3036,38 @@ mod tests {
             Some("Stored overview wins.")
         );
         assert_eq!(presentation.genres, vec!["Drama", "Mystery"]);
+    }
+
+    #[test]
+    fn youtube_helpers_accept_common_video_url_shapes() {
+        assert_eq!(
+            extract_youtube_video_id("https://www.youtube.com/watch?v=SLBACEP6LsI&t=4s").as_deref(),
+            Some("SLBACEP6LsI")
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://youtu.be/SLBACEP6LsI").as_deref(),
+            Some("SLBACEP6LsI")
+        );
+        assert_eq!(
+            extract_youtube_video_id("www.youtube.com/watch?v=SLBACEP6LsI").as_deref(),
+            Some("SLBACEP6LsI")
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://www.youtube.com/embed/SLBACEP6LsI?rel=0").as_deref(),
+            Some("SLBACEP6LsI")
+        );
+        assert_eq!(
+            youtube_watch_url("https://www.youtube.com/shorts/SLBACEP6LsI").as_deref(),
+            Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
+        );
+        assert_eq!(
+            youtube_embed_url("SLBACEP6LsI", true).as_deref(),
+            Some("https://www.youtube.com/embed/SLBACEP6LsI?autoplay=1&rel=0")
+        );
+        assert_eq!(
+            extract_youtube_video_id("https://example.com/watch?v=SLBACEP6LsI"),
+            None
+        );
     }
 
     #[test]

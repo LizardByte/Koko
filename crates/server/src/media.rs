@@ -28,9 +28,9 @@ use crate::db::models::{
     NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
-    ArtworkKind, MetadataCollectionSummary, get_preferred_item_metadata_link_for_languages,
-    get_primary_item_metadata_link, list_metadata_collection_summaries_with_preferred_languages,
-    normalize_locale_key, presentation_from_metadata_link,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, MetadataCollectionSummary,
+    list_metadata_collection_summaries_with_preferred_languages, normalize_locale_key,
+    presentation_from_metadata_links,
 };
 use crate::utils::current_timestamp;
 
@@ -315,8 +315,6 @@ pub struct MediaItemDetail {
     pub backdrop_url: Option<String>,
     /// Theme-song URL, when available.
     pub theme_song_url: Option<String>,
-    /// Hidden YouTube-backed theme-song URL, when available.
-    pub theme_song_youtube_url: Option<String>,
     /// Tagline from linked metadata, when available.
     pub tagline: Option<String>,
     /// Description or overview from linked metadata, when available.
@@ -1985,18 +1983,20 @@ pub fn get_media_item_with_preferred_languages(
     detail.children =
         list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?;
 
-    if let Some(link) =
-        get_preferred_item_metadata_link_for_languages(conn, item_id, preferred_languages)?
-    {
-        if let Some(title) = link
-            .title
-            .as_deref()
+    let metadata_links =
+        prioritized_metadata_links_for_item(conn, item_id, item.library_id, preferred_languages)?;
+    if !metadata_links.is_empty() {
+        let primary_link = metadata_links
+            .iter()
+            .find(|link| link.relation_kind == "primary");
+        if let Some(title) = primary_link
+            .and_then(|link| link.title.as_deref())
             .map(str::trim)
             .filter(|title| !title.is_empty())
         {
             detail.display_title = title.to_string();
         }
-        let presentation = presentation_from_metadata_link(&link);
+        let presentation = presentation_from_metadata_links(&metadata_links);
         detail.tagline = presentation.tagline;
         detail.overview = presentation.overview;
         detail.genres = presentation.genres;
@@ -2008,11 +2008,14 @@ pub fn get_media_item_with_preferred_languages(
         detail.content_rating = presentation.content_rating;
         detail.linked_media_type = presentation.media_type;
         detail.has_metadata = true;
-        detail.metadata_refresh_state = Some(link.refresh_state.clone());
-        detail.metadata_refresh_error = link.refresh_error.clone();
-        detail.artwork_updated_at = link.updated_at;
+        if let Some(link) = primary_link {
+            detail.metadata_refresh_state = Some(link.refresh_state.clone());
+            detail.metadata_refresh_error = link.refresh_error.clone();
+            detail.artwork_updated_at = link.updated_at;
+        }
         detail.trailer_title = presentation.trailer_title;
         detail.trailer_url = presentation.trailer_url;
+        detail.theme_song_url = presentation.theme_song_url;
         if presentation.poster_available {
             detail.poster_url = Some(format!("/api/v1/items/{}/artwork?kind=poster", item_id));
         }
@@ -2029,10 +2032,9 @@ pub fn get_media_item_with_preferred_languages(
         if assets.backdrop_path.is_some() {
             detail.backdrop_url = Some(format!("/api/v1/items/{}/artwork?kind=backdrop", item_id));
         }
-        detail.theme_song_url = assets
-            .theme_song_path
-            .as_ref()
-            .map(|_| format!("/api/v1/items/{}/theme", item_id));
+        if assets.theme_song_path.is_some() {
+            detail.theme_song_url = Some(format!("/api/v1/items/{}/theme", item_id));
+        }
         detail.subtitle_tracks = assets
             .subtitle_paths
             .iter()
@@ -2350,27 +2352,19 @@ pub fn get_item_theme_song_themerr_references(
             break;
         }
 
-        if let Some(link) = get_primary_item_metadata_link(conn, current_item_id)? {
-            if link.provider_id == MetadataProviderId::Tmdb.as_storage_value() {
-                if let Some(media_type) = link.media_type.as_deref() {
-                    if matches!(media_type, "movie" | "tv") {
-                        let mut references = vec![(
-                            media_type.to_string(),
-                            "tmdb".to_string(),
-                            link.external_id.clone(),
-                        )];
-                        if media_type == "movie" {
-                            if let Some(imdb_id) = metadata_external_id(conn, link.id, "imdb")? {
-                                references.push((
-                                    media_type.to_string(),
-                                    "imdb".to_string(),
-                                    imdb_id,
-                                ));
-                            }
-                        }
-                        return Ok(references);
+        if let Some(link) = get_item_themerr_source_metadata_link(conn, current_item_id)? {
+            if let Some(media_type) = link.media_type.as_deref() {
+                let mut references = vec![(
+                    media_type.to_string(),
+                    "tmdb".to_string(),
+                    link.external_id.clone(),
+                )];
+                if media_type == "movie" {
+                    if let Some(imdb_id) = metadata_external_id(conn, link.id, "imdb")? {
+                        references.push((media_type.to_string(), "imdb".to_string(), imdb_id));
                     }
                 }
+                return Ok(references);
             }
         }
 
@@ -2383,6 +2377,38 @@ pub fn get_item_theme_song_themerr_references(
     }
 
     Ok(Vec::new())
+}
+
+fn get_item_themerr_source_metadata_link(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+
+    metadata_links_dsl::item_metadata_links
+        .filter(metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(metadata_links_dsl::provider_id.eq(MetadataProviderId::Tmdb.as_storage_value()))
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::media_type.eq_any(["movie", "tv"]))
+        .order((
+            metadata_links_dsl::updated_at.desc(),
+            metadata_links_dsl::id.desc(),
+        ))
+        .select(ItemMetadataLink::as_select())
+        .first(conn)
+        .optional()
+}
+
+/// Return ordered YouTube theme-song lookup candidates for a secondary metadata provider.
+pub fn get_item_youtube_theme_provider_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    match provider_id {
+        MetadataProviderId::Themerr => get_item_theme_song_themerr_references(conn, item_id),
+        _ => Ok(Vec::new()),
+    }
 }
 
 fn metadata_external_id(
@@ -3435,11 +3461,9 @@ fn media_item_summary_with_preferred_languages(
     preferred_languages: &[String],
 ) -> Result<MediaItemSummary, diesel::result::Error> {
     let mut summary = to_media_item_summary(row);
-    let link = if preferred_languages.is_empty() {
-        get_preferred_item_metadata_link(conn, summary.id)?
-    } else {
-        get_preferred_item_metadata_link_for_languages(conn, summary.id, preferred_languages)?
-    };
+    let link = prioritized_primary_metadata_links_for_item(conn, &summary, preferred_languages)?
+        .into_iter()
+        .next();
     let link = link.as_ref().map(summary_metadata_link_from_full_link);
     apply_primary_metadata_link(&mut summary, link.as_ref());
 
@@ -3626,7 +3650,7 @@ fn preferred_item_metadata_link_for_summary(
     conn: &mut SqliteConnection,
     item: &MediaItemSummary,
 ) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
-    let mut links = primary_metadata_links_for_item(conn, item.id)?;
+    let mut links = prioritized_primary_metadata_links_for_item(conn, item, &[])?;
     if links.is_empty() {
         return Ok(None);
     }
@@ -3731,21 +3755,161 @@ fn show_tmdb_external_id_for_item(
     Ok(None)
 }
 
-fn primary_metadata_links_for_item(
+fn media_library_metadata_provider_order(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+) -> Result<Vec<MetadataProviderId>, diesel::result::Error> {
+    use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
+
+    let library = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::id.eq(library_id))
+        .select(MediaLibrary::as_select())
+        .first::<MediaLibrary>(conn)
+        .optional()?;
+
+    Ok(library
+        .map(media_library_settings_from_row)
+        .map(|settings| settings.metadata_providers)
+        .unwrap_or_else(|| vec![MetadataProviderId::Tmdb]))
+}
+
+fn metadata_language_priority(preferred_languages: &[String]) -> HashMap<String, usize> {
+    let mut languages = preferred_languages
+        .iter()
+        .map(|language| normalize_locale_key(language))
+        .filter(|language| !language.is_empty())
+        .collect::<Vec<_>>();
+    if !languages
+        .iter()
+        .any(|language| language == DEFAULT_METADATA_LOCALE)
+    {
+        languages.push(DEFAULT_METADATA_LOCALE.to_string());
+    }
+
+    languages
+        .into_iter()
+        .enumerate()
+        .map(|(index, language)| (language, index))
+        .collect()
+}
+
+fn prioritized_metadata_links_for_item(
     conn: &mut SqliteConnection,
     item_id: i32,
+    library_id: i32,
+    preferred_languages: &[String],
 ) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
 
-    item_metadata_links_dsl::item_metadata_links
+    let provider_order = media_library_metadata_provider_order(conn, library_id)?;
+    let provider_rank = provider_order
+        .iter()
+        .enumerate()
+        .map(|(index, provider)| (provider.as_storage_value().to_string(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_provider_rank = provider_rank.len();
+    let language_rank = metadata_language_priority(preferred_languages);
+    let fallback_language_rank = language_rank.len();
+
+    let mut rows = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::media_item_id.eq(item_id))
-        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
-        .order((
-            item_metadata_links_dsl::updated_at.desc(),
-            item_metadata_links_dsl::id.desc(),
-        ))
+        .filter(item_metadata_links_dsl::relation_kind.eq_any(["primary", "secondary"]))
         .select(ItemMetadataLink::as_select())
-        .load::<ItemMetadataLink>(conn)
+        .load::<ItemMetadataLink>(conn)?
+        .into_iter()
+        .filter(|link| provider_rank.contains_key(&link.provider_id))
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|left, right| {
+        let left_provider_rank = provider_rank
+            .get(&left.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+        let right_provider_rank = provider_rank
+            .get(&right.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+        let left_language_rank = language_rank
+            .get(&normalize_locale_key(&left.locale_key))
+            .copied()
+            .unwrap_or(fallback_language_rank);
+        let right_language_rank = language_rank
+            .get(&normalize_locale_key(&right.locale_key))
+            .copied()
+            .unwrap_or(fallback_language_rank);
+        let left_relation_rank = if left.relation_kind == "primary" { 0 } else { 1 };
+        let right_relation_rank = if right.relation_kind == "primary" { 0 } else { 1 };
+
+        left_provider_rank
+            .cmp(&right_provider_rank)
+            .then_with(|| left_relation_rank.cmp(&right_relation_rank))
+            .then_with(|| left_language_rank.cmp(&right_language_rank))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+
+    let mut seen = HashSet::<(String, String)>::new();
+    Ok(rows
+        .into_iter()
+        .filter(|link| seen.insert((link.provider_id.clone(), link.relation_kind.clone())))
+        .collect())
+}
+
+fn prioritized_primary_metadata_links_for_item(
+    conn: &mut SqliteConnection,
+    item: &MediaItemSummary,
+    preferred_languages: &[String],
+) -> Result<Vec<ItemMetadataLink>, diesel::result::Error> {
+    Ok(
+        prioritized_metadata_links_for_item(conn, item.id, item.library_id, preferred_languages)?
+            .into_iter()
+            .filter(|link| link.relation_kind == "primary")
+            .collect(),
+    )
+}
+
+/// Return the preferred metadata link that can serve the requested artwork kind.
+pub fn get_preferred_item_artwork_metadata_link_for_languages(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
+    artwork_kind: ArtworkKind,
+) -> Result<Option<ItemMetadataLink>, diesel::result::Error> {
+    let mut current_item_id = Some(item_id);
+    let mut visited = HashSet::new();
+    while let Some(current_id) = current_item_id {
+        if !visited.insert(current_id) {
+            break;
+        }
+        let Some(item) = get_media_item_summary_without_metadata(conn, current_id)? else {
+            return Ok(None);
+        };
+        if let Some(link) = prioritized_metadata_links_for_item(
+            conn,
+            current_id,
+            item.library_id,
+            preferred_languages,
+        )?
+        .into_iter()
+        .find(|link| metadata_link_has_artwork(link, artwork_kind))
+        {
+            return Ok(Some(link));
+        }
+        current_item_id = item.parent_id;
+    }
+
+    Ok(None)
+}
+
+fn metadata_link_has_artwork(
+    link: &ItemMetadataLink,
+    artwork_kind: ArtworkKind,
+) -> bool {
+    match artwork_kind {
+        ArtworkKind::Poster => link.cached_artwork_path.is_some() || link.artwork_url.is_some(),
+        ArtworkKind::Backdrop => link.cached_backdrop_path.is_some() || link.backdrop_url.is_some(),
+        ArtworkKind::Logo => link.cached_logo_path.is_some() || link.logo_url.is_some(),
+    }
 }
 
 fn to_media_item_detail(
@@ -3782,7 +3946,6 @@ fn to_media_item_detail(
         poster_url: None,
         backdrop_url: None,
         theme_song_url: None,
-        theme_song_youtube_url: None,
         tagline: None,
         overview: None,
         genres: Vec::new(),

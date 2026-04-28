@@ -1951,7 +1951,8 @@ function renderHomeNavbar(): string {
 }
 
 function renderLinkedMetadataSummary(): string {
-  const linkedMatch = state.selectedItemMetadata?.matches[0];
+  const matches = state.selectedItemMetadata?.matches ?? [];
+  const linkedMatch = matches.find((match) => match.relation_kind === 'primary') ?? matches[0];
   if (!linkedMatch) {
     return '<div class="empty-state tight">No external metadata is linked yet.</div>';
   }
@@ -1962,11 +1963,31 @@ function renderLinkedMetadataSummary(): string {
     : linkedMatch.refresh_state === 'error'
       ? 'Refresh failed'
       : 'Up to date';
-  const provider = state.selectedItemMetadata?.providers.find((entry) => entry.id === linkedMatch.provider_id);
+  const providersById = new Map(
+    (state.selectedItemMetadata?.providers ?? state.metadataProviders).map((provider) => [provider.id, provider]),
+  );
+  const contributingProviderIds = [
+    linkedMatch.provider_id,
+    ...matches.map((match) => match.provider_id).filter((providerId) => providerId !== linkedMatch.provider_id),
+  ].filter((providerId, index, providerIds) => providerIds.indexOf(providerId) === index);
+  const providerTags = contributingProviderIds
+    .map((providerId) => {
+      const className = providerId === linkedMatch.provider_id ? 'tag success' : 'tag';
+      return `<span class="${className}">${escapeHtml(providerId)}</span>`;
+    })
+    .join('');
+  const attributions = contributingProviderIds
+    .map((providerId) => providersById.get(providerId))
+    .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
+    .map((provider) => {
+      const logoUrl = providerAttributionLogo(provider.id);
+      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="" loading="lazy" />` : ''}${escapeHtml(provider.attribution_text)}</a>`;
+    })
+    .join('');
 
   return `
     <div class="metadata-current-link">
-      <span class="tag success">${escapeHtml(linkedMatch.provider_id)}</span>
+      ${providerTags}
       <span class="tag">${escapeHtml(linkedMatch.media_type ?? 'linked')}</span>
       <span class="tag ${metadataRefreshPending || linkedMatch.refresh_state === 'pending' ? 'warning' : linkedMatch.refresh_state === 'error' ? 'danger-tag' : ''}">${escapeHtml(refreshStateLabel)}</span>
       ${linkedMatch.release_year ? `<span class="tag">${linkedMatch.release_year}</span>` : ''}
@@ -1974,9 +1995,7 @@ function renderLinkedMetadataSummary(): string {
       <span class="metadata-current-copy">
         <strong>${escapeHtml(linkedMatch.title ?? linkedMatch.external_id)}</strong>
         <span class="muted">Last refreshed ${escapeHtml(formatTimestamp(linkedMatch.last_refreshed_at ?? linkedMatch.updated_at))}</span>
-        ${provider?.attribution_text
-          ? `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${provider.logo_dark_url ? `<img src="${escapeHtml(provider.logo_dark_url)}" alt="" loading="lazy" />` : ''}${escapeHtml(provider.attribution_text)}</a>`
-          : ''}
+        ${attributions}
         ${linkedMatch.refresh_error ? `<span class="metadata-refresh-error">${escapeHtml(linkedMatch.refresh_error)}</span>` : ''}
       </span>
     </div>
@@ -3627,24 +3646,23 @@ function currentThemeSongSource(): { kind: 'audio' | 'youtube'; src: string; tit
     return undefined;
   }
 
-  if (state.selectedItem.theme_song_url) {
+  const themeSongUrl = state.selectedItem.theme_song_url;
+  if (!themeSongUrl) {
+    return undefined;
+  }
+
+  const youtubeUrl = buildYouTubeEmbedUrl(themeSongUrl, { autoplay: true, controls: false });
+  if (youtubeUrl) {
     return {
-      kind: 'audio',
-      src: resolveApiUrl(state.selectedItem.theme_song_url),
+      kind: 'youtube',
+      src: youtubeUrl,
       title: state.selectedItem.display_title,
     };
   }
 
-  const youtubeUrl = state.selectedItem.theme_song_youtube_url
-    ? buildYouTubeEmbedUrl(state.selectedItem.theme_song_youtube_url, { autoplay: true, controls: false })
-    : undefined;
-  if (!youtubeUrl) {
-    return undefined;
-  }
-
   return {
-    kind: 'youtube',
-    src: youtubeUrl,
+    kind: 'audio',
+    src: resolveApiUrl(themeSongUrl),
     title: state.selectedItem.display_title,
   };
 }

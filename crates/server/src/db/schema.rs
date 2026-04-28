@@ -35,6 +35,7 @@ table! {
         content_rating -> Nullable<Text>,
         trailer_title -> Nullable<Text>,
         trailer_url -> Nullable<Text>,
+        theme_song_url -> Nullable<Text>,
         locale_key -> Text,
         provider_locale_key -> Nullable<Text>,
         cached_artwork_path -> Nullable<Text>,

@@ -25,6 +25,7 @@ use koko::media::{
 use koko::metadata::{
     ArtworkKind, StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
     get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
+    upsert_secondary_youtube_theme_metadata_link,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1005,6 +1006,168 @@ fn test_item_detail_uses_primary_metadata_link_only() {
     assert_eq!(
         detail.overview.as_deref(),
         Some("Primary metadata overview.")
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_item_detail_merges_metadata_links_by_library_provider_order() {
+    let root = unique_temp_dir("item_detail_metadata_provider_merge");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::Tvdb,
+        ],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("item_detail_metadata_provider_merge_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let movie = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("Priority Title".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tvdb,
+            external_id: "movie-603".into(),
+            media_type: Some("movie".into()),
+            title: Some("Fallback Title".into()),
+            overview: Some("Fallback overview from lower priority provider.".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2003),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    let detail = get_media_item(&mut connection, movie.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected item detail");
+    assert_eq!(detail.display_title, "Priority Title");
+    assert_eq!(
+        detail.overview.as_deref(),
+        Some("Fallback overview from lower priority provider.")
+    );
+    assert_eq!(detail.release_year, Some(1999));
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_secondary_theme_song_metadata_is_stored_and_presented() {
+    let root = unique_temp_dir("secondary_theme_song_metadata");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::Themerr,
+        ],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("secondary_theme_song_metadata_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let movie = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    let secondary = upsert_secondary_youtube_theme_metadata_link(
+        &mut connection,
+        movie.id,
+        MetadataProviderId::Themerr,
+        "movie",
+        "tmdb",
+        "603",
+        "https://youtu.be/SLBACEP6LsI",
+        None,
+    )
+    .unwrap()
+    .expect("Expected secondary metadata link");
+    assert_eq!(
+        secondary.theme_song_url.as_deref(),
+        Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
+    );
+
+    let detail = get_media_item(&mut connection, movie.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected item detail");
+    assert_eq!(
+        detail.theme_song_url.as_deref(),
+        Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
     );
 
     drop(connection);

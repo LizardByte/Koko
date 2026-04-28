@@ -1280,6 +1280,16 @@ function mediaItemsById(): Map<number, MediaItemSummary> {
   return new Map(state.libraryItems.map((item) => [item.id, item]));
 }
 
+function homePreviewItemsById(): Map<number, MediaItemSummary> {
+  const items = [
+    ...state.libraryItems,
+    ...(state.home?.shelves ?? []).flatMap((shelf) => shelf.items),
+    ...state.searchResults,
+  ];
+
+  return new Map(items.map((item) => [item.id, item]));
+}
+
 function rootAncestorForItem(item: MediaItemSummary, itemsById: Map<number, MediaItemSummary>): MediaItemSummary {
   let current = item;
 
@@ -1292,6 +1302,32 @@ function rootAncestorForItem(item: MediaItemSummary, itemsById: Map<number, Medi
   }
 
   return current;
+}
+
+function showPreviewItemForHighlight(item: MediaItemSummary): MediaItemSummary {
+  if (item.item_type !== 'season' && item.item_type !== 'episode') {
+    return item;
+  }
+
+  const hierarchyShow = item.hierarchy?.find((ancestor) => ancestor.item_type === 'show');
+  if (hierarchyShow) {
+    return hierarchyShow;
+  }
+
+  const itemsById = homePreviewItemsById();
+  let current = item;
+  while (typeof current.parent_id === 'number') {
+    const parent = itemsById.get(current.parent_id);
+    if (!parent) {
+      break;
+    }
+    if (parent.item_type === 'show') {
+      return parent;
+    }
+    current = parent;
+  }
+
+  return item;
 }
 
 function categorySummaries(): Array<{ genre: string; count: number; items: MediaItemSummary[] }> {
@@ -1527,7 +1563,7 @@ function homePreviewItem(): MediaItemSummary | undefined {
     return undefined;
   }
 
-  return items.find((item) => item.id === state.homePreviewItemId) ?? items[0];
+  return showPreviewItemForHighlight(items.find((item) => item.id === state.homePreviewItemId) ?? items[0]);
 }
 
 function homePreviewCandidates(): MediaItemSummary[] {
@@ -4982,7 +5018,8 @@ function bindEvents(): void {
         return;
       }
       state.homePreviewItemId = itemId;
-      const previewItem = homePreviewCandidates().find((item) => item.id === itemId);
+      const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
+      const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
       const root = document.querySelector<HTMLElement>('.home-feature');
       if (root) {
         root.outerHTML = renderHomeFeature();

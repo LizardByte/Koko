@@ -141,6 +141,7 @@ export interface MediaItemSummary {
   modified_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
+  hierarchy?: MediaItemSummary[];
 }
 
 export interface MediaItemDetail extends MediaItemSummary {

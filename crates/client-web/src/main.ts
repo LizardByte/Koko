@@ -143,6 +143,7 @@ interface AppState {
   libraryItemsLoading: boolean;
   searchResults: MediaItemSummary[];
   homePreviewItemId?: number;
+  homePreviewCollectionId?: string;
   metadataProviders: MetadataProviderStatus[];
   systemActivities: SystemActivity[];
   dashboardItems: MediaItemSummary[];
@@ -234,6 +235,7 @@ const state: AppState = {
   libraryItemsLoading: false,
   searchResults: [],
   homePreviewItemId: undefined,
+  homePreviewCollectionId: undefined,
   metadataProviders: [],
   systemActivities: [],
   dashboardItems: [],
@@ -1388,6 +1390,24 @@ function categoryForRoute(): { genre: string; count: number; items: MediaItemSum
   return categorySummaries().find((entry) => entry.genre === route.key);
 }
 
+function browseItemsForRoute(): MediaItemSummary[] {
+  const route = state.route;
+  if (route.page !== 'browse-detail') {
+    return [];
+  }
+
+  if (route.kind === 'collection') {
+    const collection = collectionForRoute();
+    return collection ? itemsForCollection(collection) : [];
+  }
+
+  if (route.kind === 'category') {
+    return categoryForRoute()?.items ?? [];
+  }
+
+  return [];
+}
+
 function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   const items = topLevelLibraryItems();
   if (!state.browseFilter) {
@@ -1542,14 +1562,15 @@ function renderCollectionDetailPage(): string {
   }
 
   const items = itemsForCollection(collection);
-  const posterUrl = collection.artwork_url ? resolveApiUrl(collection.artwork_url) : undefined;
   const themeSongOption = currentThemeSongYouTubeTarget();
+  const posterUrl = collection.artwork_url ? resolveApiUrl(collection.artwork_url) : undefined;
+  const overview = collection.overview ?? 'No description is stored for this collection yet.';
 
   return `
     <section class="item-page collection-page">
       <section class="item-hero collection-hero">
         <div class="detail-art item-poster collection-poster ${posterUrl ? 'has-image' : ''}">
-          ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(collection.name)}" />` : renderIcon('image', 'audio-player-art-icon')}
+          ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(collection.name)} poster" />` : renderIcon('image', 'audio-player-art-icon')}
         </div>
         <div class="detail-summary item-summary">
           <p class="eyebrow">Collection</p>
@@ -1557,7 +1578,7 @@ function renderCollectionDetailPage(): string {
           <div class="hero-meta-row">
             <span class="tag">${items.length} title${items.length === 1 ? '' : 's'}</span>
           </div>
-          ${collection.overview ? renderCollapsibleText(collection.overview, `collection-overview:${collection.id}`) : '<p>No overview is stored for this collection yet.</p>'}
+          ${renderCollapsibleText(overview, `collection-overview:${collection.id}`)}
           <div class="detail-actions">
             ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
             <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
@@ -1567,7 +1588,7 @@ function renderCollectionDetailPage(): string {
 
       <section class="panel page-panel item-section">
         <div class="section-heading section-heading-actions">
-          <h3>Titles</h3>
+          <h3>Items</h3>
           <span class="muted">${items.length} item${items.length === 1 ? '' : 's'}</span>
         </div>
         ${items.length
@@ -1587,6 +1608,9 @@ function renderCategoryDetailPage(): string {
     return '<div class="empty-state">This genre is no longer available for the current library.</div>';
   }
 
+  const overview = category.items.slice(0, 5).map((item) => item.display_title).join(' · ')
+    || 'No titles are currently linked to this genre.';
+
   return `
     <section class="item-page grouped-page category-detail-page">
       <section class="item-hero collection-hero">
@@ -1599,7 +1623,7 @@ function renderCategoryDetailPage(): string {
           <div class="hero-meta-row">
             <span class="tag">${category.items.length} title${category.items.length === 1 ? '' : 's'}</span>
           </div>
-          <p>${escapeHtml(category.items.slice(0, 5).map((item) => item.display_title).join(' · ') || 'No titles are currently linked to this genre.')}</p>
+          ${renderCollapsibleText(overview, `category-overview:${category.genre}`)}
           <div class="detail-actions">
             <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
           </div>
@@ -1608,7 +1632,7 @@ function renderCategoryDetailPage(): string {
 
       <section class="panel page-panel item-section">
         <div class="section-heading section-heading-actions">
-          <h3>Titles</h3>
+          <h3>Items</h3>
           <span class="muted">${category.items.length} item${category.items.length === 1 ? '' : 's'}</span>
         </div>
         ${category.items.length
@@ -1646,7 +1670,7 @@ function renderPlaylistDetailPage(): string {
 
       <section class="panel page-panel item-section">
         <div class="section-heading section-heading-actions">
-          <h3>Titles</h3>
+          <h3>Items</h3>
           <span class="muted">0 items</span>
         </div>
         <div class="empty-state tight">Playlist creation is planned. Items will appear here when playlists are available.</div>
@@ -1726,6 +1750,26 @@ function renderItemCard(item: MediaItemSummary): string {
   `;
 }
 
+type HomeFeaturePreview =
+  | { kind: 'collection'; collection: MediaCollectionSummary }
+  | { kind: 'item'; item: MediaItemSummary };
+
+function homeFeaturePreview(): HomeFeaturePreview | undefined {
+  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
+    const collection = collectionForRoute();
+    return collection ? { kind: 'collection', collection } : undefined;
+  }
+
+  if (state.route.page === 'home' && state.homeTab === 'collections') {
+    const collections = collectionSummaries();
+    const collection = collections.find((entry) => entry.id === state.homePreviewCollectionId) ?? collections[0];
+    return collection ? { kind: 'collection', collection } : undefined;
+  }
+
+  const item = homePreviewItem();
+  return item ? { kind: 'item', item } : undefined;
+}
+
 function homePreviewItem(): MediaItemSummary | undefined {
   const items = homePreviewCandidates();
   if (!items.length) {
@@ -1736,20 +1780,26 @@ function homePreviewItem(): MediaItemSummary | undefined {
 }
 
 function homePreviewCandidates(): MediaItemSummary[] {
+  if (state.route.page === 'browse-detail') {
+    return browseItemsForRoute();
+  }
+
   switch (state.homeTab) {
     case 'library':
       return filteredTopLevelLibraryItems();
     case 'collections': {
-      const firstCollection = collectionSummaries()[0];
-      if (!firstCollection) {
-        return filteredTopLevelLibraryItems();
-      }
-      const allowedIds = new Set(firstCollection.item_ids);
-      return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+      return filteredTopLevelLibraryItems();
     }
     case 'categories': {
-      const firstCategory = categorySummaries()[0];
-      return firstCategory?.items ?? filteredTopLevelLibraryItems();
+      const seen = new Set<number>();
+      const categoryItems = categorySummaries().flatMap((category) => category.items).filter((item) => {
+        if (seen.has(item.id)) {
+          return false;
+        }
+        seen.add(item.id);
+        return true;
+      });
+      return categoryItems.length ? categoryItems : filteredTopLevelLibraryItems();
     }
     default: {
       const shelfItems = (state.home?.shelves ?? []).flatMap((shelf) => shelf.items);
@@ -1764,12 +1814,48 @@ function pageBackdropUrlForItem(item: Pick<MediaItemSummary, 'id' | 'backdrop_ur
     : undefined;
 }
 
+function pageBackdropUrlForCollection(collection: Pick<MediaCollectionSummary, 'backdrop_url' | 'artwork_url'> | undefined): string | undefined {
+  const artworkUrl = collection?.backdrop_url ?? collection?.artwork_url;
+  return artworkUrl ? resolveApiUrl(artworkUrl) : undefined;
+}
+
+function pageBackdropUrlForHomePreview(preview: HomeFeaturePreview | undefined): string | undefined {
+  if (!preview) {
+    return undefined;
+  }
+
+  return preview.kind === 'collection'
+    ? pageBackdropUrlForCollection(preview.collection)
+    : pageBackdropUrlForItem(preview.item);
+}
+
 function renderHomeFeature(): string {
-  const item = homePreviewItem();
-  if (!item) {
+  const preview = homeFeaturePreview();
+  if (!preview) {
     return '';
   }
 
+  if (preview.kind === 'collection') {
+    const collection = preview.collection;
+    const backdropUrl = pageBackdropUrlForCollection(collection);
+    return `
+      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+        <div class="home-feature-copy">
+          <p class="eyebrow">Collection</p>
+          <h2>${escapeHtml(collection.name)}</h2>
+          <p>${escapeHtml(collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`)}</p>
+          <div class="hero-meta-row">
+            <span class="tag">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+        <button type="button" class="secondary-button home-feature-action" data-collection-filter="${escapeHtml(collection.id)}">
+          ${renderButtonContent('Open', 'arrow-right')}
+        </button>
+      </section>
+    `;
+  }
+
+  const item = preview.item;
   const backdropUrl = pageBackdropUrlForItem(item);
   const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
   const library = state.libraries.find((entry) => entry.id === item.library_id);
@@ -1995,21 +2081,26 @@ function renderCollectionsTab(): string {
   }
 
   return `
-    <section class="category-grid">
-      ${collections.map((collection) => `
-        <button
-          type="button"
-          class="category-card panel filter-card-button"
-          data-collection-filter="${escapeHtml(collection.id)}"
-          style="${collection.backdrop_url || collection.artwork_url ? `--collection-card-image: url('${escapeHtml(collection.backdrop_url ?? collection.artwork_url ?? '')}');` : ''}"
-        >
-          <div class="category-card-header">
-            <strong>${escapeHtml(collection.name)}</strong>
-            <span class="tag">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
-          </div>
-          <p class="muted">${escapeHtml(collection.overview ?? 'Open this collection.')}</p>
-        </button>
-      `).join('')}
+    <section class="item-grid">
+      ${collections.map((collection) => {
+        const posterUrl = collection.artwork_url ?? collection.backdrop_url;
+        return `
+          <button
+            type="button"
+            class="media-card collection-browse-card"
+            data-collection-filter="${escapeHtml(collection.id)}"
+            data-preview-collection-id="${escapeHtml(collection.id)}"
+          >
+            <span class="media-card-art collection" style="${posterUrl ? `background-image: url('${escapeHtml(resolveApiUrl(posterUrl))}');` : ''}">
+              <span class="media-card-kind-row">
+                <span class="media-card-kind">${renderIcon('image', 'card-icon')}</span>
+              </span>
+              <span class="media-card-duration">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
+            </span>
+            <span class="media-card-title">${escapeHtml(collection.name)}</span>
+          </button>
+        `;
+      }).join('')}
     </section>
   `;
 }
@@ -2045,6 +2136,7 @@ function renderCategoriesTab(): string {
           type="button"
           class="category-card panel filter-card-button"
           data-category-filter="${escapeHtml(category.genre)}"
+          ${category.items[0] ? `data-preview-item-id="${category.items[0].id}"` : ''}
         >
           <div class="category-card-header">
             <strong>${escapeHtml(category.genre)}</strong>
@@ -3754,18 +3846,13 @@ function render(preserveScroll = true): void {
     return;
   }
 
-  const activeCollection = collectionForRoute();
-  const activeCategory = categoryForRoute();
-  const homeFeatureItem = state.route.page === 'home' || state.route.page === 'browse-detail'
-    ? homePreviewItem()
+  const homeFeature = state.route.page === 'home' || state.route.page === 'browse-detail'
+    ? homeFeaturePreview()
     : undefined;
-  const categoryBackdropItem = activeCategory?.items.find((item) => item.backdrop_url) ?? activeCategory?.items[0];
   const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
     && (state.selectedItem.backdrop_url || state.selectedItemMetadata?.matches.some((match) => Boolean(match.backdrop_url || match.cached_backdrop_path)))
       ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
-      : activeCollection?.backdrop_url
-        ? resolveApiUrl(activeCollection.backdrop_url)
-        : pageBackdropUrlForItem(categoryBackdropItem ?? homeFeatureItem);
+      : pageBackdropUrlForHomePreview(homeFeature);
   const railCollapsed = isRailCollapsed();
   const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? ' home-page-backdrop'
@@ -5047,6 +5134,7 @@ function bindEvents(): void {
         state.homeTab = nextTab;
         state.browseFilter = undefined;
         state.homePreviewItemId = undefined;
+        state.homePreviewCollectionId = undefined;
         const nextPath = homeBrowsePath();
         window.history.pushState({}, '', nextPath);
         state.route = parseRoute();
@@ -5061,6 +5149,7 @@ function bindEvents(): void {
       state.homeTab = nextTab;
       state.browseFilter = undefined;
       state.homePreviewItemId = undefined;
+      state.homePreviewCollectionId = undefined;
       render();
     });
   });
@@ -5481,40 +5570,80 @@ function bindEvents(): void {
     });
   });
 
+  const bindHomeFeatureAction = (): void => {
+    document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.addEventListener('click', () => {
+      const nextItemId = Number(document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.dataset.itemId);
+      if (Number.isFinite(nextItemId)) {
+        navigateTo(`/items/${nextItemId}`);
+      }
+    });
+
+    document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.addEventListener('click', () => {
+      const collectionId = document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.dataset.collectionFilter;
+      if (collectionId) {
+        navigateTo(browseDetailPath('collection', collectionId));
+      }
+    });
+  };
+
+  const updatePageBackdrop = (backdropUrl: string | undefined): void => {
+    const appShell = document.querySelector<HTMLElement>('.app-shell');
+    const pageBackdrop = document.querySelector<HTMLElement>('.page-backdrop');
+    if (backdropUrl) {
+      appShell?.classList.add('has-page-backdrop');
+      if (pageBackdrop) {
+        pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
+      } else {
+        appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
+      }
+    } else {
+      appShell?.classList.remove('has-page-backdrop');
+      pageBackdrop?.remove();
+    }
+  };
+
   document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach((element) => {
     const updatePreview = (): void => {
+      if (state.route.page === 'browse-detail') {
+        return;
+      }
+
       const itemId = Number(element.dataset.previewItemId);
       if (!Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
         return;
       }
       state.homePreviewItemId = itemId;
+      state.homePreviewCollectionId = undefined;
       const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
       const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
       const root = document.querySelector<HTMLElement>('.home-feature');
       if (root) {
         root.outerHTML = renderHomeFeature();
         createIcons({ icons });
-        document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.addEventListener('click', () => {
-          const nextItemId = Number(document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.dataset.itemId);
-          if (Number.isFinite(nextItemId)) {
-            navigateTo(`/items/${nextItemId}`);
-          }
-        });
+        bindHomeFeatureAction();
       }
-      const backdropUrl = pageBackdropUrlForItem(previewItem);
-      const appShell = document.querySelector<HTMLElement>('.app-shell');
-      const pageBackdrop = document.querySelector<HTMLElement>('.page-backdrop');
-      if (backdropUrl) {
-        appShell?.classList.add('has-page-backdrop');
-        if (pageBackdrop) {
-          pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
-        } else {
-          appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
-        }
-      } else {
-        appShell?.classList.remove('has-page-backdrop');
-        pageBackdrop?.remove();
+      updatePageBackdrop(pageBackdropUrlForItem(previewItem));
+    };
+    element.addEventListener('mouseenter', updatePreview);
+    element.addEventListener('focus', updatePreview);
+  });
+
+  document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach((element) => {
+    const updatePreview = (): void => {
+      const collectionId = element.dataset.previewCollectionId;
+      if (!collectionId || state.homePreviewCollectionId === collectionId) {
+        return;
       }
+      state.homePreviewCollectionId = collectionId;
+      state.homePreviewItemId = undefined;
+      const collection = collectionSummaries().find((entry) => entry.id === collectionId);
+      const root = document.querySelector<HTMLElement>('.home-feature');
+      if (root) {
+        root.outerHTML = renderHomeFeature();
+        createIcons({ icons });
+        bindHomeFeatureAction();
+      }
+      updatePageBackdrop(pageBackdropUrlForCollection(collection));
     };
     element.addEventListener('mouseenter', updatePreview);
     element.addEventListener('focus', updatePreview);

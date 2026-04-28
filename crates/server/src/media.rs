@@ -24,8 +24,9 @@ use crate::config::{
     MetadataProviderId,
 };
 use crate::db::models::{
-    ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, NewMediaFile, NewMediaItem,
-    NewMediaLibrary, NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
+    ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, MetadataCollection,
+    MetadataCollectionItem, NewMediaFile, NewMediaItem, NewMediaLibrary, NewPlaybackProgress,
+    NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
     ArtworkKind, DEFAULT_METADATA_LOCALE, MetadataCollectionSummary, MetadataRegistry,
@@ -2114,10 +2115,15 @@ pub fn get_media_home_with_preferred_languages(
         get_continue_watching_items(conn, user_id, library_id, preferred_languages)?;
     let recently_added = sort_recently_added(&items);
     let recommended = sort_recommended(&items, &continue_watching);
+    let collection_provider_order = match library_id {
+        Some(library_id) => media_library_metadata_provider_order(conn, library_id)?,
+        None => Vec::new(),
+    };
     let collections = list_metadata_collection_summaries_with_preferred_languages(
         conn,
         library_id,
         preferred_languages,
+        &collection_provider_order,
     )?;
 
     Ok(MediaHome {
@@ -2342,6 +2348,134 @@ pub fn get_item_youtube_theme_provider_references(
     }
 
     get_item_theme_song_source_references(conn, item_id, &source_provider_ids)
+}
+
+/// Return ordered collection lookup candidates for a secondary theme-song provider.
+pub fn get_item_youtube_theme_collection_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<Vec<(i32, String, String, String)>, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+    use crate::db::schema::metadata_collections::dsl as collections_dsl;
+
+    let registry = MetadataRegistry::new();
+    let Some(provider) = registry.provider(&provider_id) else {
+        return Ok(Vec::new());
+    };
+    let source_provider_values = provider
+        .descriptor()
+        .extends_provider_ids
+        .into_iter()
+        .map(|provider_id| provider_id.as_storage_value().to_string())
+        .collect::<Vec<_>>();
+    if source_provider_values.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut current_id = Some(item_id);
+    let mut item_ids = Vec::new();
+    let mut visited = HashSet::new();
+    while let Some(current_item_id) = current_id {
+        if !visited.insert(current_item_id) {
+            break;
+        }
+        item_ids.push(current_item_id);
+        current_id = media_items_dsl::media_items
+            .filter(media_items_dsl::id.eq(current_item_id))
+            .select(media_items_dsl::parent_id)
+            .first::<Option<i32>>(conn)
+            .optional()?
+            .flatten();
+    }
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let collection_item_rows = collection_items_dsl::metadata_collection_items
+        .filter(collection_items_dsl::media_item_id.eq_any(&item_ids))
+        .select(MetadataCollectionItem::as_select())
+        .load::<MetadataCollectionItem>(conn)?;
+    if collection_item_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let collection_item_by_collection_id = collection_item_rows
+        .into_iter()
+        .map(|item| (item.collection_id, item))
+        .collect::<HashMap<_, _>>();
+    let mut collection_rows = collections_dsl::metadata_collections
+        .filter(
+            collections_dsl::id.eq_any(
+                collection_item_by_collection_id
+                    .keys()
+                    .copied()
+                    .collect::<Vec<_>>(),
+            ),
+        )
+        .filter(collections_dsl::provider_id.eq_any(&source_provider_values))
+        .filter(collections_dsl::relation_kind.eq("primary"))
+        .select(MetadataCollection::as_select())
+        .load::<MetadataCollection>(conn)?;
+
+    let source_provider_rank = source_provider_values
+        .iter()
+        .enumerate()
+        .map(|(index, provider_id)| (provider_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_provider_rank = source_provider_rank.len();
+    collection_rows.sort_by(|left, right| {
+        let left_provider_rank = source_provider_rank
+            .get(&left.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+        let right_provider_rank = source_provider_rank
+            .get(&right.provider_id)
+            .copied()
+            .unwrap_or(fallback_provider_rank);
+        let left_item_rank = collection_item_by_collection_id
+            .get(&left.id)
+            .and_then(|item| {
+                item_ids
+                    .iter()
+                    .position(|item_id| *item_id == item.media_item_id)
+            })
+            .unwrap_or(item_ids.len());
+        let right_item_rank = collection_item_by_collection_id
+            .get(&right.id)
+            .and_then(|item| {
+                item_ids
+                    .iter()
+                    .position(|item_id| *item_id == item.media_item_id)
+            })
+            .unwrap_or(item_ids.len());
+
+        left_item_rank
+            .cmp(&right_item_rank)
+            .then_with(|| left_provider_rank.cmp(&right_provider_rank))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+
+    let mut seen = HashSet::new();
+    Ok(collection_rows
+        .into_iter()
+        .filter(|collection| {
+            seen.insert((
+                collection.source_provider_id.clone(),
+                collection.source_external_id.clone(),
+            ))
+        })
+        .map(|collection| {
+            (
+                collection.id,
+                "collection".to_string(),
+                collection.source_provider_id,
+                collection.source_external_id,
+            )
+        })
+        .collect())
 }
 
 fn get_item_theme_song_source_references(

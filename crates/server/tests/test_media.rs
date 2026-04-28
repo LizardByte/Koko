@@ -7,14 +7,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use diesel::Connection;
 use diesel::RunQueryDsl;
 use diesel::SqliteConnection;
+use diesel::connection::SimpleConnection;
 use diesel_migrations::MigrationHarness;
 
 // local imports
 use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
-use koko::db::MIGRATIONS;
+use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
 use koko::media::{
-    LibraryScanStatus, get_item_youtube_theme_provider_references, get_library_files,
-    get_media_home, get_media_item, get_persisted_library_summaries,
+    LibraryScanStatus, get_item_youtube_theme_collection_references,
+    get_item_youtube_theme_provider_references, get_library_files, get_media_home,
+    get_media_home_with_preferred_languages, get_media_item, get_persisted_library_summaries,
     get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
     inspect_transcoding_capability, list_automatic_metadata_candidates, list_library_settings,
     list_media_items, remove_library_setting, replace_library_settings,
@@ -607,12 +609,86 @@ fn test_home_includes_real_collection_summaries() {
         };
         upsert_item_metadata_snapshot(&mut connection, item.id, &snapshot).unwrap();
     }
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        items[0].id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: format!("movie-{}", items[0].id),
+            media_type: Some("movie".into()),
+            title: Some(items[0].display_title.clone()),
+            overview: Some("Parte de una colección de prueba.".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "es-ES".into(),
+            provider_locale_key: Some("es-ES".into()),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "title": items[0].display_title,
+                    "overview": "Parte de una colección de prueba.",
+                    "release_date": "1999-03-31",
+                    "belongs_to_collection": {
+                        "id": 4242,
+                        "name": "Saga de Prueba",
+                        "overview": "Una colección de películas para navegar.",
+                        "poster_path": "/poster-es.jpg",
+                        "backdrop_path": "/backdrop-es.jpg"
+                    }
+                })
+                .to_string(),
+            ),
+        },
+    )
+    .unwrap();
 
     let home = get_media_home(&mut connection, None, Some(library.id)).unwrap();
     assert_eq!(home.collections.len(), 1);
     assert_eq!(home.collections[0].name, "Test Saga");
     assert_eq!(home.collections[0].item_count, 2);
     assert_eq!(home.collections[0].item_ids.len(), 2);
+    let spanish_home = get_media_home_with_preferred_languages(
+        &mut connection,
+        None,
+        Some(library.id),
+        &["es-ES".into()],
+    )
+    .unwrap();
+    assert_eq!(spanish_home.collections.len(), 1);
+    assert_eq!(spanish_home.collections[0].name, "Saga de Prueba");
+    assert_eq!(spanish_home.collections[0].item_count, 2);
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    let collection_count = diesel::sql_query("SELECT COUNT(*) AS count FROM metadata_collections")
+        .get_result::<CountRow>(&mut connection)
+        .unwrap()
+        .count;
+    let collection_item_count =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM metadata_collection_items")
+            .get_result::<CountRow>(&mut connection)
+            .unwrap()
+            .count;
+    assert_eq!(collection_count, 2);
+    assert_eq!(collection_item_count, 3);
+    let collection_references = get_item_youtube_theme_collection_references(
+        &mut connection,
+        items[0].id,
+        MetadataProviderId::Themerr,
+    )
+    .unwrap();
+    assert_eq!(collection_references.len(), 1);
+    assert_eq!(
+        (
+            collection_references[0].1.as_str(),
+            collection_references[0].2.as_str(),
+            collection_references[0].3.as_str(),
+        ),
+        ("collection", "tmdb", "4242")
+    );
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -1954,6 +2030,122 @@ fn test_latest_metadata_migration_preserves_existing_library_catalog_rows() {
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
+    let db_path = unique_temp_dir("legacy_collection_schema_repair").with_extension("db");
+    let mut connection = SqliteConnection::establish(&db_path.to_string_lossy())
+        .expect("Failed to establish SQLite test connection");
+
+    connection
+        .batch_execute(
+            "CREATE TABLE __diesel_schema_migrations (\
+                version VARCHAR(50) PRIMARY KEY NOT NULL,\
+                run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\
+             );\
+             INSERT INTO __diesel_schema_migrations(version) VALUES ('0000023');\
+             CREATE TABLE media_items (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT\
+             );\
+             CREATE TABLE item_metadata_links (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                media_item_id INTEGER NOT NULL,\
+                provider_id TEXT NOT NULL,\
+                locale_key TEXT NOT NULL,\
+                provider_locale_key TEXT DEFAULT NULL\
+             );\
+             CREATE TABLE metadata_collections (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                provider_id TEXT NOT NULL,\
+                external_id TEXT NOT NULL,\
+                name TEXT NOT NULL,\
+                overview TEXT DEFAULT NULL,\
+                artwork_url TEXT DEFAULT NULL,\
+                backdrop_url TEXT DEFAULT NULL,\
+                theme_song_url TEXT DEFAULT NULL,\
+                updated_at BIGINT DEFAULT NULL,\
+                UNIQUE (provider_id, external_id)\
+             );\
+             CREATE TABLE metadata_collection_items (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                collection_id INTEGER NOT NULL,\
+                media_item_id INTEGER NOT NULL,\
+                updated_at BIGINT DEFAULT NULL,\
+                UNIQUE (collection_id, media_item_id)\
+             );\
+             INSERT INTO media_items(id) VALUES (1);\
+             INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, provider_locale_key)\
+                VALUES (10, 1, 'tmdb', 'en-US', 'en-US');\
+             INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, provider_locale_key)\
+                VALUES (11, 1, 'tmdb', 'es-ES', 'es-ES');\
+             INSERT INTO metadata_collections(id, provider_id, external_id, name, overview, updated_at)\
+                VALUES (20, 'tmdb', '4242', 'Test Saga', 'English overview', 100);\
+             INSERT INTO metadata_collection_items(collection_id, media_item_id, updated_at)\
+                VALUES (20, 1, 100);",
+        )
+        .expect("Expected legacy collection schema fixture to be created");
+
+    reconcile_legacy_sqlite_schema(&mut connection)
+        .expect("Expected legacy collection schema repair to complete");
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct TextRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        value: String,
+    }
+
+    let source_column_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM pragma_table_info('metadata_collections') \
+         WHERE name = 'source_provider_id'",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(source_column_count, 1);
+
+    let locales = diesel::sql_query(
+        "SELECT locale_key AS value FROM metadata_collections ORDER BY locale_key",
+    )
+    .load::<TextRow>(&mut connection)
+    .unwrap()
+    .into_iter()
+    .map(|row| row.value)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        locales,
+        vec![
+            "en-US".to_string(),
+            "es-ES".to_string()
+        ]
+    );
+
+    let membership_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM metadata_collection_items \
+         WHERE metadata_link_id IS NOT NULL",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(membership_count, 2);
+
+    diesel::sql_query(
+        "INSERT INTO metadata_collections (\
+            provider_id, external_id, source_provider_id, source_external_id,\
+            relation_kind, locale_key, name\
+         ) VALUES ('tmdb', '4242', 'tmdb', '4242', 'primary', 'fr-FR', 'Saga FR')",
+    )
+    .execute(&mut connection)
+    .expect("Expected repaired collection uniqueness to include locale");
+
+    drop(connection);
     fs::remove_file(db_path).unwrap();
 }
 

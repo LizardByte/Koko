@@ -35,16 +35,17 @@ use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_item_youtube_theme_provider_references, get_library_files, get_library_metadata_languages,
-    get_library_metadata_providers, get_media_home_with_preferred_languages, get_media_item,
-    get_media_item_summary, get_media_item_with_preferred_languages,
-    get_persisted_library_summaries, get_playback_decision,
-    get_preferred_item_artwork_metadata_link_for_languages, get_preferred_item_metadata_link,
-    get_user_playback_progress, infer_episode_number, inspect_transcoding_capability,
-    library_exists, list_automatic_metadata_candidates, list_library_settings,
-    list_media_item_children, list_media_items, list_media_items_with_preferred_languages,
-    mark_metadata_match_attempted, preferred_audio_stream_index, resolve_item_subtitle_path,
-    resolve_item_theme_song_path, resolve_local_item_artwork_path, resolve_media_item_source_path,
+    get_item_youtube_theme_collection_references, get_item_youtube_theme_provider_references,
+    get_library_files, get_library_metadata_languages, get_library_metadata_providers,
+    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
+    get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
+    get_preferred_item_metadata_link, get_user_playback_progress, infer_episode_number,
+    inspect_transcoding_capability, library_exists, list_automatic_metadata_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    list_media_items_with_preferred_languages, mark_metadata_match_attempted,
+    preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
+    resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
     upsert_playback_progress, user_can_access_library,
 };
@@ -64,7 +65,7 @@ use crate::metadata::{
     set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
     try_cache_item_artwork, update_cached_artwork_path,
     upsert_item_metadata_snapshot_with_refresh_interval,
-    upsert_secondary_youtube_theme_metadata_link,
+    upsert_secondary_collection_theme_song_url, upsert_secondary_youtube_theme_metadata_link,
 };
 use crate::utils::current_timestamp;
 
@@ -524,6 +525,76 @@ async fn persist_secondary_theme_metadata_for_item(
                 Err(error) => {
                     log::warn!(
                         "Failed to load {} theme song for media item {} ({} {} {}): {}",
+                        provider_id.as_storage_value(),
+                        item_id,
+                        media_type,
+                        database_id,
+                        external_id,
+                        error
+                    );
+                }
+            }
+        }
+
+        let collection_references = db
+            .run({
+                let provider_id = provider_id.clone();
+                move |conn| {
+                    get_item_youtube_theme_collection_references(conn, item_id, provider_id)
+                }
+            })
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to resolve secondary collection theme-song references for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::InternalServerError
+            })?;
+
+        for (collection_id, media_type, database_id, external_id) in collection_references {
+            match fetch_provider_youtube_theme_url(
+                provider_id.clone(),
+                &media_type,
+                &database_id,
+                &external_id,
+            )
+            .await
+            {
+                Ok(Some(url)) => {
+                    db.run({
+                        let provider_id = provider_id.clone();
+                        let media_type = media_type.clone();
+                        let database_id = database_id.clone();
+                        let external_id = external_id.clone();
+                        move |conn| {
+                            upsert_secondary_collection_theme_song_url(
+                                conn,
+                                collection_id,
+                                provider_id,
+                                &media_type,
+                                &database_id,
+                                &external_id,
+                                &url,
+                            )
+                        }
+                    })
+                    .await
+                    .map_err(|error| {
+                        log::error!(
+                            "Failed to persist secondary collection theme-song metadata for media item {}: {}",
+                            item_id,
+                            error
+                        );
+                        Status::InternalServerError
+                    })?;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Failed to load {} collection theme song for media item {} ({} {} {}): {}",
                         provider_id.as_storage_value(),
                         item_id,
                         media_type,

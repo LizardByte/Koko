@@ -569,6 +569,7 @@ const collections: MediaCollectionSummary[] = [
     overview: 'A cyberpunk science-fiction collection centered around Neo, Zion, and the war against the machines.',
     artwork_url: 'https://image.tmdb.org/t/p/w500/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg',
     backdrop_url: 'https://image.tmdb.org/t/p/w1280/icmmSD4vTTDKOq2vvdulafOGw93.jpg',
+    theme_song_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI',
     item_ids: [101],
     item_count: 1,
   },

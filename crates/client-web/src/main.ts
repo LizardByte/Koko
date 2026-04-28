@@ -3642,11 +3642,30 @@ function themeSongLayer(): HTMLElement {
 }
 
 function currentThemeSongSource(): { kind: 'audio' | 'youtube'; src: string; title: string } | undefined {
-  if (state.route.page !== 'item' || !state.selectedItem || state.isPlayerOpen || state.activeTrailer) {
+  if (state.isPlayerOpen || state.activeTrailer) {
     return undefined;
   }
 
-  const themeSongUrl = state.selectedItem.theme_song_url;
+  if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
+    const collection = collectionSummaries().find((entry) => entry.id === state.route.key);
+    return collection?.theme_song_url
+      ? themeSongSourceFromUrl(collection.theme_song_url, collection.name)
+      : undefined;
+  }
+
+  if (state.route.page !== 'item' || !state.selectedItem) {
+    return undefined;
+  }
+
+  return state.selectedItem.theme_song_url
+    ? themeSongSourceFromUrl(state.selectedItem.theme_song_url, state.selectedItem.display_title)
+    : undefined;
+}
+
+function themeSongSourceFromUrl(
+  themeSongUrl: string,
+  title: string,
+): { kind: 'audio' | 'youtube'; src: string; title: string } | undefined {
   if (!themeSongUrl) {
     return undefined;
   }
@@ -3656,14 +3675,14 @@ function currentThemeSongSource(): { kind: 'audio' | 'youtube'; src: string; tit
     return {
       kind: 'youtube',
       src: youtubeUrl,
-      title: state.selectedItem.display_title,
+      title,
     };
   }
 
   return {
     kind: 'audio',
     src: resolveApiUrl(themeSongUrl),
-    title: state.selectedItem.display_title,
+    title,
   };
 }
 

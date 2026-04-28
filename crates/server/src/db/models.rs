@@ -5,8 +5,8 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    item_metadata_collections, item_metadata_external_ids, item_metadata_links,
-    item_metadata_people, media_files, media_items, media_libraries, metadata_people,
+    item_metadata_external_ids, item_metadata_links, item_metadata_people, media_files,
+    media_items, media_libraries, metadata_collection_items, metadata_collections, metadata_people,
     metadata_person_credits, playback_progress, scan_state, users,
 };
 
@@ -353,32 +353,64 @@ pub struct NewMetadataPersonCredit {
     pub sort_order: i32,
 }
 
-#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
-#[diesel(belongs_to(ItemMetadataLink, foreign_key = metadata_link_id))]
-#[diesel(table_name = item_metadata_collections)]
-pub struct ItemMetadataCollection {
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = metadata_collections)]
+pub struct MetadataCollection {
     pub id: i32,
-    pub metadata_link_id: i32,
     pub provider_id: String,
     pub external_id: String,
+    pub source_provider_id: String,
+    pub source_external_id: String,
+    pub relation_kind: String,
+    pub locale_key: String,
+    pub provider_locale_key: Option<String>,
     pub name: String,
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
+    pub theme_song_url: Option<String>,
     pub updated_at: Option<i64>,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
-#[diesel(table_name = item_metadata_collections)]
+#[diesel(table_name = metadata_collections)]
 #[diesel(treat_none_as_null = true)]
-pub struct NewItemMetadataCollection {
-    pub metadata_link_id: i32,
+pub struct NewMetadataCollection {
     pub provider_id: String,
     pub external_id: String,
+    pub source_provider_id: String,
+    pub source_external_id: String,
+    pub relation_kind: String,
+    pub locale_key: String,
+    pub provider_locale_key: Option<String>,
     pub name: String,
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
+    pub theme_song_url: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
+#[diesel(belongs_to(MetadataCollection, foreign_key = collection_id))]
+#[diesel(belongs_to(MediaItem, foreign_key = media_item_id))]
+#[diesel(belongs_to(ItemMetadataLink, foreign_key = metadata_link_id))]
+#[diesel(table_name = metadata_collection_items)]
+pub struct MetadataCollectionItem {
+    pub id: i32,
+    pub collection_id: i32,
+    pub media_item_id: i32,
+    pub metadata_link_id: i32,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = metadata_collection_items)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMetadataCollectionItem {
+    pub collection_id: i32,
+    pub media_item_id: i32,
+    pub metadata_link_id: i32,
     pub updated_at: Option<i64>,
 }
 

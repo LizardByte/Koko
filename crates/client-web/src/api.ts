@@ -344,6 +344,7 @@ export interface MediaCollectionSummary {
   overview?: string;
   artwork_url?: string;
   backdrop_url?: string;
+  theme_song_url?: string;
   item_ids: number[];
   item_count: number;
 }

@@ -20,6 +20,13 @@ use rocket_sync_db_pools::{database, diesel};
 /// Embedded migrations for the SQLite database.
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
 
+/// Reconcile SQLite schemas that were created by older development migrations.
+pub fn reconcile_legacy_sqlite_schema(
+    conn: &mut diesel::SqliteConnection
+) -> diesel::result::QueryResult<()> {
+    reconcile_legacy_migration_records(conn)
+}
+
 /// Apply SQLite pragmas that improve concurrency and reduce lock contention.
 pub fn configure_sqlite_connection(
     conn: &mut diesel::SqliteConnection
@@ -147,7 +154,10 @@ fn reconcile_legacy_migration_records(
         INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000022', CURRENT_TIMESTAMP
             WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_url')
-               OR EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_youtube_url');",
+               OR EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_youtube_url');\
+        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            SELECT '0000023', CURRENT_TIMESTAMP
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metadata_collections');",
     )?;
 
     ensure_sqlite_column(
@@ -207,8 +217,261 @@ fn reconcile_legacy_migration_records(
             )?;
         }
     }
+    if sqlite_migration_record_exists(conn, "0000023")? {
+        repair_metadata_collection_schema(conn)?;
+    }
 
     Ok(())
+}
+
+fn repair_metadata_collection_schema(
+    conn: &mut diesel::SqliteConnection
+) -> diesel::result::QueryResult<()> {
+    if !sqlite_table_exists(conn, "metadata_collections")? {
+        return Ok(());
+    }
+
+    let collection_has_source_provider =
+        sqlite_column_exists(conn, "metadata_collections", "source_provider_id")?;
+    let collection_has_source_external =
+        sqlite_column_exists(conn, "metadata_collections", "source_external_id")?;
+    let collection_has_relation =
+        sqlite_column_exists(conn, "metadata_collections", "relation_kind")?;
+    let collection_has_locale = sqlite_column_exists(conn, "metadata_collections", "locale_key")?;
+    let collection_has_provider_locale =
+        sqlite_column_exists(conn, "metadata_collections", "provider_locale_key")?;
+    let collection_has_theme =
+        sqlite_column_exists(conn, "metadata_collections", "theme_song_url")?;
+    let collection_has_overview = sqlite_column_exists(conn, "metadata_collections", "overview")?;
+    let collection_has_artwork = sqlite_column_exists(conn, "metadata_collections", "artwork_url")?;
+    let collection_has_backdrop =
+        sqlite_column_exists(conn, "metadata_collections", "backdrop_url")?;
+    let collection_has_updated = sqlite_column_exists(conn, "metadata_collections", "updated_at")?;
+    let collection_has_name = sqlite_column_exists(conn, "metadata_collections", "name")?;
+
+    let item_table_exists = sqlite_table_exists(conn, "metadata_collection_items")?;
+    let item_has_collection_id = item_table_exists
+        && sqlite_column_exists(conn, "metadata_collection_items", "collection_id")?;
+    let item_has_media_item_id = item_table_exists
+        && sqlite_column_exists(conn, "metadata_collection_items", "media_item_id")?;
+    let item_has_metadata_link_id = item_table_exists
+        && sqlite_column_exists(conn, "metadata_collection_items", "metadata_link_id")?;
+    let item_has_updated =
+        item_table_exists && sqlite_column_exists(conn, "metadata_collection_items", "updated_at")?;
+    let metadata_links_table_exists = sqlite_table_exists(conn, "item_metadata_links")?;
+
+    if collection_has_source_provider
+        && collection_has_source_external
+        && collection_has_relation
+        && collection_has_locale
+        && collection_has_provider_locale
+        && collection_has_theme
+        && item_table_exists
+        && item_has_collection_id
+        && item_has_media_item_id
+        && item_has_metadata_link_id
+    {
+        return Ok(());
+    }
+
+    conn.batch_execute(
+        "DROP TABLE IF EXISTS metadata_collection_items_next;\
+         DROP TABLE IF EXISTS metadata_collections_next;\
+         CREATE TABLE metadata_collections_next (\
+            id INTEGER PRIMARY KEY AUTOINCREMENT,\
+            provider_id TEXT NOT NULL,\
+            external_id TEXT NOT NULL,\
+            source_provider_id TEXT NOT NULL,\
+            source_external_id TEXT NOT NULL,\
+            relation_kind TEXT NOT NULL,\
+            locale_key TEXT NOT NULL,\
+            provider_locale_key TEXT DEFAULT NULL,\
+            name TEXT NOT NULL,\
+            overview TEXT DEFAULT NULL,\
+            artwork_url TEXT DEFAULT NULL,\
+            backdrop_url TEXT DEFAULT NULL,\
+            theme_song_url TEXT DEFAULT NULL,\
+            updated_at BIGINT DEFAULT NULL,\
+            UNIQUE (provider_id, external_id, relation_kind, locale_key)\
+         );\
+         CREATE TABLE metadata_collection_items_next (\
+            id INTEGER PRIMARY KEY AUTOINCREMENT,\
+            collection_id INTEGER NOT NULL,\
+            media_item_id INTEGER NOT NULL,\
+            metadata_link_id INTEGER NOT NULL,\
+            updated_at BIGINT DEFAULT NULL,\
+            FOREIGN KEY (collection_id) REFERENCES metadata_collections_next(id) ON DELETE CASCADE,\
+            FOREIGN KEY (media_item_id) REFERENCES media_items(id) ON DELETE CASCADE,\
+            FOREIGN KEY (metadata_link_id) REFERENCES item_metadata_links(id) ON DELETE CASCADE,\
+            UNIQUE (collection_id, media_item_id)\
+         );",
+    )?;
+
+    let source_provider_expr = if collection_has_source_provider {
+        "COALESCE(c.source_provider_id, c.provider_id)"
+    } else {
+        "c.provider_id"
+    };
+    let source_external_expr = if collection_has_source_external {
+        "COALESCE(c.source_external_id, c.external_id)"
+    } else {
+        "c.external_id"
+    };
+    let relation_expr =
+        if collection_has_relation { "COALESCE(c.relation_kind, 'primary')" } else { "'primary'" };
+    let can_join_metadata_links = metadata_links_table_exists
+        && item_has_collection_id
+        && (item_has_metadata_link_id || item_has_media_item_id);
+    let metadata_link_join = if can_join_metadata_links && item_has_metadata_link_id {
+        Some("ml.id = ci.metadata_link_id".to_string())
+    } else if can_join_metadata_links && item_has_media_item_id {
+        Some(format!(
+            "ml.media_item_id = ci.media_item_id AND ml.provider_id = {source_provider_expr}"
+        ))
+    } else {
+        None
+    };
+    let collection_link_join_sql = metadata_link_join
+        .as_ref()
+        .map(|join_condition| {
+            format!(
+                "LEFT JOIN metadata_collection_items ci ON ci.collection_id = c.id\n\
+                 LEFT JOIN item_metadata_links ml ON {join_condition}"
+            )
+        })
+        .unwrap_or_default();
+    let locale_expr = if collection_has_locale && can_join_metadata_links {
+        "COALESCE(c.locale_key, ml.locale_key, 'en-US')"
+    } else if collection_has_locale {
+        "COALESCE(c.locale_key, 'en-US')"
+    } else if can_join_metadata_links {
+        "COALESCE(ml.locale_key, 'en-US')"
+    } else {
+        "'en-US'"
+    };
+    let provider_locale_expr = if collection_has_provider_locale && can_join_metadata_links {
+        "COALESCE(c.provider_locale_key, ml.provider_locale_key)"
+    } else if collection_has_provider_locale {
+        "c.provider_locale_key"
+    } else if can_join_metadata_links {
+        "ml.provider_locale_key"
+    } else {
+        "NULL"
+    };
+    let name_expr = if collection_has_name {
+        "COALESCE(NULLIF(TRIM(c.name), ''), c.external_id)"
+    } else {
+        "c.external_id"
+    };
+    let overview_expr = if collection_has_overview { "c.overview" } else { "NULL" };
+    let artwork_expr = if collection_has_artwork { "c.artwork_url" } else { "NULL" };
+    let backdrop_expr = if collection_has_backdrop { "c.backdrop_url" } else { "NULL" };
+    let theme_expr = if collection_has_theme { "c.theme_song_url" } else { "NULL" };
+    let updated_expr = if collection_has_updated { "c.updated_at" } else { "NULL" };
+
+    let collection_repair_sql = format!(
+        r#"
+INSERT OR IGNORE INTO metadata_collections_next (
+    provider_id, external_id, source_provider_id, source_external_id,
+    relation_kind, locale_key, provider_locale_key, name, overview,
+    artwork_url, backdrop_url, theme_song_url, updated_at
+)
+SELECT DISTINCT
+    c.provider_id,
+    c.external_id,
+    {source_provider_expr},
+    {source_external_expr},
+    {relation_expr},
+    {locale_expr},
+    {provider_locale_expr},
+    {name_expr},
+    {overview_expr},
+    {artwork_expr},
+    {backdrop_expr},
+    {theme_expr},
+    {updated_expr}
+FROM metadata_collections c
+{collection_link_join_sql}
+ORDER BY {updated_expr} DESC, c.id DESC;
+"#
+    );
+    conn.batch_execute(&collection_repair_sql)?;
+
+    if let Some(join_condition) = metadata_link_join {
+        let item_updated_expr = match (item_has_updated, collection_has_updated) {
+            (true, true) => "COALESCE(ci.updated_at, c.updated_at)",
+            (true, false) => "ci.updated_at",
+            (false, true) => "c.updated_at",
+            (false, false) => "NULL",
+        };
+        let membership_locale_expr = if collection_has_locale {
+            "COALESCE(c.locale_key, ml.locale_key, 'en-US')"
+        } else {
+            "COALESCE(ml.locale_key, 'en-US')"
+        };
+        conn.batch_execute(&format!(
+            r#"
+INSERT OR IGNORE INTO metadata_collection_items_next (
+    collection_id, media_item_id, metadata_link_id, updated_at
+)
+SELECT
+    nc.id,
+    ml.media_item_id,
+    ml.id,
+    {item_updated_expr}
+FROM metadata_collection_items ci
+JOIN metadata_collections c ON c.id = ci.collection_id
+JOIN item_metadata_links ml ON {join_condition}
+JOIN metadata_collections_next nc
+    ON nc.provider_id = c.provider_id
+   AND nc.external_id = c.external_id
+   AND nc.source_provider_id = {source_provider_expr}
+   AND nc.source_external_id = {source_external_expr}
+   AND nc.relation_kind = {relation_expr}
+   AND nc.locale_key = {membership_locale_expr}
+ORDER BY {item_updated_expr} DESC, ci.id DESC;
+"#
+        ))?;
+    }
+
+    conn.batch_execute(
+        "PRAGMA foreign_keys = OFF;\
+         DROP INDEX IF EXISTS idx_metadata_collection_items_metadata_link_id;\
+         DROP INDEX IF EXISTS idx_metadata_collection_items_media_item_id;\
+         DROP INDEX IF EXISTS idx_metadata_collection_items_collection_id;\
+         DROP TABLE IF EXISTS metadata_collection_items;\
+         DROP TABLE metadata_collections;\
+         ALTER TABLE metadata_collections_next RENAME TO metadata_collections;\
+         ALTER TABLE metadata_collection_items_next RENAME TO metadata_collection_items;\
+         CREATE INDEX idx_metadata_collection_items_collection_id \
+            ON metadata_collection_items (collection_id);\
+         CREATE INDEX idx_metadata_collection_items_media_item_id \
+            ON metadata_collection_items (media_item_id);\
+         CREATE INDEX idx_metadata_collection_items_metadata_link_id \
+            ON metadata_collection_items (metadata_link_id);\
+         PRAGMA foreign_keys = ON;",
+    )
+}
+
+fn sqlite_table_exists(
+    conn: &mut diesel::SqliteConnection,
+    table_name: &str,
+) -> diesel::result::QueryResult<bool> {
+    use diesel::prelude::*;
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let escaped_table = table_name.replace('\'', "''");
+    let row = diesel::sql_query(format!(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = '{escaped_table}'"
+    ))
+    .get_result::<CountRow>(conn)?;
+
+    Ok(row.count > 0)
 }
 
 fn sqlite_column_exists(

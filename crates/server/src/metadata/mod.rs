@@ -28,9 +28,9 @@ use crate::config::{
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
-    ItemMetadataCollection, ItemMetadataLink, MediaItem, MetadataPerson, MetadataPersonCredit,
-    NewItemMetadataCollection, NewItemMetadataExternalId, NewItemMetadataLink,
-    NewItemMetadataPerson, NewMetadataPerson, NewMetadataPersonCredit,
+    ItemMetadataLink, MediaItem, MetadataCollection, MetadataCollectionItem, MetadataPerson,
+    MetadataPersonCredit, NewItemMetadataExternalId, NewItemMetadataLink, NewItemMetadataPerson,
+    NewMetadataCollection, NewMetadataCollectionItem, NewMetadataPerson, NewMetadataPersonCredit,
 };
 use crate::utils::current_timestamp;
 
@@ -299,6 +299,8 @@ pub struct MetadataCollectionSummary {
     pub artwork_url: Option<String>,
     /// Collection backdrop URL when available.
     pub backdrop_url: Option<String>,
+    /// Theme-song URL when available.
+    pub theme_song_url: Option<String>,
     /// Root media item identifiers that belong to the collection.
     pub item_ids: Vec<i32>,
     /// Number of unique root items in the collection.
@@ -420,6 +422,8 @@ pub struct ProviderMetadataCollection {
     pub artwork_url: Option<String>,
     /// Collection backdrop URL.
     pub backdrop_url: Option<String>,
+    /// Collection theme-song URL.
+    pub theme_song_url: Option<String>,
 }
 
 /// Provider-normalized person credit ready for persistence.
@@ -1360,7 +1364,7 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 
-        sync_item_metadata_collections(conn, row.id, snapshot, &details)?;
+        sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, &details)?;
         sync_item_metadata_external_ids(conn, row.id, snapshot, &details)?;
         sync_item_metadata_people(conn, row.id, snapshot, &details)?;
 
@@ -1594,18 +1598,19 @@ pub fn list_metadata_collection_summaries(
     conn: &mut SqliteConnection,
     library_id: Option<i32>,
 ) -> Result<Vec<MetadataCollectionSummary>, diesel::result::Error> {
-    list_metadata_collection_summaries_with_preferred_languages(conn, library_id, &[])
+    list_metadata_collection_summaries_with_preferred_languages(conn, library_id, &[], &[])
 }
 
-/// Return collection summaries using only each item's preferred metadata locale.
+/// Return collection summaries merged by provider order and preferred metadata locale.
 pub fn list_metadata_collection_summaries_with_preferred_languages(
     conn: &mut SqliteConnection,
     library_id: Option<i32>,
     preferred_languages: &[String],
+    provider_order: &[MetadataProviderId],
 ) -> Result<Vec<MetadataCollectionSummary>, diesel::result::Error> {
-    use crate::db::schema::item_metadata_collections::dsl as collection_dsl;
-    use crate::db::schema::item_metadata_links::dsl as link_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+    use crate::db::schema::metadata_collections::dsl as collections_dsl;
 
     let mut item_query = media_items_dsl::media_items.into_boxed();
     if let Some(library_id) = library_id {
@@ -1623,109 +1628,222 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
         .cloned()
         .map(|item| (item.id, item))
         .collect::<HashMap<_, _>>();
-    let link_rows = link_dsl::item_metadata_links
-        .filter(link_dsl::media_item_id.eq_any(items_by_id.keys().copied().collect::<Vec<_>>()))
-        .filter(link_dsl::relation_kind.eq("primary"))
-        .select(ItemMetadataLink::as_select())
-        .load::<ItemMetadataLink>(conn)?;
-    if link_rows.is_empty() {
+    let item_ids = items_by_id.keys().copied().collect::<Vec<_>>();
+    let collection_item_rows = collection_items_dsl::metadata_collection_items
+        .filter(collection_items_dsl::media_item_id.eq_any(&item_ids))
+        .select(MetadataCollectionItem::as_select())
+        .load::<MetadataCollectionItem>(conn)?;
+    if collection_item_rows.is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut languages = preferred_languages
+    let collection_ids = collection_item_rows
         .iter()
-        .map(|language| normalize_locale_key(language))
-        .filter(|language| !language.is_empty())
+        .map(|item| item.collection_id)
         .collect::<Vec<_>>();
-    if !languages
-        .iter()
-        .any(|language| language == DEFAULT_METADATA_LOCALE)
-    {
-        languages.push(DEFAULT_METADATA_LOCALE.to_string());
-    }
-    let language_rank = languages
-        .iter()
-        .enumerate()
-        .map(|(index, language)| (language.clone(), index))
+    let collection_rows = collections_dsl::metadata_collections
+        .filter(collections_dsl::id.eq_any(collection_ids))
+        .select(MetadataCollection::as_select())
+        .load::<MetadataCollection>(conn)?;
+    let collections_by_id = collection_rows
+        .into_iter()
+        .map(|collection| (collection.id, collection))
         .collect::<HashMap<_, _>>();
-    let fallback_rank = languages.len();
-    let mut preferred_links_by_item_id = HashMap::<i32, (usize, ItemMetadataLink)>::new();
-    for link in link_rows {
-        let rank = language_rank
-            .get(&normalize_locale_key(&link.locale_key))
-            .copied()
-            .unwrap_or(fallback_rank);
-        match preferred_links_by_item_id.entry(link.media_item_id) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert((rank, link));
-            }
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                if rank < entry.get().0 {
-                    entry.insert((rank, link));
-                }
-            }
-        }
-    }
 
-    let links_by_id = preferred_links_by_item_id
-        .into_values()
-        .map(|(_rank, link)| link)
-        .map(|link| (link.id, link))
-        .collect::<HashMap<_, _>>();
-    let collection_rows = collection_dsl::item_metadata_collections
-        .filter(
-            collection_dsl::metadata_link_id
-                .eq_any(links_by_id.keys().copied().collect::<Vec<_>>()),
-        )
-        .select(ItemMetadataCollection::as_select())
-        .load::<ItemMetadataCollection>(conn)?;
-
-    let mut grouped = HashMap::<String, (ItemMetadataCollection, HashSet<i32>, i32)>::new();
-    for collection in collection_rows {
-        let Some(link) = links_by_id.get(&collection.metadata_link_id) else {
+    let mut grouped = HashMap::<(String, String), (Vec<MetadataCollection>, HashSet<i32>)>::new();
+    for collection_item in collection_item_rows {
+        let Some(collection) = collections_by_id.get(&collection_item.collection_id) else {
             continue;
         };
-        let Some(root_id) = root_media_item_id(link.media_item_id, &items_by_id) else {
+        let Some(root_id) = root_media_item_id(collection_item.media_item_id, &items_by_id) else {
             continue;
         };
 
         grouped
-            .entry(format!(
-                "{}:{}",
-                collection.provider_id, collection.external_id
+            .entry((
+                collection.source_provider_id.clone(),
+                collection.source_external_id.clone(),
             ))
-            .and_modify(|(_, item_ids, local_id)| {
+            .and_modify(|(collections, item_ids)| {
+                if !collections
+                    .iter()
+                    .any(|existing| existing.id == collection.id)
+                {
+                    collections.push(collection.clone());
+                }
                 item_ids.insert(root_id);
-                *local_id = (*local_id).min(collection.id);
             })
             .or_insert_with(|| {
                 let mut item_ids = HashSet::new();
                 item_ids.insert(root_id);
-                let local_id = collection.id;
-                (collection, item_ids, local_id)
+                (vec![collection.clone()], item_ids)
             });
     }
 
+    let provider_rank = provider_order
+        .iter()
+        .enumerate()
+        .map(|(index, provider)| (provider.as_storage_value().to_string(), index))
+        .collect::<HashMap<_, _>>();
+    let fallback_provider_rank = provider_rank.len();
+    let language_rank = preferred_language_rank(preferred_languages);
+    let fallback_language_rank = language_rank.len();
+
     let mut summaries = grouped
         .into_values()
-        .map(|(collection, item_ids, local_id)| {
+        .filter_map(|(mut collections, item_ids)| {
+            collections.sort_by(|left, right| {
+                let left_provider_rank = provider_rank
+                    .get(&left.provider_id)
+                    .copied()
+                    .unwrap_or(fallback_provider_rank);
+                let right_provider_rank = provider_rank
+                    .get(&right.provider_id)
+                    .copied()
+                    .unwrap_or(fallback_provider_rank);
+                let left_relation_rank = if left.relation_kind == "primary" { 0 } else { 1 };
+                let right_relation_rank = if right.relation_kind == "primary" { 0 } else { 1 };
+                let left_language_rank = language_rank
+                    .get(&normalize_locale_key(&left.locale_key))
+                    .copied()
+                    .unwrap_or(fallback_language_rank);
+                let right_language_rank = language_rank
+                    .get(&normalize_locale_key(&right.locale_key))
+                    .copied()
+                    .unwrap_or(fallback_language_rank);
+
+                left_provider_rank
+                    .cmp(&right_provider_rank)
+                    .then_with(|| left_relation_rank.cmp(&right_relation_rank))
+                    .then_with(|| left_language_rank.cmp(&right_language_rank))
+                    .then_with(|| right.updated_at.cmp(&left.updated_at))
+                    .then_with(|| right.id.cmp(&left.id))
+            });
+            let primary = collections.first()?.clone();
             let mut item_ids = item_ids.into_iter().collect::<Vec<_>>();
             item_ids.sort_unstable();
-            MetadataCollectionSummary {
-                id: format!("collection:{local_id}"),
-                provider_id: metadata_provider_id_from_db(&collection.provider_id),
-                external_id: collection.external_id,
-                name: collection.name,
-                overview: collection.overview,
-                artwork_url: collection.artwork_url,
-                backdrop_url: collection.backdrop_url,
+            Some(MetadataCollectionSummary {
+                id: format!(
+                    "collection:{}:{}",
+                    primary.source_provider_id, primary.source_external_id
+                ),
+                provider_id: metadata_provider_id_from_db(&primary.provider_id),
+                external_id: primary.external_id.clone(),
+                name: first_collection_string(&collections, |collection| Some(&collection.name))
+                    .unwrap_or(primary.name),
+                overview: first_collection_string(&collections, |collection| {
+                    collection.overview.as_ref()
+                }),
+                artwork_url: first_collection_string(&collections, |collection| {
+                    collection.artwork_url.as_ref()
+                }),
+                backdrop_url: first_collection_string(&collections, |collection| {
+                    collection.backdrop_url.as_ref()
+                }),
+                theme_song_url: first_collection_string(&collections, |collection| {
+                    collection.theme_song_url.as_ref()
+                }),
                 item_count: item_ids.len(),
                 item_ids,
-            }
+            })
         })
         .collect::<Vec<_>>();
     summaries.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(summaries)
+}
+
+fn first_collection_string<F>(
+    collections: &[MetadataCollection],
+    value: F,
+) -> Option<String>
+where
+    F: Fn(&MetadataCollection) -> Option<&String>,
+{
+    collections.iter().find_map(|collection| {
+        value(collection)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+/// Upsert a secondary collection metadata row with a provider-supplied theme-song URL.
+pub fn upsert_secondary_collection_theme_song_url(
+    conn: &mut SqliteConnection,
+    source_collection_id: i32,
+    provider_id: MetadataProviderId,
+    media_type: &str,
+    database_id: &str,
+    external_id: &str,
+    theme_song_url: &str,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+    use crate::db::schema::metadata_collections::dsl as collections_dsl;
+
+    let theme_song_url = theme_song_url.trim();
+    if theme_song_url.is_empty() {
+        return Ok(());
+    }
+
+    let source_collection = collections_dsl::metadata_collections
+        .filter(collections_dsl::id.eq(source_collection_id))
+        .select(MetadataCollection::as_select())
+        .first::<MetadataCollection>(conn)?;
+    let now = current_timestamp();
+    let secondary_collection = ProviderMetadataCollection {
+        external_id: format!("{media_type}:{database_id}:{external_id}"),
+        name: source_collection.name.clone(),
+        overview: None,
+        artwork_url: None,
+        backdrop_url: None,
+        theme_song_url: Some(theme_song_url.to_string()),
+    };
+    let secondary_collection_id = upsert_metadata_collection(
+        conn,
+        provider_id.as_storage_value(),
+        &source_collection.source_provider_id,
+        &source_collection.source_external_id,
+        "secondary",
+        DEFAULT_METADATA_LOCALE,
+        None,
+        secondary_collection,
+        now,
+    )?;
+
+    diesel::delete(
+        collection_items_dsl::metadata_collection_items
+            .filter(collection_items_dsl::collection_id.eq(secondary_collection_id)),
+    )
+    .execute(conn)?;
+
+    let source_collection_ids = collections_dsl::metadata_collections
+        .filter(collections_dsl::source_provider_id.eq(&source_collection.source_provider_id))
+        .filter(collections_dsl::source_external_id.eq(&source_collection.source_external_id))
+        .filter(collections_dsl::relation_kind.eq("primary"))
+        .select(collections_dsl::id)
+        .load::<i32>(conn)?;
+    let source_items = collection_items_dsl::metadata_collection_items
+        .filter(collection_items_dsl::collection_id.eq_any(source_collection_ids))
+        .select(MetadataCollectionItem::as_select())
+        .load::<MetadataCollectionItem>(conn)?;
+
+    let mut seen_items = HashSet::new();
+    for source_item in source_items {
+        if !seen_items.insert(source_item.media_item_id) {
+            continue;
+        }
+        let row = NewMetadataCollectionItem {
+            collection_id: secondary_collection_id,
+            media_item_id: source_item.media_item_id,
+            metadata_link_id: source_item.metadata_link_id,
+            updated_at: Some(now),
+        };
+        diesel::insert_into(collection_items_dsl::metadata_collection_items)
+            .values(&row)
+            .execute(conn)?;
+    }
+
+    Ok(())
 }
 
 /// Return the first stored metadata link for a media item.
@@ -2727,42 +2845,137 @@ fn root_media_item_id(
 fn sync_item_metadata_collections(
     conn: &mut SqliteConnection,
     metadata_link_id: i32,
+    media_item_id: i32,
     snapshot: &StoredMetadataSnapshot,
     details: &ProviderMetadataDetails,
 ) -> Result<(), diesel::result::Error> {
-    use crate::db::schema::item_metadata_collections::dsl as collection_dsl;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+    use crate::db::schema::metadata_collections::dsl as collections_dsl;
 
-    diesel::delete(
-        collection_dsl::item_metadata_collections
-            .filter(collection_dsl::metadata_link_id.eq(metadata_link_id)),
-    )
-    .execute(conn)?;
+    let provider_id = snapshot.provider_id.as_storage_value().to_string();
+    let existing_collection_ids = collections_dsl::metadata_collections
+        .filter(collections_dsl::provider_id.eq(&provider_id))
+        .filter(collections_dsl::relation_kind.eq("primary"))
+        .filter(collections_dsl::locale_key.eq(&snapshot.locale_key))
+        .select(collections_dsl::id)
+        .load::<i32>(conn)?;
+    if !existing_collection_ids.is_empty() {
+        diesel::delete(
+            collection_items_dsl::metadata_collection_items
+                .filter(collection_items_dsl::media_item_id.eq(media_item_id))
+                .filter(collection_items_dsl::collection_id.eq_any(existing_collection_ids)),
+        )
+        .execute(conn)?;
+    }
 
     if details.collections.is_empty() {
         return Ok(());
     }
 
-    let rows = details
-        .collections
-        .iter()
-        .cloned()
-        .map(|collection| NewItemMetadataCollection {
+    let mut seen_collection_ids = HashSet::new();
+    let now = current_timestamp();
+    for collection in details.collections.iter().cloned() {
+        let collection_external_id = collection.external_id.clone();
+        let collection_id = upsert_metadata_collection(
+            conn,
+            &provider_id,
+            &provider_id,
+            &collection_external_id,
+            "primary",
+            &snapshot.locale_key,
+            snapshot.provider_locale_key.clone(),
+            collection,
+            now,
+        )?;
+        if !seen_collection_ids.insert(collection_id) {
+            continue;
+        }
+        let row = NewMetadataCollectionItem {
+            collection_id,
+            media_item_id,
             metadata_link_id,
-            provider_id: snapshot.provider_id.as_storage_value().to_string(),
-            external_id: collection.external_id,
-            name: collection.name,
-            overview: collection.overview,
-            artwork_url: collection.artwork_url,
-            backdrop_url: collection.backdrop_url,
-            updated_at: Some(current_timestamp()),
-        })
-        .collect::<Vec<_>>();
-
-    diesel::insert_into(collection_dsl::item_metadata_collections)
-        .values(&rows)
-        .execute(conn)?;
+            updated_at: Some(now),
+        };
+        diesel::insert_into(collection_items_dsl::metadata_collection_items)
+            .values(&row)
+            .execute(conn)?;
+    }
 
     Ok(())
+}
+
+fn upsert_metadata_collection(
+    conn: &mut SqliteConnection,
+    provider_id: &str,
+    source_provider_id: &str,
+    source_external_id: &str,
+    relation_kind: &str,
+    locale_key: &str,
+    provider_locale_key: Option<String>,
+    collection: ProviderMetadataCollection,
+    now: i64,
+) -> Result<i32, diesel::result::Error> {
+    use crate::db::schema::metadata_collections::dsl as collections_dsl;
+
+    let existing = collections_dsl::metadata_collections
+        .filter(collections_dsl::provider_id.eq(provider_id))
+        .filter(collections_dsl::external_id.eq(&collection.external_id))
+        .filter(collections_dsl::relation_kind.eq(relation_kind))
+        .filter(collections_dsl::locale_key.eq(locale_key))
+        .select(MetadataCollection::as_select())
+        .first::<MetadataCollection>(conn)
+        .optional()?;
+
+    let payload = NewMetadataCollection {
+        provider_id: provider_id.to_string(),
+        external_id: collection.external_id.clone(),
+        source_provider_id: source_provider_id.to_string(),
+        source_external_id: source_external_id.to_string(),
+        relation_kind: relation_kind.to_string(),
+        locale_key: locale_key.to_string(),
+        provider_locale_key,
+        name: if collection.name.trim().is_empty() {
+            existing
+                .as_ref()
+                .map(|row| row.name.clone())
+                .unwrap_or(collection.name)
+        } else {
+            collection.name
+        },
+        overview: collection
+            .overview
+            .or_else(|| existing.as_ref().and_then(|row| row.overview.clone())),
+        artwork_url: collection
+            .artwork_url
+            .or_else(|| existing.as_ref().and_then(|row| row.artwork_url.clone())),
+        backdrop_url: collection
+            .backdrop_url
+            .or_else(|| existing.as_ref().and_then(|row| row.backdrop_url.clone())),
+        theme_song_url: collection
+            .theme_song_url
+            .or_else(|| existing.as_ref().and_then(|row| row.theme_song_url.clone())),
+        updated_at: Some(now),
+    };
+
+    if let Some(existing) = existing {
+        diesel::update(
+            collections_dsl::metadata_collections.filter(collections_dsl::id.eq(existing.id)),
+        )
+        .set(&payload)
+        .execute(conn)?;
+        Ok(existing.id)
+    } else {
+        diesel::insert_into(collections_dsl::metadata_collections)
+            .values(&payload)
+            .execute(conn)?;
+        collections_dsl::metadata_collections
+            .filter(collections_dsl::provider_id.eq(provider_id))
+            .filter(collections_dsl::external_id.eq(&collection.external_id))
+            .filter(collections_dsl::relation_kind.eq(relation_kind))
+            .filter(collections_dsl::locale_key.eq(locale_key))
+            .select(collections_dsl::id)
+            .first::<i32>(conn)
+    }
 }
 
 fn sync_item_metadata_external_ids(

@@ -21,6 +21,8 @@ const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
 
 static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static TMDB_COLLECTION_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -441,8 +443,47 @@ fn enriched_tmdb_payload_json<T: serde::Serialize>(
     image_languages: &str,
 ) -> Option<String> {
     let mut payload = serde_json::to_value(details).ok()?;
+    enrich_tmdb_collection_payload(client, &mut payload, language);
     enrich_tmdb_people_payload(client, &mut payload, language, image_languages);
     serde_json::to_string(&payload).ok()
+}
+
+fn enrich_tmdb_collection_payload(
+    client: &TmdbApiClient,
+    payload: &mut Value,
+    language: &str,
+) {
+    let Some(collection_id) = payload
+        .get("belongs_to_collection")
+        .and_then(|collection| collection.get("id"))
+        .and_then(Value::as_i64)
+        .and_then(|id| i32::try_from(id).ok())
+    else {
+        return;
+    };
+    let Some(mut collection_details) =
+        tmdb_cached_collection_detail(client, collection_id, language)
+    else {
+        return;
+    };
+
+    if let (Some(original), Some(detailed)) = (
+        payload
+            .get("belongs_to_collection")
+            .and_then(Value::as_object),
+        collection_details.as_object_mut(),
+    ) {
+        for (key, value) in original {
+            let detailed_value_missing = detailed.get(key).map(Value::is_null).unwrap_or(true);
+            if detailed_value_missing {
+                detailed.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    if let Some(map) = payload.as_object_mut() {
+        map.insert("belongs_to_collection".into(), collection_details);
+    }
 }
 
 fn enrich_tmdb_people_payload(
@@ -564,6 +605,50 @@ fn tmdb_cached_person_detail(
     }
 
     if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
+        if cache.len() > 5000 {
+            cache.clear();
+        }
+        cache.insert(cache_key.clone(), value.clone());
+    }
+    write_metadata_response_cache_text(&cache_key, &value.to_string());
+    Some(value)
+}
+
+fn tmdb_cached_collection_detail(
+    client: &TmdbApiClient,
+    collection_id: i32,
+    language: &str,
+) -> Option<Value> {
+    let cache_key = metadata_response_cache_key(
+        &MetadataProviderId::Tmdb,
+        "collection",
+        &[
+            &collection_id.to_string(),
+            language,
+        ],
+    );
+    if let Some(cached) = TMDB_COLLECTION_DETAIL_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&cache_key).cloned())
+    {
+        return Some(cached);
+    }
+    if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
+        if let Ok(value) = serde_json::from_str::<Value>(&contents) {
+            if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
+                cache.insert(cache_key.clone(), value.clone());
+            }
+            return Some(value);
+        }
+    }
+
+    let details = client
+        .collections_api()
+        .get_collection_details(collection_id, Some(language))
+        .ok()?;
+    let value = serde_json::to_value(details).ok()?;
+    if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
         if cache.len() > 5000 {
             cache.clear();
         }
@@ -1148,6 +1233,7 @@ fn tmdb_collections(payload: &Value) -> Vec<ProviderMetadataCollection> {
             .get("backdrop_path")
             .and_then(Value::as_str)
             .map(|path| tmdb_image_url(path, "w1280")),
+        theme_song_url: None,
     }]
 }
 

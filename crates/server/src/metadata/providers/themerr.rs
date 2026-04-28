@@ -12,7 +12,7 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         id: MetadataProviderId::Themerr,
         display_name: "ThemerrDB".into(),
         description:
-            "Secondary provider for theme-song metadata linked to movie and show metadata.".into(),
+            "Secondary provider for theme-song metadata linked to movie, show, and collection metadata.".into(),
         supported_kinds: vec![
             MediaLibraryKind::Movies,
             MediaLibraryKind::Shows,
@@ -75,6 +75,7 @@ fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
     match media_type.trim() {
         "movie" => Some("movies"),
         "tv" | "series" | "show" => Some("tv_shows"),
+        "collection" | "movie_collection" => Some("movie_collections"),
         _ => None,
     }
 }
@@ -103,7 +104,7 @@ fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_youtube_theme_url;
+    use super::{database_path_for_media_type, normalize_database_id, parse_youtube_theme_url};
 
     #[test]
     fn parse_youtube_theme_url_extracts_watch_url() {
@@ -129,5 +130,18 @@ mod tests {
         .to_string();
 
         assert_eq!(parse_youtube_theme_url(&payload), None);
+    }
+
+    #[test]
+    fn collection_theme_lookup_uses_movie_collection_database() {
+        assert_eq!(
+            database_path_for_media_type("collection"),
+            Some("movie_collections")
+        );
+        assert_eq!(
+            normalize_database_id("collection", "tmdb"),
+            Some("themoviedb")
+        );
+        assert_eq!(normalize_database_id("collection", "imdb"), None);
     }
 }

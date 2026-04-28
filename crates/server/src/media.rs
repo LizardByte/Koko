@@ -2877,6 +2877,21 @@ pub fn get_media_item_summary_with_preferred_languages(
     }
 }
 
+/// Return one media item summary with its browser-facing parent hierarchy.
+pub fn get_media_item_summary_with_hierarchy(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    preferred_languages: &[String],
+) -> Result<Option<(MediaItemSummary, Vec<MediaItemSummary>)>, diesel::result::Error> {
+    let Some(row) = load_media_item_row(conn, item_id)? else {
+        return Ok(None);
+    };
+
+    let hierarchy = load_media_item_hierarchy(conn, &row, preferred_languages)?;
+    let summary = media_item_summary_with_preferred_languages(conn, row, preferred_languages)?;
+    Ok(Some((summary, hierarchy)))
+}
+
 fn container_matches(
     file_container: &str,
     profile_container: &str,

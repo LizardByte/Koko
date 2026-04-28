@@ -292,6 +292,8 @@ pub struct MetadataPersonItemCredit {
     pub credit: MetadataPersonCreditSummary,
     /// Related media item.
     pub item: MediaItemSummary,
+    /// Breadcrumb-like media hierarchy for the credited item.
+    pub hierarchy: Vec<MediaItemSummary>,
 }
 
 /// Active backend activity summary that the browser can poll.
@@ -3027,12 +3029,18 @@ pub async fn get_person(
                 if !seen_items.insert(credit.media_item_id) {
                     continue;
                 }
-                if let Some(item) = crate::media::get_media_item_summary_with_preferred_languages(
-                    conn,
-                    credit.media_item_id,
-                    &languages,
-                )? {
-                    credits.push(MetadataPersonItemCredit { credit, item });
+                if let Some((item, hierarchy)) =
+                    crate::media::get_media_item_summary_with_hierarchy(
+                        conn,
+                        credit.media_item_id,
+                        &languages,
+                    )?
+                {
+                    credits.push(MetadataPersonItemCredit {
+                        credit,
+                        item,
+                        hierarchy,
+                    });
                 }
             }
             Ok::<_, diesel::result::Error>(MetadataPersonResponse { person, credits })

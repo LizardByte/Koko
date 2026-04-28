@@ -54,6 +54,7 @@ import {
   type MediaLibrarySettings,
   type MetadataProviderStatus,
   type MetadataProviderSettings,
+  type MetadataPersonItemCredit,
   type MetadataPersonResponse,
   type MetadataSearchResult,
   type LogEntriesResponse,
@@ -2458,6 +2459,124 @@ function renderPeopleRail(): string {
   `;
 }
 
+interface PersonSeasonCreditGroup {
+  season: MediaItemSummary;
+  episodes: MediaItemSummary[];
+}
+
+interface PersonCreditGroup {
+  root: MediaItemSummary;
+  seasons: PersonSeasonCreditGroup[];
+}
+
+function itemSortKey(item: MediaItemSummary): string {
+  const season = typeof item.season_number === 'number' ? String(item.season_number).padStart(5, '0') : '99999';
+  const episode = typeof item.episode_number === 'number' ? String(item.episode_number).padStart(5, '0') : '99999';
+  return `${season}:${episode}:${item.display_title.toLocaleLowerCase()}`;
+}
+
+function compareMediaItems(left: MediaItemSummary, right: MediaItemSummary): number {
+  return itemSortKey(left).localeCompare(itemSortKey(right));
+}
+
+function personCreditRootItem(entry: MetadataPersonItemCredit): MediaItemSummary {
+  return entry.hierarchy.find((item) => item.item_type === 'show')
+    ?? entry.hierarchy[0]
+    ?? entry.item;
+}
+
+function personCreditSeasonItem(entry: MetadataPersonItemCredit): MediaItemSummary | undefined {
+  if (entry.item.item_type === 'season') {
+    return entry.item;
+  }
+
+  if (entry.item.item_type !== 'episode') {
+    return undefined;
+  }
+
+  return [...entry.hierarchy].reverse().find((item) => item.item_type === 'season');
+}
+
+function personCreditGroups(credits: MetadataPersonItemCredit[]): PersonCreditGroup[] {
+  const groupsByRootId = new Map<number, PersonCreditGroup>();
+
+  credits.forEach((entry) => {
+    const root = personCreditRootItem(entry);
+    if (!groupsByRootId.has(root.id)) {
+      groupsByRootId.set(root.id, { root, seasons: [] });
+    }
+
+    const group = groupsByRootId.get(root.id)!;
+    const season = personCreditSeasonItem(entry);
+    if (!season) {
+      return;
+    }
+
+    let seasonGroup = group.seasons.find((candidate) => candidate.season.id === season.id);
+    if (!seasonGroup) {
+      seasonGroup = { season, episodes: [] };
+      group.seasons.push(seasonGroup);
+    }
+
+    if (entry.item.item_type === 'episode' && !seasonGroup.episodes.some((episode) => episode.id === entry.item.id)) {
+      seasonGroup.episodes.push(entry.item);
+    }
+  });
+
+  return [...groupsByRootId.values()]
+    .map((group) => ({
+      ...group,
+      seasons: group.seasons
+        .map((seasonGroup) => ({
+          ...seasonGroup,
+          episodes: seasonGroup.episodes.sort(compareMediaItems),
+        }))
+        .sort((left, right) => compareMediaItems(left.season, right.season)),
+    }))
+    .sort((left, right) => left.root.display_title.localeCompare(right.root.display_title));
+}
+
+function renderPersonCreditGroup(group: PersonCreditGroup): string {
+  const seasonCount = group.seasons.length;
+  const episodeCount = group.seasons.reduce((total, season) => total + season.episodes.length, 0);
+  const traySummary = [
+    seasonCount ? `${seasonCount} season${seasonCount === 1 ? '' : 's'}` : '',
+    episodeCount ? `${episodeCount} episode${episodeCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `
+    <article class="person-credit-card" data-person-credit-card data-person-credit-id="${group.root.id}">
+      ${renderItemCard(group.root)}
+    </article>
+    ${group.seasons.length ? `
+      <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}">
+        <div class="person-credit-tray-heading">
+          <span>${escapeHtml(traySummary || 'Credits')}</span>
+          <button class="person-credit-tray-close" type="button" data-close-person-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
+        </div>
+        <div class="person-season-credit-grid">
+          ${group.seasons.map((seasonGroup) => `
+            <article class="person-season-credit-card" data-person-season-credit-card data-person-season-credit-id="${seasonGroup.season.id}">
+              ${renderItemCard(seasonGroup.season)}
+            </article>
+            ${seasonGroup.episodes.length ? `
+              <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}">
+                <div class="person-credit-tray-heading">
+                  <span>${seasonGroup.episodes.length} episode${seasonGroup.episodes.length === 1 ? '' : 's'}</span>
+                  <button class="person-credit-tray-close" type="button" data-close-person-season-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
+                </div>
+                <div class="person-episode-credit-grid">
+                  ${seasonGroup.episodes.map(renderItemCard).join('')}
+                </div>
+              </div>
+            ` : ''}
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
 function renderPersonPage(): string {
   const response = state.selectedPerson;
   if (!response) {
@@ -2468,6 +2587,7 @@ function renderPersonPage(): string {
     ? getPersonImageUrl(response.person.id)
     : response.person.image_url ? resolveApiUrl(response.person.image_url) : undefined;
   const credits = response.credits;
+  const creditGroups = personCreditGroups(credits);
   const age = personAgeLabel(response.person.birthday, response.person.deathday);
 
   return `
@@ -2497,14 +2617,143 @@ function renderPersonPage(): string {
       <section class="panel page-panel item-section">
         <div class="section-heading section-heading-actions">
           <h3>Credits</h3>
-          <span class="muted">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
+          <span class="muted">${creditGroups.length} title${creditGroups.length === 1 ? '' : 's'}</span>
         </div>
         ${credits.length
-          ? `<div class="item-grid">${credits.map((entry) => renderItemCard(entry.item)).join('')}</div>`
+          ? `<div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>`
           : '<div class="empty-state tight">No linked items are stored for this person yet.</div>'}
       </section>
     </section>
   `;
+}
+
+function directGridChildren(grid: HTMLElement, selector: string): HTMLElement[] {
+  return Array.from(grid.children)
+    .filter((child): child is HTMLElement => child instanceof HTMLElement && child.matches(selector));
+}
+
+function directGridChildByData(grid: HTMLElement, selector: string, key: string, value: string | undefined): HTMLElement | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return directGridChildren(grid, selector).find((child) => child.dataset[key] === value);
+}
+
+function rowIndexForElement(element: HTMLElement, rowTops: number[]): number {
+  const rowIndex = rowTops.findIndex((top) => Math.abs(top - element.offsetTop) < 8);
+  return rowIndex >= 0 ? rowIndex : 0;
+}
+
+function activatePersonCreditTray(
+  grid: HTMLElement,
+  card: HTMLElement,
+  tray: HTMLElement,
+  cardSelector: string,
+  traySelector: string,
+): void {
+  if (card.classList.contains('is-active') && tray.classList.contains('is-active')) {
+    return;
+  }
+
+  const cards = directGridChildren(grid, cardSelector);
+  const trays = directGridChildren(grid, traySelector);
+
+  trays.forEach((entry) => {
+    entry.classList.remove('is-active');
+    entry.style.removeProperty('order');
+  });
+  cards.forEach((entry) => {
+    entry.classList.remove('is-active');
+    entry.style.removeProperty('order');
+  });
+
+  const rowTops = [...new Set(cards
+    .map((entry) => entry.offsetTop)
+    .sort((left, right) => left - right)
+    .filter((top, index, values) => index === 0 || Math.abs(top - values[index - 1]) >= 8))];
+
+  cards.forEach((entry) => {
+    entry.style.order = String(rowIndexForElement(entry, rowTops) * 2);
+  });
+
+  card.classList.add('is-active');
+  tray.classList.add('is-active');
+  tray.style.order = String(rowIndexForElement(card, rowTops) * 2 + 1);
+}
+
+function collapsePersonCreditTrays(grid: HTMLElement, cardSelector: string, traySelector: string): void {
+  directGridChildren(grid, cardSelector).forEach((entry) => {
+    entry.classList.remove('is-active');
+    entry.style.removeProperty('order');
+  });
+  directGridChildren(grid, traySelector).forEach((entry) => {
+    entry.classList.remove('is-active');
+    entry.style.removeProperty('order');
+  });
+}
+
+function bindPersonCreditTrays(): void {
+  const grid = document.querySelector<HTMLElement>('.person-credit-grid');
+  if (!grid) {
+    return;
+  }
+
+  const activateRootTray = (target: EventTarget | null): void => {
+    const card = target instanceof Element ? target.closest<HTMLElement>('.person-credit-card') : null;
+    if (!card || card.parentElement !== grid) {
+      return;
+    }
+
+    const tray = directGridChildByData(grid, '.person-season-tray', 'personCreditId', card.dataset.personCreditId);
+    if (!tray) {
+      return;
+    }
+
+    activatePersonCreditTray(grid, card, tray, '.person-credit-card', '.person-season-tray');
+  };
+
+  const activateSeasonTray = (target: EventTarget | null): void => {
+    const card = target instanceof Element ? target.closest<HTMLElement>('.person-season-credit-card') : null;
+    const seasonGrid = card?.parentElement;
+    if (!card || !(seasonGrid instanceof HTMLElement) || !seasonGrid.classList.contains('person-season-credit-grid')) {
+      return;
+    }
+
+    const tray = directGridChildByData(seasonGrid, '.person-episode-tray', 'personSeasonCreditId', card.dataset.personSeasonCreditId);
+    if (!tray) {
+      return;
+    }
+
+    activatePersonCreditTray(seasonGrid, card, tray, '.person-season-credit-card', '.person-episode-tray');
+  };
+
+  grid.addEventListener('mouseover', (event) => {
+    activateRootTray(event.target);
+    activateSeasonTray(event.target);
+  });
+  grid.addEventListener('focusin', (event) => {
+    activateRootTray(event.target);
+    activateSeasonTray(event.target);
+  });
+  grid.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const rootCloseButton = target?.closest<HTMLButtonElement>('[data-close-person-credit-tray]');
+    if (rootCloseButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      collapsePersonCreditTrays(grid, '.person-credit-card', '.person-season-tray');
+      return;
+    }
+
+    const seasonCloseButton = target?.closest<HTMLButtonElement>('[data-close-person-season-credit-tray]');
+    const seasonGrid = seasonCloseButton?.closest<HTMLElement>('.person-season-credit-grid');
+    if (seasonCloseButton && seasonGrid) {
+      event.preventDefault();
+      event.stopPropagation();
+      collapsePersonCreditTrays(seasonGrid, '.person-season-credit-card', '.person-episode-tray');
+    }
+  });
 }
 
 function renderItemPage(): string {
@@ -4665,6 +4914,7 @@ function bindEvents(): void {
       navigateTo(`/people/${personId}`);
     });
   });
+  bindPersonCreditTrays();
 
   document.querySelectorAll<HTMLButtonElement>('[data-toggle-text]').forEach((button) => {
     button.addEventListener('click', () => {

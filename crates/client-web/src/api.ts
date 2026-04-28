@@ -277,6 +277,7 @@ export interface MetadataPersonCreditSummary {
 export interface MetadataPersonItemCredit {
   credit: MetadataPersonCreditSummary;
   item: MediaItemSummary;
+  hierarchy: MediaItemSummary[];
 }
 
 export interface MetadataPersonResponse {

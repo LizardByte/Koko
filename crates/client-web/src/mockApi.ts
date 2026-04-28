@@ -1128,6 +1128,7 @@ export function getMockPerson(personId: number): MetadataPersonResponse {
               sort_order: person.sort_order,
             },
             item,
+            hierarchy: item.hierarchy ?? [],
           }];
         });
     }));

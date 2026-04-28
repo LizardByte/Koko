@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 // lib imports
 use rocket::fs::NamedFile;
 use rocket::get;
+use rocket::http::uri::{Segments, fmt::Path as UriPath};
 use rocket::response::content::RawHtml;
 
 // local imports
@@ -26,15 +27,23 @@ pub async fn index() -> Result<NamedFile, RawHtml<String>> {
 }
 
 #[get("/<path..>", rank = 100)]
-pub async fn spa_asset(path: PathBuf) -> Option<NamedFile> {
+pub async fn spa_asset(path: Segments<'_, UriPath>) -> Option<NamedFile> {
     let dist_dir = web_client_dist_dir()?;
-    let requested_path = dist_dir.join(&path);
+    let requested_path = path.to_path_buf(false).ok();
 
-    if requested_path.is_file() {
-        return NamedFile::open(requested_path).await.ok();
+    if let Some(requested_path) = requested_path {
+        let requested_path = dist_dir.join(&requested_path);
+        if requested_path.is_file() {
+            return NamedFile::open(requested_path).await.ok();
+        }
     }
 
-    if Path::new(&path).extension().is_none() {
+    let has_extension = path
+        .clone()
+        .last()
+        .is_some_and(|segment| Path::new(segment).extension().is_some());
+
+    if !has_extension {
         return NamedFile::open(dist_dir.join("index.html")).await.ok();
     }
 

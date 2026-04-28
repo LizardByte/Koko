@@ -1436,6 +1436,11 @@ function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
     : `/items/${segment}/${encodedKey}`;
 }
 
+function homeBrowsePath(): string {
+  const libraryId = activeLibraryId();
+  return typeof libraryId === 'number' ? `/libraries/${libraryId}` : '/';
+}
+
 function browseFilterForRoute(): BrowseFilter | undefined {
   if (state.route.page !== 'browse-detail') {
     return undefined;
@@ -4917,7 +4922,22 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-home-tab]').forEach((button) => {
     button.addEventListener('click', () => {
       const nextTab = button.dataset.homeTab as HomeBrowseTab | undefined;
-      if (!nextTab || state.homeTab === nextTab) {
+      if (!nextTab) {
+        return;
+      }
+
+      if (state.route.page === 'browse-detail') {
+        state.homeTab = nextTab;
+        state.browseFilter = undefined;
+        state.homePreviewItemId = undefined;
+        const nextPath = homeBrowsePath();
+        window.history.pushState({}, '', nextPath);
+        state.route = parseRoute();
+        void refreshData();
+        return;
+      }
+
+      if (state.homeTab === nextTab) {
         return;
       }
 

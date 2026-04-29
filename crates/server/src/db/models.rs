@@ -120,6 +120,8 @@ pub struct MediaFile {
     pub metadata_updated_at: Option<i64>,
     pub metadata_match_attempted_at: Option<i64>,
     pub media_item_id: Option<i32>,
+    pub missing_since: Option<i64>,
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
@@ -144,6 +146,8 @@ pub struct MediaItem {
     pub modified_at: Option<i64>,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
+    pub missing_since: Option<i64>,
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
@@ -166,6 +170,8 @@ pub struct NewMediaItem {
     pub modified_at: Option<i64>,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
+    pub missing_since: Option<i64>,
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
@@ -470,4 +476,6 @@ pub struct NewMediaFile {
     pub metadata_updated_at: Option<i64>,
     pub metadata_match_attempted_at: Option<i64>,
     pub media_item_id: Option<i32>,
+    pub missing_since: Option<i64>,
+    pub deleted_at: Option<i64>,
 }

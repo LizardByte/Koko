@@ -27,6 +27,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_home,
         media::get_libraries,
         media::scan_library,
+        media::delete_library_missing_items,
         media::refresh_library_metadata,
         media::get_library_inventory,
         media::get_items,

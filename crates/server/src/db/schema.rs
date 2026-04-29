@@ -156,6 +156,8 @@ table! {
         metadata_updated_at -> Nullable<BigInt>,
         metadata_match_attempted_at -> Nullable<BigInt>,
         media_item_id -> Nullable<Integer>,
+        missing_since -> Nullable<BigInt>,
+        deleted_at -> Nullable<BigInt>,
     }
 }
 
@@ -178,6 +180,8 @@ table! {
         modified_at -> Nullable<BigInt>,
         created_at -> Nullable<BigInt>,
         updated_at -> Nullable<BigInt>,
+        missing_since -> Nullable<BigInt>,
+        deleted_at -> Nullable<BigInt>,
     }
 }
 

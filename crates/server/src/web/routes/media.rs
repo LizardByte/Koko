@@ -34,7 +34,7 @@ use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
-    PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
+    PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability, delete_missing_media_items,
     get_item_secondary_provider_references, get_item_youtube_theme_collection_references,
     get_library_files, get_library_metadata_languages, get_library_metadata_providers,
     get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
@@ -42,8 +42,8 @@ use crate::media::{
     get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
     get_preferred_item_metadata_link, get_user_playback_progress, infer_episode_number,
     inspect_transcoding_capability, library_exists, list_automatic_metadata_candidates,
-    list_library_settings, list_media_item_children, list_media_items,
-    list_media_items_with_preferred_languages, mark_metadata_match_attempted,
+    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_item_children,
+    list_media_items, list_media_items_with_preferred_languages, mark_metadata_match_attempted,
     preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
     resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
@@ -341,6 +341,21 @@ pub struct SystemActivitiesResponse {
     pub generated_at: i64,
     /// Active activities currently tracked by the backend.
     pub activities: Vec<SystemActivity>,
+}
+
+/// Response returned after deleting missing catalog items.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct MissingItemsCleanupResponse {
+    /// Library scoped by the cleanup request.
+    pub library_id: i32,
+    /// File rows removed from the active catalog.
+    pub deleted_files: i64,
+    /// Item rows removed from the active catalog.
+    pub deleted_items: i64,
+    /// Collection membership rows removed from active collection/list views.
+    pub removed_collection_items: i64,
+    /// Refreshed library summary after cleanup.
+    pub library: PersistedLibrarySummary,
 }
 
 /// One locale supported by Koko metadata preferences.
@@ -934,6 +949,97 @@ async fn register_metadata_refresh_activity(
     );
 
     Some((activity_id, queued_targets))
+}
+
+async fn register_metadata_refresh_activity_for_items(
+    scope: &str,
+    source: &str,
+    label: String,
+    library_id: Option<i32>,
+    root_item_id: Option<i32>,
+    provider_id: Option<MetadataProviderId>,
+    item_ids: Vec<i32>,
+) -> Option<(String, Vec<i32>)> {
+    let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    let queued_item_ids = item_ids
+        .into_iter()
+        .filter(|item_id| !item_registry.contains_key(item_id))
+        .collect::<Vec<_>>();
+    if queued_item_ids.is_empty() {
+        return None;
+    }
+
+    let activity_id = next_system_activity_id();
+    for item_id in &queued_item_ids {
+        item_registry.insert(*item_id, activity_id.clone());
+    }
+    drop(item_registry);
+
+    let now = current_timestamp();
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
+        activity_id.clone(),
+        MetadataRefreshActivityRecord {
+            activity: SystemActivity {
+                id: activity_id.clone(),
+                category: "metadata_refresh".into(),
+                scope: scope.into(),
+                source: source.into(),
+                state: "queued".into(),
+                label,
+                provider_id: provider_id
+                    .as_ref()
+                    .map(|provider_id| provider_id.as_storage_value().to_string()),
+                library_id,
+                root_item_id,
+                item_ids: queued_item_ids.clone(),
+                total_items: i32::try_from(queued_item_ids.len()).unwrap_or(i32::MAX),
+                completed_items: 0,
+                failed_items: 0,
+                queued_at: now,
+                started_at: None,
+                updated_at: now,
+            },
+        },
+    );
+
+    Some((activity_id, queued_item_ids))
+}
+
+async fn register_manual_library_automatch_activity(
+    db: &DbConn,
+    library_id: i32,
+) -> Option<(String, Vec<i32>)> {
+    let candidates = match db
+        .run(move |conn| {
+            list_automatic_metadata_refresh_candidates(conn, Some(library_id), usize::MAX)
+        })
+        .await
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            log::warn!(
+                "Failed to load automatic metadata candidates for library {} refresh activity: {}",
+                library_id,
+                error
+            );
+            return None;
+        }
+    };
+    let item_ids = candidates
+        .iter()
+        .map(|candidate| candidate.item_id)
+        .collect::<Vec<_>>();
+
+    register_metadata_refresh_activity_for_items(
+        "library",
+        "manual_library_automatch",
+        "Match unlinked library metadata".into(),
+        Some(library_id),
+        None,
+        None,
+        item_ids,
+    )
+    .await
 }
 
 async fn cancel_metadata_refresh_activity(activity_id: &str) {
@@ -1663,6 +1769,39 @@ async fn run_due_metadata_refreshes(
     .await;
 }
 
+async fn run_due_missing_item_cleanup(
+    db: &DbConn,
+    settings: &crate::config::Settings,
+) {
+    let Some(days) = settings.media.missing_item_auto_delete_days else {
+        return;
+    };
+    if days == 0 {
+        return;
+    }
+
+    let cutoff = current_timestamp().saturating_sub(i64::from(days) * 24 * 60 * 60);
+    match db
+        .run(move |conn| delete_missing_media_items(conn, None, Some(cutoff)))
+        .await
+    {
+        Ok(summary) if summary.deleted_items > 0 || summary.deleted_files > 0 => {
+            log::info!(
+                "Automatically deleted {} missing item rows and {} missing file rows from active catalog",
+                summary.deleted_items,
+                summary.deleted_files
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::error!(
+                "Failed to automatically delete missing media items: {}",
+                error
+            );
+        }
+    }
+}
+
 async fn build_metadata_refresh_job(
     db: &DbConn,
     settings: &crate::config::Settings,
@@ -1868,6 +2007,8 @@ async fn run_automatic_movie_metadata_linking(
     db: &DbConn,
     settings: &crate::config::Settings,
     library_id: Option<i32>,
+    retry_previously_attempted: bool,
+    activity: Option<(String, Vec<i32>)>,
 ) {
     let ready_providers = list_provider_statuses(&settings.metadata)
         .into_iter()
@@ -1875,8 +2016,14 @@ async fn run_automatic_movie_metadata_linking(
         .map(|provider| provider.id)
         .collect::<std::collections::HashSet<_>>();
 
-    let candidates = match db
-        .run(move |conn| list_automatic_metadata_candidates(conn, library_id, 8))
+    let mut candidates = match db
+        .run(move |conn| {
+            if retry_previously_attempted {
+                list_automatic_metadata_refresh_candidates(conn, library_id, usize::MAX)
+            } else {
+                list_automatic_metadata_candidates(conn, library_id, 8)
+            }
+        })
         .await
     {
         Ok(candidates) => candidates,
@@ -1886,7 +2033,41 @@ async fn run_automatic_movie_metadata_linking(
         }
     };
 
+    let activity = if retry_previously_attempted {
+        if activity.is_some() {
+            activity
+        } else {
+            let item_ids = candidates
+                .iter()
+                .map(|candidate| candidate.item_id)
+                .collect::<Vec<_>>();
+            register_metadata_refresh_activity_for_items(
+                "library",
+                "manual_library_automatch",
+                "Match unlinked library metadata".into(),
+                library_id,
+                None,
+                None,
+                item_ids,
+            )
+            .await
+        }
+    } else {
+        None
+    };
+    if let Some((_, queued_item_ids)) = &activity {
+        let queued_item_ids = queued_item_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        candidates.retain(|candidate| queued_item_ids.contains(&candidate.item_id));
+    }
+    if let Some((activity_id, _)) = &activity {
+        mark_metadata_refresh_activity_running(activity_id).await;
+    }
+
     for candidate in candidates {
+        let mut failed = false;
         let mut guessed_provider_id = None;
         let mut guess = None;
         for provider_id in candidate
@@ -1929,6 +2110,7 @@ async fn run_automatic_movie_metadata_linking(
                         candidate.relative_path,
                         error
                     );
+                    failed = true;
                 }
             }
         }
@@ -1958,6 +2140,7 @@ async fn run_automatic_movie_metadata_linking(
                     candidate.item_id,
                     error
                 );
+                failed = true;
             }
             match fetch_provider_metadata_snapshot(
                 &settings.metadata,
@@ -2002,7 +2185,7 @@ async fn run_automatic_movie_metadata_linking(
                                 error
                             );
                         }
-                        continue;
+                        failed = true;
                     }
                 }
                 Err(error) => {
@@ -2037,7 +2220,7 @@ async fn run_automatic_movie_metadata_linking(
                             persist_error
                         );
                     }
-                    continue;
+                    failed = true;
                 }
             }
         }
@@ -2055,8 +2238,17 @@ async fn run_automatic_movie_metadata_linking(
                     candidate.item_id,
                     error
                 );
+                failed = true;
             }
         }
+
+        if let Some((activity_id, _)) = &activity {
+            record_metadata_refresh_activity_progress(activity_id, failed).await;
+        }
+    }
+
+    if let Some((activity_id, _)) = &activity {
+        complete_metadata_refresh_activity(activity_id).await;
     }
 
     let pending_show_backfills = match db.run(linked_shows_needing_descendant_backfill).await {
@@ -2309,6 +2501,7 @@ pub fn start_library_monitor(db: DbConn) {
 
             recover_pending_metadata_refreshes(&db, &settings).await;
             run_due_metadata_refreshes(&db, &settings).await;
+            run_due_missing_item_cleanup(&db, &settings).await;
             tokio::time::sleep(tokio::time::Duration::from_secs(
                 LIBRARY_MONITOR_INTERVAL_SECONDS,
             ))
@@ -2391,6 +2584,51 @@ pub async fn scan_library(
     });
 
     Ok(Json(summary))
+}
+
+/// Delete items currently marked missing from one library's active catalog.
+#[openapi(tag = "Media")]
+#[delete("/api/v1/libraries/<library_id>/missing")]
+pub async fn delete_library_missing_items(
+    db: DbConn,
+    library_id: i32,
+) -> Result<Json<MissingItemsCleanupResponse>, Status> {
+    let settings = current_settings();
+    let exists = db
+        .run(move |conn| library_exists(conn, library_id))
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to inspect library {} before missing-item cleanup: {}",
+                library_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
+    if !exists {
+        return Err(Status::NotFound);
+    }
+
+    let cleanup = db
+        .run(move |conn| delete_missing_media_items(conn, Some(library_id), None))
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to delete missing media items for library {}: {}",
+                library_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
+    let library = load_library_summary(&db, &settings, library_id).await?;
+
+    Ok(Json(MissingItemsCleanupResponse {
+        library_id,
+        deleted_files: cleanup.deleted_files,
+        deleted_items: cleanup.deleted_items,
+        removed_collection_items: cleanup.removed_collection_items,
+        library,
+    }))
 }
 
 /// Return active backend activities such as metadata refresh work.
@@ -3420,6 +3658,7 @@ pub async fn refresh_library_metadata(
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
     let library_summary = load_library_summary(&db, &settings, library_id).await?;
+    let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
 
     let refresh_jobs = load_library_refresh_jobs(&db, &settings, library_id).await?;
     let refresh_targets = refresh_jobs
@@ -3439,13 +3678,23 @@ pub async fn refresh_library_metadata(
     else {
         let summary = load_library_summary(&db, &settings, library_id).await?;
         tokio::spawn(async move {
-            run_automatic_movie_metadata_linking(&db, &settings, Some(library_id)).await;
+            run_automatic_movie_metadata_linking(
+                &db,
+                &settings,
+                Some(library_id),
+                true,
+                automatch_activity,
+            )
+            .await;
         });
         return Ok(Json(summary));
     };
 
     if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
         cancel_metadata_refresh_activity(&activity_id).await;
+        if let Some((automatch_activity_id, _)) = &automatch_activity {
+            cancel_metadata_refresh_activity(automatch_activity_id).await;
+        }
         return Err(status);
     }
 
@@ -3457,7 +3706,14 @@ pub async fn refresh_library_metadata(
             record_metadata_refresh_activity_progress(&activity_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
-        run_automatic_movie_metadata_linking(&db, &settings, Some(library_id)).await;
+        run_automatic_movie_metadata_linking(
+            &db,
+            &settings,
+            Some(library_id),
+            true,
+            automatch_activity,
+        )
+        .await;
     });
 
     Ok(Json(pending_summary))

@@ -165,6 +165,10 @@ pub struct PersistedLibrarySummary {
     pub metadata_refresh_completed: i64,
     /// Number of linked metadata items whose latest refresh failed.
     pub metadata_refresh_failed: i64,
+    /// Number of file rows currently marked missing.
+    pub missing_files: i64,
+    /// Number of item rows currently marked missing.
+    pub missing_items: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -206,6 +210,8 @@ pub struct PersistedMediaFileSummary {
     pub video_codec: Option<String>,
     /// Audio codec name when available.
     pub audio_codec: Option<String>,
+    /// When this file was first observed as missing from disk.
+    pub missing_since: Option<i64>,
 }
 
 /// Summary of a browser-visible media item.
@@ -261,6 +267,8 @@ pub struct MediaItemSummary {
     pub playback_position_ms: Option<i64>,
     /// Last saved playback duration for the current user.
     pub playback_duration_ms: Option<i64>,
+    /// When this item was first observed as missing from disk.
+    pub missing_since: Option<i64>,
 }
 
 /// Detailed browser-facing media item response.
@@ -356,6 +364,21 @@ pub struct MediaItemDetail {
     pub playback_position_ms: Option<i64>,
     /// Last saved playback duration for the current user.
     pub playback_duration_ms: Option<i64>,
+    /// When this item was first observed as missing from disk.
+    pub missing_since: Option<i64>,
+}
+
+/// Result of removing missing items from the active catalog.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MissingItemsCleanupSummary {
+    /// Library scoped by the cleanup request, when applicable.
+    pub library_id: Option<i32>,
+    /// File rows removed from the active catalog.
+    pub deleted_files: i64,
+    /// Item rows removed from the active catalog.
+    pub deleted_items: i64,
+    /// Collection membership rows removed from active collection/list views.
+    pub removed_collection_items: i64,
 }
 
 /// One audio stream discovered inside a media file.
@@ -518,6 +541,7 @@ struct FileCounters {
 struct LibraryInspection {
     summary: LibraryScanSummary,
     files: Vec<DiscoveredMediaFile>,
+    scanned_root_paths: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -562,6 +586,9 @@ struct PlannedMediaItem {
     duration_ms: Option<i64>,
     modified_at: Option<i64>,
     explicit_id: Option<i32>,
+    missing_since: Option<i64>,
+    available_leaf_count: i32,
+    missing_leaf_count: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -845,6 +872,7 @@ pub fn get_persisted_library_summaries(
     legacy_libraries: &[MediaLibrarySettings],
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
+    use crate::db::schema::media_files::dsl as media_files_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
     use crate::db::schema::scan_state::dsl as scan_state_dsl;
@@ -873,6 +901,7 @@ pub fn get_persisted_library_summaries(
                         .collect::<Vec<_>>(),
                 ),
             )
+            .filter(media_items_dsl::deleted_at.is_null())
             .select(MediaItem::as_select())
             .load::<MediaItem>(conn)?
             .into_iter()
@@ -914,6 +943,40 @@ pub fn get_persisted_library_summaries(
                 },
             )
     };
+    let library_ids = libraries
+        .iter()
+        .map(|library| library.id)
+        .collect::<Vec<_>>();
+    let missing_files_by_library = if library_ids.is_empty() {
+        HashMap::new()
+    } else {
+        media_files_dsl::media_files
+            .filter(media_files_dsl::library_id.eq_any(&library_ids))
+            .filter(media_files_dsl::deleted_at.is_null())
+            .filter(media_files_dsl::missing_since.is_not_null())
+            .select(media_files_dsl::library_id)
+            .load::<i32>(conn)?
+            .into_iter()
+            .fold(HashMap::<i32, i64>::new(), |mut counts, library_id| {
+                *counts.entry(library_id).or_default() += 1;
+                counts
+            })
+    };
+    let missing_items_by_library = if library_ids.is_empty() {
+        HashMap::new()
+    } else {
+        media_items_dsl::media_items
+            .filter(media_items_dsl::library_id.eq_any(&library_ids))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .filter(media_items_dsl::missing_since.is_not_null())
+            .select(media_items_dsl::library_id)
+            .load::<i32>(conn)?
+            .into_iter()
+            .fold(HashMap::<i32, i64>::new(), |mut counts, library_id| {
+                *counts.entry(library_id).or_default() += 1;
+                counts
+            })
+    };
 
     Ok(libraries
         .into_iter()
@@ -944,6 +1007,14 @@ pub fn get_persisted_library_summaries(
                 metadata_refresh_pending: metadata_counts.pending_items,
                 metadata_refresh_completed: metadata_counts.completed_items,
                 metadata_refresh_failed: metadata_counts.failed_items,
+                missing_files: missing_files_by_library
+                    .get(&library.id)
+                    .copied()
+                    .unwrap_or_default(),
+                missing_items: missing_items_by_library
+                    .get(&library.id)
+                    .copied()
+                    .unwrap_or_default(),
             }
         })
         .collect())
@@ -955,10 +1026,8 @@ pub fn sync_library_catalog(
     libraries: &[MediaLibrarySettings],
     ffmpeg_settings: &FfmpegSettings,
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
-    use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
     use crate::db::schema::media_files::dsl as media_files_dsl;
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
-    use crate::db::schema::playback_progress::dsl as playback_progress_dsl;
     use crate::db::schema::scan_state::dsl as scan_state_dsl;
 
     let probe_context = ProbeContext {
@@ -1066,6 +1135,10 @@ pub fn sync_library_catalog(
                 .as_ref()
                 .map(|file| file.fingerprint_seed != discovered_file.fingerprint_seed)
                 .unwrap_or(true);
+            let should_restore_file = existing_file
+                .as_ref()
+                .map(|file| file.missing_since.is_some() || file.deleted_at.is_some())
+                .unwrap_or(false);
 
             let mut metadata = if should_refresh_metadata {
                 extract_metadata(discovered_file, probe_context)
@@ -1092,6 +1165,7 @@ pub fn sync_library_catalog(
             if let Some(existing_file) = existing_file {
                 if existing_file.fingerprint_seed != discovered_file.fingerprint_seed
                     || should_refresh_title
+                    || should_restore_file
                 {
                     diesel::update(
                         media_files_dsl::media_files
@@ -1107,18 +1181,49 @@ pub fn sync_library_catalog(
             }
         }
 
-        let deleted_file_ids: Vec<i32> = existing_files_by_path
+        let missing_file_ids: Vec<i32> = existing_files_by_path
             .values()
-            .filter(|file| !seen_paths.contains(&media_file_inventory_key(file)))
+            .filter(|file| file.deleted_at.is_none())
             .map(|file| file.id)
             .collect();
-        if !deleted_file_ids.is_empty() {
-            diesel::delete(
-                media_files_dsl::media_files.filter(media_files_dsl::id.eq_any(deleted_file_ids)),
+        let missing_file_count = missing_file_ids.len();
+        if !missing_file_ids.is_empty() {
+            diesel::update(
+                media_files_dsl::media_files
+                    .filter(media_files_dsl::id.eq_any(missing_file_ids))
+                    .filter(media_files_dsl::missing_since.is_null()),
             )
+            .set(media_files_dsl::missing_since.eq(current_timestamp()))
             .execute(conn)?;
         }
 
+        if inspection.scanned_root_paths.is_empty() {
+            if missing_file_count > 0 {
+                log::warn!(
+                    "No configured roots were scanned successfully for library {} ({}); marked {} existing file rows as missing",
+                    library_row.id,
+                    library_row.name,
+                    missing_file_count
+                );
+            }
+        } else {
+            let missing_unscanned_files = existing_files_by_path
+                .values()
+                .filter(|file| {
+                    !inspection
+                        .scanned_root_paths
+                        .contains(&file.source_root_path)
+                })
+                .count();
+            if missing_unscanned_files > 0 {
+                log::warn!(
+                    "Marked {} existing file rows as missing in library {} ({}) because their source roots were not scanned successfully",
+                    missing_unscanned_files,
+                    library_row.id,
+                    library_row.name
+                );
+            }
+        }
         sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
 
         let state_values = NewScanState {
@@ -1168,52 +1273,9 @@ pub fn sync_library_catalog(
             metadata_refresh_pending: 0,
             metadata_refresh_completed: 0,
             metadata_refresh_failed: 0,
+            missing_files: 0,
+            missing_items: 0,
         });
-    }
-
-    let stale_library_rows = existing_library_rows
-        .into_iter()
-        .skip(libraries.len())
-        .collect::<Vec<_>>();
-
-    if !stale_library_rows.is_empty() {
-        let stale_library_ids = stale_library_rows
-            .iter()
-            .map(|library| library.id)
-            .collect::<Vec<_>>();
-        let stale_media_file_ids = media_files_dsl::media_files
-            .filter(media_files_dsl::library_id.eq_any(&stale_library_ids))
-            .select(media_files_dsl::id)
-            .load::<i32>(conn)?;
-
-        if !stale_media_file_ids.is_empty() {
-            diesel::delete(
-                item_metadata_links_dsl::item_metadata_links
-                    .filter(item_metadata_links_dsl::media_item_id.eq_any(&stale_media_file_ids)),
-            )
-            .execute(conn)?;
-            diesel::delete(
-                playback_progress_dsl::playback_progress
-                    .filter(playback_progress_dsl::media_item_id.eq_any(&stale_media_file_ids)),
-            )
-            .execute(conn)?;
-            diesel::delete(
-                media_files_dsl::media_files
-                    .filter(media_files_dsl::id.eq_any(&stale_media_file_ids)),
-            )
-            .execute(conn)?;
-        }
-
-        diesel::delete(
-            scan_state_dsl::scan_state
-                .filter(scan_state_dsl::library_id.eq_any(&stale_library_ids)),
-        )
-        .execute(conn)?;
-        diesel::delete(
-            media_libraries_dsl::media_libraries
-                .filter(media_libraries_dsl::id.eq_any(stale_library_ids)),
-        )
-        .execute(conn)?;
     }
 
     Ok(persisted)
@@ -1229,6 +1291,7 @@ fn sync_logical_media_items_for_library(
 
     let files = media_files_dsl::media_files
         .filter(media_files_dsl::library_id.eq(library.id))
+        .filter(media_files_dsl::deleted_at.is_null())
         .order(media_files_dsl::relative_path.asc())
         .select(MediaFile::as_select())
         .load::<MediaFile>(conn)?;
@@ -1307,14 +1370,103 @@ fn sync_logical_media_items_for_library(
     let stale_ids = existing_items
         .into_iter()
         .filter(|item| !planned_keys.contains(&item.identity_key))
+        .filter(|item| item.deleted_at.is_none())
         .map(|item| item.id)
         .collect::<Vec<_>>();
     if !stale_ids.is_empty() {
-        diesel::delete(media_items_dsl::media_items.filter(media_items_dsl::id.eq_any(stale_ids)))
-            .execute(conn)?;
+        mark_media_items_deleted(conn, &stale_ids, current_timestamp())?;
     }
 
     Ok(())
+}
+
+/// Mark missing media files and items as deleted from the active catalog.
+pub fn delete_missing_media_items(
+    conn: &mut SqliteConnection,
+    library_id: Option<i32>,
+    missing_before_or_at: Option<i64>,
+) -> Result<MissingItemsCleanupSummary, diesel::result::Error> {
+    use crate::db::schema::media_files::dsl as media_files_dsl;
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+
+    let mut file_query = media_files_dsl::media_files
+        .filter(media_files_dsl::deleted_at.is_null())
+        .filter(media_files_dsl::missing_since.is_not_null())
+        .into_boxed();
+    let mut item_query = media_items_dsl::media_items
+        .filter(media_items_dsl::deleted_at.is_null())
+        .filter(media_items_dsl::missing_since.is_not_null())
+        .into_boxed();
+
+    if let Some(library_id) = library_id {
+        file_query = file_query.filter(media_files_dsl::library_id.eq(library_id));
+        item_query = item_query.filter(media_items_dsl::library_id.eq(library_id));
+    }
+    if let Some(cutoff) = missing_before_or_at {
+        file_query = file_query.filter(media_files_dsl::missing_since.le(cutoff));
+        item_query = item_query.filter(media_items_dsl::missing_since.le(cutoff));
+    }
+
+    let file_ids = file_query.select(media_files_dsl::id).load::<i32>(conn)?;
+    let item_ids = item_query.select(media_items_dsl::id).load::<i32>(conn)?;
+
+    let deleted_at = current_timestamp();
+    let deleted_files = if file_ids.is_empty() {
+        0
+    } else {
+        diesel::update(media_files_dsl::media_files.filter(media_files_dsl::id.eq_any(&file_ids)))
+            .set(media_files_dsl::deleted_at.eq(deleted_at))
+            .execute(conn)? as i64
+    };
+
+    let removed_collection_items = if item_ids.is_empty() {
+        0
+    } else {
+        diesel::delete(
+            collection_items_dsl::metadata_collection_items
+                .filter(collection_items_dsl::media_item_id.eq_any(&item_ids)),
+        )
+        .execute(conn)? as i64
+    };
+
+    let deleted_items = if item_ids.is_empty() {
+        0
+    } else {
+        diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq_any(&item_ids)))
+            .set(media_items_dsl::deleted_at.eq(deleted_at))
+            .execute(conn)? as i64
+    };
+
+    Ok(MissingItemsCleanupSummary {
+        library_id,
+        deleted_files,
+        deleted_items,
+        removed_collection_items,
+    })
+}
+
+fn mark_media_items_deleted(
+    conn: &mut SqliteConnection,
+    item_ids: &[i32],
+    deleted_at: i64,
+) -> Result<usize, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items_dsl;
+
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
+
+    diesel::delete(
+        collection_items_dsl::metadata_collection_items
+            .filter(collection_items_dsl::media_item_id.eq_any(item_ids)),
+    )
+    .execute(conn)?;
+
+    diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq_any(item_ids)))
+        .set(media_items_dsl::deleted_at.eq(deleted_at))
+        .execute(conn)
 }
 
 fn upsert_planned_media_item(
@@ -1345,6 +1497,8 @@ fn upsert_planned_media_item(
         modified_at: plan.modified_at,
         created_at: plan.modified_at.or_else(|| Some(current_timestamp())),
         updated_at: Some(current_timestamp()),
+        missing_since: plan.missing_since,
+        deleted_at: None,
     };
 
     let target = existing_by_key.remove(&plan.identity_key).or_else(|| {
@@ -1402,6 +1556,8 @@ fn plan_library_media_items(
     let mut leaf_identity_by_file_id = HashMap::new();
 
     for file in files {
+        let available_leaf_count = if file.missing_since.is_none() { 1 } else { 0 };
+        let missing_leaf_count = if file.missing_since.is_some() { 1 } else { 0 };
         if *library_kind == MediaLibraryKind::Shows && file.media_kind == "video" {
             let fallback_title = fallback_title_from_relative_path(&file.relative_path);
             let parsed = parse_show_path(
@@ -1428,6 +1584,9 @@ fn plan_library_media_items(
                     duration_ms: None,
                     modified_at: file.modified_at,
                     explicit_id: None,
+                    missing_since: file.missing_since,
+                    available_leaf_count,
+                    missing_leaf_count,
                 },
             );
             upsert_planned_item(
@@ -1447,6 +1606,9 @@ fn plan_library_media_items(
                     duration_ms: None,
                     modified_at: file.modified_at,
                     explicit_id: None,
+                    missing_since: file.missing_since,
+                    available_leaf_count,
+                    missing_leaf_count,
                 },
             );
             upsert_planned_item(
@@ -1466,6 +1628,9 @@ fn plan_library_media_items(
                     duration_ms: file.duration_ms,
                     modified_at: file.modified_at,
                     explicit_id: Some(file.id),
+                    missing_since: file.missing_since,
+                    available_leaf_count,
+                    missing_leaf_count,
                 },
             );
             leaf_identity_by_file_id.insert(file.id, parsed.episode_key);
@@ -1499,6 +1664,9 @@ fn plan_library_media_items(
                 duration_ms: file.duration_ms,
                 modified_at: file.modified_at,
                 explicit_id: Some(file.id),
+                missing_since: file.missing_since,
+                available_leaf_count,
+                missing_leaf_count,
             },
         );
         leaf_identity_by_file_id.insert(file.id, identity_key);
@@ -1557,6 +1725,18 @@ fn upsert_planned_item(
         .entry(item.identity_key.clone())
         .and_modify(|existing| {
             existing.modified_at = existing.modified_at.max(item.modified_at);
+            existing.available_leaf_count += item.available_leaf_count;
+            existing.missing_leaf_count += item.missing_leaf_count;
+            existing.missing_since = if existing.available_leaf_count > 0 {
+                None
+            } else {
+                match (existing.missing_since, item.missing_since) {
+                    (Some(left), Some(right)) => Some(left.min(right)),
+                    (Some(left), None) => Some(left),
+                    (None, Some(right)) => Some(right),
+                    (None, None) => None,
+                }
+            };
             existing.duration_ms = Some(
                 existing.duration_ms.unwrap_or_default() + item.duration_ms.unwrap_or_default(),
             )
@@ -1753,6 +1933,7 @@ pub fn get_library_files(
 
     let rows = media_files_dsl::media_files
         .filter(media_files_dsl::library_id.eq(library_id))
+        .filter(media_files_dsl::deleted_at.is_null())
         .order(media_files_dsl::relative_path.asc())
         .select(MediaFile::as_select())
         .load::<MediaFile>(conn)?;
@@ -1792,6 +1973,7 @@ pub fn list_media_items_with_preferred_languages(
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let mut query = media_items_dsl::media_items.into_boxed();
+    query = query.filter(media_items_dsl::deleted_at.is_null());
     if let Some(library_id) = library_id {
         query = query.filter(media_items_dsl::library_id.eq(library_id));
     }
@@ -1826,6 +2008,28 @@ pub fn list_automatic_metadata_candidates(
     library_id: Option<i32>,
     limit: usize,
 ) -> Result<Vec<AutomaticMetadataCandidate>, diesel::result::Error> {
+    list_automatic_metadata_candidates_with_options(conn, library_id, limit, false)
+}
+
+/// Return unmatched movie-like items for a user-triggered metadata refresh.
+///
+/// Manual library refreshes should retry currently unlinked movies even if a
+/// previous automatic pass marked them as attempted. The normal candidate list
+/// remains conservative so automatic polling does not repeatedly hit providers.
+pub fn list_automatic_metadata_refresh_candidates(
+    conn: &mut SqliteConnection,
+    library_id: Option<i32>,
+    limit: usize,
+) -> Result<Vec<AutomaticMetadataCandidate>, diesel::result::Error> {
+    list_automatic_metadata_candidates_with_options(conn, library_id, limit, true)
+}
+
+fn list_automatic_metadata_candidates_with_options(
+    conn: &mut SqliteConnection,
+    library_id: Option<i32>,
+    limit: usize,
+    include_previously_attempted: bool,
+) -> Result<Vec<AutomaticMetadataCandidate>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
     use crate::db::schema::media_files::dsl as media_files_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
@@ -1846,6 +2050,8 @@ pub fn list_automatic_metadata_candidates(
         .collect::<HashSet<_>>();
 
     let rows = media_files_dsl::media_files
+        .filter(media_files_dsl::deleted_at.is_null())
+        .filter(media_files_dsl::missing_since.is_null())
         .order((
             media_files_dsl::modified_at.desc(),
             media_files_dsl::id.asc(),
@@ -1859,7 +2065,9 @@ pub fn list_automatic_metadata_candidates(
             continue;
         };
 
-        if linked_item_ids.contains(&media_item_id) || row.metadata_match_attempted_at.is_some() {
+        if linked_item_ids.contains(&media_item_id)
+            || (!include_previously_attempted && row.metadata_match_attempted_at.is_some())
+        {
             continue;
         }
         if row.media_kind != "video" {
@@ -1894,6 +2102,8 @@ pub fn list_automatic_metadata_candidates(
 
     let show_rows = media_items_dsl::media_items
         .filter(media_items_dsl::item_type.eq("show"))
+        .filter(media_items_dsl::deleted_at.is_null())
+        .filter(media_items_dsl::missing_since.is_null())
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
     for row in show_rows {
@@ -1970,6 +2180,7 @@ pub fn get_media_item_with_preferred_languages(
 
     let item = media_items_dsl::media_items
         .filter(media_items_dsl::id.eq(item_id))
+        .filter(media_items_dsl::deleted_at.is_null())
         .select(MediaItem::as_select())
         .first(conn)
         .optional()?;
@@ -2159,6 +2370,7 @@ pub fn get_playback_decision(
 
     let item = media_items_dsl::media_items
         .filter(media_items_dsl::id.eq(item_id))
+        .filter(media_items_dsl::deleted_at.is_null())
         .select(MediaItem::as_select())
         .first(conn)
         .optional()?;
@@ -2170,6 +2382,25 @@ pub fn get_playback_decision(
     let backing_file = load_backing_media_file(conn, item_id)?;
 
     Ok(Some(if let Some(row) = backing_file {
+        if row.missing_since.is_some() {
+            return Ok(Some(PlaybackDecision {
+                item_id,
+                can_direct_play: false,
+                transcode_required: false,
+                reason: "This item is missing from disk and cannot be played.".into(),
+                stream_url: None,
+                mime_type: detect_mime_type(&row),
+                transcode_container: None,
+                transcode_video_codec: None,
+                transcode_audio_codec: None,
+                video_transcode_required: false,
+                audio_transcode_required: false,
+                source_video_codec: row.video_codec,
+                source_audio_codec: row.audio_codec,
+                source_container: row.container,
+            }));
+        }
+
         let default_profile = ClientProfile {
             client_type: "web".into(),
             client_name: "Web".into(),
@@ -2269,6 +2500,7 @@ pub fn resolve_media_item_source_path(
 
     let item = media_items_dsl::media_items
         .filter(media_items_dsl::id.eq(item_id))
+        .filter(media_items_dsl::deleted_at.is_null())
         .select(MediaItem::as_select())
         .first(conn)
         .optional()?;
@@ -2283,6 +2515,9 @@ pub fn resolve_media_item_source_path(
         }
         return Ok(None);
     };
+    if media_file.missing_since.is_some() {
+        return Ok(None);
+    }
     if let Some(item_relative_path) = item
         .as_ref()
         .and_then(|item| item.relative_path.as_deref())
@@ -2402,6 +2637,7 @@ pub fn get_item_youtube_theme_collection_references(
         item_ids.push(current_item_id);
         current_id = media_items_dsl::media_items
             .filter(media_items_dsl::id.eq(current_item_id))
+            .filter(media_items_dsl::deleted_at.is_null())
             .select(media_items_dsl::parent_id)
             .first::<Option<i32>>(conn)
             .optional()?
@@ -2524,6 +2760,7 @@ fn get_item_theme_song_source_references(
 
         current_id = media_items_dsl::media_items
             .filter(media_items_dsl::id.eq(current_item_id))
+            .filter(media_items_dsl::deleted_at.is_null())
             .select(media_items_dsl::parent_id)
             .first::<Option<i32>>(conn)
             .optional()?
@@ -3071,11 +3308,13 @@ fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInsp
                 error: Some("Library path is empty".into()),
             },
             files: Vec::new(),
+            scanned_root_paths: HashSet::new(),
         };
     }
 
     let mut counters = FileCounters::default();
     let mut files = Vec::new();
+    let mut scanned_root_paths = HashSet::new();
     let mut errors = Vec::new();
     let mut first_failure_status = None;
 
@@ -3100,6 +3339,7 @@ fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInsp
             &library.kind,
         ) {
             Ok((nested, nested_files)) => {
+                scanned_root_paths.insert(configured_path.clone());
                 counters.total_files += nested.total_files;
                 counters.video_files += nested.video_files;
                 counters.audio_files += nested.audio_files;
@@ -3133,6 +3373,7 @@ fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInsp
                 error: (!errors.is_empty()).then(|| errors.join("; ")),
             },
             files,
+            scanned_root_paths,
         }
     } else {
         LibraryInspection {
@@ -3152,6 +3393,7 @@ fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInsp
                 error: Some(errors.join("; ")),
             },
             files: Vec::new(),
+            scanned_root_paths,
         }
     }
 }
@@ -3335,6 +3577,8 @@ impl DiscoveredMediaFile {
             metadata_updated_at: metadata.metadata_updated_at,
             metadata_match_attempted_at,
             media_item_id: None,
+            missing_since: None,
+            deleted_at: None,
         }
     }
 }
@@ -3603,6 +3847,7 @@ fn to_persisted_file_summary(row: MediaFile) -> PersistedMediaFileSummary {
         height: row.height,
         video_codec: row.video_codec,
         audio_codec: row.audio_codec,
+        missing_since: row.missing_since,
     }
 }
 
@@ -3637,6 +3882,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         modified_at: item.modified_at,
         playback_position_ms: None,
         playback_duration_ms: None,
+        missing_since: item.missing_since,
     }
 }
 
@@ -3648,6 +3894,7 @@ fn load_media_item_row(
 
     media_items_dsl::media_items
         .filter(media_items_dsl::id.eq(item_id))
+        .filter(media_items_dsl::deleted_at.is_null())
         .select(MediaItem::as_select())
         .first(conn)
         .optional()
@@ -4178,6 +4425,7 @@ fn to_media_item_detail(
         children: Vec::new(),
         playback_position_ms: None,
         playback_duration_ms: None,
+        missing_since: item.missing_since,
     }
 }
 
@@ -4198,6 +4446,7 @@ fn load_backing_media_file(
 
     media_files_dsl::media_files
         .filter(media_files_dsl::media_item_id.eq(item_id))
+        .filter(media_files_dsl::deleted_at.is_null())
         .order(media_files_dsl::id.asc())
         .select(MediaFile::as_select())
         .first(conn)
@@ -4217,6 +4466,7 @@ fn load_media_item_hierarchy(
     while let Some(parent_id) = next_parent_id {
         let Some(parent) = media_items_dsl::media_items
             .filter(media_items_dsl::id.eq(parent_id))
+            .filter(media_items_dsl::deleted_at.is_null())
             .select(MediaItem::as_select())
             .first(conn)
             .optional()?
@@ -4254,6 +4504,7 @@ pub fn list_media_item_children_with_preferred_languages(
 
     let rows = media_items_dsl::media_items
         .filter(media_items_dsl::parent_id.eq(item_id))
+        .filter(media_items_dsl::deleted_at.is_null())
         .order((
             media_items_dsl::season_number.asc(),
             media_items_dsl::episode_number.asc(),

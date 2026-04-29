@@ -1,6 +1,7 @@
 import {
   addMockLibrary,
   createMockUser,
+  deleteMockMissingItems,
   getMockCapabilities,
   getMockBootstrap,
   getMockHome,
@@ -112,6 +113,8 @@ export interface MediaLibrary {
   metadata_refresh_pending: number;
   metadata_refresh_completed: number;
   metadata_refresh_failed: number;
+  missing_files: number;
+  missing_items: number;
   error?: string;
 }
 
@@ -141,6 +144,7 @@ export interface MediaItemSummary {
   modified_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
+  missing_since?: number | null;
   hierarchy?: MediaItemSummary[];
 }
 
@@ -549,6 +553,7 @@ export interface SettingsSnapshot {
   };
   media: {
     libraries: MediaLibrarySettings[];
+    missing_item_auto_delete_days?: number | null;
   };
   metadata: {
     providers: MetadataProviderSettings[];
@@ -575,6 +580,14 @@ export interface SettingsResponse {
 
 export interface MetadataCacheClearResponse {
   removed_files: number;
+}
+
+export interface MissingItemsCleanupResponse {
+  library_id: number;
+  deleted_files: number;
+  deleted_items: number;
+  removed_collection_items: number;
+  library: MediaLibrary;
 }
 
 export interface PlaybackProgressRequest {
@@ -756,6 +769,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
   const removeLibraryMatch = url.pathname.match(/^\/api\/v1\/settings\/libraries\/(\d+)$/);
   if (method === 'DELETE' && removeLibraryMatch) {
     return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
+  }
+
+  const missingItemsMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/missing$/);
+  if (method === 'DELETE' && missingItemsMatch) {
+    return deleteMockMissingItems(Number(missingItemsMatch[1])) as T;
   }
 
   const deleteSessionMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)$/);
@@ -985,6 +1003,10 @@ export function refreshLibraryMetadata(libraryId: number): Promise<MediaLibrary>
 
 export function scanLibrary(libraryId: number): Promise<MediaLibrary> {
   return requestJson<MediaLibrary>('POST', `/api/v1/libraries/${libraryId}/scan`);
+}
+
+export function deleteMissingItems(libraryId: number): Promise<MissingItemsCleanupResponse> {
+  return requestJson<MissingItemsCleanupResponse>('DELETE', `/api/v1/libraries/${libraryId}/missing`);
 }
 
 export function getPlaybackDecision(itemId: number): Promise<PlaybackDecision> {

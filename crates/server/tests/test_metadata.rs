@@ -217,6 +217,7 @@ fn test_database_settings_round_trip_runtime_sections() {
         ffmpeg_path: "C:/Tools/ffmpeg.exe".into(),
         ffprobe_path: "C:/Tools/ffprobe.exe".into(),
     };
+    settings.media.missing_item_auto_delete_days = Some(14);
     settings.metadata.providers = vec![MetadataProviderSettings {
         id: MetadataProviderId::Tmdb,
         enabled: true,
@@ -231,6 +232,7 @@ fn test_database_settings_round_trip_runtime_sections() {
     let loaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
     assert_eq!(loaded.server.port, 8181);
     assert_eq!(loaded.ffmpeg.ffmpeg_path, "C:/Tools/ffmpeg.exe");
+    assert_eq!(loaded.media.missing_item_auto_delete_days, Some(14));
     assert_eq!(
         loaded.metadata.providers[0].api_key.as_deref(),
         Some("tmdb-key")
@@ -239,10 +241,12 @@ fn test_database_settings_round_trip_runtime_sections() {
     let mut updated = loaded.clone();
     updated.server.port = 8282;
     updated.ffmpeg.ffmpeg_path = "D:/ffmpeg.exe".into();
+    updated.media.missing_item_auto_delete_days = None;
     save_database_settings(&mut conn, &updated).unwrap();
     let reloaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
     assert_eq!(reloaded.server.port, 8282);
     assert_eq!(reloaded.ffmpeg.ffmpeg_path, "D:/ffmpeg.exe");
+    assert_eq!(reloaded.media.missing_item_auto_delete_days, None);
 }
 
 #[test]

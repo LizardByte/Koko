@@ -12,6 +12,7 @@ import type {
   MediaItemSummary,
   MediaLibrary,
   MediaLibrarySettings,
+  MissingItemsCleanupResponse,
   MetadataProviderStatus,
   MetadataPersonResponse,
   MetadataSearchResult,
@@ -57,6 +58,8 @@ const libraries: MediaLibrary[] = [
     metadata_refresh_pending: 0,
     metadata_refresh_completed: 0,
     metadata_refresh_failed: 0,
+    missing_files: 0,
+    missing_items: 0,
   },
   {
     id: 2,
@@ -78,6 +81,8 @@ const libraries: MediaLibrary[] = [
     metadata_refresh_pending: 0,
     metadata_refresh_completed: 0,
     metadata_refresh_failed: 0,
+    missing_files: 0,
+    missing_items: 0,
   },
   {
     id: 3,
@@ -99,6 +104,8 @@ const libraries: MediaLibrary[] = [
     metadata_refresh_pending: 0,
     metadata_refresh_completed: 0,
     metadata_refresh_failed: 0,
+    missing_files: 0,
+    missing_items: 0,
   },
 ];
 
@@ -580,6 +587,7 @@ let settings: SettingsSnapshot = {
     data_dir: 'C:/Users/Mock/AppData/Local/Koko/data',
   },
   media: {
+    missing_item_auto_delete_days: null,
     libraries: [
       {
         name: 'Movies',
@@ -1037,6 +1045,8 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
     metadata_refresh_pending: 0,
     metadata_refresh_completed: 0,
     metadata_refresh_failed: 0,
+    missing_files: 0,
+    missing_items: 0,
   });
   nextLibraryId += 1;
   return getMockSettings();
@@ -1056,6 +1066,35 @@ export function removeMockLibrary(libraryIndex: number): SettingsResponse {
   }
 
   return getMockSettings();
+}
+
+export function deleteMockMissingItems(libraryId: number): MissingItemsCleanupResponse {
+  const library = libraries.find((candidate) => candidate.id === libraryId);
+  if (!library) {
+    throw new Error('404 Not Found');
+  }
+
+  const deletedItems = items.filter((item) => item.library_id === libraryId && item.missing_since).length;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index].library_id === libraryId && items[index].missing_since) {
+      items.splice(index, 1);
+    }
+  }
+
+  collections.forEach((collection) => {
+    collection.item_ids = collection.item_ids.filter((itemId) => items.some((item) => item.id === itemId));
+    collection.item_count = collection.item_ids.length;
+  });
+  library.missing_files = 0;
+  library.missing_items = 0;
+
+  return {
+    library_id: libraryId,
+    deleted_files: deletedItems,
+    deleted_items: deletedItems,
+    removed_collection_items: 0,
+    library: { ...library },
+  };
 }
 
 export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProgressRequest): void {

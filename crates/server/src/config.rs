@@ -20,6 +20,7 @@ use crate::db::schema::app_settings;
 use crate::globals::GLOBAL_APP_NAME;
 
 const METADATA_SETTINGS_KEY: &str = "metadata";
+const MEDIA_SETTINGS_KEY: &str = "media";
 const SERVER_SETTINGS_KEY: &str = "server";
 const FFMPEG_SETTINGS_KEY: &str = "ffmpeg";
 
@@ -90,6 +91,10 @@ fn default_provider_retry_backoff_ms() -> u32 {
 
 fn default_metadata_refresh_interval_days() -> Option<u32> {
     Some(30)
+}
+
+fn default_missing_item_auto_delete_days() -> Option<u32> {
+    None
 }
 
 fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProviderSettings {
@@ -277,6 +282,9 @@ pub struct MediaSettings {
     /// Configured media-library roots.
     #[serde(default)]
     pub libraries: Vec<MediaLibrarySettings>,
+    /// Automatically delete missing catalog items after this many days. `None` disables cleanup.
+    #[serde(default = "default_missing_item_auto_delete_days")]
+    pub missing_item_auto_delete_days: Option<u32>,
 }
 
 /// Supported external metadata providers.
@@ -530,6 +538,9 @@ pub fn normalize_settings(settings: &mut Settings) {
     for library in &mut settings.media.libraries {
         library.normalize();
     }
+    if let Some(days) = settings.media.missing_item_auto_delete_days {
+        settings.media.missing_item_auto_delete_days = (days > 0).then_some(days.min(3650));
+    }
 
     let mut seen_provider_ids = std::collections::HashSet::new();
     settings
@@ -614,6 +625,12 @@ fn parse_runtime_setting<T: for<'de> Deserialize<'de>>(
         .map_err(|error| format!("Failed to parse persisted {key} settings: {error}"))
 }
 
+fn media_settings_for_database(settings: &Settings) -> MediaSettings {
+    let mut media = settings.media.clone();
+    media.libraries.clear();
+    media
+}
+
 fn upsert_runtime_setting(
     conn: &mut diesel::SqliteConnection,
     key: &str,
@@ -672,6 +689,11 @@ pub fn save_database_settings(
     )?;
     upsert_runtime_setting(
         conn,
+        MEDIA_SETTINGS_KEY,
+        runtime_setting_value(&media_settings_for_database(&normalized))?,
+    )?;
+    upsert_runtime_setting(
+        conn,
         SERVER_SETTINGS_KEY,
         runtime_setting_value(&normalized.server)?,
     )?;
@@ -698,6 +720,11 @@ pub fn seed_database_settings(
     )?;
     insert_runtime_setting_if_missing(
         conn,
+        MEDIA_SETTINGS_KEY,
+        runtime_setting_value(&media_settings_for_database(&normalized))?,
+    )?;
+    insert_runtime_setting_if_missing(
+        conn,
         SERVER_SETTINGS_KEY,
         runtime_setting_value(&normalized.server)?,
     )?;
@@ -717,6 +744,7 @@ pub fn load_database_settings(
     let rows = app_settings::table
         .filter(app_settings::key.eq_any([
             METADATA_SETTINGS_KEY,
+            MEDIA_SETTINGS_KEY,
             SERVER_SETTINGS_KEY,
             FFMPEG_SETTINGS_KEY,
         ]))
@@ -729,6 +757,11 @@ pub fn load_database_settings(
         match row.key.as_str() {
             METADATA_SETTINGS_KEY => {
                 settings.metadata = parse_runtime_setting(&row.value, METADATA_SETTINGS_KEY)?;
+            }
+            MEDIA_SETTINGS_KEY => {
+                let libraries = settings.media.libraries.clone();
+                settings.media = parse_runtime_setting(&row.value, MEDIA_SETTINGS_KEY)?;
+                settings.media.libraries = libraries;
             }
             SERVER_SETTINGS_KEY => {
                 settings.server = parse_runtime_setting(&row.value, SERVER_SETTINGS_KEY)?;

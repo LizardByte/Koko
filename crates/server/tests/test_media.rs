@@ -14,18 +14,19 @@ use diesel_migrations::MigrationHarness;
 use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
 use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
 use koko::media::{
-    LibraryScanStatus, get_item_youtube_theme_collection_references,
+    LibraryScanStatus, delete_missing_media_items, get_item_youtube_theme_collection_references,
     get_item_youtube_theme_provider_references, get_library_files, get_media_home,
     get_media_home_with_preferred_languages, get_media_item,
     get_media_item_with_preferred_languages, get_persisted_library_summaries,
     get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
-    inspect_transcoding_capability, list_automatic_metadata_candidates, list_library_settings,
-    list_media_items, remove_library_setting, replace_library_settings,
+    inspect_transcoding_capability, list_automatic_metadata_candidates,
+    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_items,
+    mark_metadata_match_attempted, remove_library_setting, replace_library_settings,
     resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
     sync_library_catalog, upsert_playback_progress,
 };
 use koko::metadata::{
-    ArtworkKind, ProviderMetadataDetails, StoredMetadataSnapshot,
+    ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, StoredMetadataSnapshot,
     get_preferred_item_metadata_link_for_languages, get_primary_item_metadata_link,
     set_item_metadata_refresh_state, upsert_item_metadata_link, upsert_item_metadata_snapshot,
     upsert_secondary_collection_theme_song_url,
@@ -279,21 +280,303 @@ fn test_sync_library_catalog_updates_incrementally() {
     assert_eq!(second_library.total_files, 2);
     assert_eq!(second_library.video_files, 1);
     assert_eq!(second_library.image_files, 1);
-    assert_eq!(second_files.len(), 2);
+    assert_eq!(second_files.len(), 3);
     assert_eq!(first_movie.id, second_movie.id);
     assert!(
         second_files
             .iter()
             .any(|file| file.relative_path == "cover.jpg")
     );
-    assert!(
-        !second_files
-            .iter()
-            .any(|file| file.relative_path == "song.mp3")
-    );
+    let missing_song = second_files
+        .iter()
+        .find(|file| file.relative_path == "song.mp3")
+        .expect("Expected removed file to stay in trash state");
+    assert!(missing_song.missing_since.is_some());
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_sync_library_catalog_preserves_inventory_when_root_is_missing() {
+    let root = unique_temp_dir("missing_root_preserves_inventory");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Removable drive".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("missing_root_catalog");
+    let first_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = first_sync[0].id;
+    assert_eq!(
+        get_library_files(&mut connection, library_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        list_media_items(&mut connection, Some(library_id))
+            .unwrap()
+            .len(),
+        1
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+
+    let second_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    assert_eq!(second_sync[0].status, LibraryScanStatus::MissingPath);
+    assert_eq!(second_sync[0].total_files, 0);
+    let files = get_library_files(&mut connection, library_id).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0].missing_since.is_some(),
+        "Expected the file to be marked missing instead of deleted"
+    );
+    let items = list_media_items(&mut connection, Some(library_id)).unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(
+        items[0].missing_since.is_some(),
+        "Expected the item to be marked missing instead of deleted"
+    );
+    let summaries = get_persisted_library_summaries(&mut connection, &libraries).unwrap();
+    let summary = summaries
+        .iter()
+        .find(|summary| summary.id == library_id)
+        .unwrap();
+    assert_eq!(summary.missing_files, 1);
+    assert_eq!(summary.missing_items, 1);
+
+    drop(connection);
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_delete_missing_media_items_removes_active_rows_without_losing_history_metadata() {
+    let root = unique_temp_dir("delete_missing_media_items");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("delete_missing_media_items_db");
+    diesel::sql_query(
+        "INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1)",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = persisted[0].id;
+    let movie = list_media_items(&mut connection, Some(library_id))
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    upsert_item_metadata_link(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: Some("Primary metadata overview.".into()),
+            artwork_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".into()),
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: None,
+        },
+        &ProviderMetadataDetails {
+            collections: vec![ProviderMetadataCollection {
+                external_id: "matrix".into(),
+                name: Some("The Matrix Collection".into()),
+                overview: None,
+                artwork_url: None,
+                backdrop_url: None,
+                theme_song_url: None,
+            }],
+            ..ProviderMetadataDetails::default()
+        },
+        "primary",
+        None,
+    )
+    .unwrap();
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        movie.id,
+        120_000,
+        movie.duration_ms,
+        false,
+    )
+    .unwrap();
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let collection_item_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM metadata_collection_items WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(collection_item_count, 1);
+
+    fs::remove_dir_all(&root).unwrap();
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+
+    let cleanup = delete_missing_media_items(&mut connection, Some(library_id), None).unwrap();
+    assert_eq!(cleanup.deleted_files, 1);
+    assert_eq!(cleanup.deleted_items, 1);
+    assert_eq!(
+        list_media_items(&mut connection, Some(library_id))
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        get_library_files(&mut connection, library_id)
+            .unwrap()
+            .len(),
+        0
+    );
+    assert!(
+        get_media_item(&mut connection, movie.id, &root.to_string_lossy())
+            .unwrap()
+            .is_none()
+    );
+
+    let metadata_link_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM item_metadata_links WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(metadata_link_count, 1);
+    let playback_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM playback_progress WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(playback_count, 1);
+    let collection_item_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM metadata_collection_items WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(movie.id)
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(collection_item_count, 0);
+
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let restored = list_media_items(&mut connection, Some(library_id)).unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].id, movie.id);
+    assert!(restored[0].missing_since.is_none());
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_sync_library_catalog_marks_missing_files_without_deleting_rows() {
+    let first_root = unique_temp_dir("partial_scan_first_root");
+    let second_root = unique_temp_dir("partial_scan_second_root");
+    fs::create_dir_all(&first_root).unwrap();
+    fs::create_dir_all(&second_root).unwrap();
+    fs::write(first_root.join("removed.mkv"), b"video").unwrap();
+    fs::write(second_root.join("preserved.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Multi-root library".into(),
+        path: first_root.to_string_lossy().to_string(),
+        paths: vec![
+            first_root.to_string_lossy().to_string(),
+            second_root.to_string_lossy().to_string(),
+        ],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("partial_missing_root_catalog");
+    let first_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = first_sync[0].id;
+    assert_eq!(
+        get_library_files(&mut connection, library_id)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    fs::remove_file(first_root.join("removed.mkv")).unwrap();
+    fs::remove_dir_all(&second_root).unwrap();
+
+    let second_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    assert_eq!(second_sync[0].status, LibraryScanStatus::Available);
+    assert!(
+        second_sync[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("does not exist")
+    );
+
+    let files = get_library_files(&mut connection, library_id).unwrap();
+    assert_eq!(files.len(), 2);
+    let preserved = files
+        .iter()
+        .find(|file| file.relative_path == "preserved.mkv")
+        .expect("Expected file under missing root to stay in trash state");
+    assert!(preserved.missing_since.is_some());
+    let removed = files
+        .iter()
+        .find(|file| file.relative_path == "removed.mkv")
+        .expect("Expected missing file under scanned root to stay in trash state");
+    assert!(removed.missing_since.is_some());
+
+    drop(connection);
+    fs::remove_dir_all(first_root).unwrap();
     fs::remove_file(db_path).unwrap();
 }
 
@@ -469,6 +752,58 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
         candidate.item_id == show.id
             && candidate.display_title == show.display_title
             && candidate.library_kind == MediaLibraryKind::Shows
+    }));
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_refresh_metadata_candidates_retry_previously_attempted_unlinked_movies() {
+    let root = unique_temp_dir("retry_attempted_movie_metadata_candidates");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("retry_attempted_movie_metadata_candidates_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let movie = list_media_items(&mut connection, Some(library.id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .expect("Expected movie item to exist");
+
+    mark_metadata_match_attempted(&mut connection, movie.id, 123).unwrap();
+
+    let automatic_candidates =
+        list_automatic_metadata_candidates(&mut connection, Some(library.id), 8).unwrap();
+    assert!(
+        automatic_candidates
+            .iter()
+            .all(|candidate| candidate.item_id != movie.id)
+    );
+
+    let refresh_candidates =
+        list_automatic_metadata_refresh_candidates(&mut connection, Some(library.id), 8).unwrap();
+    assert!(refresh_candidates.iter().any(|candidate| {
+        candidate.item_id == movie.id
+            && candidate.display_title == movie.display_title
+            && candidate.metadata_providers == vec![MetadataProviderId::Tmdb]
     }));
 
     drop(connection);

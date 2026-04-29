@@ -7,6 +7,7 @@ import {
   clearStoredAuthToken,
   createUser,
   deleteLibrary,
+  deleteMissingItems,
   getAppBootstrap,
   getApiMode,
   getArtworkUrl,
@@ -307,7 +308,32 @@ let activeTrailerYouTubeVideoId: string | undefined;
 let trailerProgressHandle: number | undefined;
 let trailerVolume = 1;
 let trailerMuted = false;
+let spinnerVisibilityObserver: IntersectionObserver | undefined;
 const activeGamepadButtons = new Set<string>();
+
+function visibleSpinnerObserver(): IntersectionObserver | undefined {
+  if (!('IntersectionObserver' in window)) {
+    return undefined;
+  }
+  spinnerVisibilityObserver ??= new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      entry.target.classList.toggle('is-spinner-visible', entry.isIntersecting);
+    });
+  }, { rootMargin: '120px' });
+  return spinnerVisibilityObserver;
+}
+
+function syncVisibleSpinners(): void {
+  const spinners = Array.from(document.querySelectorAll<HTMLElement>('.loading-spinner:not(.player-loading-spinner)'));
+  const observer = visibleSpinnerObserver();
+  if (!observer) {
+    spinners.forEach((spinner) => spinner.classList.add('is-spinner-visible'));
+    return;
+  }
+
+  observer.disconnect();
+  spinners.forEach((spinner) => observer.observe(spinner));
+}
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
   return state.systemActivities.filter((activity) => {
@@ -562,9 +588,9 @@ function shouldAutoRefreshMetadata(): boolean {
     .some((item) => item.metadata_refresh_state === 'pending');
 }
 
-function schedulePendingMetadataRefresh(): void {
+function schedulePendingMetadataRefresh(force = false): void {
   clearPendingMetadataRefresh();
-  if (!shouldAutoRefreshMetadata()) {
+  if (!force && !shouldAutoRefreshMetadata()) {
     return;
   }
 
@@ -1723,15 +1749,36 @@ function renderBrowseDetailPage(): string {
 }
 
 function metadataBadgeMarkup(item: MediaItemSummary): string {
-  if (item.metadata_refresh_state === 'pending') {
-    return '<span class="media-card-status is-loading"><span class="loading-spinner" aria-hidden="true"></span></span>';
-  }
-
-  if (item.has_metadata) {
+  const pending = itemIsMetadataPending(item);
+  const unmatched = !item.has_metadata;
+  if (!pending && !unmatched) {
     return '';
   }
 
-  return `<span class="media-card-status is-unmatched icon-only" title="Metadata is not linked yet" aria-label="Metadata is not linked yet">${renderIcon('triangle-alert', 'status-icon')}</span>`;
+  const statusLabel = pending
+    ? unmatched
+      ? 'Matching metadata'
+      : 'Refreshing metadata'
+    : 'Metadata is not linked yet';
+  return `
+    <span class="media-card-status ${unmatched ? 'is-unmatched' : ''} ${pending ? 'is-loading' : ''} ${pending && unmatched ? 'has-multiple' : 'icon-only'}" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
+      ${unmatched ? `<span class="status-warning-icon">${renderIcon('triangle-alert', 'status-icon')}</span>` : ''}
+      ${pending ? '<span class="loading-spinner" aria-hidden="true"></span>' : ''}
+    </span>
+  `;
+}
+
+function missingItemBadgeMarkup(item: MediaItemSummary): string {
+  if (!item.missing_since) {
+    return '';
+  }
+
+  const statusLabel = `Missing from disk since ${formatTimestamp(item.missing_since)}`;
+  return `
+    <span class="media-card-status is-missing icon-only" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
+      ${renderIcon('trash-2', 'status-icon')}
+    </span>
+  `;
 }
 
 function itemCardSubtitle(item: MediaItemSummary): string | undefined {
@@ -1758,10 +1805,10 @@ function renderItemCard(item: MediaItemSummary): string {
     : state.route.page === 'home' && typeof state.route.libraryId === 'number'
       ? humanizeItemType(item.item_type)
       : `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`;
-  const badgeMarkup = metadataBadgeMarkup(item);
+  const badgeMarkup = `${missingItemBadgeMarkup(item)}${metadataBadgeMarkup(item)}`;
 
   return `
-    <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+    <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
       <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(item.item_type)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
           ${badgeMarkup}
@@ -3402,6 +3449,9 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
       const refreshLabel = refreshPending
         ? 'Refreshing metadata'
         : 'Refresh metadata';
+      const missingFiles = persistedLibrary?.missing_files ?? 0;
+      const missingItems = persistedLibrary?.missing_items ?? 0;
+      const hasMissingItems = missingFiles > 0 || missingItems > 0;
 
       return `
       <section class="settings-library-card">
@@ -3409,12 +3459,19 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
           <div>
             <p class="eyebrow">Library ${index + 1}</p>
             <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
+            ${persistedLibrary
+              ? `<div class="settings-library-tags">
+                <span class="tag ${hasMissingItems ? 'warning' : 'success'}">${escapeHtml(hasMissingItems ? `${missingItems} missing items` : 'No missing items')}</span>
+                ${missingFiles > 0 ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>` : ''}
+              </div>`
+              : ''}
           </div>
           <div class="settings-library-actions">
             ${persistedLibrary
               ? `
                 <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}">${renderButtonContent('Scan now', 'refresh-cw')}</button>
                 <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
+                <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${hasMissingItems ? '' : 'disabled'}>${renderButtonContent('Delete missing', 'trash-2')}</button>
               `
               : ''}
             <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
@@ -3455,6 +3512,34 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
     `;
     })
     .join('');
+}
+
+function renderMissingItemsSettings(settings: SettingsSnapshot): string {
+  const autoDeleteDays = settings.media.missing_item_auto_delete_days ?? null;
+  const autoDeleteEnabled = autoDeleteDays !== null;
+
+  return `
+    <section class="settings-library-card">
+      <div class="settings-library-header">
+        <div>
+          <p class="eyebrow">Missing media</p>
+          <h3>Trash cleanup</h3>
+        </div>
+        <span class="tag ${autoDeleteEnabled ? 'warning' : ''}">${autoDeleteEnabled ? 'Automatic' : 'Manual'}</span>
+      </div>
+      <div class="form-row">
+        <label>Automatic delete
+          <select name="missing_item_auto_delete_mode">
+            <option value="disabled" ${autoDeleteEnabled ? '' : 'selected'}>Disabled</option>
+            <option value="auto" ${autoDeleteEnabled ? 'selected' : ''}>Enabled</option>
+          </select>
+        </label>
+        <label>Days missing
+          <input name="missing_item_auto_delete_days" type="number" min="1" max="3650" value="${autoDeleteDays ?? 30}" />
+        </label>
+      </div>
+    </section>
+  `;
 }
 
 function libraryKindOptions(selectedKind: string): string {
@@ -3604,6 +3689,7 @@ function renderSettingsPage(): string {
               <h3>Libraries</h3>
             </div>
             <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+            ${renderMissingItemsSettings(settings)}
             <div class="settings-library-list">
               ${renderExistingLibrariesSettings(settings)}
             </div>
@@ -3963,6 +4049,7 @@ function render(preserveScroll = true): void {
 
   createIcons({ icons });
   bindEvents();
+  syncVisibleSpinners();
   syncThemeSongPlayer();
   if (preserveScroll) {
     window.requestAnimationFrame(() => {
@@ -4353,6 +4440,7 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
       data_dir: String(formData.get('data_dir') ?? current.general.data_dir),
     },
     media: {
+      missing_item_auto_delete_days: parseMissingItemAutoDeleteDays(formData, current),
       libraries: current.media.libraries.map((library, index) => {
         const pathsField = `existing_library_paths_${index}`;
         if (!formData.has(pathsField)) {
@@ -4425,6 +4513,23 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
       ffprobe_path: String(formData.get('ffprobe_path') ?? current.ffmpeg.ffprobe_path),
     },
   };
+}
+
+function parseMissingItemAutoDeleteDays(formData: FormData, current: SettingsSnapshot): number | null {
+  if (!formData.has('missing_item_auto_delete_mode')) {
+    return current.media.missing_item_auto_delete_days ?? null;
+  }
+
+  if (String(formData.get('missing_item_auto_delete_mode') ?? 'disabled') !== 'auto') {
+    return null;
+  }
+
+  const parsedDays = Number(formData.get('missing_item_auto_delete_days') ?? 30);
+  if (!Number.isFinite(parsedDays)) {
+    return current.media.missing_item_auto_delete_days ?? 30;
+  }
+
+  return Math.max(1, Math.min(3650, Math.floor(parsedDays)));
 }
 
 function themeSongLayer(): HTMLElement {
@@ -5607,7 +5712,7 @@ function bindEvents(): void {
       const refreshedLibrary = await refreshLibraryMetadata(library.id);
       state.libraries = state.libraries.map((entry) => entry.id === refreshedLibrary.id ? refreshedLibrary : entry);
       await refreshPendingMetadataData();
-      schedulePendingMetadataRefresh();
+      schedulePendingMetadataRefresh(true);
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to refresh library metadata.';
       render();
@@ -6249,7 +6354,7 @@ function bindEvents(): void {
         const library = await refreshLibraryMetadata(libraryId);
         state.libraries = state.libraries.map((entry) => entry.id === library.id ? library : entry);
         await refreshPendingMetadataData();
-        schedulePendingMetadataRefresh();
+        schedulePendingMetadataRefresh(true);
       } catch (error) {
         state.error = error instanceof Error ? error.message : 'Failed to refresh library metadata.';
         render();
@@ -6302,6 +6407,31 @@ function bindEvents(): void {
         await refreshData(false);
       } catch (error) {
         state.error = error instanceof Error ? error.message : 'Failed to scan library.';
+        render();
+      }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-delete-missing-library-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const libraryId = Number(button.dataset.deleteMissingLibraryId);
+      if (!Number.isFinite(libraryId)) {
+        return;
+      }
+
+      const library = state.libraries.find((entry) => entry.id === libraryId);
+      const missingItems = library?.missing_items ?? 0;
+      const missingFiles = library?.missing_files ?? 0;
+      if (!window.confirm(`Delete ${missingItems} missing item${missingItems === 1 ? '' : 's'} and ${missingFiles} missing file${missingFiles === 1 ? '' : 's'} from this library?`)) {
+        return;
+      }
+
+      button.disabled = true;
+      try {
+        const cleanup = await deleteMissingItems(libraryId);
+        state.libraries = state.libraries.map((entry) => entry.id === cleanup.library.id ? cleanup.library : entry);
+        await refreshData(false);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to delete missing items.';
         render();
       }
     });

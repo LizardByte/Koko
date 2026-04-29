@@ -7,6 +7,7 @@ use std::sync::RwLock;
 
 // lib imports
 use config::{Config, ConfigError, Environment, File};
+use diesel::prelude::*;
 use dirs::config_local_dir;
 use once_cell::sync::Lazy;
 use schemars::JsonSchema;
@@ -14,7 +15,13 @@ use serde::Deserialize;
 use serde::Serialize;
 
 // local imports
+use crate::db::models::AppSetting;
+use crate::db::schema::app_settings;
 use crate::globals::GLOBAL_APP_NAME;
+
+const METADATA_SETTINGS_KEY: &str = "metadata";
+const SERVER_SETTINGS_KEY: &str = "server";
+const FFMPEG_SETTINGS_KEY: &str = "ffmpeg";
 
 /// General settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -579,6 +586,163 @@ pub fn settings_for_persistence(settings: &Settings) -> Settings {
     normalized
 }
 
+/// Serialize settings to YAML for disk persistence, omitting DB-owned library settings.
+pub fn settings_yaml_for_persistence(settings: &Settings) -> Result<String, String> {
+    let normalized = settings_for_persistence(settings);
+    let mut value = serde_yaml::to_value(&normalized).map_err(|error| error.to_string())?;
+
+    if let serde_yaml::Value::Mapping(root) = &mut value {
+        let general_key = serde_yaml::Value::String("general".into());
+        if let Some(general) = root.get(&general_key).cloned() {
+            root.clear();
+            root.insert(general_key, general);
+        }
+    }
+
+    serde_yaml::to_string(&value).map_err(|error| error.to_string())
+}
+
+fn runtime_setting_value<T: Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|error| error.to_string())
+}
+
+fn parse_runtime_setting<T: for<'de> Deserialize<'de>>(
+    value: &str,
+    key: &str,
+) -> Result<T, String> {
+    serde_json::from_str(value)
+        .map_err(|error| format!("Failed to parse persisted {key} settings: {error}"))
+}
+
+fn upsert_runtime_setting(
+    conn: &mut diesel::SqliteConnection,
+    key: &str,
+    value: String,
+) -> Result<(), String> {
+    use crate::db::schema::app_settings::dsl as app_settings_dsl;
+
+    diesel::insert_into(app_settings_dsl::app_settings)
+        .values(AppSetting {
+            key: key.to_string(),
+            value,
+            updated_at: Some(chrono::Utc::now().timestamp()),
+        })
+        .on_conflict(app_settings_dsl::key)
+        .do_update()
+        .set((
+            app_settings_dsl::value.eq(diesel::upsert::excluded(app_settings_dsl::value)),
+            app_settings_dsl::updated_at.eq(diesel::upsert::excluded(app_settings_dsl::updated_at)),
+        ))
+        .execute(conn)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn insert_runtime_setting_if_missing(
+    conn: &mut diesel::SqliteConnection,
+    key: &str,
+    value: String,
+) -> Result<(), String> {
+    use crate::db::schema::app_settings::dsl as app_settings_dsl;
+
+    diesel::insert_into(app_settings_dsl::app_settings)
+        .values(AppSetting {
+            key: key.to_string(),
+            value,
+            updated_at: Some(chrono::Utc::now().timestamp()),
+        })
+        .on_conflict_do_nothing()
+        .execute(conn)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Persist DB-owned runtime settings to SQLite.
+pub fn save_database_settings(
+    conn: &mut diesel::SqliteConnection,
+    settings: &Settings,
+) -> Result<(), String> {
+    let mut normalized = settings.clone();
+    normalize_settings(&mut normalized);
+
+    upsert_runtime_setting(
+        conn,
+        METADATA_SETTINGS_KEY,
+        runtime_setting_value(&normalized.metadata)?,
+    )?;
+    upsert_runtime_setting(
+        conn,
+        SERVER_SETTINGS_KEY,
+        runtime_setting_value(&normalized.server)?,
+    )?;
+    upsert_runtime_setting(
+        conn,
+        FFMPEG_SETTINGS_KEY,
+        runtime_setting_value(&normalized.ffmpeg)?,
+    )?;
+    Ok(())
+}
+
+/// Seed DB-owned runtime settings from the legacy settings file when no DB value exists yet.
+pub fn seed_database_settings(
+    conn: &mut diesel::SqliteConnection,
+    settings: &Settings,
+) -> Result<(), String> {
+    let mut normalized = settings.clone();
+    normalize_settings(&mut normalized);
+
+    insert_runtime_setting_if_missing(
+        conn,
+        METADATA_SETTINGS_KEY,
+        runtime_setting_value(&normalized.metadata)?,
+    )?;
+    insert_runtime_setting_if_missing(
+        conn,
+        SERVER_SETTINGS_KEY,
+        runtime_setting_value(&normalized.server)?,
+    )?;
+    insert_runtime_setting_if_missing(
+        conn,
+        FFMPEG_SETTINGS_KEY,
+        runtime_setting_value(&normalized.ffmpeg)?,
+    )?;
+    Ok(())
+}
+
+/// Load DB-owned runtime settings and merge them over the bootstrap settings.
+pub fn load_database_settings(
+    conn: &mut diesel::SqliteConnection,
+    bootstrap: &Settings,
+) -> Result<Settings, String> {
+    let rows = app_settings::table
+        .filter(app_settings::key.eq_any([
+            METADATA_SETTINGS_KEY,
+            SERVER_SETTINGS_KEY,
+            FFMPEG_SETTINGS_KEY,
+        ]))
+        .select(AppSetting::as_select())
+        .load::<AppSetting>(conn)
+        .map_err(|error| error.to_string())?;
+
+    let mut settings = bootstrap.clone();
+    for row in rows {
+        match row.key.as_str() {
+            METADATA_SETTINGS_KEY => {
+                settings.metadata = parse_runtime_setting(&row.value, METADATA_SETTINGS_KEY)?;
+            }
+            SERVER_SETTINGS_KEY => {
+                settings.server = parse_runtime_setting(&row.value, SERVER_SETTINGS_KEY)?;
+            }
+            FFMPEG_SETTINGS_KEY => {
+                settings.ffmpeg = parse_runtime_setting(&row.value, FFMPEG_SETTINGS_KEY)?;
+            }
+            _ => {}
+        }
+    }
+    normalize_settings(&mut settings);
+    Ok(settings)
+}
+
 fn settings_base_path() -> PathBuf {
     settings_directory_path().join("settings")
 }
@@ -609,13 +773,12 @@ pub fn settings_file_path() -> PathBuf {
 
 /// Save settings to disk.
 pub fn save_settings(settings: &Settings) -> Result<(), String> {
-    let normalized = settings_for_persistence(settings);
     let settings_path = settings_file_path();
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
-    let yaml = serde_yaml::to_string(&normalized).map_err(|error| error.to_string())?;
+    let yaml = settings_yaml_for_persistence(settings)?;
     fs::write(settings_path, yaml).map_err(|error| error.to_string())
 }
 

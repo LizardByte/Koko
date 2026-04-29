@@ -54,6 +54,20 @@ pub fn prepare_sqlite_database_path(db_path: &str) {
     clear_stale_sqlite_lock_files(db_path);
 }
 
+/// Prepare a SQLite database and run embedded migrations outside the Rocket pool.
+pub fn initialize_sqlite_database(db_path: &str) -> Result<(), String> {
+    prepare_sqlite_database_path(db_path);
+    let mut conn = diesel::SqliteConnection::establish(db_path)
+        .map_err(|error| format!("Failed to open SQLite database {db_path}: {error}"))?;
+    configure_sqlite_connection(&mut conn)
+        .map_err(|error| format!("Failed to configure SQLite database {db_path}: {error}"))?;
+    reconcile_legacy_migration_records(&mut conn)
+        .map_err(|error| format!("Failed to reconcile SQLite schema {db_path}: {error}"))?;
+    conn.run_pending_migrations(MIGRATIONS)
+        .map_err(|error| format!("Failed to run SQLite migrations {db_path}: {error}"))?;
+    Ok(())
+}
+
 fn clear_stale_sqlite_lock_files(db_path: &str) {
     let Ok(mut conn) = diesel::SqliteConnection::establish(db_path) else {
         return;

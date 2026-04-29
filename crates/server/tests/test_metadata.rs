@@ -1,7 +1,11 @@
 // local imports
+use diesel::Connection;
+use diesel::connection::SimpleConnection;
 use koko::config::{
-    MediaLibraryKind, MediaLibrarySettings, MetadataProviderId, MetadataProviderSettings,
-    MetadataSettings, Settings, settings_for_persistence,
+    FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId,
+    MetadataProviderSettings, MetadataSettings, Settings, load_database_settings,
+    save_database_settings, seed_database_settings, settings_for_persistence,
+    settings_yaml_for_persistence,
 };
 use koko::metadata::{
     StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
@@ -145,6 +149,21 @@ fn test_settings_persistence_clears_library_definitions() {
 
     let persisted = settings_for_persistence(&settings);
     assert!(persisted.media.libraries.is_empty());
+
+    let persisted_yaml = settings_yaml_for_persistence(&settings).unwrap();
+    for omitted in [
+        "media:",
+        "libraries:",
+        "metadata:",
+        "server:",
+        "ffmpeg:",
+    ] {
+        assert!(
+            !persisted_yaml.contains(omitted),
+            "Expected persisted YAML to omit {omitted}, got:\n{persisted_yaml}"
+        );
+    }
+    assert!(persisted_yaml.contains("general:"));
 }
 
 #[test]
@@ -177,6 +196,53 @@ fn test_settings_persistence_includes_tvdb_provider_and_preserves_api_key() {
         .find(|provider| provider.id == MetadataProviderId::Tmdb)
         .expect("Expected settings persistence to keep the TMDB provider entry");
     assert_eq!(tmdb.api_key.as_deref(), Some("tmdb-key"));
+}
+
+#[test]
+fn test_database_settings_round_trip_runtime_sections() {
+    let mut conn =
+        diesel::SqliteConnection::establish(":memory:").expect("Expected in-memory SQLite");
+    conn.batch_execute(
+        "CREATE TABLE app_settings (\
+            key TEXT PRIMARY KEY NOT NULL,\
+            value TEXT NOT NULL,\
+            updated_at BIGINT DEFAULT NULL\
+        );",
+    )
+    .unwrap();
+
+    let mut settings = Settings::default();
+    settings.server.port = 8181;
+    settings.ffmpeg = FfmpegSettings {
+        ffmpeg_path: "C:/Tools/ffmpeg.exe".into(),
+        ffprobe_path: "C:/Tools/ffprobe.exe".into(),
+    };
+    settings.metadata.providers = vec![MetadataProviderSettings {
+        id: MetadataProviderId::Tmdb,
+        enabled: true,
+        api_key: Some("tmdb-key".into()),
+        language: "en-US".into(),
+        rate_limit_per_second: 4,
+        retry_attempts: 3,
+        retry_backoff_ms: 1_000,
+    }];
+
+    seed_database_settings(&mut conn, &settings).unwrap();
+    let loaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
+    assert_eq!(loaded.server.port, 8181);
+    assert_eq!(loaded.ffmpeg.ffmpeg_path, "C:/Tools/ffmpeg.exe");
+    assert_eq!(
+        loaded.metadata.providers[0].api_key.as_deref(),
+        Some("tmdb-key")
+    );
+
+    let mut updated = loaded.clone();
+    updated.server.port = 8282;
+    updated.ffmpeg.ffmpeg_path = "D:/ffmpeg.exe".into();
+    save_database_settings(&mut conn, &updated).unwrap();
+    let reloaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
+    assert_eq!(reloaded.server.port, 8282);
+    assert_eq!(reloaded.ffmpeg.ffmpeg_path, "D:/ffmpeg.exe");
 }
 
 #[test]

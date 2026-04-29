@@ -5,10 +5,18 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    item_metadata_external_ids, item_metadata_links, item_metadata_people, media_files,
-    media_items, media_libraries, metadata_collection_items, metadata_collections, metadata_people,
-    metadata_person_credits, playback_progress, scan_state, users,
+    app_settings, item_metadata_external_ids, item_metadata_links, item_metadata_people,
+    media_files, media_items, media_libraries, metadata_collection_items, metadata_collections,
+    metadata_people, metadata_person_credits, playback_progress, scan_state, users,
 };
+
+#[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = app_settings)]
+pub struct AppSetting {
+    pub key: String,
+    pub value: String,
+    pub updated_at: Option<i64>,
+}
 
 #[derive(Queryable, Selectable, Insertable, Debug)]
 #[diesel(table_name = users)]

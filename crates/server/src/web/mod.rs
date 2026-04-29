@@ -4,6 +4,7 @@
 mod routes;
 
 // lib imports
+use diesel::Connection;
 use rocket::config::Config;
 use rocket::config::TlsConfig;
 use rocket::fairing::AdHoc;
@@ -13,8 +14,10 @@ use rocket_okapi::{rapidoc::*, swagger_ui::*};
 
 // local imports
 use crate::certs;
-use crate::config::current_settings;
-use crate::db::{DbConn, Migrate, ReleaseDatabase, prepare_sqlite_database_path};
+use crate::config::{
+    current_settings, load_database_settings, replace_current_settings, seed_database_settings,
+};
+use crate::db::{DbConn, Migrate, ReleaseDatabase, initialize_sqlite_database};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 
@@ -25,7 +28,37 @@ pub fn rocket() -> rocket::Rocket<rocket::Build> {
 
 /// Build the web server with a custom database path (primarily for testing).
 pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<rocket::Build> {
-    let settings = current_settings();
+    let bootstrap_settings = current_settings();
+
+    // Use custom database path for tests, or default for production.
+    let db_path = custom_db_path.unwrap_or_else(|| globals::APP_PATHS.db_path.clone());
+    let settings = match initialize_sqlite_database(&db_path) {
+        Ok(()) => match diesel::SqliteConnection::establish(&db_path) {
+            Ok(mut conn) => {
+                if let Err(error) = seed_database_settings(&mut conn, &bootstrap_settings) {
+                    log::warn!("Failed to seed database-backed settings: {}", error);
+                }
+                match load_database_settings(&mut conn, &bootstrap_settings) {
+                    Ok(settings) => {
+                        replace_current_settings(settings.clone());
+                        settings
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to load database-backed settings: {}", error);
+                        bootstrap_settings
+                    }
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to reopen SQLite database for settings: {}", error);
+                bootstrap_settings
+            }
+        },
+        Err(error) => {
+            log::warn!("{}", error);
+            bootstrap_settings
+        }
+    };
 
     // the cert path changes depending on if the user wants to use custom certs
     let (cert_path, key_path);
@@ -41,9 +74,6 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         certs::ensure_certificates_exist(cert_path.clone(), key_path.clone());
     }
 
-    // Use custom database path for tests, or default for production
-    let db_path = custom_db_path.unwrap_or_else(|| globals::APP_PATHS.db_path.clone());
-    prepare_sqlite_database_path(&db_path);
     let database_url = sqlite_database_url(&db_path);
 
     let figment = Figment::from(Config::default())

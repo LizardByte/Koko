@@ -16,14 +16,15 @@ use serde::{Deserialize, Serialize};
 
 // local imports
 use crate::config::{
-    MediaLibrarySettings, Settings, current_settings, replace_current_settings, save_settings,
-    settings_file_path, settings_for_persistence,
+    MediaLibrarySettings, Settings, current_settings, replace_current_settings,
+    save_database_settings, save_settings, settings_file_path,
 };
 use crate::db::DbConn;
 use crate::globals;
 use crate::logging::{normalize_display_path, normalize_log_source_path};
 use crate::media::{
-    add_library_setting, list_library_settings, remove_library_setting, replace_library_settings,
+    add_library_setting, count_persisted_libraries, list_library_settings, remove_library_setting,
+    replace_library_settings,
 };
 
 static STRUCTURED_LOG_LINE_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -92,14 +93,11 @@ fn merged_settings_response(
     }
 }
 
-fn persist_runtime_settings(settings: Settings) -> Result<(), Status> {
-    let persisted = settings_for_persistence(&settings);
-    save_settings(&persisted).map_err(|error| {
+fn persist_bootstrap_settings(settings: &Settings) -> Result<(), Status> {
+    save_settings(settings).map_err(|error| {
         log::error!("Failed to save settings: {}", error);
         Status::InternalServerError
-    })?;
-    replace_current_settings(persisted);
-    Ok(())
+    })
 }
 
 fn parse_log_source(source: &str) -> (String, Option<u32>) {
@@ -250,7 +248,7 @@ pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> 
             Status::InternalServerError
         })?;
 
-    persist_runtime_settings(settings.clone())?;
+    persist_bootstrap_settings(&settings)?;
 
     Ok(Json(merged_settings_response(settings, libraries)))
 }
@@ -301,15 +299,40 @@ pub async fn update_settings(
 ) -> Result<Json<SettingsResponse>, Status> {
     let settings = settings.into_inner();
     let libraries = settings.media.libraries.clone();
+    let settings_for_database = settings.clone();
     let persisted_libraries = db
-        .run(move |conn| replace_library_settings(conn, &libraries))
+        .run(move |conn| {
+            let existing_count =
+                count_persisted_libraries(conn).map_err(|error| error.to_string())? as usize;
+            let persisted_libraries = if libraries.len() < existing_count {
+                log::warn!(
+                    "Preserving {} persisted media libraries omitted from settings update; use the library delete route to remove libraries",
+                    existing_count - libraries.len()
+                );
+                let mut merged = list_library_settings(conn, &[])
+                    .map_err(|error| error.to_string())?;
+                for (index, library) in libraries.iter().cloned().enumerate() {
+                    if let Some(existing) = merged.get_mut(index) {
+                        *existing = library;
+                    }
+                }
+                replace_library_settings(conn, &merged).map_err(|error| error.to_string())?
+            } else {
+                replace_library_settings(conn, &libraries).map_err(|error| error.to_string())?
+            };
+            save_database_settings(conn, &settings_for_database)?;
+            Ok::<_, String>(persisted_libraries)
+        })
         .await
         .map_err(|error| {
             log::error!("Failed to replace persisted library settings: {}", error);
             Status::InternalServerError
         })?;
 
-    persist_runtime_settings(settings.clone())?;
+    persist_bootstrap_settings(&settings)?;
+    let mut runtime_settings = settings.clone();
+    runtime_settings.media.libraries.clear();
+    replace_current_settings(runtime_settings);
 
     Ok(Json(merged_settings_response(
         settings,
@@ -336,7 +359,7 @@ pub async fn add_library(
         })?;
 
     let settings = current_settings();
-    persist_runtime_settings(settings.clone())?;
+    persist_bootstrap_settings(&settings)?;
 
     Ok(Json(merged_settings_response(settings, libraries)))
 }
@@ -375,7 +398,7 @@ pub async fn remove_library(
             Status::InternalServerError
         })?;
 
-    persist_runtime_settings(settings.clone())?;
+    persist_bootstrap_settings(&settings)?;
 
     Ok(Json(merged_settings_response(settings, libraries)))
 }

@@ -149,6 +149,165 @@ async fn test_add_library_route_allows_duplicate_root_paths() {
 }
 
 #[rocket::async_test]
+async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
+    let client = create_test_client(Some("settings_route_update_preserves_libraries")).await;
+
+    make_request(
+        Some(&client),
+        "post",
+        "/api/v1/settings/libraries",
+        Some(json!({
+            "library": {
+                "name": "Movies",
+                "path": "C:/Media/Movies",
+                "paths": ["C:/Media/Movies"],
+                "recursive": true,
+                "kind": "movies",
+                "metadata_providers": ["tmdb"]
+            }
+        })),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+
+    let settings_response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/settings",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let mut settings_json: Value = serde_json::from_str(&settings_response.body).unwrap();
+    settings_json["settings"]["media"]["libraries"] = json!([]);
+
+    let update_response = make_request(
+        Some(&client),
+        "put",
+        "/api/v1/settings",
+        Some(settings_json["settings"].clone()),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let update_json: Value = serde_json::from_str(&update_response.body).unwrap();
+    assert_eq!(
+        update_json["settings"]["media"]["libraries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let after_response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/settings",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let after_json: Value = serde_json::from_str(&after_response.body).unwrap();
+    assert_eq!(
+        after_json["settings"]["media"]["libraries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[rocket::async_test]
+async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_rows() {
+    let client =
+        create_test_client(Some("settings_route_update_preserves_omitted_libraries")).await;
+
+    for (name, kind) in [
+        ("Movies", "movies"),
+        ("Shows", "shows"),
+    ] {
+        make_request(
+            Some(&client),
+            "post",
+            "/api/v1/settings/libraries",
+            Some(json!({
+                "library": {
+                    "name": name,
+                    "path": format!("C:/Media/{name}"),
+                    "paths": [format!("C:/Media/{name}")],
+                    "recursive": true,
+                    "kind": kind,
+                    "metadata_providers": ["tmdb"]
+                }
+            })),
+            None,
+            Some(Status::Ok),
+            Some(false),
+        )
+        .await;
+    }
+
+    let settings_response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/settings",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let mut settings_json: Value = serde_json::from_str(&settings_response.body).unwrap();
+    let first_library = settings_json["settings"]["media"]["libraries"][0].clone();
+    settings_json["settings"]["media"]["libraries"] = json!([first_library]);
+
+    let update_response = make_request(
+        Some(&client),
+        "put",
+        "/api/v1/settings",
+        Some(settings_json["settings"].clone()),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let update_json: Value = serde_json::from_str(&update_response.body).unwrap();
+    assert_eq!(
+        update_json["settings"]["media"]["libraries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let after_response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/settings",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let after_json: Value = serde_json::from_str(&after_response.body).unwrap();
+    assert_eq!(
+        after_json["settings"]["media"]["libraries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[rocket::async_test]
 async fn test_remove_missing_library_route() {
     let client = create_test_client(Some("settings_route_remove_missing")).await;
 

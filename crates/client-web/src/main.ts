@@ -3676,6 +3676,11 @@ function renderPlayerOverlay(): string {
     const videoId = extractYouTubeVideoId(state.activeTrailer.url);
     const watchUrl = buildYouTubeWatchUrl(state.activeTrailer.url);
     const label = state.activeTrailer.label ?? 'Trailer';
+    const itemTitle = state.selectedItem?.display_title.trim();
+    const itemLogoUrl = state.selectedItem?.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
+    const trailerTitle = itemLogoUrl || !itemTitle
+      ? state.activeTrailer.title
+      : `${itemTitle} | ${state.activeTrailer.title}`;
     return `
       <div class="player-overlay trailer-overlay">
         <div class="player-shell trailer-shell is-controls-visible" tabindex="-1" ${videoId ? `data-trailer-video-id="${escapeHtml(videoId)}"` : ''}>
@@ -3696,7 +3701,12 @@ function renderPlayerOverlay(): string {
           <div class="player-top-controls player-controls trailer-top-controls">
             <div class="player-title-block">
               <span class="eyebrow">${escapeHtml(label)}</span>
-              <h2>${escapeHtml(state.activeTrailer.title)}</h2>
+              ${itemLogoUrl ? `
+                <div class="trailer-title-brand-row">
+                  <img class="player-title-logo trailer-title-logo" src="${escapeHtml(itemLogoUrl)}" alt="${escapeHtml(itemTitle ?? 'Item logo')}" />
+                  <h2>${escapeHtml(state.activeTrailer.title)}</h2>
+                </div>
+              ` : `<h2>${escapeHtml(trailerTitle)}</h2>`}
             </div>
             <div class="player-top-actions">
               ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}

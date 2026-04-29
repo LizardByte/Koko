@@ -2415,6 +2415,24 @@ legend {
   object-position: left center;
 }
 
+.trailer-title-brand-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.2rem;
+}
+
+.trailer-title-brand-row h2 {
+  margin: 0;
+}
+
+.trailer-title-logo {
+  flex: 0 1 auto;
+  max-width: min(280px, 34vw);
+  max-height: 58px;
+}
+
 .player-top-actions,
 .player-control-row,
 .player-control-cluster {

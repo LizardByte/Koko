@@ -839,6 +839,7 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
         .and_then(Value::as_str)
         .or(snapshot.provider_locale_key.as_deref())
         .unwrap_or("eng");
+    let trailer = tvdb_trailer_entry(data, language);
 
     ProviderMetadataDetails {
         external_ids: tvdb_external_ids(data, snapshot),
@@ -850,6 +851,8 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
             .and_then(Value::as_f64)
             .map(|value| value as f32),
         content_rating: tvdb_content_rating(data),
+        trailer_title: trailer.and_then(tvdb_trailer_title),
+        trailer_url: trailer.and_then(tvdb_trailer_url),
         people: tvdb_people(&payload),
         ..ProviderMetadataDetails::default()
     }
@@ -917,6 +920,50 @@ fn push_external_id(
         source: source.to_string(),
         external_id: external_id.to_string(),
     });
+}
+
+fn tvdb_trailer_entry<'a>(
+    value: &'a Value,
+    provider_language: &str,
+) -> Option<&'a Value> {
+    let trailers = value.get("trailers").and_then(Value::as_array)?;
+    trailers
+        .iter()
+        .find(|trailer| {
+            tvdb_trailer_url(trailer).is_some()
+                && tvdb_trailer_language_matches(trailer, provider_language)
+        })
+        .or_else(|| {
+            trailers
+                .iter()
+                .find(|trailer| tvdb_trailer_url(trailer).is_some())
+        })
+}
+
+fn tvdb_trailer_title(value: &Value) -> Option<String> {
+    text_field(value, &["name"])
+}
+
+fn tvdb_trailer_url(value: &Value) -> Option<String> {
+    text_field(value, &["url"])
+        .as_deref()
+        .and_then(crate::metadata::youtube_watch_url)
+}
+
+fn tvdb_trailer_language_matches(
+    value: &Value,
+    provider_language: &str,
+) -> bool {
+    let provider_language = provider_language.trim();
+    if provider_language.is_empty() {
+        return false;
+    }
+
+    value
+        .get("language")
+        .and_then(Value::as_str)
+        .map(|language| language.eq_ignore_ascii_case(provider_language))
+        .unwrap_or(false)
 }
 
 pub(crate) async fn cache_person_assets(
@@ -1752,7 +1799,7 @@ fn episode_number(value: &Value) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        artwork_url, backdrop_url, best_overview, movie_snapshot_from_value,
+        artwork_url, backdrop_url, best_overview, metadata_details, movie_snapshot_from_value,
         search_result_from_value, tvdb_people,
     };
     use serde_json::json;
@@ -1869,6 +1916,41 @@ mod tests {
         assert_eq!(
             backdrop_url(&payload).as_deref(),
             Some("https://example.test/backdrop.jpg")
+        );
+    }
+
+    #[test]
+    fn tvdb_metadata_details_extracts_preferred_youtube_trailer() {
+        let payload = json!({
+            "data": {
+                "id": 901,
+                "name": "Example Movie",
+                "trailers": [
+                    {
+                        "name": "Spanish Trailer",
+                        "language": "spa",
+                        "url": "https://youtu.be/aaaaaaaaaaa"
+                    },
+                    {
+                        "name": "Official Trailer",
+                        "language": "eng",
+                        "url": "https://www.youtube.com/embed/vKQi3bBA1y8?rel=0"
+                    },
+                    {
+                        "name": "Provider Hosted Trailer",
+                        "language": "eng",
+                        "url": "https://example.test/trailer.mp4"
+                    }
+                ]
+            }
+        });
+        let snapshot = movie_snapshot_from_value("901", &payload, None, "eng");
+        let details = metadata_details(&snapshot);
+
+        assert_eq!(details.trailer_title.as_deref(), Some("Official Trailer"));
+        assert_eq!(
+            details.trailer_url.as_deref(),
+            Some("https://www.youtube.com/watch?v=vKQi3bBA1y8")
         );
     }
 

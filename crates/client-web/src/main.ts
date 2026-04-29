@@ -101,7 +101,17 @@ type ThemeSongSource =
 
 interface YouTubePlayer {
   loadVideoById(videoId: string): void;
+  playVideo(): void;
   pauseVideo(): void;
+  seekTo(seconds: number, allowSeekAhead: boolean): void;
+  getCurrentTime(): number;
+  getDuration(): number;
+  getPlayerState(): number;
+  setVolume(volume: number): void;
+  getVolume(): number;
+  mute(): void;
+  unMute(): void;
+  isMuted(): boolean;
   setPlaybackQuality(suggestedQuality: string): void;
   destroy(): void;
 }
@@ -113,7 +123,7 @@ interface YouTubeIframeApi {
       height: string;
       width: string;
       videoId?: string;
-      playerVars?: Record<string, number>;
+      playerVars?: Record<string, number | string>;
       events?: {
         onReady?: (event: { target: YouTubePlayer }) => void;
         onStateChange?: () => void;
@@ -277,6 +287,13 @@ if (!app) {
 }
 const appRoot = app;
 const YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID = 'dQw4w9WgXcQ';
+const YOUTUBE_PLAYER_STATE = {
+  ended: 0,
+  playing: 1,
+  paused: 2,
+  buffering: 3,
+  cued: 5,
+} as const;
 let pendingLibraryRefreshHandle: number | undefined;
 let pendingMetadataRefreshHandle: number | undefined;
 let pendingLiveSearchHandle: number | undefined;
@@ -284,6 +301,12 @@ let youtubeIframeApiPromise: Promise<YouTubeIframeApi> | undefined;
 let themeSongYouTubePlayer: YouTubePlayer | undefined;
 let themeSongYouTubePlayerReady: Promise<YouTubePlayer> | undefined;
 let activeThemeSongYouTubeVideoId: string | undefined;
+let trailerYouTubePlayer: YouTubePlayer | undefined;
+let trailerYouTubePlayerReady: Promise<YouTubePlayer> | undefined;
+let activeTrailerYouTubeVideoId: string | undefined;
+let trailerProgressHandle: number | undefined;
+let trailerVolume = 1;
+let trailerMuted = false;
 const activeGamepadButtons = new Set<string>();
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
@@ -739,33 +762,6 @@ function extractYouTubeVideoId(url: string): string | undefined {
   return undefined;
 }
 
-function buildYouTubeEmbedUrl(
-  url: string,
-  options: { autoplay?: boolean; controls?: boolean; loop?: boolean } = {},
-): string | undefined {
-  const videoId = extractYouTubeVideoId(url);
-  if (!videoId) {
-    return undefined;
-  }
-
-  const embedUrl = new URL(`https://www.youtube.com/embed/${videoId}`);
-  embedUrl.searchParams.set('rel', '0');
-  embedUrl.searchParams.set('playsinline', '1');
-  embedUrl.searchParams.set('modestbranding', '1');
-  embedUrl.searchParams.set('enablejsapi', '1');
-  if (window.location.origin.startsWith('http')) {
-    embedUrl.searchParams.set('origin', window.location.origin);
-  }
-  embedUrl.searchParams.set('autoplay', options.autoplay ? '1' : '0');
-  embedUrl.searchParams.set('controls', options.controls === false ? '0' : '1');
-  if (options.loop) {
-    embedUrl.searchParams.set('loop', '1');
-    embedUrl.searchParams.set('playlist', videoId);
-  }
-
-  return embedUrl.toString();
-}
-
 function buildYouTubeWatchUrl(url: string): string | undefined {
   const videoId = extractYouTubeVideoId(url);
   return videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
@@ -820,6 +816,7 @@ function openVideoOverlay(option: TrailerOption | undefined): void {
     return;
   }
 
+  destroyTrailerYouTubePlayer();
   state.activeTrailer = option;
   state.isTrailerMenuOpen = false;
   render();
@@ -827,6 +824,12 @@ function openVideoOverlay(option: TrailerOption | undefined): void {
 
 function openTrailer(option: TrailerOption | undefined): void {
   openVideoOverlay(option);
+}
+
+function closeTrailerPlayer(): void {
+  state.activeTrailer = undefined;
+  destroyTrailerYouTubePlayer();
+  render();
 }
 
 function libraryRefreshProgress(library: MediaLibrary): { completed: number; total: number; percent: number; failed: number } | undefined {
@@ -3670,34 +3673,60 @@ function renderCurrentPage(): string {
 
 function renderPlayerOverlay(): string {
   if (state.activeTrailer) {
-    const trailerUrl = buildYouTubeEmbedUrl(state.activeTrailer.url, { autoplay: true, controls: true })
-      ?? state.activeTrailer.url;
+    const videoId = extractYouTubeVideoId(state.activeTrailer.url);
     const watchUrl = buildYouTubeWatchUrl(state.activeTrailer.url);
     const label = state.activeTrailer.label ?? 'Trailer';
-    const titleSuffix = state.activeTrailer.titleSuffix ?? 'trailer';
     return `
       <div class="player-overlay trailer-overlay">
-        <div class="player-shell trailer-shell">
-          <div class="trailer-frame-shell">
-            <iframe
-              id="trailer-player"
-              src="${escapeHtml(trailerUrl)}"
-              title="${escapeHtml(`${state.activeTrailer.title} ${titleSuffix}`)}"
-              allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-              referrerpolicy="origin"
-              allowfullscreen
-            ></iframe>
+        <div class="player-shell trailer-shell is-controls-visible" tabindex="-1" ${videoId ? `data-trailer-video-id="${escapeHtml(videoId)}"` : ''}>
+          <div class="trailer-frame-shell" aria-label="${escapeHtml(state.activeTrailer.title)}">
+            ${videoId
+              ? '<div id="trailer-player" class="trailer-youtube-player"></div>'
+              : '<div class="trailer-unavailable">This trailer URL is not a controllable YouTube video.</div>'}
           </div>
-          <div class="trailer-chrome">
-            <div class="trailer-title-block">
-              <p>${escapeHtml(label)}</p>
+          <div class="player-loading-indicator" aria-live="polite">
+            <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
+          </div>
+          <div class="player-error-indicator" aria-live="polite">
+            <strong>Trailer could not start</strong>
+            <span>Open it on YouTube or try again in a moment.</span>
+          </div>
+          <div class="player-idle-hit-area trailer-idle-hit-area" aria-hidden="true"></div>
+          <div class="player-top-controls player-controls trailer-top-controls">
+            <div class="player-title-block">
+              <span class="eyebrow">${escapeHtml(label)}</span>
               <h2>${escapeHtml(state.activeTrailer.title)}</h2>
             </div>
-            <div class="trailer-actions">
+            <div class="player-top-actions">
               ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}
-              <button id="close-trailer" class="secondary-button icon-button" type="button" title="Close trailer" aria-label="Close trailer">${renderIcon('x')}</button>
+              <button id="close-trailer" class="player-icon-button" type="button" title="Close trailer" aria-label="Close trailer">${renderIcon('x', 'player-control-icon')}</button>
             </div>
           </div>
+          ${videoId ? `
+            <div class="player-center-controls player-controls">
+              <button class="player-icon-button player-large-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
+              <button id="trailer-play-toggle-large" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+              <button class="player-icon-button player-large-button" type="button" data-trailer-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+            </div>
+            <div class="player-bottom-controls player-controls">
+              <input id="trailer-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Trailer position" />
+              <div class="player-control-row">
+                <div class="player-control-cluster player-time-cluster">
+                  <span class="player-time"><span id="trailer-current-time">0:00</span><span>/</span><span id="trailer-duration">0:00</span></span>
+                </div>
+                <div class="player-control-cluster player-transport-cluster">
+                  <button class="player-icon-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
+                  <button id="trailer-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+                  <button class="player-icon-button" type="button" data-trailer-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+                </div>
+                <div class="player-control-cluster player-tool-cluster">
+                  <button id="trailer-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
+                  <input id="trailer-volume" class="player-volume" type="range" min="0" max="1" value="${trailerMuted ? '0' : String(trailerVolume)}" step="0.01" aria-label="Trailer volume" />
+                  <button id="trailer-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
+                </div>
+              </div>
+            </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -3865,7 +3894,7 @@ function renderRail(): string {
 }
 
 function render(preserveScroll = true): void {
-  if (!state.isPlayerOpen) {
+  if (!state.isPlayerOpen && !state.activeTrailer) {
     document.body.style.cursor = '';
   }
 
@@ -4466,6 +4495,34 @@ function loadYouTubeIframeApi(): Promise<YouTubeIframeApi> {
   return youtubeIframeApiPromise;
 }
 
+function clearTrailerProgressHandle(): void {
+  if (trailerProgressHandle !== undefined) {
+    window.clearInterval(trailerProgressHandle);
+    trailerProgressHandle = undefined;
+  }
+}
+
+function destroyTrailerYouTubePlayer(): void {
+  clearTrailerProgressHandle();
+  trailerYouTubePlayerReady = undefined;
+  if (!trailerYouTubePlayer) {
+    activeTrailerYouTubeVideoId = undefined;
+    document.body.style.cursor = '';
+    return;
+  }
+
+  try {
+    trailerYouTubePlayer.pauseVideo();
+    trailerYouTubePlayer.destroy();
+  } catch {
+    // The trailer iframe may already have been removed during a render.
+  } finally {
+    trailerYouTubePlayer = undefined;
+    activeTrailerYouTubeVideoId = undefined;
+    document.body.style.cursor = '';
+  }
+}
+
 function destroyThemeSongYouTubePlayer(): void {
   themeSongYouTubePlayerReady = undefined;
   if (!themeSongYouTubePlayer) {
@@ -4624,6 +4681,339 @@ function closeActivePlaybackSession(): void {
       console.error('Failed to close playback session', error);
     });
   }
+}
+
+function ensureTrailerYouTubePlayer(videoId: string): Promise<YouTubePlayer> {
+  if (trailerYouTubePlayer && activeTrailerYouTubeVideoId === videoId) {
+    return Promise.resolve(trailerYouTubePlayer);
+  }
+
+  if (trailerYouTubePlayerReady && activeTrailerYouTubeVideoId === videoId) {
+    return trailerYouTubePlayerReady;
+  }
+
+  destroyTrailerYouTubePlayer();
+  activeTrailerYouTubeVideoId = videoId;
+  const playerVars: Record<string, number | string> = {
+    autoplay: 1,
+    controls: 0,
+    disablekb: 1,
+    fs: 0,
+    iv_load_policy: 3,
+    loop: 0,
+    modestbranding: 1,
+    playsinline: 1,
+    rel: 0,
+  };
+  if (window.location.origin.startsWith('http')) {
+    playerVars.origin = window.location.origin;
+  }
+
+  trailerYouTubePlayerReady = loadYouTubeIframeApi().then((api) => new Promise<YouTubePlayer>((resolve) => {
+    trailerYouTubePlayer = new api.Player('trailer-player', {
+      height: '100%',
+      width: '100%',
+      videoId,
+      playerVars,
+      events: {
+        onReady: (event) => {
+          trailerYouTubePlayer = event.target;
+          event.target.setPlaybackQuality('hd720');
+          event.target.setVolume(Math.round(trailerVolume * 100));
+          if (trailerMuted) {
+            event.target.mute();
+          } else {
+            event.target.unMute();
+          }
+          event.target.playVideo();
+          resolve(event.target);
+        },
+        onStateChange: () => {
+          updateTrailerPlayerUi();
+        },
+        onError: (event) => {
+          document.querySelector<HTMLElement>('.trailer-shell')?.classList.add('has-media-error');
+          document.querySelector<HTMLElement>('.trailer-shell')?.classList.remove('is-media-loading');
+          console.warn('YouTube trailer playback failed', {
+            videoId: activeTrailerYouTubeVideoId,
+            errorCode: event.data,
+          });
+        },
+      },
+    });
+  }));
+
+  return trailerYouTubePlayerReady;
+}
+
+function trailerPlayerState(): number | undefined {
+  try {
+    return trailerYouTubePlayer?.getPlayerState();
+  } catch {
+    return undefined;
+  }
+}
+
+function isTrailerPlaying(): boolean {
+  return trailerPlayerState() === YOUTUBE_PLAYER_STATE.playing;
+}
+
+function updateIconButton(
+  button: HTMLButtonElement | null | undefined,
+  iconName: AppIconName,
+  label: string,
+): void {
+  if (!button) {
+    return;
+  }
+  button.innerHTML = renderIcon(iconName, 'player-control-icon');
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  createIcons({ icons });
+}
+
+function updateTrailerPlayerUi(): void {
+  const player = trailerYouTubePlayer;
+  if (!player) {
+    return;
+  }
+
+  const shell = document.querySelector<HTMLElement>('.trailer-shell');
+  const progress = document.querySelector<HTMLInputElement>('#trailer-progress');
+  const currentTimeLabel = document.querySelector<HTMLElement>('#trailer-current-time');
+  const durationLabel = document.querySelector<HTMLElement>('#trailer-duration');
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small, #trailer-play-toggle-large'));
+  const muteButton = document.querySelector<HTMLButtonElement>('#trailer-mute-toggle');
+  const volume = document.querySelector<HTMLInputElement>('#trailer-volume');
+  const playerState = trailerPlayerState();
+  const isPlaying = playerState === YOUTUBE_PLAYER_STATE.playing;
+  const isLoading = playerState === YOUTUBE_PLAYER_STATE.buffering || playerState === YOUTUBE_PLAYER_STATE.cued;
+  const duration = player.getDuration();
+  const currentTime = player.getCurrentTime();
+
+  shell?.classList.toggle('is-media-loading', isLoading);
+  playButtons.forEach((button) => updateIconButton(button, isPlaying ? 'pause' : 'play', isPlaying ? 'Pause' : 'Play'));
+  trailerMuted = player.isMuted() || player.getVolume() === 0;
+  trailerVolume = Math.max(0, Math.min(1, player.getVolume() / 100));
+  updateIconButton(muteButton, trailerMuted ? 'volume-x' : 'volume-2', trailerMuted ? 'Unmute' : 'Mute');
+  if (volume && document.activeElement !== volume) {
+    volume.value = String(trailerMuted ? 0 : trailerVolume);
+  }
+  if (progress && progress.dataset.scrubbing !== 'true') {
+    progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (currentTime / duration) * 1000))) : '0';
+  }
+  if (currentTimeLabel) {
+    currentTimeLabel.textContent = formatMediaTime(currentTime);
+  }
+  if (durationLabel) {
+    durationLabel.textContent = formatMediaTime(duration);
+  }
+}
+
+function bindTrailerPlayer(): void {
+  if (!state.activeTrailer) {
+    destroyTrailerYouTubePlayer();
+    return;
+  }
+
+  const shell = document.querySelector<HTMLElement>('.trailer-shell');
+  const videoId = shell?.dataset.trailerVideoId;
+  if (!shell || !videoId) {
+    return;
+  }
+
+  const progress = document.querySelector<HTMLInputElement>('#trailer-progress');
+  const volume = document.querySelector<HTMLInputElement>('#trailer-volume');
+  const currentTimeLabel = document.querySelector<HTMLElement>('#trailer-current-time');
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small, #trailer-play-toggle-large'));
+  const muteButton = document.querySelector<HTMLButtonElement>('#trailer-mute-toggle');
+  const fullscreenButton = document.querySelector<HTMLButtonElement>('#trailer-fullscreen');
+  const idleHitArea = document.querySelector<HTMLElement>('.trailer-idle-hit-area');
+  let controlsHideHandle: number | undefined;
+  let isScrubbing = false;
+
+  const showControls = (): void => {
+    shell.classList.add('is-controls-visible');
+    shell.classList.remove('is-controls-hidden');
+    document.body.style.cursor = '';
+    if (controlsHideHandle !== undefined) {
+      window.clearTimeout(controlsHideHandle);
+    }
+    controlsHideHandle = window.setTimeout(() => {
+      if (isTrailerPlaying() && !isScrubbing) {
+        shell.classList.remove('is-controls-visible');
+        shell.classList.add('is-controls-hidden');
+        document.body.style.cursor = 'none';
+      }
+    }, 3200);
+  };
+
+  const seekBy = (seconds: number): void => {
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    const duration = trailerYouTubePlayer.getDuration();
+    const currentTime = trailerYouTubePlayer.getCurrentTime();
+    const targetTime = duration > 0
+      ? Math.min(duration, Math.max(0, currentTime + seconds))
+      : Math.max(0, currentTime + seconds);
+    trailerYouTubePlayer.seekTo(targetTime, true);
+    updateTrailerPlayerUi();
+  };
+
+  const togglePlayback = (): void => {
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    if (isTrailerPlaying()) {
+      trailerYouTubePlayer.pauseVideo();
+    } else {
+      trailerYouTubePlayer.playVideo();
+    }
+    updateTrailerPlayerUi();
+  };
+
+  const toggleFullscreen = (): void => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    void shell.requestFullscreen?.();
+  };
+
+  shell.focus({ preventScroll: true });
+  ['mousemove', 'mousedown', 'touchstart', 'pointermove'].forEach((eventName) => {
+    shell.addEventListener(eventName, showControls, { passive: true });
+  });
+  shell.addEventListener('keydown', (event) => {
+    if (event.target instanceof HTMLInputElement) {
+      return;
+    }
+    if (event.key === ' ' || event.key === 'k') {
+      event.preventDefault();
+      togglePlayback();
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      seekBy(-10);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      seekBy(30);
+    } else if (event.key === 'm') {
+      event.preventDefault();
+      muteButton?.click();
+    } else if (event.key === 'f') {
+      event.preventDefault();
+      toggleFullscreen();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeTrailerPlayer();
+    }
+    showControls();
+  });
+
+  idleHitArea?.addEventListener('click', () => {
+    togglePlayback();
+    showControls();
+  });
+  playButtons.forEach((button) => button.addEventListener('click', () => {
+    togglePlayback();
+    showControls();
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-trailer-seek]').forEach((button) => {
+    button.addEventListener('click', () => {
+      seekBy(Number(button.dataset.trailerSeek) || 0);
+      showControls();
+    });
+  });
+  muteButton?.addEventListener('click', () => {
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    if (trailerYouTubePlayer.isMuted() || trailerYouTubePlayer.getVolume() === 0) {
+      trailerYouTubePlayer.unMute();
+      if (trailerYouTubePlayer.getVolume() === 0) {
+        trailerYouTubePlayer.setVolume(Math.round(Math.max(trailerVolume, 0.45) * 100));
+      }
+    } else {
+      trailerYouTubePlayer.mute();
+    }
+    updateTrailerPlayerUi();
+    showControls();
+  });
+  volume?.addEventListener('input', () => {
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    const nextVolume = Math.min(1, Math.max(0, Number(volume.value)));
+    trailerVolume = nextVolume;
+    trailerYouTubePlayer.setVolume(Math.round(nextVolume * 100));
+    if (nextVolume <= 0) {
+      trailerYouTubePlayer.mute();
+    } else {
+      trailerYouTubePlayer.unMute();
+    }
+    updateTrailerPlayerUi();
+    showControls();
+  });
+  volume?.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    const delta = event.deltaY < 0 ? 0.05 : -0.05;
+    const nextVolume = Math.min(1, Math.max(0, trailerVolume + delta));
+    trailerVolume = nextVolume;
+    trailerYouTubePlayer.setVolume(Math.round(nextVolume * 100));
+    if (nextVolume <= 0) {
+      trailerYouTubePlayer.mute();
+    } else {
+      trailerYouTubePlayer.unMute();
+    }
+    updateTrailerPlayerUi();
+    showControls();
+  }, { passive: false });
+  fullscreenButton?.addEventListener('click', () => {
+    toggleFullscreen();
+    showControls();
+  });
+  progress?.addEventListener('input', () => {
+    isScrubbing = true;
+    progress.dataset.scrubbing = 'true';
+    if (!trailerYouTubePlayer) {
+      return;
+    }
+    const duration = trailerYouTubePlayer.getDuration();
+    if (duration > 0 && currentTimeLabel) {
+      currentTimeLabel.textContent = formatMediaTime((Number(progress.value) / 1000) * duration);
+    }
+    showControls();
+  });
+  progress?.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    seekBy(event.deltaY < 0 ? 10 : -10);
+    showControls();
+  }, { passive: false });
+  progress?.addEventListener('change', () => {
+    if (trailerYouTubePlayer) {
+      const duration = trailerYouTubePlayer.getDuration();
+      if (duration > 0) {
+        trailerYouTubePlayer.seekTo((Number(progress.value) / 1000) * duration, true);
+      }
+    }
+    isScrubbing = false;
+    delete progress.dataset.scrubbing;
+    updateTrailerPlayerUi();
+    showControls();
+  });
+
+  shell.classList.add('is-media-loading');
+  void ensureTrailerYouTubePlayer(videoId).then((player) => {
+    player.playVideo();
+    updateTrailerPlayerUi();
+    clearTrailerProgressHandle();
+    trailerProgressHandle = window.setInterval(updateTrailerPlayerUi, 500);
+    showControls();
+  });
 }
 
 function bindPlayerProgress(): void {
@@ -5476,8 +5866,7 @@ function bindEvents(): void {
   });
 
   document.querySelector<HTMLButtonElement>('#close-trailer')?.addEventListener('click', () => {
-    state.activeTrailer = undefined;
-    render();
+    closeTrailerPlayer();
   });
 
   document.querySelector<HTMLButtonElement>('#play-youtube-theme-song')?.addEventListener('click', () => {
@@ -5896,6 +6285,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 
   bindPlayerProgress();
+  bindTrailerPlayer();
 }
 
 function syncProviderDependencyOptions(list: HTMLElement): void {

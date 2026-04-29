@@ -2136,78 +2136,7 @@ legend {
   border-radius: 0;
   background: #000;
   overflow: hidden;
-}
-
-.trailer-chrome {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  padding: clamp(1rem, 2vw, 2rem);
-  pointer-events: none;
-}
-
-.trailer-chrome::before {
-  content: "";
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: min(34vh, 280px);
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
-  pointer-events: none;
-}
-
-.trailer-title-block,
-.trailer-actions {
-  position: relative;
-  z-index: 1;
-}
-
-.trailer-title-block {
-  max-width: min(46rem, 58vw);
-  padding-top: 0.25rem;
-  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8);
-}
-
-.trailer-title-block p {
-  margin: 0 0 0.55rem;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.trailer-title-block h2 {
-  margin: 0;
-  font-size: clamp(1.35rem, 2.4vw, 2.6rem);
-  line-height: 1.05;
-}
-
-.trailer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.7rem;
-  pointer-events: auto;
-}
-
-.trailer-actions .secondary-button {
-  background: rgba(18, 18, 20, 0.78);
-  border-color: rgba(255, 255, 255, 0.14);
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(18px);
-}
-
-.trailer-actions .icon-button {
-  width: 2.85rem;
-  height: 2.85rem;
-  padding: 0;
-  justify-content: center;
+  outline: none;
 }
 
 .trailer-frame-shell {
@@ -2220,11 +2149,32 @@ legend {
   background: #000;
 }
 
+.trailer-youtube-player,
+#trailer-player,
 .trailer-frame-shell iframe {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
   display: block;
+}
+
+.trailer-unavailable {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  color: #dbe6f7;
+  text-align: center;
+}
+
+.trailer-shell .player-top-actions .button-link {
+  background: rgba(18, 18, 20, 0.78);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(18px);
 }
 
 .theme-song-iframe {
@@ -2774,18 +2724,6 @@ legend {
   .player-control-row {
     grid-template-columns: 1fr;
     justify-items: center;
-  }
-
-  .trailer-chrome {
-    flex-direction: column;
-  }
-
-  .trailer-title-block {
-    max-width: 100%;
-  }
-
-  .trailer-actions {
-    align-self: flex-end;
   }
 
   .player-time-cluster,

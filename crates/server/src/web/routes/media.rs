@@ -3671,26 +3671,38 @@ pub async fn refresh_library_metadata(
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
     let library_summary = load_library_summary(&db, &settings, library_id).await?;
-    let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
+    let library_name = library_summary.name.clone();
+    tokio::spawn(async move {
+        let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
+        let refresh_jobs = match load_library_refresh_jobs(&db, &settings, library_id).await {
+            Ok(refresh_jobs) => refresh_jobs,
+            Err(status) => {
+                log::warn!(
+                    "Failed to prepare library {} metadata refresh jobs: {:?}",
+                    library_id,
+                    status
+                );
+                if let Some((automatch_activity_id, _)) = &automatch_activity {
+                    cancel_metadata_refresh_activity(automatch_activity_id).await;
+                }
+                return;
+            }
+        };
+        let refresh_targets = refresh_jobs
+            .iter()
+            .flat_map(flatten_metadata_refresh_job)
+            .collect::<Vec<_>>();
 
-    let refresh_jobs = load_library_refresh_jobs(&db, &settings, library_id).await?;
-    let refresh_targets = refresh_jobs
-        .iter()
-        .flat_map(flatten_metadata_refresh_job)
-        .collect::<Vec<_>>();
-
-    let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
-        "library",
-        "manual_library_refresh",
-        format!("Refresh library metadata for {}", library_summary.name),
-        Some(library_id),
-        None,
-        refresh_targets,
-    )
-    .await
-    else {
-        let summary = load_library_summary(&db, &settings, library_id).await?;
-        tokio::spawn(async move {
+        let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
+            "library",
+            "manual_library_refresh",
+            format!("Refresh library metadata for {}", library_name),
+            Some(library_id),
+            None,
+            refresh_targets,
+        )
+        .await
+        else {
             run_automatic_movie_metadata_linking(
                 &db,
                 &settings,
@@ -3699,20 +3711,22 @@ pub async fn refresh_library_metadata(
                 automatch_activity,
             )
             .await;
-        });
-        return Ok(Json(summary));
-    };
+            return;
+        };
 
-    if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
-        cancel_metadata_refresh_activity(&activity_id).await;
-        if let Some((automatch_activity_id, _)) = &automatch_activity {
-            cancel_metadata_refresh_activity(automatch_activity_id).await;
+        if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
+            cancel_metadata_refresh_activity(&activity_id).await;
+            if let Some((automatch_activity_id, _)) = &automatch_activity {
+                cancel_metadata_refresh_activity(automatch_activity_id).await;
+            }
+            log::warn!(
+                "Failed to mark library {} metadata refresh targets pending: {:?}",
+                library_id,
+                status
+            );
+            return;
         }
-        return Err(status);
-    }
 
-    let pending_summary = load_library_summary(&db, &settings, library_id).await?;
-    tokio::spawn(async move {
         mark_metadata_refresh_activity_running(&activity_id).await;
         for target in queued_targets {
             let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
@@ -3729,7 +3743,7 @@ pub async fn refresh_library_metadata(
         .await;
     });
 
-    Ok(Json(pending_summary))
+    Ok(Json(library_summary))
 }
 
 /// Serve poster or backdrop artwork for a linked media item, caching it locally on demand.

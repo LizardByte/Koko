@@ -2194,12 +2194,12 @@ legend {
 
 .trailer-youtube-chrome-mask::before {
   top: 0;
-  height: clamp(96px, 18vh, 210px);
+  height: clamp(90px, 18vh, 90px);
 }
 
 .trailer-youtube-chrome-mask::after {
   bottom: 0;
-  height: clamp(120px, 24vh, 260px);
+  height: clamp(90px, 24vh, 90px);
 }
 
 .trailer-shell.is-controls-hidden .trailer-youtube-chrome-mask {

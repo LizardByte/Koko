@@ -2160,6 +2160,10 @@ legend {
   display: block;
 }
 
+.trailer-frame-shell iframe {
+  pointer-events: none;
+}
+
 .trailer-unavailable {
   position: absolute;
   inset: 0;

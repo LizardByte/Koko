@@ -3704,11 +3704,6 @@ function renderPlayerOverlay(): string {
             </div>
           </div>
           ${videoId ? `
-            <div class="player-center-controls player-controls">
-              <button class="player-icon-button player-large-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
-              <button id="trailer-play-toggle-large" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-              <button class="player-icon-button player-large-button" type="button" data-trailer-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
-            </div>
             <div class="player-bottom-controls player-controls">
               <input id="trailer-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Trailer position" />
               <div class="player-control-row">
@@ -3718,7 +3713,7 @@ function renderPlayerOverlay(): string {
                 <div class="player-control-cluster player-transport-cluster">
                   <button class="player-icon-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
                   <button id="trailer-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-                  <button class="player-icon-button" type="button" data-trailer-seek="30" title="Forward 30 seconds" aria-label="Forward 30 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+                  <button class="player-icon-button" type="button" data-trailer-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
                 </div>
                 <div class="player-control-cluster player-tool-cluster">
                   <button id="trailer-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
@@ -4783,7 +4778,7 @@ function updateTrailerPlayerUi(): void {
   const progress = document.querySelector<HTMLInputElement>('#trailer-progress');
   const currentTimeLabel = document.querySelector<HTMLElement>('#trailer-current-time');
   const durationLabel = document.querySelector<HTMLElement>('#trailer-duration');
-  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small, #trailer-play-toggle-large'));
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small'));
   const muteButton = document.querySelector<HTMLButtonElement>('#trailer-mute-toggle');
   const volume = document.querySelector<HTMLInputElement>('#trailer-volume');
   const playerState = trailerPlayerState();
@@ -4826,12 +4821,28 @@ function bindTrailerPlayer(): void {
   const progress = document.querySelector<HTMLInputElement>('#trailer-progress');
   const volume = document.querySelector<HTMLInputElement>('#trailer-volume');
   const currentTimeLabel = document.querySelector<HTMLElement>('#trailer-current-time');
-  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small, #trailer-play-toggle-large'));
+  const playButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#trailer-play-toggle-small'));
   const muteButton = document.querySelector<HTMLButtonElement>('#trailer-mute-toggle');
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#trailer-fullscreen');
   const idleHitArea = document.querySelector<HTMLElement>('.trailer-idle-hit-area');
+  const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
+  let lastSkipDirection = 0;
+  let lastSkipAt = 0;
+  let skipStepIndex = 0;
+
+  const withTrailerPlayer = (action: (player: YouTubePlayer) => void): void => {
+    if (trailerYouTubePlayer) {
+      action(trailerYouTubePlayer);
+      updateTrailerPlayerUi();
+      return;
+    }
+    void ensureTrailerYouTubePlayer(videoId).then((player) => {
+      action(player);
+      updateTrailerPlayerUi();
+    });
+  };
 
   const showControls = (): void => {
     shell.classList.add('is-controls-visible');
@@ -4850,28 +4861,36 @@ function bindTrailerPlayer(): void {
   };
 
   const seekBy = (seconds: number): void => {
-    if (!trailerYouTubePlayer) {
-      return;
+    withTrailerPlayer((player) => {
+      const duration = player.getDuration();
+      const currentTime = player.getCurrentTime();
+      const targetTime = duration > 0
+        ? Math.min(duration, Math.max(0, currentTime + seconds))
+        : Math.max(0, currentTime + seconds);
+      player.seekTo(targetTime, true);
+    });
+  };
+
+  const seekWithEscalation = (direction: number): void => {
+    const now = Date.now();
+    if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
+      skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
+    } else {
+      skipStepIndex = 0;
     }
-    const duration = trailerYouTubePlayer.getDuration();
-    const currentTime = trailerYouTubePlayer.getCurrentTime();
-    const targetTime = duration > 0
-      ? Math.min(duration, Math.max(0, currentTime + seconds))
-      : Math.max(0, currentTime + seconds);
-    trailerYouTubePlayer.seekTo(targetTime, true);
-    updateTrailerPlayerUi();
+    lastSkipDirection = direction;
+    lastSkipAt = now;
+    seekBy(direction * skipSteps[skipStepIndex]);
   };
 
   const togglePlayback = (): void => {
-    if (!trailerYouTubePlayer) {
-      return;
-    }
-    if (isTrailerPlaying()) {
-      trailerYouTubePlayer.pauseVideo();
-    } else {
-      trailerYouTubePlayer.playVideo();
-    }
-    updateTrailerPlayerUi();
+    withTrailerPlayer((player) => {
+      if (player.getPlayerState() === YOUTUBE_PLAYER_STATE.playing) {
+        player.pauseVideo();
+      } else {
+        player.playVideo();
+      }
+    });
   };
 
   const toggleFullscreen = (): void => {
@@ -4895,10 +4914,10 @@ function bindTrailerPlayer(): void {
       togglePlayback();
     } else if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      seekBy(-10);
+      seekWithEscalation(-1);
     } else if (event.key === 'ArrowRight') {
       event.preventDefault();
-      seekBy(30);
+      seekWithEscalation(1);
     } else if (event.key === 'm') {
       event.preventDefault();
       muteButton?.click();
@@ -4922,55 +4941,53 @@ function bindTrailerPlayer(): void {
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-trailer-seek]').forEach((button) => {
     button.addEventListener('click', () => {
-      seekBy(Number(button.dataset.trailerSeek) || 0);
+      const requestedSeconds = Number(button.dataset.trailerSeek);
+      const direction = Math.sign(requestedSeconds);
+      if (direction !== 0) {
+        seekWithEscalation(direction);
+      }
       showControls();
     });
   });
   muteButton?.addEventListener('click', () => {
-    if (!trailerYouTubePlayer) {
-      return;
-    }
-    if (trailerYouTubePlayer.isMuted() || trailerYouTubePlayer.getVolume() === 0) {
-      trailerYouTubePlayer.unMute();
-      if (trailerYouTubePlayer.getVolume() === 0) {
-        trailerYouTubePlayer.setVolume(Math.round(Math.max(trailerVolume, 0.45) * 100));
+    withTrailerPlayer((player) => {
+      if (player.isMuted() || player.getVolume() === 0) {
+        player.unMute();
+        if (player.getVolume() === 0) {
+          player.setVolume(Math.round(Math.max(trailerVolume, 0.45) * 100));
+        }
+      } else {
+        player.mute();
       }
-    } else {
-      trailerYouTubePlayer.mute();
-    }
-    updateTrailerPlayerUi();
+    });
     showControls();
   });
   volume?.addEventListener('input', () => {
-    if (!trailerYouTubePlayer) {
-      return;
-    }
     const nextVolume = Math.min(1, Math.max(0, Number(volume.value)));
     trailerVolume = nextVolume;
-    trailerYouTubePlayer.setVolume(Math.round(nextVolume * 100));
-    if (nextVolume <= 0) {
-      trailerYouTubePlayer.mute();
-    } else {
-      trailerYouTubePlayer.unMute();
-    }
-    updateTrailerPlayerUi();
+    withTrailerPlayer((player) => {
+      player.setVolume(Math.round(nextVolume * 100));
+      if (nextVolume <= 0) {
+        player.mute();
+      } else {
+        player.unMute();
+      }
+    });
     showControls();
   });
   volume?.addEventListener('wheel', (event) => {
     event.preventDefault();
-    if (!trailerYouTubePlayer) {
-      return;
-    }
     const delta = event.deltaY < 0 ? 0.05 : -0.05;
     const nextVolume = Math.min(1, Math.max(0, trailerVolume + delta));
     trailerVolume = nextVolume;
-    trailerYouTubePlayer.setVolume(Math.round(nextVolume * 100));
-    if (nextVolume <= 0) {
-      trailerYouTubePlayer.mute();
-    } else {
-      trailerYouTubePlayer.unMute();
-    }
-    updateTrailerPlayerUi();
+    withTrailerPlayer((player) => {
+      player.setVolume(Math.round(nextVolume * 100));
+      if (nextVolume <= 0) {
+        player.mute();
+      } else {
+        player.unMute();
+      }
+    });
     showControls();
   }, { passive: false });
   fullscreenButton?.addEventListener('click', () => {
@@ -4991,7 +5008,7 @@ function bindTrailerPlayer(): void {
   });
   progress?.addEventListener('wheel', (event) => {
     event.preventDefault();
-    seekBy(event.deltaY < 0 ? 10 : -10);
+    seekWithEscalation(event.deltaY < 0 ? 1 : -1);
     showControls();
   }, { passive: false });
   progress?.addEventListener('change', () => {

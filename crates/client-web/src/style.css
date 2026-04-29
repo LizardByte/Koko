@@ -2170,6 +2170,38 @@ legend {
   text-align: center;
 }
 
+.trailer-youtube-chrome-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.trailer-youtube-chrome-mask::before,
+.trailer-youtube-chrome-mask::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #000;
+}
+
+.trailer-youtube-chrome-mask::before {
+  top: 0;
+  height: clamp(96px, 18vh, 210px);
+}
+
+.trailer-youtube-chrome-mask::after {
+  bottom: 0;
+  height: clamp(120px, 24vh, 260px);
+}
+
+.trailer-shell.is-controls-hidden .trailer-youtube-chrome-mask {
+  opacity: 0;
+}
+
 .trailer-shell .player-top-actions .button-link {
   background: rgba(18, 18, 20, 0.78);
   border-color: rgba(255, 255, 255, 0.14);

@@ -3684,6 +3684,7 @@ function renderPlayerOverlay(): string {
               ? '<div id="trailer-player" class="trailer-youtube-player"></div>'
               : '<div class="trailer-unavailable">This trailer URL is not a controllable YouTube video.</div>'}
           </div>
+          <div class="trailer-youtube-chrome-mask" aria-hidden="true"></div>
           <div class="player-loading-indicator" aria-live="polite">
             <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
           </div>

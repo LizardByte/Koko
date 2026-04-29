@@ -16,7 +16,8 @@ use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
 use koko::media::{
     LibraryScanStatus, get_item_youtube_theme_collection_references,
     get_item_youtube_theme_provider_references, get_library_files, get_media_home,
-    get_media_home_with_preferred_languages, get_media_item, get_persisted_library_summaries,
+    get_media_home_with_preferred_languages, get_media_item,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
     get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
     inspect_transcoding_capability, list_automatic_metadata_candidates, list_library_settings,
     list_media_items, remove_library_setting, replace_library_settings,
@@ -24,9 +25,10 @@ use koko::media::{
     sync_library_catalog, upsert_playback_progress,
 };
 use koko::metadata::{
-    ArtworkKind, StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
-    get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_snapshot,
-    upsert_secondary_collection_theme_song_url, upsert_secondary_youtube_theme_metadata_link,
+    ArtworkKind, ProviderMetadataDetails, StoredMetadataSnapshot,
+    get_preferred_item_metadata_link_for_languages, get_primary_item_metadata_link,
+    set_item_metadata_refresh_state, upsert_item_metadata_link, upsert_item_metadata_snapshot,
+    upsert_secondary_collection_theme_song_url,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1270,18 +1272,30 @@ fn test_secondary_theme_song_metadata_is_stored_and_presented() {
     )
     .unwrap();
 
-    let secondary = upsert_secondary_youtube_theme_metadata_link(
+    let secondary = upsert_item_metadata_link(
         &mut connection,
         movie.id,
-        MetadataProviderId::Themerr,
-        "movie",
-        "tmdb",
-        "603",
-        "https://youtu.be/SLBACEP6LsI",
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Themerr,
+            external_id: "movie:tmdb:603".into(),
+            media_type: Some("movie".into()),
+            title: None,
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: None,
+            provider_payload_json: None,
+        },
+        &ProviderMetadataDetails {
+            theme_song_url: Some("https://youtu.be/SLBACEP6LsI".into()),
+            ..ProviderMetadataDetails::default()
+        },
+        "secondary",
         None,
     )
-    .unwrap()
-    .expect("Expected secondary metadata link");
+    .unwrap();
     assert_eq!(
         secondary.theme_song_url.as_deref(),
         Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
@@ -1293,6 +1307,129 @@ fn test_secondary_theme_song_metadata_is_stored_and_presented() {
     assert_eq!(
         detail.theme_song_url.as_deref(),
         Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
+    let root = unique_temp_dir("secondary_trailer_metadata");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        metadata_providers: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::TrailerDb,
+        ],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Manual,
+        metadata_languages: vec!["en-US".into(), "es-ES".into()],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("secondary_trailer_metadata_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let movie = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: None,
+        },
+    )
+    .unwrap();
+
+    upsert_item_metadata_link(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::TrailerDb,
+            external_id: "movie:imdb:tt0133093".into(),
+            media_type: Some("movie".into()),
+            title: None,
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en".into()),
+            provider_payload_json: None,
+        },
+        &ProviderMetadataDetails {
+            trailer_title: Some("Official Trailer".into()),
+            trailer_url: Some("https://youtu.be/abcdefghijk".into()),
+            ..ProviderMetadataDetails::default()
+        },
+        "secondary",
+        None,
+    )
+    .unwrap();
+
+    let secondary = upsert_item_metadata_link(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::TrailerDb,
+            external_id: "movie:imdb:tt0133093".into(),
+            media_type: Some("movie".into()),
+            title: None,
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "es-ES".into(),
+            provider_locale_key: Some("es".into()),
+            provider_payload_json: None,
+        },
+        &ProviderMetadataDetails {
+            trailer_title: Some("Trailer oficial".into()),
+            trailer_url: Some("https://youtu.be/ZYXWVUT9876".into()),
+            ..ProviderMetadataDetails::default()
+        },
+        "secondary",
+        None,
+    )
+    .unwrap();
+    assert_eq!(secondary.locale_key, "es-ES");
+    assert_eq!(secondary.provider_locale_key.as_deref(), Some("es"));
+    assert_eq!(secondary.trailer_title.as_deref(), Some("Trailer oficial"));
+
+    let detail = get_media_item_with_preferred_languages(
+        &mut connection,
+        movie.id,
+        &root.to_string_lossy(),
+        &["es-ES".into()],
+    )
+    .unwrap()
+    .expect("Expected item detail");
+    assert_eq!(detail.trailer_title.as_deref(), Some("Trailer oficial"));
+    assert_eq!(
+        detail.trailer_url.as_deref(),
+        Some("https://www.youtube.com/watch?v=ZYXWVUT9876")
     );
 
     drop(connection);

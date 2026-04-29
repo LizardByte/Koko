@@ -53,6 +53,25 @@ fn test_metadata_settings_default_includes_tvdb_provider_entry() {
 }
 
 #[test]
+fn test_metadata_provider_statuses_include_trailerdb() {
+    let statuses = list_provider_statuses(&MetadataSettings::default());
+    let trailerdb = statuses
+        .iter()
+        .find(|provider| provider.id == MetadataProviderId::TrailerDb)
+        .expect("Expected TrailerDB provider to be registered");
+
+    assert_eq!(trailerdb.display_name, "TrailerDB");
+    assert!(trailerdb.enabled);
+    assert!(!trailerdb.requires_api_key);
+    assert!(trailerdb.configured);
+    assert!(trailerdb.implemented);
+    assert_eq!(
+        trailerdb.extends_provider_ids,
+        vec![MetadataProviderId::Tmdb]
+    );
+}
+
+#[test]
 fn test_metadata_provider_statuses_respect_api_key_configuration() {
     let settings = MetadataSettings {
         providers: vec![MetadataProviderSettings {
@@ -97,6 +116,16 @@ fn test_metadata_provider_id_supports_tvdb() {
 
     assert_eq!(provider, MetadataProviderId::Tvdb);
     assert_eq!(serde_json::to_string(&provider).unwrap(), "\"tvdb\"");
+}
+
+#[test]
+fn test_metadata_provider_id_supports_trailerdb() {
+    let provider: MetadataProviderId = serde_json::from_str("\"trailerdb\"")
+        .expect("Expected trailerdb identifier to deserialize");
+
+    assert_eq!(provider, MetadataProviderId::TrailerDb);
+    assert_eq!(provider.as_storage_value(), "trailerdb");
+    assert_eq!(serde_json::to_string(&provider).unwrap(), "\"trailerdb\"");
 }
 
 #[test]

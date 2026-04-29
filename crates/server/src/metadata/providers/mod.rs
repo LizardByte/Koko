@@ -1,5 +1,6 @@
 pub(crate) mod themerr;
 pub(crate) mod tmdb;
+pub(crate) mod trailerdb;
 pub(crate) mod tvdb;
 
 use std::future::Future;
@@ -8,8 +9,8 @@ use std::pin::Pin;
 use crate::config::{MediaLibraryKind, MetadataProviderId, MetadataSettings};
 use crate::metadata::{
     MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole, MetadataSearchResult,
-    ProviderDescendantTarget, ProviderMetadataDetails, StoredMetadataSnapshot,
-    normalize_locale_key,
+    ProviderDescendantTarget, ProviderMetadataCollection, ProviderMetadataDetails,
+    StoredMetadataSnapshot, normalize_locale_key,
 };
 
 /// Boxed async result returned by metadata provider operations.
@@ -126,14 +127,26 @@ pub trait MetadataProvider {
         Box::pin(async move { Ok(snapshot.clone()) })
     }
 
-    /// Resolve a YouTube theme-song URL for a secondary provider.
-    fn fetch_youtube_theme_url<'a>(
+    /// Resolve item-level metadata fields contributed by a secondary provider.
+    fn fetch_secondary_metadata<'a>(
         &'a self,
         _media_type: &'a str,
         _database_id: &'a str,
         _external_id: &'a str,
-    ) -> MetadataProviderFuture<'a, Option<String>> {
-        unsupported_provider_operation(self.descriptor().display_name, "theme-song lookup")
+        _locale_key: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Resolve collection-level metadata fields contributed by a secondary provider.
+    fn fetch_secondary_collection_metadata<'a>(
+        &'a self,
+        _media_type: &'a str,
+        _database_id: &'a str,
+        _external_id: &'a str,
+        _locale_key: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataCollection>> {
+        Box::pin(async { Ok(None) })
     }
 }
 
@@ -147,6 +160,7 @@ fn unsupported_provider_operation<'a, T>(
 struct TmdbMetadataProvider;
 struct TvdbMetadataProvider;
 struct ThemerrMetadataProvider;
+struct TrailerDbMetadataProvider;
 struct MusicBrainzMetadataProvider;
 struct OpenLibraryMetadataProvider;
 struct LocalNfoMetadataProvider;
@@ -402,16 +416,73 @@ impl MetadataProvider for ThemerrMetadataProvider {
         themerr::descriptor()
     }
 
-    fn fetch_youtube_theme_url<'a>(
+    fn fetch_secondary_metadata<'a>(
         &'a self,
         media_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
-    ) -> MetadataProviderFuture<'a, Option<String>> {
-        Box::pin(themerr::fetch_youtube_theme_url(
+        _locale_key: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
+        Box::pin(async move {
+            Ok(
+                themerr::fetch_youtube_theme_url(media_type, database_id, external_id)
+                    .await?
+                    .map(|theme_song_url| ProviderMetadataDetails {
+                        theme_song_url: Some(theme_song_url),
+                        ..ProviderMetadataDetails::default()
+                    }),
+            )
+        })
+    }
+
+    fn fetch_secondary_collection_metadata<'a>(
+        &'a self,
+        media_type: &'a str,
+        database_id: &'a str,
+        external_id: &'a str,
+        _locale_key: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataCollection>> {
+        Box::pin(async move {
+            Ok(
+                themerr::fetch_youtube_theme_url(media_type, database_id, external_id)
+                    .await?
+                    .map(|theme_song_url| ProviderMetadataCollection {
+                        external_id: format!("{media_type}:{database_id}:{external_id}"),
+                        name: None,
+                        overview: None,
+                        artwork_url: None,
+                        backdrop_url: None,
+                        theme_song_url: Some(theme_song_url),
+                    }),
+            )
+        })
+    }
+}
+
+impl MetadataProvider for TrailerDbMetadataProvider {
+    fn descriptor(&self) -> MetadataProviderDescriptor {
+        trailerdb::descriptor()
+    }
+
+    fn provider_locale_key(
+        &self,
+        locale_key: &str,
+    ) -> String {
+        trailerdb::provider_locale_key(locale_key)
+    }
+
+    fn fetch_secondary_metadata<'a>(
+        &'a self,
+        media_type: &'a str,
+        database_id: &'a str,
+        external_id: &'a str,
+        locale_key: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
+        Box::pin(trailerdb::fetch_secondary_metadata(
             media_type,
             database_id,
             external_id,
+            locale_key,
         ))
     }
 }
@@ -492,6 +563,7 @@ impl MetadataRegistry {
                 Box::new(TmdbMetadataProvider),
                 Box::new(TvdbMetadataProvider),
                 Box::new(ThemerrMetadataProvider),
+                Box::new(TrailerDbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),

@@ -600,7 +600,7 @@ async fn enrich_tvdb_people_payload(
         let Ok(person) = get_json(
             provider,
             &format!("people/{person_id}/extended"),
-            Vec::new(),
+            vec![("meta", "translations".to_string())],
             &format!("people lookup for {person_id}"),
         )
         .await
@@ -853,7 +853,7 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
         content_rating: tvdb_content_rating(data),
         trailer_title: trailer.and_then(tvdb_trailer_title),
         trailer_url: trailer.and_then(tvdb_trailer_url),
-        people: tvdb_people(&payload),
+        people: tvdb_people_with_language(&payload, language),
         ..ProviderMetadataDetails::default()
     }
 }
@@ -1191,7 +1191,10 @@ fn tvdb_content_rating(value: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn tvdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
+fn tvdb_people_with_language(
+    payload: &Value,
+    provider_language: &str,
+) -> Vec<ProviderMetadataPerson> {
     let data = payload.get("data").unwrap_or(payload);
     let characters = data
         .get("characters")
@@ -1242,32 +1245,12 @@ fn tvdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                         .or_else(|| tvdb_person_external_id(entry)),
                     name,
                     known_for: Vec::new(),
-                    biography: text_field(
-                        person_for_details,
-                        &[
-                            "biography",
-                            "description",
-                            "overview",
-                        ],
-                    )
-                    .or_else(|| {
-                        text_field(
-                            entry,
-                            &[
-                                "biography",
-                                "description",
-                                "overview",
-                            ],
-                        )
-                    }),
+                    biography: tvdb_person_biography(person_for_details, provider_language),
                     gender: text_field(person_for_details, &["gender"])
                         .or_else(|| text_field(entry, &["gender"])),
-                    birthday: text_field(person_for_details, &["birthday", "birthDate"])
-                        .or_else(|| text_field(entry, &["birthday", "birthDate"])),
-                    deathday: text_field(person_for_details, &["deathday", "deathDate"])
-                        .or_else(|| text_field(entry, &["deathday", "deathDate"])),
-                    birth_place: text_field(person_for_details, &["birthPlace", "placeOfBirth"])
-                        .or_else(|| text_field(entry, &["birthPlace", "placeOfBirth"])),
+                    birthday: text_field(person_for_details, &["birth"]),
+                    deathday: text_field(person_for_details, &["death"]),
+                    birth_place: text_field(person_for_details, &["birthPlace"]),
                     department: Some(if role.as_deref() == Some("Actor") {
                         "Cast".into()
                     } else {
@@ -1286,6 +1269,24 @@ fn tvdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                 })
             })
             .collect(),
+    )
+}
+
+fn tvdb_person_biography(
+    value: &Value,
+    provider_language: &str,
+) -> Option<String> {
+    let preferred = tvdb_requested_language_preference(provider_language);
+    translated_text_for_languages(value.get("biographies"), &preferred, &["biography"]).or_else(
+        || {
+            value.get("translations").and_then(|translations| {
+                translated_text_for_languages(
+                    translations.get("overviewTranslations"),
+                    &preferred,
+                    &["overview"],
+                )
+            })
+        },
     )
 }
 
@@ -1624,12 +1625,26 @@ fn translated_overview(
     value: Option<&Value>,
     preferred_keys: &[String],
 ) -> Option<String> {
+    translated_text(value, preferred_keys, &["overview", "description"])
+}
+
+fn translated_text(
+    value: Option<&Value>,
+    preferred_keys: &[String],
+    text_keys: &[&str],
+) -> Option<String> {
     let value = value?;
     if let Some(map) = value.as_object() {
         return preferred_keys
             .iter()
-            .find_map(|key| map.get(key).and_then(translation_overview_value))
-            .or_else(|| map.values().find_map(translation_overview_value));
+            .find_map(|key| {
+                map.get(key)
+                    .and_then(|value| translation_text_value(value, text_keys))
+            })
+            .or_else(|| {
+                map.values()
+                    .find_map(|value| translation_text_value(value, text_keys))
+            });
     }
 
     value.as_array().and_then(|translations| {
@@ -1644,45 +1659,115 @@ fn translated_overview(
                         .and_then(Value::as_str)?;
                     language
                         .eq_ignore_ascii_case(key.as_str())
-                        .then(|| translation_overview_value(translation))
+                        .then(|| translation_text_value(translation, text_keys))
                         .flatten()
                 })
             })
-            .or_else(|| translations.iter().find_map(translation_overview_value))
+            .or_else(|| {
+                translations
+                    .iter()
+                    .find_map(|translation| translation_text_value(translation, text_keys))
+            })
     })
 }
 
-fn tvdb_language_preference(provider_language: &str) -> Vec<String> {
+fn translated_text_for_languages(
+    value: Option<&Value>,
+    preferred_keys: &[String],
+    text_keys: &[&str],
+) -> Option<String> {
+    let value = value?;
+    if let Some(map) = value.as_object() {
+        return preferred_keys.iter().find_map(|key| {
+            map.get(key)
+                .and_then(|value| translation_text_value(value, text_keys))
+        });
+    }
+
+    value.as_array().and_then(|translations| {
+        preferred_keys.iter().find_map(|key| {
+            translations.iter().find_map(|translation| {
+                let language = translation
+                    .get("language")
+                    .or_else(|| translation.get("languageCode"))
+                    .or_else(|| translation.get("iso_639_1"))
+                    .and_then(Value::as_str)?;
+                language
+                    .eq_ignore_ascii_case(key.as_str())
+                    .then(|| translation_text_value(translation, text_keys))
+                    .flatten()
+            })
+        })
+    })
+}
+
+fn tvdb_requested_language_preference(provider_language: &str) -> Vec<String> {
     let normalized = provider_language.trim().to_ascii_lowercase();
     let mut languages = Vec::new();
-    if !normalized.is_empty() {
-        languages.push(normalized.clone());
-    }
+    push_language_preference(&mut languages, &normalized);
     match normalized.as_str() {
-        "eng" | "en" | "english" => {}
-        "spa" => languages.push("es".into()),
-        "fra" => languages.push("fr".into()),
-        "deu" => languages.push("de".into()),
-        "ita" => languages.push("it".into()),
-        "jpn" => languages.push("ja".into()),
-        "por" => languages.push("pt".into()),
-        _ => {}
-    }
-    for language in ["eng", "en", "english"] {
-        if !languages.iter().any(|entry| entry == language) {
-            languages.push(language.to_string());
+        "eng" | "en" | "english" => {
+            push_language_preference(&mut languages, "eng");
+            push_language_preference(&mut languages, "en");
+            push_language_preference(&mut languages, "english");
         }
+        "spa" | "es" | "spanish" => {
+            push_language_preference(&mut languages, "spa");
+            push_language_preference(&mut languages, "es");
+        }
+        "fra" | "fr" | "french" => {
+            push_language_preference(&mut languages, "fra");
+            push_language_preference(&mut languages, "fr");
+        }
+        "deu" | "de" | "ger" | "german" => {
+            push_language_preference(&mut languages, "deu");
+            push_language_preference(&mut languages, "de");
+        }
+        "ita" | "it" | "italian" => {
+            push_language_preference(&mut languages, "ita");
+            push_language_preference(&mut languages, "it");
+        }
+        "jpn" | "ja" | "japanese" => {
+            push_language_preference(&mut languages, "jpn");
+            push_language_preference(&mut languages, "ja");
+        }
+        "por" | "pt" | "portuguese" => {
+            push_language_preference(&mut languages, "por");
+            push_language_preference(&mut languages, "pt");
+        }
+        _ => {}
     }
     languages
 }
 
-fn translation_overview_value(value: &Value) -> Option<String> {
+fn tvdb_language_preference(provider_language: &str) -> Vec<String> {
+    let mut languages = tvdb_requested_language_preference(provider_language);
+    for language in ["eng", "en", "english"] {
+        push_language_preference(&mut languages, language);
+    }
+    languages
+}
+
+fn push_language_preference(
+    languages: &mut Vec<String>,
+    language: &str,
+) {
+    let language = language.trim().to_ascii_lowercase();
+    if !language.is_empty() && !languages.iter().any(|entry| entry == &language) {
+        languages.push(language);
+    }
+}
+
+fn translation_text_value(
+    value: &Value,
+    text_keys: &[&str],
+) -> Option<String> {
     value
         .as_str()
         .map(str::trim)
         .filter(|overview| !overview.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| text_field(value, &["overview", "description"]))
+        .or_else(|| text_field(value, text_keys))
 }
 
 fn artwork_url(value: &Value) -> Option<String> {
@@ -1800,7 +1885,7 @@ fn episode_number(value: &Value) -> Option<i32> {
 mod tests {
     use super::{
         artwork_url, backdrop_url, best_overview, metadata_details, movie_snapshot_from_value,
-        search_result_from_value, tvdb_people,
+        search_result_from_value, tvdb_people_with_language,
     };
     use serde_json::json;
 
@@ -1977,7 +2062,7 @@ mod tests {
             }
         });
 
-        let people = tvdb_people(&payload);
+        let people = tvdb_people_with_language(&payload, "eng");
 
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].name, "Tom Cruise");
@@ -1987,5 +2072,171 @@ mod tests {
             people[0].image_url.as_deref(),
             Some("https://example.test/person-tom-cruise.jpg")
         );
+    }
+
+    #[test]
+    fn tvdb_people_use_localized_person_biographies() {
+        let payload = json!({
+            "data": {
+                "koko_provider_language": "spa",
+                "characters": [
+                    {
+                        "id": 12242840,
+                        "name": "Brian Flanagan",
+                        "peopleId": 254032,
+                        "personName": "Tom Cruise",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "biographies": [
+                                {
+                                    "language": "eng",
+                                    "biography": "English biography."
+                                },
+                                {
+                                    "language": "spa",
+                                    "biography": "Biografia en espanol."
+                                }
+                            ],
+                            "birth": "1962-07-03",
+                            "death": "2099-01-01",
+                            "birthPlace": "Syracuse, New York, USA"
+                        }
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people_with_language(&payload, "spa");
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(
+            people[0].biography.as_deref(),
+            Some("Biografia en espanol.")
+        );
+        assert_eq!(people[0].birthday.as_deref(), Some("1962-07-03"));
+        assert_eq!(people[0].deathday.as_deref(), Some("2099-01-01"));
+        assert_eq!(
+            people[0].birth_place.as_deref(),
+            Some("Syracuse, New York, USA")
+        );
+    }
+
+    #[test]
+    fn tvdb_metadata_details_use_provider_locale_for_person_biographies() {
+        let payload = json!({
+            "data": {
+                "id": 901,
+                "name": "Cocktail",
+                "characters": [
+                    {
+                        "name": "Brian Flanagan",
+                        "peopleId": 254032,
+                        "personName": "Tom Cruise",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "biographies": [
+                                {
+                                    "language": "eng",
+                                    "biography": "English biography."
+                                },
+                                {
+                                    "language": "spa",
+                                    "biography": "Biografia en espanol."
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        });
+        let mut snapshot = movie_snapshot_from_value("901", &payload, None, "eng");
+        snapshot.provider_locale_key = Some("spa".into());
+
+        let details = metadata_details(&snapshot);
+
+        assert_eq!(details.people.len(), 1);
+        assert_eq!(
+            details.people[0].biography.as_deref(),
+            Some("Biografia en espanol.")
+        );
+    }
+
+    #[test]
+    fn tvdb_people_use_people_translation_overview_when_biography_records_are_missing() {
+        let payload = json!({
+            "data": {
+                "characters": [
+                    {
+                        "name": "Brian Flanagan",
+                        "peopleId": 254032,
+                        "personName": "Tom Cruise",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "translations": {
+                                "overviewTranslations": [
+                                    {
+                                        "language": "eng",
+                                        "overview": "English translated overview."
+                                    },
+                                    {
+                                        "language": "spa",
+                                        "overview": "Resumen biografico en espanol."
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people_with_language(&payload, "spa");
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(
+            people[0].biography.as_deref(),
+            Some("Resumen biografico en espanol.")
+        );
+    }
+
+    #[test]
+    fn tvdb_people_do_not_fall_back_to_unrequested_biography_languages() {
+        let payload = json!({
+            "data": {
+                "characters": [
+                    {
+                        "name": "Brian Flanagan",
+                        "peopleId": 254032,
+                        "personName": "Tom Cruise",
+                        "koko_person": {
+                            "id": 254032,
+                            "name": "Tom Cruise",
+                            "biographies": [
+                                {
+                                    "language": "fra",
+                                    "biography": "Biographie francaise."
+                                }
+                            ],
+                            "translations": {
+                                "overviewTranslations": [
+                                    {
+                                        "language": "deu",
+                                        "overview": "Deutsche Biografie."
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people_with_language(&payload, "spa");
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].biography, None);
     }
 }

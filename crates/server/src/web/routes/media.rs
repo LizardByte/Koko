@@ -35,7 +35,7 @@ use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
     PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability,
-    get_item_youtube_theme_collection_references, get_item_youtube_theme_provider_references,
+    get_item_secondary_provider_references, get_item_youtube_theme_collection_references,
     get_library_files, get_library_metadata_languages, get_library_metadata_providers,
     get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
     get_media_item_with_preferred_languages, get_persisted_library_summaries,
@@ -54,18 +54,19 @@ use crate::metadata::{
     MetadataProviderRole, MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
     expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot,
     fetch_provider_metadata_snapshot, fetch_provider_metadata_snapshot_for_locale,
-    fetch_provider_season_metadata_snapshot, fetch_provider_youtube_theme_url,
-    get_item_metadata_summaries, get_metadata_person_for_languages,
-    get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
-    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
-    list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
-    list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
-    metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
-    persist_metadata_people_assets, resolve_metadata_asset_db_path, search_provider,
+    fetch_provider_season_metadata_snapshot, fetch_provider_secondary_collection_metadata,
+    fetch_provider_secondary_metadata, get_item_metadata_summaries,
+    get_metadata_person_for_languages, get_metadata_person_locale_peer_ids,
+    get_primary_item_metadata_link, guess_provider_movie_match, guess_provider_show_match,
+    list_due_item_metadata_links, list_metadata_person_credit_summaries_for_person_ids,
+    list_pending_item_metadata_links, list_provider_statuses,
+    load_provider_show_descendant_targets, managed_metadata_asset_dir, metadata_asset_db_path,
+    normalize_locale_key, persist_item_metadata_assets, persist_metadata_people_assets,
+    provider_locale_key, resolve_metadata_asset_db_path, search_provider,
     set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
-    try_cache_item_artwork, update_cached_artwork_path,
+    try_cache_item_artwork, update_cached_artwork_path, upsert_item_metadata_link,
     upsert_item_metadata_snapshot_with_refresh_interval,
-    upsert_secondary_collection_theme_song_url, upsert_secondary_youtube_theme_metadata_link,
+    upsert_secondary_collection_theme_song_url,
 };
 use crate::utils::current_timestamp;
 
@@ -418,7 +419,7 @@ fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
         .and_then(|days| i64::from(days).checked_mul(24 * 60 * 60))
 }
 
-fn secondary_theme_providers_for_library(
+fn secondary_providers_for_library(
     settings: &Settings,
     library_providers: &[MetadataProviderId],
 ) -> Vec<MetadataProviderId> {
@@ -438,7 +439,7 @@ fn secondary_theme_providers_for_library(
         .collect()
 }
 
-async fn persist_secondary_theme_metadata_for_item(
+async fn persist_secondary_metadata_for_item(
     db: &DbConn,
     item_id: i32,
     settings: &Settings,
@@ -454,7 +455,7 @@ async fn persist_secondary_theme_metadata_for_item(
             diesel::result::Error::NotFound => Status::NotFound,
             error => {
                 log::error!(
-                    "Failed to load library for media item {} secondary metadata: {}",
+                    "Failed to load library for media item {} secondary provider metadata: {}",
                     item_id,
                     error
                 );
@@ -462,78 +463,101 @@ async fn persist_secondary_theme_metadata_for_item(
             }
         })?;
     let library_providers = load_item_library_metadata_providers(db, settings, library_id).await?;
-    let secondary_providers = secondary_theme_providers_for_library(settings, &library_providers);
+    let secondary_providers = secondary_providers_for_library(settings, &library_providers);
     if secondary_providers.is_empty() {
         return Ok(());
     }
+    let languages = load_item_library_metadata_languages(db, settings, library_id).await?;
 
     for provider_id in secondary_providers {
         let references = db
             .run({
                 let provider_id = provider_id.clone();
-                move |conn| get_item_youtube_theme_provider_references(conn, item_id, provider_id)
+                move |conn| get_item_secondary_provider_references(conn, item_id, provider_id)
             })
             .await
             .map_err(|error| {
                 log::error!(
-                    "Failed to resolve secondary theme-song references for media item {}: {}",
+                    "Failed to resolve secondary metadata references for media item {}: {}",
                     item_id,
                     error
                 );
                 Status::InternalServerError
             })?;
 
-        for (media_type, database_id, external_id) in references {
-            match fetch_provider_youtube_theme_url(
-                provider_id.clone(),
-                &media_type,
-                &database_id,
-                &external_id,
-            )
-            .await
-            {
-                Ok(Some(url)) => {
-                    db.run({
-                        let provider_id = provider_id.clone();
-                        let media_type = media_type.clone();
-                        let database_id = database_id.clone();
-                        let external_id = external_id.clone();
-                        let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
-                        move |conn| {
-                            upsert_secondary_youtube_theme_metadata_link(
-                                conn,
+        for locale_key in &languages {
+            let provider_locale = provider_locale_key(provider_id.clone(), locale_key);
+            for (media_type, database_id, external_id) in &references {
+                match fetch_provider_secondary_metadata(
+                    provider_id.clone(),
+                    media_type,
+                    database_id,
+                    external_id,
+                    locale_key,
+                )
+                .await
+                {
+                    Ok(Some(details)) => {
+                        db.run({
+                            let provider_id = provider_id.clone();
+                            let media_type = media_type.clone();
+                            let database_id = database_id.clone();
+                            let external_id = external_id.clone();
+                            let locale_key = locale_key.clone();
+                            let provider_locale = provider_locale.clone();
+                            let details = details.clone();
+                            let refresh_interval_seconds =
+                                metadata_refresh_interval_seconds(settings);
+                            move |conn| {
+                                let snapshot = StoredMetadataSnapshot {
+                                    provider_id,
+                                    external_id: format!(
+                                        "{media_type}:{database_id}:{external_id}"
+                                    ),
+                                    media_type: Some(media_type),
+                                    title: None,
+                                    overview: None,
+                                    artwork_url: None,
+                                    backdrop_url: None,
+                                    release_year: None,
+                                    locale_key,
+                                    provider_locale_key: Some(provider_locale),
+                                    provider_payload_json: None,
+                                };
+                                upsert_item_metadata_link(
+                                    conn,
+                                    item_id,
+                                    &snapshot,
+                                    &details,
+                                    "secondary",
+                                    refresh_interval_seconds,
+                                )
+                            }
+                        })
+                        .await
+                        .map_err(|error| {
+                            log::error!(
+                                "Failed to persist secondary metadata for media item {}: {}",
                                 item_id,
-                                provider_id,
-                                &media_type,
-                                &database_id,
-                                &external_id,
-                                &url,
-                                refresh_interval_seconds,
-                            )
-                        }
-                    })
-                    .await
-                    .map_err(|error| {
-                        log::error!(
-                            "Failed to persist secondary theme-song metadata for media item {}: {}",
+                                error
+                            );
+                            Status::InternalServerError
+                        })?;
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to load {} secondary metadata for media item {} locale {} ({} {} {}): {}",
+                            provider_id.as_storage_value(),
                             item_id,
+                            locale_key,
+                            media_type,
+                            database_id,
+                            external_id,
                             error
                         );
-                        Status::InternalServerError
-                    })?;
-                    break;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::warn!(
-                        "Failed to load {} theme song for media item {} ({} {} {}): {}",
-                        provider_id.as_storage_value(),
-                        item_id,
-                        media_type,
-                        database_id,
-                        external_id,
-                        error
-                    );
+                    }
                 }
             }
         }
@@ -553,18 +577,22 @@ async fn persist_secondary_theme_metadata_for_item(
                     error
                 );
                 Status::InternalServerError
-            })?;
+        })?;
 
         for (collection_id, media_type, database_id, external_id) in collection_references {
-            match fetch_provider_youtube_theme_url(
+            match fetch_provider_secondary_collection_metadata(
                 provider_id.clone(),
                 &media_type,
                 &database_id,
                 &external_id,
+                crate::metadata::DEFAULT_METADATA_LOCALE,
             )
             .await
             {
-                Ok(Some(url)) => {
+                Ok(Some(collection)) => {
+                    let Some(url) = collection.theme_song_url else {
+                        continue;
+                    };
                     db.run({
                         let provider_id = provider_id.clone();
                         let media_type = media_type.clone();
@@ -596,7 +624,7 @@ async fn persist_secondary_theme_metadata_for_item(
                 Ok(None) => {}
                 Err(error) => {
                     log::warn!(
-                        "Failed to load {} collection theme song for media item {} ({} {} {}): {}",
+                        "Failed to load {} secondary collection metadata for media item {} ({} {} {}): {}",
                         provider_id.as_storage_value(),
                         item_id,
                         media_type,
@@ -733,7 +761,7 @@ async fn persist_snapshot_for_item(
         summary.cached_logo_path = Some(logo_path_string);
     }
 
-    persist_secondary_theme_metadata_for_item(db, item_id, settings).await?;
+    persist_secondary_metadata_for_item(db, item_id, settings).await?;
 
     Ok(summary)
 }

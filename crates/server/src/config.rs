@@ -133,6 +133,15 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             retry_attempts: default_provider_retry_attempts(),
             retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
+        MetadataProviderId::TrailerDb => MetadataProviderSettings {
+            id: MetadataProviderId::TrailerDb,
+            enabled: true,
+            api_key: None,
+            language: default_metadata_language(),
+            rate_limit_per_second: default_provider_rate_limit_per_second(),
+            retry_attempts: default_provider_retry_attempts(),
+            retry_backoff_ms: default_provider_retry_backoff_ms(),
+        },
     }
 }
 
@@ -281,6 +290,9 @@ pub enum MetadataProviderId {
     LocalNfo,
     /// ThemerrDB theme-song metadata extension provider.
     Themerr,
+    /// The Trailer Database trailer metadata extension provider.
+    #[serde(rename = "trailerdb")]
+    TrailerDb,
 }
 
 impl MetadataProviderId {
@@ -293,6 +305,7 @@ impl MetadataProviderId {
             MetadataProviderId::OpenLibrary => "open_library",
             MetadataProviderId::LocalNfo => "local_nfo",
             MetadataProviderId::Themerr => "themerr",
+            MetadataProviderId::TrailerDb => "trailerdb",
         }
     }
 
@@ -305,6 +318,7 @@ impl MetadataProviderId {
             "open_library" => Some(MetadataProviderId::OpenLibrary),
             "local_nfo" => Some(MetadataProviderId::LocalNfo),
             "themerr" => Some(MetadataProviderId::Themerr),
+            "trailerdb" => Some(MetadataProviderId::TrailerDb),
             _ => None,
         }
     }
@@ -461,6 +475,7 @@ impl Default for MetadataSettings {
                 default_metadata_provider_settings(MetadataProviderId::OpenLibrary),
                 default_metadata_provider_settings(MetadataProviderId::LocalNfo),
                 default_metadata_provider_settings(MetadataProviderId::Themerr),
+                default_metadata_provider_settings(MetadataProviderId::TrailerDb),
             ],
             refresh_interval_days: default_metadata_refresh_interval_days(),
         }
@@ -540,6 +555,7 @@ pub fn normalize_settings(settings: &mut Settings) {
         MetadataProviderId::OpenLibrary,
         MetadataProviderId::LocalNfo,
         MetadataProviderId::Themerr,
+        MetadataProviderId::TrailerDb,
     ] {
         if !settings
             .metadata

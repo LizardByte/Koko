@@ -2338,6 +2338,15 @@ pub fn get_item_youtube_theme_provider_references(
     item_id: i32,
     provider_id: MetadataProviderId,
 ) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    get_item_secondary_provider_references(conn, item_id, provider_id)
+}
+
+/// Return ordered lookup candidates for a secondary metadata provider.
+pub fn get_item_secondary_provider_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
     let registry = MetadataRegistry::new();
     let Some(provider) = registry.provider(&provider_id) else {
         return Ok(Vec::new());
@@ -2348,6 +2357,15 @@ pub fn get_item_youtube_theme_provider_references(
     }
 
     get_item_theme_song_source_references(conn, item_id, &source_provider_ids)
+}
+
+/// Return ordered YouTube trailer lookup candidates for a secondary metadata provider.
+pub fn get_item_youtube_trailer_provider_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    get_item_secondary_provider_references(conn, item_id, provider_id)
 }
 
 /// Return ordered collection lookup candidates for a secondary theme-song provider.

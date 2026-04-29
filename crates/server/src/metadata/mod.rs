@@ -1204,22 +1204,43 @@ pub async fn load_provider_show_descendant_targets(
         .await
 }
 
-/// Resolve a secondary provider YouTube theme-song URL for one media item.
-pub async fn fetch_provider_youtube_theme_url(
+/// Resolve item-level metadata fields contributed by a secondary provider.
+pub async fn fetch_provider_secondary_metadata(
     provider_id: MetadataProviderId,
     media_type: &str,
     database_id: &str,
     external_id: &str,
-) -> Result<Option<String>, String> {
+    locale_key: &str,
+) -> Result<Option<ProviderMetadataDetails>, String> {
     let registry = MetadataRegistry::new();
     let provider = registry.provider(&provider_id).ok_or_else(|| {
         format!(
-            "{} theme-song lookup is not implemented.",
+            "{} secondary metadata lookup is not implemented.",
             provider_display_name(&provider_id)
         )
     })?;
     provider
-        .fetch_youtube_theme_url(media_type, database_id, external_id)
+        .fetch_secondary_metadata(media_type, database_id, external_id, locale_key)
+        .await
+}
+
+/// Resolve collection-level metadata fields contributed by a secondary provider.
+pub async fn fetch_provider_secondary_collection_metadata(
+    provider_id: MetadataProviderId,
+    media_type: &str,
+    database_id: &str,
+    external_id: &str,
+    locale_key: &str,
+) -> Result<Option<ProviderMetadataCollection>, String> {
+    let registry = MetadataRegistry::new();
+    let provider = registry.provider(&provider_id).ok_or_else(|| {
+        format!(
+            "{} secondary collection metadata lookup is not implemented.",
+            provider_display_name(&provider_id)
+        )
+    })?;
+    provider
+        .fetch_secondary_collection_metadata(media_type, database_id, external_id, locale_key)
         .await
 }
 
@@ -1244,14 +1265,36 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
     snapshot: &StoredMetadataSnapshot,
     refresh_interval_seconds: Option<i64>,
 ) -> Result<ItemMetadataSummary, diesel::result::Error> {
-    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
-    configure_sqlite_connection(conn)?;
     let details = provider_metadata_details(snapshot);
+    upsert_item_metadata_link(
+        conn,
+        item_id,
+        snapshot,
+        &details,
+        "primary",
+        refresh_interval_seconds,
+    )
+}
+
+/// Upsert a stored metadata link for one media item.
+pub fn upsert_item_metadata_link(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    snapshot: &StoredMetadataSnapshot,
+    details: &ProviderMetadataDetails,
+    relation_kind: &str,
+    refresh_interval_seconds: Option<i64>,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+    let relation_kind = relation_kind.trim();
+    let relation_kind =
+        if relation_kind.is_empty() { "primary" } else { relation_kind }.to_string();
+    configure_sqlite_connection(conn)?;
     retry_sqlite_write(|| {
         let existing = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
             .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)
@@ -1302,7 +1345,7 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             backdrop_url: snapshot.backdrop_url.clone(),
             release_year: snapshot.release_year,
             media_type: snapshot.media_type.clone(),
-            relation_kind: "primary".into(),
+            relation_kind: relation_kind.clone(),
             match_state: "linked".into(),
             logo_url,
             cached_logo_path: if keep_cached_logo {
@@ -1316,8 +1359,8 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
             rating: details.rating,
             content_rating: details.content_rating.clone(),
             trailer_title: details.trailer_title.clone(),
-            trailer_url: details.trailer_url.clone(),
-            theme_song_url: details.theme_song_url.clone(),
+            trailer_url: normalized_youtube_url(details.trailer_url.as_deref()),
+            theme_song_url: normalized_youtube_url(details.theme_song_url.as_deref()),
             locale_key: snapshot.locale_key.clone(),
             provider_locale_key: snapshot.provider_locale_key.clone(),
             cached_artwork_path: if keep_cached_artwork {
@@ -1359,17 +1402,26 @@ pub fn upsert_item_metadata_snapshot_with_refresh_interval(
         let row = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
             .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 
-        sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, &details)?;
-        sync_item_metadata_external_ids(conn, row.id, snapshot, &details)?;
-        sync_item_metadata_people(conn, row.id, snapshot, &details)?;
+        if relation_kind == "primary" {
+            sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, details)?;
+            sync_item_metadata_external_ids(conn, row.id, snapshot, details)?;
+            sync_item_metadata_people(conn, row.id, snapshot, details)?;
+        }
 
         to_item_metadata_summary_with_people(conn, row)
     })
+}
+
+fn normalized_youtube_url(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| youtube_watch_url(value).unwrap_or_else(|| value.to_string()))
 }
 
 /// Create or update one metadata-link refresh state for asynchronous work tracking.
@@ -1486,91 +1538,6 @@ pub fn set_item_metadata_refresh_state(
             .first(conn)?;
 
         to_item_metadata_summary_with_people(conn, row)
-    })
-}
-
-/// Store a secondary provider YouTube theme-song URL for one media item.
-pub fn upsert_secondary_youtube_theme_metadata_link(
-    conn: &mut SqliteConnection,
-    item_id: i32,
-    provider_id: MetadataProviderId,
-    media_type: &str,
-    database_id: &str,
-    external_id: &str,
-    url: &str,
-    refresh_interval_seconds: Option<i64>,
-) -> Result<Option<ItemMetadataSummary>, diesel::result::Error> {
-    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
-
-    let Some(theme_song_url) = youtube_watch_url(url) else {
-        return Ok(None);
-    };
-    configure_sqlite_connection(conn)?;
-    retry_sqlite_write(|| {
-        let existing = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq("secondary"))
-            .filter(metadata_links_dsl::locale_key.eq(DEFAULT_METADATA_LOCALE))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)
-            .optional()?;
-        let now = current_timestamp();
-        let payload = NewItemMetadataLink {
-            media_item_id: item_id,
-            provider_id: provider_id.as_storage_value().to_string(),
-            external_id: format!("{media_type}:{database_id}:{external_id}"),
-            title: None,
-            overview: None,
-            tagline: None,
-            artwork_url: None,
-            backdrop_url: None,
-            release_year: None,
-            media_type: Some(media_type.to_string()),
-            relation_kind: "secondary".into(),
-            match_state: "linked".into(),
-            logo_url: None,
-            cached_logo_path: None,
-            genres_json: None,
-            rating: None,
-            content_rating: None,
-            trailer_title: None,
-            trailer_url: None,
-            theme_song_url: Some(theme_song_url.clone()),
-            locale_key: DEFAULT_METADATA_LOCALE.to_string(),
-            provider_locale_key: None,
-            cached_artwork_path: None,
-            cached_backdrop_path: None,
-            refresh_state: "fresh".into(),
-            refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
-            last_refreshed_at: Some(now),
-            next_refresh_at: refresh_interval_seconds.map(|interval| now + interval),
-            refresh_error: None,
-            updated_at: Some(now),
-        };
-
-        if let Some(existing) = existing {
-            diesel::update(
-                metadata_links_dsl::item_metadata_links
-                    .filter(metadata_links_dsl::id.eq(existing.id)),
-            )
-            .set(&payload)
-            .execute(conn)?;
-        } else {
-            diesel::insert_into(metadata_links_dsl::item_metadata_links)
-                .values(&payload)
-                .execute(conn)?;
-        }
-
-        let row = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq("secondary"))
-            .filter(metadata_links_dsl::locale_key.eq(DEFAULT_METADATA_LOCALE))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)?;
-
-        to_item_metadata_summary_with_people(conn, row).map(Some)
     })
 }
 

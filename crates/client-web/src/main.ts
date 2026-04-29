@@ -3678,16 +3678,6 @@ function renderPlayerOverlay(): string {
     return `
       <div class="player-overlay trailer-overlay">
         <div class="player-shell trailer-shell">
-          <div class="player-header">
-            <div>
-              <p class="eyebrow">${escapeHtml(label)}</p>
-              <h2>${escapeHtml(state.activeTrailer.title)}</h2>
-            </div>
-            <div class="player-header-actions">
-              ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}
-              <button id="close-trailer" class="secondary-button" type="button">${renderButtonContent('Close', 'x')}</button>
-            </div>
-          </div>
           <div class="trailer-frame-shell">
             <iframe
               id="trailer-player"
@@ -3697,6 +3687,16 @@ function renderPlayerOverlay(): string {
               referrerpolicy="origin"
               allowfullscreen
             ></iframe>
+          </div>
+          <div class="trailer-chrome">
+            <div class="trailer-title-block">
+              <p>${escapeHtml(label)}</p>
+              <h2>${escapeHtml(state.activeTrailer.title)}</h2>
+            </div>
+            <div class="trailer-actions">
+              ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}
+              <button id="close-trailer" class="secondary-button icon-button" type="button" title="Close trailer" aria-label="Close trailer">${renderIcon('x')}</button>
+            </div>
           </div>
         </div>
       </div>

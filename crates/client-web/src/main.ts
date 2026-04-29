@@ -3580,7 +3580,7 @@ function renderProviderSettingsCard(provider: MetadataProviderSettings): string 
         ${showRequestSettings ? `
         <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
         <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
-        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="100" value="${provider.retry_backoff_ms}" /></label>
+        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
         ` : ''}
       </div>` : '<p class="muted">This provider does not require provider-specific settings.</p>'}
     </section>

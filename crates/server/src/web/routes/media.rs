@@ -1810,36 +1810,49 @@ async fn build_metadata_refresh_job(
     external_id: &str,
     media_type: &str,
 ) -> Result<MetadataRefreshJob, Status> {
+    let root = MetadataRefreshTarget {
+        item_id: item.id,
+        library_id: item.library_id,
+        provider_id,
+        item_type: item.item_type.clone(),
+        display_title: item.display_title.clone(),
+        relative_path: item.relative_path.clone(),
+        external_id: external_id.to_string(),
+        media_type: media_type.to_string(),
+        fetch_kind: MetadataRefreshFetchKind::Direct,
+    };
     let descendants = if item.item_type == "show"
-        && ((provider_id == MetadataProviderId::Tmdb && media_type == "tv")
-            || (provider_id == MetadataProviderId::Tvdb && media_type == "series"))
+        && ((root.provider_id == MetadataProviderId::Tmdb && media_type == "tv")
+            || (root.provider_id == MetadataProviderId::Tvdb && media_type == "series"))
     {
-        load_show_descendant_refresh_targets(
+        match load_show_descendant_refresh_targets(
             db,
             settings,
             item.id,
-            provider_id.clone(),
+            root.provider_id.clone(),
             external_id,
         )
-        .await?
+        .await
+        {
+            Ok(descendants) => descendants,
+            Err(status) => {
+                if status == Status::ServiceUnavailable {
+                    log::warn!(
+                        "Skipping descendant metadata refresh expansion for {} because {} is unavailable; the root item will still be refreshed",
+                        describe_metadata_refresh_target(&root),
+                        root.provider_id.as_storage_value()
+                    );
+                    Vec::new()
+                } else {
+                    return Err(status);
+                }
+            }
+        }
     } else {
         Vec::new()
     };
 
-    Ok(MetadataRefreshJob {
-        root: MetadataRefreshTarget {
-            item_id: item.id,
-            library_id: item.library_id,
-            provider_id,
-            item_type: item.item_type.clone(),
-            display_title: item.display_title.clone(),
-            relative_path: item.relative_path.clone(),
-            external_id: external_id.to_string(),
-            media_type: media_type.to_string(),
-            fetch_kind: MetadataRefreshFetchKind::Direct,
-        },
-        descendants,
-    })
+    Ok(MetadataRefreshJob { root, descendants })
 }
 
 async fn load_metadata_summary_for_item(

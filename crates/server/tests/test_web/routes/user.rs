@@ -6,6 +6,9 @@ use rstest::rstest;
 // test imports
 use crate::test_utils::{create_test_client, create_test_user, login_user, make_request};
 
+const TINY_PNG_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 #[rstest]
 #[case("admin", "password123", true, Some("1234"))]
 #[case("user", "userpass456", false, None)]
@@ -123,7 +126,10 @@ async fn test_user_profile_fields_are_returned() {
             "password": "password123",
             "admin": true,
             "birthday": "1984-10-26",
-            "profile_image_url": "https://example.com/profile.jpg"
+            "profile_image_upload": {
+                "mime_type": "image/png",
+                "data_base64": TINY_PNG_BASE64
+            }
         })),
         None,
         Some(Status::Ok),
@@ -148,10 +154,18 @@ async fn test_user_profile_fields_are_returned() {
 
     let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
     assert_eq!(json["current_user"]["birthday"], "1984-10-26");
-    assert_eq!(
-        json["current_user"]["profile_image_url"],
-        "https://example.com/profile.jpg"
-    );
+    let image_url = json["current_user"]["profile_image_url"]
+        .as_str()
+        .expect("Expected uploaded profile image URL");
+    assert!(image_url.starts_with("/api/v1/user-profile-images/profile-"));
+
+    let image_response = client.get(image_url).dispatch().await;
+    assert_eq!(image_response.status(), Status::Ok);
+    let image_bytes = image_response
+        .into_bytes()
+        .await
+        .expect("Expected uploaded profile image bytes");
+    assert!(!image_bytes.is_empty());
 }
 
 #[rocket::async_test]
@@ -197,7 +211,10 @@ async fn test_admin_can_update_existing_user_profile_fields() {
             "username": "viewer-updated",
             "admin": false,
             "birthday": "2001-02-03",
-            "profile_image_url": "https://example.com/viewer.png"
+            "profile_image_upload": {
+                "mime_type": "image/png",
+                "data_base64": TINY_PNG_BASE64
+            }
         })),
         auth_header,
         Some(Status::Ok),
@@ -209,7 +226,12 @@ async fn test_admin_can_update_existing_user_profile_fields() {
     assert_eq!(json["username"], "viewer-updated");
     assert_eq!(json["admin"], false);
     assert_eq!(json["birthday"], "2001-02-03");
-    assert_eq!(json["profile_image_url"], "https://example.com/viewer.png");
+    assert!(
+        json["profile_image_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("/api/v1/user-profile-images/profile-")
+    );
 }
 
 #[rocket::async_test]
@@ -238,7 +260,7 @@ async fn test_cannot_demote_last_admin() {
             "username": "admin",
             "admin": false,
             "birthday": null,
-            "profile_image_url": null
+            "remove_profile_image": true
         })),
         Some(format!("Bearer {}", token)),
         Some(Status::BadRequest),

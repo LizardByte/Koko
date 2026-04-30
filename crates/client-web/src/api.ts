@@ -75,13 +75,18 @@ export interface TokenResponse {
   token: string;
 }
 
+export interface ProfileImageUploadRequest {
+  mime_type: string;
+  data_base64: string;
+}
+
 export interface CreateUserRequest {
   username: string;
   password: string;
   pin?: string;
   admin: boolean;
   birthday?: string;
-  profile_image_url?: string;
+  profile_image_upload?: ProfileImageUploadRequest;
   preferred_metadata_languages?: string[];
 }
 
@@ -89,7 +94,8 @@ export interface UpdateUserRequest {
   username: string;
   admin: boolean;
   birthday?: string;
-  profile_image_url?: string;
+  profile_image_upload?: ProfileImageUploadRequest;
+  remove_profile_image?: boolean;
   preferred_metadata_languages?: string[];
 }
 

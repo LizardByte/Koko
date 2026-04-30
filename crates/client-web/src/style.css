@@ -284,17 +284,48 @@ legend {
 
 .rail-user-card {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.7rem;
+  align-items: center;
   padding: 0.85rem 0.9rem;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.05);
   color: #dbe7ff;
 }
 
+.rail-user-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
 .rail-user-card span {
   color: #9ab1d1;
   font-size: 0.82rem;
+}
+
+.user-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #263f5f;
+  color: #dbe7ff;
+  font-weight: 700;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.edit-avatar {
+  width: 3rem;
+  height: 3rem;
 }
 
 .brand-block {

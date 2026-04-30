@@ -7,11 +7,11 @@ CREATE TABLE users_next (
     pin TEXT DEFAULT NULL,
     admin BOOLEAN NOT NULL DEFAULT FALSE,
     birthday TEXT DEFAULT NULL,
-    profile_image_url TEXT DEFAULT NULL
+    profile_image_path TEXT DEFAULT NULL
 );
 
-INSERT INTO users_next (id, username, password, pin, admin, birthday, profile_image_url)
-SELECT id, username, password, pin, admin, birthday, profile_image_url
+INSERT INTO users_next (id, username, password, pin, admin, birthday, profile_image_path)
+SELECT id, username, password, pin, admin, birthday, profile_image_path
 FROM users;
 
 DROP TABLE users;

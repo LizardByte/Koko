@@ -458,7 +458,7 @@ const users: MockUserRecord[] = [
     password: 'adminpass',
     admin: true,
     birthday: '1990-01-01',
-    profile_image_url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=160&h=160&fit=crop',
+    profile_image_url: undefined,
     preferred_metadata_languages: ['en-US'],
   },
 ];
@@ -730,7 +730,7 @@ export function createMockUser(request: CreateUserRequest): string {
     pin: request.pin,
     admin: users.length === 0 || request.admin,
     birthday: request.birthday?.trim() || undefined,
-    profile_image_url: request.profile_image_url?.trim() || undefined,
+    profile_image_url: mockProfileImageUrl(request.profile_image_upload),
     preferred_metadata_languages: request.preferred_metadata_languages?.length
       ? request.preferred_metadata_languages
       : ['en-US'],
@@ -771,7 +771,10 @@ export function updateMockUser(userId: number, request: UpdateUserRequest): Boot
   user.username = username;
   user.admin = request.admin;
   user.birthday = request.birthday?.trim() || undefined;
-  user.profile_image_url = request.profile_image_url?.trim() || undefined;
+  const nextProfileImageUrl = mockProfileImageUrl(request.profile_image_upload);
+  if (nextProfileImageUrl || request.remove_profile_image) {
+    user.profile_image_url = nextProfileImageUrl;
+  }
   user.preferred_metadata_languages = request.preferred_metadata_languages?.length
     ? request.preferred_metadata_languages
     : ['en-US'];
@@ -1011,6 +1014,13 @@ export function getMockSettings(): SettingsResponse {
 export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResponse {
   settings = structuredClone(nextSettings);
   return getMockSettings();
+}
+
+function mockProfileImageUrl(upload?: { mime_type: string; data_base64: string }): string | undefined {
+  if (!upload?.data_base64) {
+    return undefined;
+  }
+  return `data:${upload.mime_type};base64,${upload.data_base64}`;
 }
 
 export function clearMockMetadataCache(): { removed_files: number } {

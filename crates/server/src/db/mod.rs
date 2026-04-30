@@ -188,6 +188,15 @@ fn reconcile_legacy_migration_records(
         "genres_json",
         "ALTER TABLE item_metadata_links ADD COLUMN genres_json TEXT DEFAULT NULL",
     )?;
+    if sqlite_migration_record_exists(conn, "0000012")? {
+        ensure_sqlite_column(
+            conn,
+            "users",
+            Some("birthday"),
+            "profile_image_path",
+            "ALTER TABLE users ADD COLUMN profile_image_path TEXT DEFAULT NULL",
+        )?;
+    }
 
     if sqlite_migration_record_exists(conn, "0000021")? {
         ensure_sqlite_column(

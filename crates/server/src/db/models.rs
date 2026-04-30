@@ -28,7 +28,7 @@ pub struct User {
     pub pin: Option<String>,
     pub admin: bool,
     pub birthday: Option<String>,
-    pub profile_image_url: Option<String>,
+    pub profile_image_path: Option<String>,
     pub preferred_metadata_languages_json: String,
 }
 

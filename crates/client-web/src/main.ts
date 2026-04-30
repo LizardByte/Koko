@@ -60,6 +60,7 @@ import {
   type MetadataSearchResult,
   type LogEntriesResponse,
   type PlaybackDecision,
+  type ProfileImageUploadRequest,
   type SettingsResponse,
   type SettingsSnapshot,
   type ServerCapabilities,
@@ -1110,6 +1111,18 @@ function currentUser(): BootstrapUser | undefined {
   return state.bootstrap?.current_user;
 }
 
+function renderUserAvatar(user: BootstrapUser, className = ''): string {
+  const imageUrl = user.profile_image_url ? resolveApiUrl(user.profile_image_url) : undefined;
+  const initial = user.username.trim().charAt(0).toUpperCase() || '?';
+  return `
+    <span class="user-avatar ${className}">
+      ${imageUrl
+        ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" />`
+        : `<span>${escapeHtml(initial)}</span>`}
+    </span>
+  `;
+}
+
 function requiresSetup(): boolean {
   return state.bootstrap?.has_users === false;
 }
@@ -1120,6 +1133,41 @@ function requiresLogin(): boolean {
 
 function canManageUsers(): boolean {
   return currentUser()?.admin ?? false;
+}
+
+async function readProfileImageUpload(formData: FormData): Promise<ProfileImageUploadRequest | undefined> {
+  const value = formData.get('profile_image_file');
+  if (!(value instanceof File) || value.size === 0) {
+    return undefined;
+  }
+
+  const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+  if (!allowedTypes.has(value.type)) {
+    throw new Error('Profile image must be a JPEG, PNG, WebP, or GIF file.');
+  }
+  if (value.size > 2 * 1024 * 1024) {
+    throw new Error('Profile image must be 2 MB or smaller.');
+  }
+
+  const dataUrl = await readFileAsDataUrl(value);
+  const dataBase64 = dataUrl.split(',')[1] ?? '';
+  if (!dataBase64) {
+    throw new Error('Failed to read profile image.');
+  }
+
+  return {
+    mime_type: value.type,
+    data_base64: dataBase64,
+  };
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result ?? '')));
+    reader.addEventListener('error', () => reject(new Error('Failed to read profile image.')));
+    reader.readAsDataURL(file);
+  });
 }
 
 function renderAuthShell(title: string, description: string, content: string): string {
@@ -1153,7 +1201,7 @@ function renderWelcomeScreen(): string {
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
-        <label>Profile image URL<input name="profile_image_url" type="url" placeholder="https://example.com/avatar.jpg" /></label>
+        <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
         <button type="submit">${renderButtonContent('Create admin account', 'user-plus')}</button>
       </form>
     `,
@@ -1188,12 +1236,14 @@ function renderUserManagement(): string {
         ${state.users.length
           ? state.users.map((user) => `
               <form class="provider-row user-edit-row" data-update-user-id="${user.id}">
+                ${renderUserAvatar(user, 'edit-avatar')}
                 <div class="user-edit-fields">
                   <label>Username<input name="username" value="${escapeHtml(user.username)}" required /></label>
                   <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
-                  <label>Profile image URL<input name="profile_image_url" type="url" value="${escapeHtml(user.profile_image_url ?? '')}" placeholder="https://example.com/avatar.jpg" /></label>
+                  <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
                   <label>Metadata languages<input name="preferred_metadata_languages" value="${escapeHtml((user.preferred_metadata_languages ?? ['en-US']).join(', '))}" placeholder="en-US, es-ES" /></label>
                   <label class="checkbox-inline"><input name="admin" type="checkbox" ${user.admin ? 'checked' : ''} /> Administrator</label>
+                  <label class="checkbox-inline"><input name="remove_profile_image" type="checkbox" /> Remove image</label>
                 </div>
                 <div class="provider-tags">
                   <span class="tag ${user.admin ? 'success' : ''}">${user.admin ? 'Admin' : 'User'}</span>
@@ -1214,7 +1264,7 @@ function renderUserManagement(): string {
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
-        <label>Profile image URL<input name="profile_image_url" type="url" placeholder="https://example.com/avatar.jpg" /></label>
+        <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
         <label>Metadata languages<input name="preferred_metadata_languages" value="en-US" placeholder="en-US, es-ES" /></label>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>
         <button type="submit">${renderButtonContent('Create user', 'user-plus')}</button>
@@ -3968,8 +4018,11 @@ function renderRail(): string {
       <div class="library-rail-bottom">
         ${currentUser() ? `
           <div class="rail-user-card">
-            <strong>${escapeHtml(currentUser()!.username)}</strong>
-            <span>${currentUser()!.admin ? 'Administrator' : 'Signed in'}</span>
+            ${renderUserAvatar(currentUser()!, 'rail-avatar')}
+            <span class="rail-user-copy">
+              <strong>${escapeHtml(currentUser()!.username)}</strong>
+              <span>${currentUser()!.admin ? 'Administrator' : 'Signed in'}</span>
+            </span>
           </div>
         ` : ''}
         <button class="rail-button rail-settings ${state.route.page === 'settings' ? 'active' : ''}" type="button" data-nav-settings title="Settings">
@@ -5562,18 +5615,17 @@ function bindEvents(): void {
       return;
     }
 
-    const formData = new FormData(form);
-    const request: CreateUserRequest = {
-      username: String(formData.get('username') ?? '').trim(),
-      password: String(formData.get('password') ?? ''),
-      pin: String(formData.get('pin') ?? '').trim() || undefined,
-      admin: true,
-      birthday: String(formData.get('birthday') ?? '').trim() || undefined,
-      profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
-      preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-    };
-
     try {
+      const formData = new FormData(form);
+      const request: CreateUserRequest = {
+        username: String(formData.get('username') ?? '').trim(),
+        password: String(formData.get('password') ?? ''),
+        pin: String(formData.get('pin') ?? '').trim() || undefined,
+        admin: true,
+        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+        profile_image_upload: await readProfileImageUpload(formData),
+        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
+      };
       setAuthFormBusy(form, true);
       await createUser(request);
       const token = await loginUser({ username: request.username, password: request.password });
@@ -6269,16 +6321,18 @@ function bindEvents(): void {
         return;
       }
 
-      const formData = new FormData(form);
-      const request: UpdateUserRequest = {
-        username: String(formData.get('username') ?? '').trim(),
-        admin: formData.get('admin') === 'on',
-        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
-        profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
-        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-      };
-
       try {
+        const formData = new FormData(form);
+        const profileImageUpload = await readProfileImageUpload(formData);
+        const removeProfileImage = formData.get('remove_profile_image') === 'on';
+        const request: UpdateUserRequest = {
+          username: String(formData.get('username') ?? '').trim(),
+          admin: formData.get('admin') === 'on',
+          birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+          profile_image_upload: profileImageUpload,
+          remove_profile_image: removeProfileImage,
+          preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
+        };
         const updatedUser = await updateUser(userId, request);
         state.users = state.users.map((user) => (user.id === updatedUser.id ? updatedUser : user));
         if (state.bootstrap?.current_user?.id === updatedUser.id) {
@@ -6299,18 +6353,17 @@ function bindEvents(): void {
       return;
     }
 
-    const formData = new FormData(form);
-    const request: CreateUserRequest = {
-      username: String(formData.get('username') ?? '').trim(),
-      password: String(formData.get('password') ?? ''),
-      pin: String(formData.get('pin') ?? '').trim() || undefined,
-      admin: formData.get('admin') === 'on',
-      birthday: String(formData.get('birthday') ?? '').trim() || undefined,
-      profile_image_url: String(formData.get('profile_image_url') ?? '').trim() || undefined,
-      preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-    };
-
     try {
+      const formData = new FormData(form);
+      const request: CreateUserRequest = {
+        username: String(formData.get('username') ?? '').trim(),
+        password: String(formData.get('password') ?? ''),
+        pin: String(formData.get('pin') ?? '').trim() || undefined,
+        admin: formData.get('admin') === 'on',
+        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+        profile_image_upload: await readProfileImageUpload(formData),
+        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
+      };
       await createUser(request);
       form.reset();
       state.users = await getUsers();

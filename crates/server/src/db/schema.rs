@@ -269,7 +269,7 @@ table! {
         pin -> Nullable<Text>,
         admin -> Bool,
         birthday -> Nullable<Text>,
-        profile_image_url -> Nullable<Text>,
+        profile_image_path -> Nullable<Text>,
         preferred_metadata_languages_json -> Text,
     }
 }

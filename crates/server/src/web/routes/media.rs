@@ -855,15 +855,55 @@ fn metadata_search_score(
         (Some(_), None) => -0.05,
         _ => 0.0,
     };
-    let casing_score =
-        if query_title.eq_ignore_ascii_case(result_title) && query_title != result_title {
-            -0.04
-        } else if query_title == result_title {
-            0.03
-        } else {
-            0.0
-        };
-    (title_score + year_score + casing_score).clamp(0.0, 1.0)
+    let casing_score = if query_title == result_title {
+        0.03
+    } else {
+        metadata_search_casing_penalty(query_title, result_title, &result.provider_id)
+    };
+    ((title_score + year_score).clamp(0.0, 1.0) + casing_score).clamp(0.0, 1.0)
+}
+
+fn metadata_search_casing_penalty(
+    query_title: &str,
+    result_title: &str,
+    provider_id: &MetadataProviderId,
+) -> f64 {
+    if !matches!(
+        provider_id,
+        MetadataProviderId::Tmdb | MetadataProviderId::Tvdb
+    ) {
+        return 0.0;
+    }
+
+    let comparable_letters = query_title
+        .chars()
+        .zip(result_title.chars())
+        .filter(|(left, right)| {
+            left.is_ascii_alphabetic()
+                && right.is_ascii_alphabetic()
+                && left.eq_ignore_ascii_case(right)
+        })
+        .count();
+    if comparable_letters == 0 {
+        return 0.0;
+    }
+
+    let mismatched_case_letters = query_title
+        .chars()
+        .zip(result_title.chars())
+        .filter(|(left, right)| {
+            left.is_ascii_alphabetic()
+                && right.is_ascii_alphabetic()
+                && left.eq_ignore_ascii_case(right)
+                && left != right
+        })
+        .count();
+    if mismatched_case_letters == 0 {
+        return 0.0;
+    }
+
+    let mismatch_ratio = mismatched_case_letters as f64 / comparable_letters as f64;
+    -(0.04 + mismatch_ratio * 0.06)
 }
 
 #[derive(Debug, Clone)]
@@ -4227,4 +4267,70 @@ pub async fn search_items(
         })?;
 
     Ok(Json(items))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search_result(
+        provider_id: MetadataProviderId,
+        title: &str,
+    ) -> MetadataSearchResult {
+        MetadataSearchResult {
+            provider_id,
+            external_id: "1".into(),
+            media_type: "movie".into(),
+            title: title.into(),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            score: None,
+        }
+    }
+
+    #[test]
+    fn metadata_search_score_penalizes_tmdb_case_mismatch() {
+        let exact = search_result(MetadataProviderId::Tmdb, "The Matrix");
+        let mismatched_case = search_result(MetadataProviderId::Tmdb, "THE MATRIX");
+
+        assert!(
+            metadata_search_score("The Matrix", None, &mismatched_case)
+                < metadata_search_score("The Matrix", None, &exact)
+        );
+    }
+
+    #[test]
+    fn metadata_search_score_penalizes_case_mismatch_after_year_bonus() {
+        let mismatched_case = MetadataSearchResult {
+            release_year: Some(2021),
+            ..search_result(MetadataProviderId::Tmdb, "Free Guy")
+        };
+
+        assert!(metadata_search_score("free guy", Some(2021), &mismatched_case) < 1.0);
+    }
+
+    #[test]
+    fn metadata_search_score_penalizes_tvdb_case_mismatch() {
+        let exact = search_result(MetadataProviderId::Tvdb, "The Matrix");
+        let mismatched_case = search_result(MetadataProviderId::Tvdb, "THE MATRIX");
+
+        assert!(
+            metadata_search_score("The Matrix", None, &mismatched_case)
+                < metadata_search_score("The Matrix", None, &exact)
+        );
+    }
+
+    #[test]
+    fn metadata_search_score_keeps_case_penalty_provider_scoped() {
+        let tmdb_mismatched_case = search_result(MetadataProviderId::Tmdb, "THE MATRIX");
+        let musicbrainz_mismatched_case =
+            search_result(MetadataProviderId::MusicBrainz, "THE MATRIX");
+
+        assert!(
+            metadata_search_score("The Matrix", None, &tmdb_mismatched_case)
+                < metadata_search_score("The Matrix", None, &musicbrainz_mismatched_case)
+        );
+    }
 }

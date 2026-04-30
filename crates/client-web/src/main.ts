@@ -2371,8 +2371,7 @@ function renderMetadataSearchResults(): string {
           <strong>${escapeHtml(result.title)}</strong>
           <p>${escapeHtml(result.overview ?? 'No overview available.')}</p>
           <div class="metadata-match-meta">
-            <span>${escapeHtml(providerDisplayName(result.provider_id))}</span>
-            ${providerAttributionLogo(result.provider_id) ? `<img class="metadata-attribution-logo" src="${escapeHtml(providerAttributionLogo(result.provider_id) ?? '')}" alt="" loading="lazy" />` : ''}
+            ${renderMetadataSearchProviderAttribution(result.provider_id)}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
             ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
@@ -2446,6 +2445,15 @@ function providerAttributionLogo(providerId: string): string | undefined {
   const provider = (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .find((entry) => entry.id === providerId);
   return provider?.logo_dark_url ?? provider?.logo_light_url;
+}
+
+function renderMetadataSearchProviderAttribution(providerId: string): string {
+  const label = providerDisplayName(providerId);
+  const logoUrl = providerAttributionLogo(providerId);
+  if (!logoUrl) {
+    return `<span>${escapeHtml(label)}</span>`;
+  }
+  return `<img class="metadata-attribution-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(label)}" title="${escapeHtml(label)}" loading="lazy" />`;
 }
 
 function renderMetadataSearchProviderControls(): string {

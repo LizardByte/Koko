@@ -646,6 +646,15 @@ pub fn provider_locale_key(
         .unwrap_or_else(|| normalize_locale_key(locale_key))
 }
 
+/// Whether a provider returns locale-specific metadata and should be stored per locale.
+pub fn provider_uses_localized_metadata(provider_id: MetadataProviderId) -> bool {
+    let registry = MetadataRegistry::new();
+    registry
+        .provider(&provider_id)
+        .map(|provider| provider.uses_localized_metadata())
+        .unwrap_or(false)
+}
+
 /// Remove provider metadata response cache files from the configured data directory.
 pub fn clear_metadata_response_cache(data_dir: &str) -> Result<usize, String> {
     let cache_dir = metadata_response_cache_dir(data_dir);
@@ -982,15 +991,8 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
 
     let mut last_error = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
-        let provider_locale = provider_locale_key(provider_id.clone(), &fetch_locale);
-        let mut localized_settings = settings.clone();
-        if let Some(provider) = localized_settings
-            .providers
-            .iter_mut()
-            .find(|provider| provider.id == provider_id)
-        {
-            provider.language = provider_locale.clone();
-        }
+        let (localized_settings, provider_locale) =
+            localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
 
         let registry = MetadataRegistry::new();
         let result = match registry.provider(&provider_id) {
@@ -1046,6 +1048,24 @@ fn locale_fallback_chain(locale_key: &str) -> Vec<String> {
         locales.push(DEFAULT_METADATA_LOCALE.to_string());
     }
     locales
+}
+
+fn localized_provider_settings(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    locale_key: &str,
+) -> (MetadataSettings, String) {
+    let provider_locale = provider_locale_key(provider_id.clone(), locale_key);
+    let mut localized_settings = settings.clone();
+    if let Some(provider) = localized_settings
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == provider_id)
+    {
+        provider.language = provider_locale.clone();
+    }
+
+    (localized_settings, provider_locale)
 }
 
 fn snapshot_has_presentable_metadata(snapshot: &StoredMetadataSnapshot) -> bool {
@@ -1106,6 +1126,80 @@ pub async fn fetch_provider_season_metadata_snapshot(
     Ok(snapshot)
 }
 
+/// Fetch and normalize one provider season snapshot for a specific Koko locale.
+pub async fn fetch_provider_season_metadata_snapshot_for_locale(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    season_external_id: Option<&str>,
+    locale_key: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    let locale_key = normalize_locale_key(locale_key);
+    let season_external_key = season_external_id.unwrap_or_default();
+    let season_number_key = season_number.to_string();
+    let cache_key = metadata_response_cache_key(
+        &provider_id,
+        "season",
+        &[
+            show_external_id,
+            &season_number_key,
+            season_external_key,
+            &locale_key,
+        ],
+    );
+    if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
+    let mut last_error = None;
+    for fetch_locale in locale_fallback_chain(&locale_key) {
+        let (localized_settings, provider_locale) =
+            localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
+
+        let registry = MetadataRegistry::new();
+        let result = match registry.provider(&provider_id) {
+            Some(provider) => {
+                provider
+                    .fetch_season_snapshot(
+                        &localized_settings,
+                        show_external_id,
+                        season_number,
+                        season_external_id,
+                    )
+                    .await
+            }
+            None => Err(format!(
+                "{} season metadata fetch is not implemented.",
+                provider_display_name(&provider_id)
+            )),
+        };
+
+        match result {
+            Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
+                snapshot.locale_key = locale_key;
+                snapshot.provider_locale_key = Some(provider_locale);
+                write_metadata_snapshot_cache(&cache_key, &snapshot);
+                return Ok(snapshot);
+            }
+            Ok(mut snapshot) => {
+                snapshot.locale_key = locale_key.clone();
+                snapshot.provider_locale_key = Some(provider_locale);
+                last_error =
+                    Some("metadata provider returned an empty localized season snapshot".into());
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        format!(
+            "{} season metadata fetch is not implemented.",
+            provider_display_name(&provider_id)
+        )
+    }))
+}
+
 /// Fetch one provider episode snapshot for a linked show descendant.
 pub async fn fetch_provider_episode_metadata_snapshot(
     settings: &MetadataSettings,
@@ -1152,6 +1246,84 @@ pub async fn fetch_provider_episode_metadata_snapshot(
         .await?;
     write_metadata_snapshot_cache(&cache_key, &snapshot);
     Ok(snapshot)
+}
+
+/// Fetch and normalize one provider episode snapshot for a specific Koko locale.
+pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    episode_external_id: Option<&str>,
+    locale_key: &str,
+) -> Result<StoredMetadataSnapshot, String> {
+    let locale_key = normalize_locale_key(locale_key);
+    let episode_external_key = episode_external_id.unwrap_or_default();
+    let season_number_key = season_number.to_string();
+    let episode_number_key = episode_number.to_string();
+    let cache_key = metadata_response_cache_key(
+        &provider_id,
+        "episode",
+        &[
+            show_external_id,
+            &season_number_key,
+            &episode_number_key,
+            episode_external_key,
+            &locale_key,
+        ],
+    );
+    if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
+    let mut last_error = None;
+    for fetch_locale in locale_fallback_chain(&locale_key) {
+        let (localized_settings, provider_locale) =
+            localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
+
+        let registry = MetadataRegistry::new();
+        let result = match registry.provider(&provider_id) {
+            Some(provider) => {
+                provider
+                    .fetch_episode_snapshot(
+                        &localized_settings,
+                        show_external_id,
+                        season_number,
+                        episode_number,
+                        episode_external_id,
+                    )
+                    .await
+            }
+            None => Err(format!(
+                "{} episode metadata fetch is not implemented.",
+                provider_display_name(&provider_id)
+            )),
+        };
+
+        match result {
+            Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
+                snapshot.locale_key = locale_key;
+                snapshot.provider_locale_key = Some(provider_locale);
+                write_metadata_snapshot_cache(&cache_key, &snapshot);
+                return Ok(snapshot);
+            }
+            Ok(mut snapshot) => {
+                snapshot.locale_key = locale_key.clone();
+                snapshot.provider_locale_key = Some(provider_locale);
+                last_error =
+                    Some("metadata provider returned an empty localized episode snapshot".into());
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        format!(
+            "{} episode metadata fetch is not implemented.",
+            provider_display_name(&provider_id)
+        )
+    }))
 }
 
 /// Guess the best provider movie match for one library item.

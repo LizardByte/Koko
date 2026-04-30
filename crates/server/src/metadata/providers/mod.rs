@@ -38,6 +38,11 @@ pub trait MetadataProvider {
         normalize_locale_key(locale_key)
     }
 
+    /// Whether this provider returns locale-specific metadata that should be stored per locale.
+    fn uses_localized_metadata(&self) -> bool {
+        false
+    }
+
     /// Search this provider for metadata candidates.
     fn search<'a>(
         &'a self,
@@ -170,6 +175,10 @@ impl MetadataProvider for TmdbMetadataProvider {
         tmdb::descriptor()
     }
 
+    fn uses_localized_metadata(&self) -> bool {
+        true
+    }
+
     fn metadata_item_kind(
         &self,
         media_type: Option<&str>,
@@ -270,6 +279,10 @@ impl MetadataProvider for TmdbMetadataProvider {
 impl MetadataProvider for TvdbMetadataProvider {
     fn descriptor(&self) -> MetadataProviderDescriptor {
         tvdb::descriptor()
+    }
+
+    fn uses_localized_metadata(&self) -> bool {
+        true
     }
 
     fn metadata_item_kind(
@@ -462,6 +475,10 @@ impl MetadataProvider for ThemerrMetadataProvider {
 impl MetadataProvider for TrailerDbMetadataProvider {
     fn descriptor(&self) -> MetadataProviderDescriptor {
         trailerdb::descriptor()
+    }
+
+    fn uses_localized_metadata(&self) -> bool {
+        true
     }
 
     fn provider_locale_key(

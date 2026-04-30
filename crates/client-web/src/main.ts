@@ -2512,6 +2512,8 @@ function renderSearchPopover(): string {
 function renderHomeNavbar(): string {
   const library = activeLibrary();
   const libraryRefreshPending = library ? Boolean(libraryRefreshProgress(library)) : false;
+  const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+  const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
 
   return `
     <header class="home-navbar">
@@ -2519,7 +2521,14 @@ function renderHomeNavbar(): string {
       <div class="home-navbar-tools">
         <form id="search-form" class="search-form">
           <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" autocomplete="off" />
-          <button id="search-toggle" type="submit" class="icon-button search-toggle-button" title="Search" aria-label="Search">${renderIcon('search')}</button>
+          <button
+            id="search-toggle"
+            type="${hasSearch ? 'button' : 'submit'}"
+            class="icon-button search-toggle-button"
+            title="${searchToggleLabel}"
+            aria-label="${searchToggleLabel}"
+            ${hasSearch ? 'data-clear-search' : ''}
+          >${renderIcon(hasSearch ? 'x' : 'search')}</button>
         </form>
         ${library
           ? `
@@ -5780,6 +5789,12 @@ function bindEvents(): void {
       pendingLiveSearchHandle = undefined;
       void refreshData(false);
     }, 250);
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-clear-search]')?.addEventListener('click', () => {
+    clearHomeSearch();
+    render();
+    document.querySelector<HTMLInputElement>('#search-input')?.focus();
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata')?.addEventListener('click', async () => {

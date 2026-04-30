@@ -601,6 +601,18 @@ function schedulePendingMetadataRefresh(force = false): void {
   }, 1500);
 }
 
+function clearHomeSearch(): boolean {
+  const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+  if (pendingLiveSearchHandle !== undefined) {
+    window.clearTimeout(pendingLiveSearchHandle);
+    pendingLiveSearchHandle = undefined;
+  }
+  state.searchQuery = '';
+  state.searchResults = [];
+  state.showFullSearchResults = false;
+  return hadSearch;
+}
+
 function navigateTo(path: string, replace = false): void {
   const currentPath = `${window.location.pathname}${window.location.search}`;
   if (currentPath === path) {
@@ -5801,6 +5813,7 @@ function bindEvents(): void {
         state.browseFilter = undefined;
         state.homePreviewItemId = undefined;
         state.homePreviewCollectionId = undefined;
+        clearHomeSearch();
         const nextPath = homeBrowsePath();
         window.history.pushState({}, '', nextPath);
         state.route = parseRoute();
@@ -5808,7 +5821,11 @@ function bindEvents(): void {
         return;
       }
 
+      const clearedSearch = clearHomeSearch();
       if (state.homeTab === nextTab) {
+        if (clearedSearch) {
+          render();
+        }
         return;
       }
 

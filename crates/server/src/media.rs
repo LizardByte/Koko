@@ -3087,13 +3087,30 @@ fn sort_recommended(
     items: &[MediaItemSummary],
     continue_watching: &[MediaItemSummary],
 ) -> Vec<MediaItemSummary> {
-    let continue_ids: std::collections::HashSet<i32> =
-        continue_watching.iter().map(|item| item.id).collect();
+    let items_by_id = items
+        .iter()
+        .cloned()
+        .map(|item| (item.id, item))
+        .collect::<HashMap<_, _>>();
+    let continue_ids = recommended_excluded_item_ids(continue_watching, &items_by_id);
+    let mut seen_recommendations = HashSet::<i32>::new();
 
     let mut items = items
         .iter()
-        .filter(|item| !continue_ids.contains(&item.id))
-        .cloned()
+        .filter_map(|item| {
+            if continue_ids.contains(&item.id) {
+                return None;
+            }
+
+            let recommendation = recommended_representative_item(item, &items_by_id)?;
+            if continue_ids.contains(&recommendation.id)
+                || !seen_recommendations.insert(recommendation.id)
+            {
+                return None;
+            }
+
+            Some(recommendation)
+        })
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
         right
@@ -3103,6 +3120,38 @@ fn sort_recommended(
             .then_with(|| right.modified_at.cmp(&left.modified_at))
     });
     items.into_iter().take(12).collect()
+}
+
+fn recommended_excluded_item_ids(
+    continue_watching: &[MediaItemSummary],
+    items_by_id: &HashMap<i32, MediaItemSummary>,
+) -> HashSet<i32> {
+    continue_watching
+        .iter()
+        .flat_map(|item| {
+            let mut ids = vec![item.id];
+            if let Some(show_id) = root_show_item_id(item, items_by_id) {
+                ids.push(show_id);
+            }
+            ids
+        })
+        .collect()
+}
+
+fn recommended_representative_item(
+    item: &MediaItemSummary,
+    items_by_id: &HashMap<i32, MediaItemSummary>,
+) -> Option<MediaItemSummary> {
+    if matches!(item.item_type.as_str(), "season" | "episode") {
+        if let Some(show_id) = root_show_item_id(item, items_by_id) {
+            if let Some(show) = items_by_id.get(&show_id) {
+                return Some(show.clone());
+            }
+        }
+        return None;
+    }
+
+    Some(item.clone())
 }
 
 /// Return one browser-facing media item summary by its stable identifier.
@@ -5033,4 +5082,161 @@ fn movie_display_title_from_name(value: &str) -> String {
         .to_string();
 
     if cleaned.is_empty() { value.to_string() } else { cleaned }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(
+        id: i32,
+        parent_id: Option<i32>,
+        item_type: &str,
+        title: &str,
+        child_count: i32,
+        duration_ms: Option<i64>,
+        modified_at: Option<i64>,
+    ) -> MediaItemSummary {
+        MediaItemSummary {
+            id,
+            library_id: 1,
+            parent_id,
+            item_type: item_type.to_string(),
+            display_title: title.to_string(),
+            relative_path: title.to_string(),
+            media_kind: "video".to_string(),
+            playable: child_count == 0,
+            child_count,
+            season_number: None,
+            episode_number: None,
+            duration_ms,
+            width: None,
+            height: None,
+            genres: Vec::new(),
+            overview: None,
+            backdrop_url: None,
+            logo_url: None,
+            has_metadata: false,
+            metadata_refresh_state: None,
+            metadata_refresh_error: None,
+            artwork_updated_at: None,
+            modified_at,
+            playback_position_ms: None,
+            playback_duration_ms: None,
+            missing_since: None,
+        }
+    }
+
+    #[test]
+    fn recommended_collapses_show_children_to_single_show() {
+        let show = summary(
+            10,
+            None,
+            "show",
+            "Example Show",
+            1,
+            Some(7_200_000),
+            Some(10),
+        );
+        let season = summary(
+            11,
+            Some(10),
+            "season",
+            "Season 1",
+            1,
+            Some(7_200_000),
+            Some(20),
+        );
+        let episode = summary(
+            12,
+            Some(11),
+            "episode",
+            "Episode 1",
+            0,
+            Some(3_600_000),
+            Some(30),
+        );
+        let movie = summary(
+            20,
+            None,
+            "movie",
+            "Example Movie",
+            0,
+            Some(5_400_000),
+            Some(40),
+        );
+
+        let recommended = sort_recommended(&[season, episode, show, movie], &[]);
+
+        assert_eq!(
+            recommended
+                .iter()
+                .map(|item| item.item_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["show", "movie"]
+        );
+        assert_eq!(
+            recommended
+                .iter()
+                .map(|item| item.display_title.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Example Show",
+                "Example Movie"
+            ]
+        );
+    }
+
+    #[test]
+    fn recommended_excludes_show_when_child_is_continue_watching() {
+        let show = summary(
+            10,
+            None,
+            "show",
+            "Example Show",
+            1,
+            Some(7_200_000),
+            Some(10),
+        );
+        let season = summary(
+            11,
+            Some(10),
+            "season",
+            "Season 1",
+            1,
+            Some(7_200_000),
+            Some(20),
+        );
+        let episode = summary(
+            12,
+            Some(11),
+            "episode",
+            "Episode 1",
+            0,
+            Some(3_600_000),
+            Some(30),
+        );
+        let movie = summary(
+            20,
+            None,
+            "movie",
+            "Example Movie",
+            0,
+            Some(5_400_000),
+            Some(40),
+        );
+
+        let recommended = sort_recommended(
+            &[
+                show,
+                season,
+                episode.clone(),
+                movie,
+            ],
+            std::slice::from_ref(&episode),
+        );
+
+        assert_eq!(recommended.len(), 1);
+        assert_eq!(recommended[0].display_title, "Example Movie");
+    }
 }

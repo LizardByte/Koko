@@ -1011,6 +1011,39 @@ async fn register_metadata_refresh_activity(
     Some((activity_id, queued_targets))
 }
 
+async fn extend_metadata_refresh_activity(
+    activity_id: &str,
+    targets: Vec<MetadataRefreshTarget>,
+) -> Vec<MetadataRefreshTarget> {
+    let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    let mut seen_item_ids = HashSet::new();
+    let queued_targets = targets
+        .into_iter()
+        .filter(|target| seen_item_ids.insert(target.item_id))
+        .filter(|target| !item_registry.contains_key(&target.item_id))
+        .collect::<Vec<_>>();
+    if queued_targets.is_empty() {
+        return Vec::new();
+    }
+
+    for target in &queued_targets {
+        item_registry.insert(target.item_id, activity_id.to_string());
+    }
+    drop(item_registry);
+
+    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
+        record
+            .activity
+            .item_ids
+            .extend(queued_targets.iter().map(|target| target.item_id));
+        record.activity.total_items =
+            i32::try_from(record.activity.item_ids.len()).unwrap_or(i32::MAX);
+        record.activity.updated_at = current_timestamp();
+    }
+
+    queued_targets
+}
+
 async fn register_metadata_refresh_activity_for_items(
     scope: &str,
     source: &str,
@@ -1996,41 +2029,6 @@ async fn load_snapshot_descendant_refresh_targets(
     } else {
         Ok(Vec::new())
     }
-}
-
-async fn fetch_snapshots_for_all_user_languages(
-    db: &DbConn,
-    settings: &crate::config::Settings,
-    library_id: i32,
-    provider_id: MetadataProviderId,
-    external_id: &str,
-    media_type: &str,
-) -> Result<Vec<StoredMetadataSnapshot>, Status> {
-    let languages = load_item_library_metadata_languages(db, settings, library_id).await?;
-    let languages = metadata_locales_for_provider(provider_id.clone(), &languages);
-    let mut snapshots = Vec::new();
-    for language in languages {
-        snapshots.push(
-            fetch_provider_metadata_snapshot_for_locale(
-                &settings.metadata,
-                provider_id.clone(),
-                external_id,
-                media_type,
-                &language,
-            )
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to fetch {} metadata snapshot for locale {}: {}",
-                    provider_id.as_storage_value(),
-                    language,
-                    error
-                );
-                Status::ServiceUnavailable
-            })?,
-        );
-    }
-    Ok(snapshots)
 }
 
 async fn fetch_snapshots_for_item_metadata_languages(
@@ -3669,7 +3667,7 @@ pub async fn search_item_metadata(
     Ok(Json(results))
 }
 
-/// Link a media item to a provider match and persist the fetched metadata snapshot.
+/// Link a media item to a provider match and queue the fetched metadata snapshot.
 #[openapi(tag = "Media")]
 #[post(
     "/api/v1/items/<item_id>/metadata/link",
@@ -3716,19 +3714,87 @@ pub async fn link_item_metadata(
         return Err(Status::BadRequest);
     }
 
-    let snapshots = fetch_snapshots_for_all_user_languages(
-        &db,
-        &settings,
-        item.library_id,
-        request.provider_id,
-        &request.external_id,
-        &request.media_type,
+    let root_target = MetadataRefreshTarget {
+        item_id: item.id,
+        library_id: item.library_id,
+        provider_id: request.provider_id.clone(),
+        item_type: item.item_type.clone(),
+        display_title: item.display_title.clone(),
+        relative_path: item.relative_path.clone(),
+        external_id: request.external_id.clone(),
+        media_type: request.media_type.clone(),
+        fetch_kind: MetadataRefreshFetchKind::Direct,
+    };
+    let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
+        "item",
+        "manual_item_link",
+        format!("Link metadata for {}", item.display_title),
+        Some(item.library_id),
+        Some(item.id),
+        vec![root_target.clone()],
     )
-    .await?;
+    .await
+    else {
+        return Ok(Json(
+            load_metadata_summary_for_item(&db, item_id, request.provider_id.clone()).await?,
+        ));
+    };
 
-    let summary = persist_snapshot_tree_for_languages(&db, item_id, &snapshots, &settings).await?;
+    if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
+        cancel_metadata_refresh_activity(&activity_id).await;
+        return Err(status);
+    }
 
-    Ok(Json(summary))
+    let pending_summary =
+        load_metadata_summary_for_item(&db, item_id, request.provider_id.clone()).await?;
+    tokio::spawn(async move {
+        mark_metadata_refresh_activity_running(&activity_id).await;
+
+        let mut targets = queued_targets;
+        match build_metadata_refresh_job(
+            &db,
+            &settings,
+            &item,
+            root_target.provider_id.clone(),
+            &root_target.external_id,
+            &root_target.media_type,
+        )
+        .await
+        {
+            Ok(refresh_job) => {
+                let expanded_targets = flatten_metadata_refresh_job(&refresh_job);
+                let additional_targets =
+                    extend_metadata_refresh_activity(&activity_id, expanded_targets).await;
+                if !additional_targets.is_empty() {
+                    if let Err(status) =
+                        mark_metadata_refresh_targets_pending(&db, &additional_targets).await
+                    {
+                        log::warn!(
+                            "Failed to mark manual metadata link descendants pending for item {}: {:?}",
+                            item_id,
+                            status
+                        );
+                    }
+                    targets.extend(additional_targets);
+                }
+            }
+            Err(status) => {
+                log::warn!(
+                    "Failed to expand manual metadata link refresh targets for item {}: {:?}",
+                    item_id,
+                    status
+                );
+            }
+        }
+
+        for target in targets {
+            let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
+            record_metadata_refresh_activity_progress(&activity_id, failed).await;
+        }
+        complete_metadata_refresh_activity(&activity_id).await;
+    });
+
+    Ok(Json(pending_summary))
 }
 
 /// Force-refresh the currently linked metadata snapshot for one media item.

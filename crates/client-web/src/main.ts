@@ -1047,12 +1047,17 @@ function activeLibrarySettings(): MediaLibrarySettings | undefined {
     return undefined;
   }
 
-  return state.settingsResponse.settings.media.libraries.find((settings) => {
+  const settingsWithPaths = state.settingsResponse.settings.media.libraries.map((settings) => {
     const paths = [settings.path, ...settings.paths].map((path) => path.trim()).filter(Boolean);
-    return settings.name === library.name
-      || paths.includes(library.path)
+    return { settings, paths };
+  });
+  const pathMatch = settingsWithPaths.find(({ paths }) => {
+    return paths.includes(library.path)
       || library.paths.some((path) => paths.includes(path));
   });
+
+  return pathMatch?.settings
+    ?? settingsWithPaths.find(({ settings }) => settings.name === library.name)?.settings;
 }
 
 function persistedLibraryForSettings(library: MediaLibrarySettings): MediaLibrary | undefined {
@@ -2374,7 +2379,8 @@ function parseMetadataLanguageInput(value: FormDataEntryValue | null): string[] 
 
 function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
-  const libraryKind = itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined;
+  const libraryKind = activeLibrary()?.kind
+    ?? (itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined);
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .filter((provider) => provider.role !== 'secondary')
     .filter((provider) => provider.configured && provider.implemented)
@@ -2383,12 +2389,12 @@ function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
 
 function defaultMetadataSearchProviderIds(): string[] {
   const providers = selectedItemMetadataProviderOptions();
-  const librarySettings = activeLibrarySettings();
-  const libraryProviderIds = librarySettings?.metadata_providers ?? [];
-  const selectedLibraryProviders = providers
-    .filter((provider) => libraryProviderIds.includes(provider.id))
-    .map((provider) => provider.id);
-  return librarySettings ? selectedLibraryProviders : providers.map((provider) => provider.id);
+  const providerIds = new Set(providers.map((provider) => provider.id));
+  const libraryProviderIds = activeLibrary()?.metadata_providers
+    ?? activeLibrarySettings()?.metadata_providers;
+  const selectedLibraryProviders = (libraryProviderIds ?? [])
+    .filter((providerId) => providerIds.has(providerId));
+  return libraryProviderIds ? selectedLibraryProviders : providers.map((provider) => provider.id);
 }
 
 function selectedItemDefaultMetadataTitle(): string {
@@ -2403,9 +2409,12 @@ function selectedItemDefaultMetadataYear(): string {
 }
 
 function defaultMetadataSearchLanguage(): string {
+  const library = activeLibrary();
   const librarySettings = activeLibrarySettings();
-  if (librarySettings?.metadata_language_mode === 'manual') {
-    return normalizedMetadataLanguages(librarySettings.metadata_languages)[0] ?? 'en-US';
+  const metadataLanguageMode = library?.metadata_language_mode ?? librarySettings?.metadata_language_mode;
+  const metadataLanguages = library?.metadata_languages ?? librarySettings?.metadata_languages;
+  if (metadataLanguageMode === 'manual') {
+    return normalizedMetadataLanguages(metadataLanguages)[0] ?? 'en-US';
   }
   return state.bootstrap?.current_user?.preferred_metadata_languages?.[0]
     ?? state.metadataProviders.find((provider) => provider.configured)?.language

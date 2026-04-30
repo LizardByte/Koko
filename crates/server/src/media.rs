@@ -137,6 +137,12 @@ pub struct PersistedLibrarySummary {
     pub recursive: bool,
     /// Intended media category for the library.
     pub kind: MediaLibraryKind,
+    /// Ordered metadata providers configured for this library.
+    pub metadata_providers: Vec<MetadataProviderId>,
+    /// Whether metadata languages are inferred from users or set manually.
+    pub metadata_language_mode: MediaLibraryMetadataLanguageMode,
+    /// Ordered metadata languages configured for this library.
+    pub metadata_languages: Vec<String>,
     /// Scan status for this library.
     pub status: LibraryScanStatus,
     /// Monotonically increasing scan revision.
@@ -991,6 +997,9 @@ pub fn get_persisted_library_summaries(
                 paths: settings.paths,
                 recursive: settings.recursive,
                 kind: settings.kind,
+                metadata_providers: settings.metadata_providers,
+                metadata_language_mode: settings.metadata_language_mode,
+                metadata_languages: settings.metadata_languages,
                 status: state
                     .map(|state| LibraryScanStatus::from_storage_value(&state.last_status))
                     .unwrap_or(LibraryScanStatus::NeverScanned),
@@ -1259,6 +1268,9 @@ pub fn sync_library_catalog(
             paths: inspection.summary.paths,
             recursive: inspection.summary.recursive,
             kind: inspection.summary.kind,
+            metadata_providers: library.metadata_providers.clone(),
+            metadata_language_mode: library.metadata_language_mode.clone(),
+            metadata_languages: library.metadata_languages.clone(),
             status: inspection.summary.status,
             scan_revision: next_scan_revision,
             last_scanned_at,

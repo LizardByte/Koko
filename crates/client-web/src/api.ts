@@ -698,8 +698,7 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
       }
       case '/api/v1/search': {
         const query = url.searchParams.get('query') ?? '';
-        const libraryId = url.searchParams.get('library_id');
-        return searchMockItems(query, libraryId ? Number(libraryId) : undefined) as T;
+        return searchMockItems(query) as T;
       }
       default: {
         const itemMetadataSearchMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/search$/);
@@ -939,11 +938,8 @@ export function getItems(libraryId?: number): Promise<MediaItemSummary[]> {
   return requestJson<MediaItemSummary[]>('GET', `/api/v1/items${query}`);
 }
 
-export function searchItems(query: string, libraryId?: number): Promise<MediaItemSummary[]> {
+export function searchItems(query: string): Promise<MediaItemSummary[]> {
   const params = new URLSearchParams({ query });
-  if (typeof libraryId === 'number') {
-    params.set('library_id', String(libraryId));
-  }
 
   return requestJson<MediaItemSummary[]>('GET', `/api/v1/search?${params.toString()}`);
 }

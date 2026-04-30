@@ -1000,13 +1000,13 @@ export function getMockItems(libraryId?: number): MediaItemSummary[] {
     .map(({ file_size: _fileSize, container: _container, bit_rate: _bitRate, video_codec: _videoCodec, audio_codec: _audioCodec, metadata_json: _metadataJson, metadata_updated_at: _metadataUpdatedAt, ...summary }) => applyMockPlaybackProgress(summary));
 }
 
-export function searchMockItems(query: string, libraryId?: number): MediaItemSummary[] {
+export function searchMockItems(query: string): MediaItemSummary[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return [];
   }
 
-  return getMockItems(libraryId).filter((item) => {
+  return getMockItems().filter((item) => {
     return item.display_title.toLowerCase().includes(normalizedQuery)
       || item.relative_path.toLowerCase().includes(normalizedQuery)
       || item.media_kind.toLowerCase().includes(normalizedQuery);

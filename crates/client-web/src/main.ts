@@ -1550,7 +1550,7 @@ async function loadLibraryItemsForCurrentRoute(): Promise<void> {
   try {
     const [libraryItems, searchResults] = await Promise.all([
       getItems(libraryId),
-      searchQuery ? searchItems(searchQuery, libraryId) : Promise.resolve([]),
+      searchQuery ? searchItems(searchQuery) : Promise.resolve([]),
     ]);
     const nextRoute = parseRoute();
     if (
@@ -4377,7 +4377,7 @@ async function refreshPendingLibraryData(): Promise<void> {
       getHome(libraryId),
       getItems(libraryId),
       searchQuery
-        ? searchItems(searchQuery, libraryId)
+        ? searchItems(searchQuery)
         : Promise.resolve([]),
     ]);
     if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
@@ -4474,7 +4474,7 @@ async function refreshPendingMetadataData(): Promise<void> {
         getHome(libraryId),
         getItems(libraryId),
         searchQuery
-          ? searchItems(searchQuery, libraryId)
+          ? searchItems(searchQuery)
           : Promise.resolve([]),
       ]);
       if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {

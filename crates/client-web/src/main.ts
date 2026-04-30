@@ -1888,6 +1888,11 @@ function homeFeaturePreview(): HomeFeaturePreview | undefined {
     return collection ? { kind: 'collection', collection } : undefined;
   }
 
+  if (state.route.page === 'home' && state.searchQuery.trim() && state.searchResults.length) {
+    const item = homePreviewItem();
+    return item ? { kind: 'item', item } : undefined;
+  }
+
   if (state.route.page === 'home' && state.homeTab === 'collections') {
     const collections = collectionSummaries();
     const collection = collections.find((entry) => entry.id === state.homePreviewCollectionId) ?? collections[0];
@@ -1910,6 +1915,10 @@ function homePreviewItem(): MediaItemSummary | undefined {
 function homePreviewCandidates(): MediaItemSummary[] {
   if (state.route.page === 'browse-detail') {
     return browseItemsForRoute();
+  }
+
+  if (state.route.page === 'home' && state.searchQuery.trim() && state.searchResults.length) {
+    return state.searchResults;
   }
 
   switch (state.homeTab) {

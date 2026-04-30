@@ -71,13 +71,17 @@ pub(crate) async fn search(
 ) -> Result<Vec<MetadataSearchResult>, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
+    let mut query_params = vec![
+        ("query", query.to_string()),
+        ("limit", "20".to_string()),
+    ];
+    if let Some(media_type) = media_type.map(normalize_tvdb_search_media_type) {
+        query_params.push(("type", media_type));
+    }
     let payload = get_json(
         &provider,
         "search",
-        vec![
-            ("query", query.to_string()),
-            ("limit", "20".to_string()),
-        ],
+        query_params,
         &format!("search query {:?}", query),
     )
     .await?;
@@ -90,7 +94,7 @@ pub(crate) async fn search(
     let expected_media_type = media_type.map(normalize_tvdb_search_media_type);
     Ok(results
         .into_iter()
-        .filter_map(search_result_from_value)
+        .filter_map(|result| search_result_from_value(result, &provider.language))
         .filter(|result| {
             expected_media_type
                 .as_deref()
@@ -699,7 +703,10 @@ async fn fetch_translation_payload(
     }
 }
 
-fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
+fn search_result_from_value(
+    item: Value,
+    provider_language: &str,
+) -> Option<MetadataSearchResult> {
     let item_type = item
         .get("type")
         .and_then(Value::as_str)
@@ -711,13 +718,13 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
     };
 
     let external_id = object_id(&item)?.to_string();
-    let title = best_title(&item, "eng")?;
+    let title = best_title(&item, provider_language)?;
     Some(MetadataSearchResult {
         provider_id: MetadataProviderId::Tvdb,
         external_id,
         media_type: media_type.into(),
         title,
-        overview: best_overview(&item, "eng"),
+        overview: best_overview(&item, provider_language),
         artwork_url: artwork_url(&item),
         backdrop_url: backdrop_url(&item),
         release_year: release_year(&item),
@@ -1559,23 +1566,40 @@ fn best_overview(
         .or_else(|| {
             value
                 .get("translations")
-                .and_then(|translations| translation_record(translations, &preferred))
+                .and_then(|translations| translation_record_for_languages(translations, &preferred))
                 .and_then(|translation| text_field(translation, &["overview", "description"]))
         })
+        .or_else(|| translated_overview_for_languages(value.get("overviews"), &preferred))
         .or_else(|| {
-            text_field(
-                value,
-                &[
-                    "overview",
-                    "description",
-                    "shortDescription",
-                    "longDescription",
-                ],
-            )
+            translated_overview_for_languages(value.get("overviewTranslations"), &preferred)
         })
-        .or_else(|| translated_overview(value.get("overviews"), &preferred))
-        .or_else(|| translated_overview(value.get("overviewTranslations"), &preferred))
-        .or_else(|| translated_overview(value.get("translations"), &preferred))
+        .or_else(|| translated_overview_for_languages(value.get("translations"), &preferred))
+        .or_else(|| {
+            (!has_overview_translation_metadata(value))
+                .then(|| {
+                    text_field(
+                        value,
+                        &[
+                            "overview",
+                            "description",
+                            "shortDescription",
+                            "longDescription",
+                        ],
+                    )
+                })
+                .flatten()
+        })
+}
+
+fn has_overview_translation_metadata(value: &Value) -> bool {
+    [
+        "koko_translation",
+        "translations",
+        "overviews",
+        "overviewTranslations",
+    ]
+    .iter()
+    .any(|key| value.get(*key).is_some())
 }
 
 fn translation_record<'a>(
@@ -1607,6 +1631,29 @@ fn translation_record<'a>(
     })
 }
 
+fn translation_record_for_languages<'a>(
+    value: &'a Value,
+    preferred_keys: &[String],
+) -> Option<&'a Value> {
+    if let Some(map) = value.as_object() {
+        return preferred_keys.iter().find_map(|key| map.get(key));
+    }
+
+    value.as_array().and_then(|translations| {
+        preferred_keys.iter().find_map(|key| {
+            translations.iter().find(|translation| {
+                translation
+                    .get("language")
+                    .or_else(|| translation.get("languageCode"))
+                    .or_else(|| translation.get("iso_639_1"))
+                    .and_then(Value::as_str)
+                    .map(|language| language.eq_ignore_ascii_case(key))
+                    .unwrap_or(false)
+            })
+        })
+    })
+}
+
 fn text_field(
     value: &Value,
     keys: &[&str],
@@ -1621,54 +1668,11 @@ fn text_field(
     })
 }
 
-fn translated_overview(
+fn translated_overview_for_languages(
     value: Option<&Value>,
     preferred_keys: &[String],
 ) -> Option<String> {
-    translated_text(value, preferred_keys, &["overview", "description"])
-}
-
-fn translated_text(
-    value: Option<&Value>,
-    preferred_keys: &[String],
-    text_keys: &[&str],
-) -> Option<String> {
-    let value = value?;
-    if let Some(map) = value.as_object() {
-        return preferred_keys
-            .iter()
-            .find_map(|key| {
-                map.get(key)
-                    .and_then(|value| translation_text_value(value, text_keys))
-            })
-            .or_else(|| {
-                map.values()
-                    .find_map(|value| translation_text_value(value, text_keys))
-            });
-    }
-
-    value.as_array().and_then(|translations| {
-        preferred_keys
-            .iter()
-            .find_map(|key| {
-                translations.iter().find_map(|translation| {
-                    let language = translation
-                        .get("language")
-                        .or_else(|| translation.get("languageCode"))
-                        .or_else(|| translation.get("iso_639_1"))
-                        .and_then(Value::as_str)?;
-                    language
-                        .eq_ignore_ascii_case(key.as_str())
-                        .then(|| translation_text_value(translation, text_keys))
-                        .flatten()
-                })
-            })
-            .or_else(|| {
-                translations
-                    .iter()
-                    .find_map(|translation| translation_text_value(translation, text_keys))
-            })
-    })
+    translated_text_for_languages(value, preferred_keys, &["overview", "description"])
 }
 
 fn translated_text_for_languages(
@@ -1891,18 +1895,21 @@ mod tests {
 
     #[test]
     fn tvdb_search_result_accepts_object_id_and_translations() {
-        let result = search_result_from_value(json!({
-            "type": "movie",
-            "objectID": "901",
-            "translations": {
-                "eng": "Top Gun: Maverick"
-            },
-            "overviews": {
-                "eng": "After more than thirty years of service..."
-            },
-            "year": "2022",
-            "image_url": "https://example.test/poster.jpg"
-        }))
+        let result = search_result_from_value(
+            json!({
+                "type": "movie",
+                "objectID": "901",
+                "translations": {
+                    "eng": "Top Gun: Maverick"
+                },
+                "overviews": {
+                    "eng": "After more than thirty years of service..."
+                },
+                "year": "2022",
+                "image_url": "https://example.test/poster.jpg"
+            }),
+            "eng",
+        )
         .expect("expected TVDB search result to parse");
 
         assert_eq!(result.external_id, "901");
@@ -1916,12 +1923,57 @@ mod tests {
     }
 
     #[test]
+    fn tvdb_search_result_uses_requested_language_for_overview() {
+        let result = search_result_from_value(
+            json!({
+                "type": "movie",
+                "objectID": "711",
+                "name": "T-34",
+                "overview": "Russian source overview.",
+                "overviews": {
+                    "eng": "English translated overview.",
+                    "rus": "Russian translated overview."
+                },
+                "year": "2018"
+            }),
+            "eng",
+        )
+        .expect("expected TVDB search result to parse");
+
+        assert_eq!(
+            result.overview.as_deref(),
+            Some("English translated overview.")
+        );
+    }
+
+    #[test]
+    fn tvdb_search_result_does_not_fall_back_to_unrequested_overview_language() {
+        let result = search_result_from_value(
+            json!({
+                "type": "movie",
+                "objectID": "711",
+                "name": "T-34",
+                "overview": "Russian source overview.",
+                "overviewTranslations": ["rus"],
+                "year": "2018"
+            }),
+            "eng",
+        )
+        .expect("expected TVDB search result to parse");
+
+        assert_eq!(result.overview, None);
+    }
+
+    #[test]
     fn tvdb_search_result_accepts_show_alias_type() {
-        let result = search_result_from_value(json!({
-            "type": "show",
-            "tvdb_id": "42",
-            "name": "Example Show"
-        }))
+        let result = search_result_from_value(
+            json!({
+                "type": "show",
+                "tvdb_id": "42",
+                "name": "Example Show"
+            }),
+            "eng",
+        )
         .expect("expected TVDB show search result to parse");
 
         assert_eq!(result.external_id, "42");

@@ -1396,6 +1396,14 @@ pub fn upsert_item_metadata_link(
         } else {
             diesel::insert_into(metadata_links_dsl::item_metadata_links)
                 .values(&payload)
+                .on_conflict((
+                    metadata_links_dsl::media_item_id,
+                    metadata_links_dsl::provider_id,
+                    metadata_links_dsl::relation_kind,
+                    metadata_links_dsl::locale_key,
+                ))
+                .do_update()
+                .set(&payload)
                 .execute(conn)?;
         }
 
@@ -1528,6 +1536,14 @@ pub fn set_item_metadata_refresh_state(
         } else {
             diesel::insert_into(metadata_links_dsl::item_metadata_links)
                 .values(&payload)
+                .on_conflict((
+                    metadata_links_dsl::media_item_id,
+                    metadata_links_dsl::provider_id,
+                    metadata_links_dsl::relation_kind,
+                    metadata_links_dsl::locale_key,
+                ))
+                .do_update()
+                .set(&payload)
                 .execute(conn)?;
         }
 
@@ -2865,6 +2881,15 @@ fn sync_item_metadata_collections(
         };
         diesel::insert_into(collection_items_dsl::metadata_collection_items)
             .values(&row)
+            .on_conflict((
+                collection_items_dsl::collection_id,
+                collection_items_dsl::media_item_id,
+            ))
+            .do_update()
+            .set((
+                collection_items_dsl::metadata_link_id.eq(metadata_link_id),
+                collection_items_dsl::updated_at.eq(Some(now)),
+            ))
             .execute(conn)?;
     }
 
@@ -2938,6 +2963,14 @@ fn upsert_metadata_collection(
     } else {
         diesel::insert_into(collections_dsl::metadata_collections)
             .values(&payload)
+            .on_conflict((
+                collections_dsl::provider_id,
+                collections_dsl::external_id,
+                collections_dsl::relation_kind,
+                collections_dsl::locale_key,
+            ))
+            .do_update()
+            .set(&payload)
             .execute(conn)?;
         collections_dsl::metadata_collections
             .filter(collections_dsl::provider_id.eq(provider_id))
@@ -2989,9 +3022,17 @@ fn sync_item_metadata_external_ids(
         });
     }
 
-    if !rows.is_empty() {
+    for row in rows {
         diesel::insert_into(external_ids_dsl::item_metadata_external_ids)
-            .values(&rows)
+            .values(&row)
+            .on_conflict((external_ids_dsl::metadata_link_id, external_ids_dsl::source))
+            .do_update()
+            .set((
+                external_ids_dsl::external_id
+                    .eq(diesel::upsert::excluded(external_ids_dsl::external_id)),
+                external_ids_dsl::updated_at
+                    .eq(diesel::upsert::excluded(external_ids_dsl::updated_at)),
+            ))
             .execute(conn)?;
     }
 
@@ -3084,6 +3125,13 @@ fn sync_item_metadata_people(
         } else {
             diesel::insert_into(normalized_people_dsl::metadata_people)
                 .values(&payload)
+                .on_conflict((
+                    normalized_people_dsl::provider_id,
+                    normalized_people_dsl::identity_key,
+                    normalized_people_dsl::locale_key,
+                ))
+                .do_update()
+                .set(&payload)
                 .execute(conn)?;
             normalized_people_dsl::metadata_people
                 .filter(normalized_people_dsl::provider_id.eq(&provider_id))
@@ -3102,6 +3150,17 @@ fn sync_item_metadata_people(
                 character_name: person.character_name,
                 sort_order: person.sort_order,
             })
+            .on_conflict((
+                credit_dsl::metadata_link_id,
+                credit_dsl::person_id,
+                credit_dsl::role,
+                credit_dsl::character_name,
+            ))
+            .do_update()
+            .set((
+                credit_dsl::department.eq(diesel::upsert::excluded(credit_dsl::department)),
+                credit_dsl::sort_order.eq(diesel::upsert::excluded(credit_dsl::sort_order)),
+            ))
             .execute(conn)?;
     }
 

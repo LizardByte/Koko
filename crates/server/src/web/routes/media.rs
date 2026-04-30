@@ -1,7 +1,7 @@
 //! Media and system discovery routes.
 
 // lib imports
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -407,6 +407,10 @@ static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_METADATA_REFRESH_ITEMS: Lazy<tokio::sync::RwLock<HashMap<i32, String>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
+static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
@@ -898,6 +902,34 @@ fn flatten_metadata_refresh_job(job: &MetadataRefreshJob) -> Vec<MetadataRefresh
     targets
 }
 
+async fn begin_metadata_refresh_execution(item_id: i32) -> bool {
+    ACTIVE_METADATA_REFRESH_EXECUTIONS
+        .write()
+        .await
+        .insert(item_id)
+}
+
+async fn finish_metadata_refresh_execution(item_id: i32) {
+    ACTIVE_METADATA_REFRESH_EXECUTIONS
+        .write()
+        .await
+        .remove(&item_id);
+}
+
+async fn begin_library_metadata_refresh(library_id: i32) -> bool {
+    ACTIVE_LIBRARY_METADATA_REFRESHES
+        .write()
+        .await
+        .insert(library_id)
+}
+
+async fn finish_library_metadata_refresh(library_id: i32) {
+    ACTIVE_LIBRARY_METADATA_REFRESHES
+        .write()
+        .await
+        .remove(&library_id);
+}
+
 async fn register_metadata_refresh_activity(
     scope: &str,
     source: &str,
@@ -907,8 +939,10 @@ async fn register_metadata_refresh_activity(
     targets: Vec<MetadataRefreshTarget>,
 ) -> Option<(String, Vec<MetadataRefreshTarget>)> {
     let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    let mut seen_item_ids = HashSet::new();
     let queued_targets = targets
         .into_iter()
+        .filter(|target| seen_item_ids.insert(target.item_id))
         .filter(|target| !item_registry.contains_key(&target.item_id))
         .collect::<Vec<_>>();
     if queued_targets.is_empty() {
@@ -961,8 +995,10 @@ async fn register_metadata_refresh_activity_for_items(
     item_ids: Vec<i32>,
 ) -> Option<(String, Vec<i32>)> {
     let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    let mut seen_item_ids = HashSet::new();
     let queued_item_ids = item_ids
         .into_iter()
+        .filter(|item_id| seen_item_ids.insert(*item_id))
         .filter(|item_id| !item_registry.contains_key(item_id))
         .collect::<Vec<_>>();
     if queued_item_ids.is_empty() {
@@ -1392,6 +1428,25 @@ async fn record_metadata_refresh_error(
 }
 
 async fn execute_metadata_refresh_target(
+    db: &DbConn,
+    target: &MetadataRefreshTarget,
+    settings: &crate::config::Settings,
+) -> bool {
+    if !begin_metadata_refresh_execution(target.item_id).await {
+        log::info!(
+            "Skipping duplicate {} metadata refresh for {}; another refresh for this item is already running",
+            target.provider_id.as_storage_value(),
+            describe_metadata_refresh_target(target)
+        );
+        return false;
+    }
+
+    let failed = execute_metadata_refresh_target_inner(db, target, settings).await;
+    finish_metadata_refresh_execution(target.item_id).await;
+    failed
+}
+
+async fn execute_metadata_refresh_target_inner(
     db: &DbConn,
     target: &MetadataRefreshTarget,
     settings: &crate::config::Settings,
@@ -3662,6 +3717,82 @@ pub async fn refresh_item_metadata(
     Ok(Json(pending_summary))
 }
 
+async fn run_manual_library_metadata_refresh(
+    db: DbConn,
+    settings: Settings,
+    library_id: i32,
+    library_name: String,
+) {
+    let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
+    let refresh_jobs = match load_library_refresh_jobs(&db, &settings, library_id).await {
+        Ok(refresh_jobs) => refresh_jobs,
+        Err(status) => {
+            log::warn!(
+                "Failed to prepare library {} metadata refresh jobs: {:?}",
+                library_id,
+                status
+            );
+            if let Some((automatch_activity_id, _)) = &automatch_activity {
+                cancel_metadata_refresh_activity(automatch_activity_id).await;
+            }
+            return;
+        }
+    };
+    let refresh_targets = refresh_jobs
+        .iter()
+        .flat_map(flatten_metadata_refresh_job)
+        .collect::<Vec<_>>();
+
+    let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
+        "library",
+        "manual_library_refresh",
+        format!("Refresh library metadata for {}", library_name),
+        Some(library_id),
+        None,
+        refresh_targets,
+    )
+    .await
+    else {
+        run_automatic_movie_metadata_linking(
+            &db,
+            &settings,
+            Some(library_id),
+            true,
+            automatch_activity,
+        )
+        .await;
+        return;
+    };
+
+    if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
+        cancel_metadata_refresh_activity(&activity_id).await;
+        if let Some((automatch_activity_id, _)) = &automatch_activity {
+            cancel_metadata_refresh_activity(automatch_activity_id).await;
+        }
+        log::warn!(
+            "Failed to mark library {} metadata refresh targets pending: {:?}",
+            library_id,
+            status
+        );
+        return;
+    }
+
+    mark_metadata_refresh_activity_running(&activity_id).await;
+    for target in queued_targets {
+        let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
+        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+    }
+    complete_metadata_refresh_activity(&activity_id).await;
+    run_automatic_movie_metadata_linking(
+        &db,
+        &settings,
+        Some(library_id),
+        true,
+        automatch_activity,
+    )
+    .await;
+}
+
 /// Force-refresh every linked metadata item within one library.
 #[openapi(tag = "Media")]
 #[post("/api/v1/libraries/<library_id>/metadata/refresh")]
@@ -3672,75 +3803,17 @@ pub async fn refresh_library_metadata(
     let settings = current_settings();
     let library_summary = load_library_summary(&db, &settings, library_id).await?;
     let library_name = library_summary.name.clone();
+    if !begin_library_metadata_refresh(library_id).await {
+        log::info!(
+            "Skipping duplicate library {} metadata refresh request; a refresh is already running",
+            library_id
+        );
+        return Ok(Json(library_summary));
+    }
+
     tokio::spawn(async move {
-        let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
-        let refresh_jobs = match load_library_refresh_jobs(&db, &settings, library_id).await {
-            Ok(refresh_jobs) => refresh_jobs,
-            Err(status) => {
-                log::warn!(
-                    "Failed to prepare library {} metadata refresh jobs: {:?}",
-                    library_id,
-                    status
-                );
-                if let Some((automatch_activity_id, _)) = &automatch_activity {
-                    cancel_metadata_refresh_activity(automatch_activity_id).await;
-                }
-                return;
-            }
-        };
-        let refresh_targets = refresh_jobs
-            .iter()
-            .flat_map(flatten_metadata_refresh_job)
-            .collect::<Vec<_>>();
-
-        let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
-            "library",
-            "manual_library_refresh",
-            format!("Refresh library metadata for {}", library_name),
-            Some(library_id),
-            None,
-            refresh_targets,
-        )
-        .await
-        else {
-            run_automatic_movie_metadata_linking(
-                &db,
-                &settings,
-                Some(library_id),
-                true,
-                automatch_activity,
-            )
-            .await;
-            return;
-        };
-
-        if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
-            cancel_metadata_refresh_activity(&activity_id).await;
-            if let Some((automatch_activity_id, _)) = &automatch_activity {
-                cancel_metadata_refresh_activity(automatch_activity_id).await;
-            }
-            log::warn!(
-                "Failed to mark library {} metadata refresh targets pending: {:?}",
-                library_id,
-                status
-            );
-            return;
-        }
-
-        mark_metadata_refresh_activity_running(&activity_id).await;
-        for target in queued_targets {
-            let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
-            record_metadata_refresh_activity_progress(&activity_id, failed).await;
-        }
-        complete_metadata_refresh_activity(&activity_id).await;
-        run_automatic_movie_metadata_linking(
-            &db,
-            &settings,
-            Some(library_id),
-            true,
-            automatch_activity,
-        )
-        .await;
+        run_manual_library_metadata_refresh(db, settings, library_id, library_name).await;
+        finish_library_metadata_refresh(library_id).await;
     });
 
     Ok(Json(library_summary))

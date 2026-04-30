@@ -5743,14 +5743,14 @@ function bindEvents(): void {
   document.querySelector<HTMLFormElement>('#search-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const input = document.querySelector<HTMLInputElement>('#search-input');
-    state.searchQuery = input?.value.trim() ?? '';
-    state.showFullSearchResults = Boolean(state.searchQuery);
+    state.searchQuery = input?.value ?? '';
+    state.showFullSearchResults = Boolean(state.searchQuery.trim());
     void refreshData();
   });
 
   document.querySelector<HTMLInputElement>('#search-input')?.addEventListener('input', (event) => {
     const input = event.currentTarget as HTMLInputElement;
-    state.searchQuery = input.value.trim();
+    state.searchQuery = input.value;
     state.showFullSearchResults = false;
     if (pendingLiveSearchHandle !== undefined) {
       window.clearTimeout(pendingLiveSearchHandle);

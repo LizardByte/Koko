@@ -987,9 +987,9 @@ export function getMockHome(libraryId?: number): MediaHome {
   return {
     library_id: libraryId,
     shelves: [
-      { id: 'continue_watching', title: 'Continue watching', items: continueWatching.slice(0, 12) },
-      { id: 'recently_added', title: 'Recently added', items: recentlyAdded.slice(0, 12) },
-      { id: 'recommended', title: 'Recommended', items: recommended.slice(0, 12) },
+      { id: 'continue_watching', title: 'Continue watching', items: continueWatching },
+      { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
+      { id: 'recommended', title: 'Recommended', items: recommended },
     ],
     collections: collections.filter((collection) => collection.item_ids.some((itemId) => filteredItems.some((item) => item.id === itemId))),
   };

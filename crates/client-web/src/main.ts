@@ -49,6 +49,7 @@ import {
   type ItemMetadataResponse,
   type LoginRequest,
   type MediaHome,
+  type MediaShelf,
   type MediaItemDetail,
   type MediaItemSummary,
   type MediaLibrary,
@@ -290,6 +291,7 @@ if (!app) {
 }
 const appRoot = app;
 const YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID = 'dQw4w9WgXcQ';
+const HOME_SHELF_CHUNK_SIZE = 12;
 const YOUTUBE_PLAYER_STATE = {
   ended: 0,
   playing: 1,
@@ -2141,6 +2143,10 @@ function renderSearchResults(): string {
   `;
 }
 
+function visibleShelfItems(shelf: MediaShelf): MediaItemSummary[] {
+  return shelf.items.slice(0, HOME_SHELF_CHUNK_SIZE);
+}
+
 function renderShelfStack(): string {
   const shelves = (state.home?.shelves ?? []).filter((shelf) => shelf.items.length);
   if (!shelves.length) {
@@ -2156,7 +2162,12 @@ function renderShelfStack(): string {
         </div>
         <div class="shelf-row-shell">
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
-              <div class="shelf-row" data-shelf-row="${escapeHtml(shelf.id)}">${shelf.items.map(renderItemCard).join('')}</div>
+              <div
+                class="shelf-row"
+                data-shelf-row="${escapeHtml(shelf.id)}"
+                data-lazy-shelf-id="${escapeHtml(shelf.id)}"
+                data-lazy-rendered-count="${Math.min(HOME_SHELF_CHUNK_SIZE, shelf.items.length)}"
+              >${visibleShelfItems(shelf).map(renderItemCard).join('')}</div>
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
             </div>
       </section>
@@ -5723,6 +5734,154 @@ function bindPlayerProgress(): void {
   });
 }
 
+function updatePageBackdrop(backdropUrl: string | undefined): void {
+  const appShell = document.querySelector<HTMLElement>('.app-shell');
+  const pageBackdrop = document.querySelector<HTMLElement>('.page-backdrop');
+  if (backdropUrl) {
+    appShell?.classList.add('has-page-backdrop');
+    if (pageBackdrop) {
+      pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
+    } else {
+      appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
+    }
+  } else {
+    appShell?.classList.remove('has-page-backdrop');
+    pageBackdrop?.remove();
+  }
+}
+
+function bindHomeFeatureAction(): void {
+  document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.addEventListener('click', () => {
+    const nextItemId = Number(document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.dataset.itemId);
+    if (Number.isFinite(nextItemId)) {
+      navigateTo(`/items/${nextItemId}`);
+    }
+  });
+
+  document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.addEventListener('click', () => {
+    const collectionId = document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.dataset.collectionFilter;
+    if (collectionId) {
+      navigateTo(browseDetailPath('collection', collectionId));
+    }
+  });
+}
+
+function refreshHomeFeatureElement(backdropUrl: string | undefined): void {
+  const root = document.querySelector<HTMLElement>('.home-feature');
+  if (root) {
+    root.outerHTML = renderHomeFeature();
+    createIcons({ icons });
+    bindHomeFeatureAction();
+  }
+  updatePageBackdrop(backdropUrl);
+}
+
+function activatePreviewItem(itemId: number): void {
+  if (state.route.page === 'browse-detail' || !Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
+    return;
+  }
+  state.homePreviewItemId = itemId;
+  state.homePreviewCollectionId = undefined;
+  const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
+  const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
+  refreshHomeFeatureElement(pageBackdropUrlForItem(previewItem));
+}
+
+function activatePreviewCollection(collectionId: string | undefined): void {
+  if (!collectionId || state.homePreviewCollectionId === collectionId) {
+    return;
+  }
+  state.homePreviewCollectionId = collectionId;
+  state.homePreviewItemId = undefined;
+  const collection = collectionSummaries().find((entry) => entry.id === collectionId)
+    ?? searchResultCollections().find((entry) => entry.id === collectionId);
+  refreshHomeFeatureElement(pageBackdropUrlForCollection(collection));
+}
+
+function bindItemNavigationElement(element: HTMLElement): void {
+  if (element.dataset.boundItemNavigation === 'true') {
+    return;
+  }
+  element.dataset.boundItemNavigation = 'true';
+  element.addEventListener('click', () => {
+    const itemId = Number(element.dataset.itemId);
+    if (!Number.isFinite(itemId)) {
+      return;
+    }
+
+    navigateTo(`/items/${itemId}`);
+  });
+}
+
+function bindPreviewItemElement(element: HTMLElement): void {
+  if (element.dataset.boundPreviewItem === 'true') {
+    return;
+  }
+  element.dataset.boundPreviewItem = 'true';
+  const updatePreview = (): void => {
+    activatePreviewItem(Number(element.dataset.previewItemId));
+  };
+  element.addEventListener('mouseenter', updatePreview);
+  element.addEventListener('focus', updatePreview);
+}
+
+function bindPreviewCollectionElement(element: HTMLElement): void {
+  if (element.dataset.boundPreviewCollection === 'true') {
+    return;
+  }
+  element.dataset.boundPreviewCollection = 'true';
+  const updatePreview = (): void => {
+    activatePreviewCollection(element.dataset.previewCollectionId);
+  };
+  element.addEventListener('mouseenter', updatePreview);
+  element.addEventListener('focus', updatePreview);
+}
+
+function bindMediaCardInteractions(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>('[data-item-id]').forEach(bindItemNavigationElement);
+  root.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach(bindPreviewItemElement);
+  root.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach(bindPreviewCollectionElement);
+}
+
+function homeShelfForRow(row: HTMLElement): MediaShelf | undefined {
+  const shelfId = row.dataset.lazyShelfId;
+  return shelfId ? state.home?.shelves.find((shelf) => shelf.id === shelfId) : undefined;
+}
+
+function appendLazyShelfItems(row: HTMLElement): boolean {
+  const shelf = homeShelfForRow(row);
+  if (!shelf) {
+    return false;
+  }
+
+  const renderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
+  if (!Number.isFinite(renderedCount) || renderedCount >= shelf.items.length) {
+    row.dataset.lazyComplete = 'true';
+    return false;
+  }
+
+  const nextCount = Math.min(shelf.items.length, renderedCount + HOME_SHELF_CHUNK_SIZE);
+  row.insertAdjacentHTML('beforeend', shelf.items.slice(renderedCount, nextCount).map(renderItemCard).join(''));
+  row.dataset.lazyRenderedCount = String(nextCount);
+  row.dataset.lazyComplete = nextCount >= shelf.items.length ? 'true' : 'false';
+  bindMediaCardInteractions(row);
+  createIcons({ icons });
+  return true;
+}
+
+function appendLazyShelfItemsIfNeeded(row: HTMLElement): void {
+  const threshold = Math.max(360, row.clientWidth * 0.45);
+  while (row.dataset.lazyComplete !== 'true') {
+    const remainingScroll = row.scrollWidth - row.scrollLeft - row.clientWidth;
+    if (remainingScroll > threshold) {
+      return;
+    }
+    if (!appendLazyShelfItems(row)) {
+      return;
+    }
+  }
+}
+
 function bindEvents(): void {
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -5982,16 +6141,7 @@ function bindEvents(): void {
     navigateTo(typeof activeLibraryId() === 'number' ? `/libraries/${activeLibraryId()}` : '/');
   });
 
-  document.querySelectorAll<HTMLElement>('[data-item-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const itemId = Number(button.dataset.itemId);
-      if (!Number.isFinite(itemId)) {
-        return;
-      }
-
-      navigateTo(`/items/${itemId}`);
-    });
-  });
+  document.querySelectorAll<HTMLElement>('[data-item-id]').forEach(bindItemNavigationElement);
 
   document.querySelectorAll<HTMLElement>('[data-person-id]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -6346,88 +6496,18 @@ function bindEvents(): void {
         return;
       }
       row.scrollBy({ left: direction * Math.max(320, row.clientWidth * 0.8), behavior: 'smooth' });
+      window.setTimeout(() => appendLazyShelfItemsIfNeeded(row), 220);
     });
   });
 
-  const bindHomeFeatureAction = (): void => {
-    document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.addEventListener('click', () => {
-      const nextItemId = Number(document.querySelector<HTMLElement>('.home-feature [data-item-id]')?.dataset.itemId);
-      if (Number.isFinite(nextItemId)) {
-        navigateTo(`/items/${nextItemId}`);
-      }
-    });
-
-    document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.addEventListener('click', () => {
-      const collectionId = document.querySelector<HTMLElement>('.home-feature [data-collection-filter]')?.dataset.collectionFilter;
-      if (collectionId) {
-        navigateTo(browseDetailPath('collection', collectionId));
-      }
-    });
-  };
-
-  const updatePageBackdrop = (backdropUrl: string | undefined): void => {
-    const appShell = document.querySelector<HTMLElement>('.app-shell');
-    const pageBackdrop = document.querySelector<HTMLElement>('.page-backdrop');
-    if (backdropUrl) {
-      appShell?.classList.add('has-page-backdrop');
-      if (pageBackdrop) {
-        pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
-      } else {
-        appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
-      }
-    } else {
-      appShell?.classList.remove('has-page-backdrop');
-      pageBackdrop?.remove();
-    }
-  };
-
-  document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach((element) => {
-    const updatePreview = (): void => {
-      if (state.route.page === 'browse-detail') {
-        return;
-      }
-
-      const itemId = Number(element.dataset.previewItemId);
-      if (!Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
-        return;
-      }
-      state.homePreviewItemId = itemId;
-      state.homePreviewCollectionId = undefined;
-      const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
-      const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
-      const root = document.querySelector<HTMLElement>('.home-feature');
-      if (root) {
-        root.outerHTML = renderHomeFeature();
-        createIcons({ icons });
-        bindHomeFeatureAction();
-      }
-      updatePageBackdrop(pageBackdropUrlForItem(previewItem));
-    };
-    element.addEventListener('mouseenter', updatePreview);
-    element.addEventListener('focus', updatePreview);
+  document.querySelectorAll<HTMLElement>('[data-lazy-shelf-id]').forEach((row) => {
+    row.addEventListener('scroll', () => appendLazyShelfItemsIfNeeded(row), { passive: true });
+    appendLazyShelfItemsIfNeeded(row);
   });
 
-  document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach((element) => {
-    const updatePreview = (): void => {
-      const collectionId = element.dataset.previewCollectionId;
-      if (!collectionId || state.homePreviewCollectionId === collectionId) {
-        return;
-      }
-      state.homePreviewCollectionId = collectionId;
-      state.homePreviewItemId = undefined;
-      const collection = collectionSummaries().find((entry) => entry.id === collectionId)
-        ?? searchResultCollections().find((entry) => entry.id === collectionId);
-      const root = document.querySelector<HTMLElement>('.home-feature');
-      if (root) {
-        root.outerHTML = renderHomeFeature();
-        createIcons({ icons });
-        bindHomeFeatureAction();
-      }
-      updatePageBackdrop(pageBackdropUrlForCollection(collection));
-    };
-    element.addEventListener('mouseenter', updatePreview);
-    element.addEventListener('focus', updatePreview);
-  });
+  document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach(bindPreviewItemElement);
+  document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach(bindPreviewCollectionElement);
+  bindHomeFeatureAction();
   document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
     const button = document.querySelector<HTMLButtonElement>('#scan-active-library');
     const library = activeLibrary();

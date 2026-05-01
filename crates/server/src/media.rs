@@ -3011,7 +3011,7 @@ fn get_continue_watching_items(
         }
     }
 
-    Ok(items.into_iter().take(12).collect())
+    Ok(items)
 }
 
 fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
@@ -3075,7 +3075,7 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
             .cmp(&left.0)
             .then_with(|| left.1.display_title.cmp(&right.1.display_title))
     });
-    entries.into_iter().map(|(_, item)| item).take(12).collect()
+    entries.into_iter().map(|(_, item)| item).collect()
 }
 
 fn root_show_item_id(
@@ -3131,7 +3131,7 @@ fn sort_recommended(
             .cmp(&left.duration_ms.unwrap_or_default())
             .then_with(|| right.modified_at.cmp(&left.modified_at))
     });
-    items.into_iter().take(12).collect()
+    items
 }
 
 fn recommended_excluded_item_ids(
@@ -5250,5 +5250,25 @@ mod tests {
 
         assert_eq!(recommended.len(), 1);
         assert_eq!(recommended[0].display_title, "Example Movie");
+    }
+
+    #[test]
+    fn home_shelf_sorters_do_not_cap_at_twelve_items() {
+        let items = (0..14)
+            .map(|index| {
+                summary(
+                    index + 1,
+                    None,
+                    "movie",
+                    &format!("Movie {index:02}"),
+                    0,
+                    Some(1_000 + i64::from(index)),
+                    Some(i64::from(index)),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(sort_recently_added(&items).len(), 14);
+        assert_eq!(sort_recommended(&items, &[]).len(), 14);
     }
 }

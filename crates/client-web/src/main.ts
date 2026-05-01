@@ -313,6 +313,7 @@ let trailerProgressHandle: number | undefined;
 let trailerVolume = 1;
 let trailerMuted = false;
 let spinnerVisibilityObserver: IntersectionObserver | undefined;
+let shelfScrollResizeBound = false;
 const activeGamepadButtons = new Set<string>();
 
 function visibleSpinnerObserver(): IntersectionObserver | undefined {
@@ -5866,6 +5867,7 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   row.dataset.lazyComplete = nextCount >= shelf.items.length ? 'true' : 'false';
   bindMediaCardInteractions(row);
   createIcons({ icons });
+  updateShelfScrollControls(row);
   return true;
 }
 
@@ -5880,6 +5882,51 @@ function appendLazyShelfItemsIfNeeded(row: HTMLElement): void {
       return;
     }
   }
+}
+
+function parseShelfScrollTarget(value: string | undefined): { shelfId: string; direction: number } | undefined {
+  const separatorIndex = value?.lastIndexOf(':') ?? -1;
+  if (!value || separatorIndex <= 0) {
+    return undefined;
+  }
+
+  const shelfId = value.slice(0, separatorIndex);
+  const direction = Number(value.slice(separatorIndex + 1));
+  return Number.isFinite(direction) ? { shelfId, direction } : undefined;
+}
+
+function setShelfScrollButtonVisible(button: HTMLButtonElement | undefined, visible: boolean): void {
+  if (!button) {
+    return;
+  }
+
+  button.classList.toggle('is-scroll-hidden', !visible);
+  button.disabled = !visible;
+  button.tabIndex = visible ? 0 : -1;
+  button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function updateShelfScrollControls(row: HTMLElement): void {
+  const shelfId = row.dataset.shelfRow;
+  const shell = row.closest<HTMLElement>('.shelf-row-shell');
+  if (!shelfId || !shell) {
+    return;
+  }
+
+  const buttons = Array.from(shell.querySelectorAll<HTMLButtonElement>('[data-shelf-scroll]'));
+  const leftButton = buttons.find((button) => parseShelfScrollTarget(button.dataset.shelfScroll)?.direction === -1);
+  const rightButton = buttons.find((button) => parseShelfScrollTarget(button.dataset.shelfScroll)?.direction === 1);
+  const hasOverflow = row.scrollWidth > row.clientWidth + 1;
+  const atLeftEdge = row.scrollLeft <= 1;
+  const atRightEdge = row.scrollLeft + row.clientWidth >= row.scrollWidth - 1;
+
+  shell.classList.toggle('no-scroll', !hasOverflow);
+  setShelfScrollButtonVisible(leftButton, hasOverflow && !atLeftEdge);
+  setShelfScrollButtonVisible(rightButton, hasOverflow && !atRightEdge);
+}
+
+function refreshShelfScrollControls(): void {
+  document.querySelectorAll<HTMLElement>('[data-shelf-row]').forEach(updateShelfScrollControls);
 }
 
 function bindEvents(): void {
@@ -6489,21 +6536,35 @@ function bindEvents(): void {
 
   document.querySelectorAll<HTMLButtonElement>('[data-shelf-scroll]').forEach((button) => {
     button.addEventListener('click', () => {
-      const [shelfId, directionValue] = (button.dataset.shelfScroll ?? '').split(':');
-      const direction = Number(directionValue);
-      const row = document.querySelector<HTMLElement>(`[data-shelf-row="${CSS.escape(shelfId)}"]`);
-      if (!row || !Number.isFinite(direction)) {
+      const target = parseShelfScrollTarget(button.dataset.shelfScroll);
+      const row = target
+        ? document.querySelector<HTMLElement>(`[data-shelf-row="${CSS.escape(target.shelfId)}"]`)
+        : undefined;
+      if (!row || !target) {
         return;
       }
-      row.scrollBy({ left: direction * Math.max(320, row.clientWidth * 0.8), behavior: 'smooth' });
-      window.setTimeout(() => appendLazyShelfItemsIfNeeded(row), 220);
+      row.scrollBy({ left: target.direction * Math.max(320, row.clientWidth * 0.8), behavior: 'smooth' });
+      window.setTimeout(() => {
+        appendLazyShelfItemsIfNeeded(row);
+        updateShelfScrollControls(row);
+      }, 220);
     });
   });
 
   document.querySelectorAll<HTMLElement>('[data-lazy-shelf-id]').forEach((row) => {
-    row.addEventListener('scroll', () => appendLazyShelfItemsIfNeeded(row), { passive: true });
-    appendLazyShelfItemsIfNeeded(row);
+    row.addEventListener('scroll', () => {
+      appendLazyShelfItemsIfNeeded(row);
+      updateShelfScrollControls(row);
+    }, { passive: true });
   });
+  document.querySelectorAll<HTMLElement>('[data-shelf-row]:not([data-lazy-shelf-id])').forEach((row) => {
+    row.addEventListener('scroll', () => updateShelfScrollControls(row), { passive: true });
+  });
+  window.requestAnimationFrame(refreshShelfScrollControls);
+  if (!shelfScrollResizeBound) {
+    window.addEventListener('resize', refreshShelfScrollControls, { passive: true });
+    shelfScrollResizeBound = true;
+  }
 
   document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach(bindPreviewItemElement);
   document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach(bindPreviewCollectionElement);

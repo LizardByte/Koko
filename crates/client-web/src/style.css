@@ -886,6 +886,10 @@ legend {
   align-items: center;
 }
 
+.shelf-row-shell.no-scroll {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .shelf-scroll-button {
   width: 2.3rem;
   height: 2.3rem;
@@ -894,6 +898,15 @@ legend {
   background: rgba(255, 255, 255, 0.08);
   color: #dfe9ff;
   box-shadow: none;
+}
+
+.shelf-scroll-button.is-scroll-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.shelf-row-shell.no-scroll .shelf-scroll-button {
+  display: none;
 }
 
 .shelf-scroll-button:hover,

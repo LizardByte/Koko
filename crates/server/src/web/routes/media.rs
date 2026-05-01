@@ -50,23 +50,25 @@ use crate::media::{
     upsert_playback_progress, user_can_access_library,
 };
 use crate::metadata::{
-    ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataPersonCreditSummary,
-    MetadataPersonSummary, MetadataProviderRole, MetadataProviderStatus, MetadataSearchResult,
-    StoredMetadataSnapshot, expected_artwork_cache_path,
-    fetch_provider_episode_metadata_snapshot_for_locale,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
+    MetadataPersonCreditSummary, MetadataPersonSummary, MetadataProviderRole,
+    MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
+    expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot_for_locale,
     fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot_for_locale,
     fetch_provider_secondary_collection_metadata, fetch_provider_secondary_metadata,
     get_item_metadata_summaries, get_metadata_person_for_languages,
     get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
     guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    list_metadata_collection_summaries_with_preferred_languages,
     list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
     list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
     metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
     persist_metadata_people_assets, provider_locale_key, provider_uses_localized_metadata,
-    resolve_metadata_asset_db_path, search_provider, set_item_metadata_refresh_state,
-    sort_item_metadata_summaries_for_languages, try_cache_item_artwork, update_cached_artwork_path,
-    upsert_item_metadata_link, upsert_item_metadata_snapshot_with_refresh_interval,
+    resolve_metadata_asset_db_path, search_metadata_people_with_preferred_languages,
+    search_provider, set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
+    try_cache_item_artwork, update_cached_artwork_path, upsert_item_metadata_link,
+    upsert_item_metadata_snapshot_with_refresh_interval,
     upsert_secondary_collection_theme_song_url,
 };
 use crate::utils::current_timestamp;
@@ -296,6 +298,27 @@ pub struct MetadataPersonItemCredit {
     pub item: MediaItemSummary,
     /// Breadcrumb-like media hierarchy for the credited item.
     pub hierarchy: Vec<MediaItemSummary>,
+}
+
+/// Browser-facing mixed search result.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(tag = "result_type", rename_all = "snake_case")]
+pub enum MediaSearchResult {
+    /// Media item result such as a movie, show, season, episode, or future item type.
+    Item {
+        /// Matching media item.
+        item: MediaItemSummary,
+    },
+    /// Collection grouping result.
+    Collection {
+        /// Matching collection.
+        collection: MetadataCollectionSummary,
+    },
+    /// Metadata person result.
+    Person {
+        /// Matching person.
+        person: MetadataPersonSummary,
+    },
 }
 
 /// Active backend activity summary that the browser can poll.
@@ -4228,37 +4251,44 @@ pub async fn get_item_subtitle(
         .map_err(|_| Status::NotFound)
 }
 
-/// Search browser-facing media items by title or path.
+/// Search browser-facing media items and metadata entities.
 #[openapi(tag = "Media")]
-#[get("/api/v1/search?<query>&<library_id>")]
+#[get("/api/v1/search?<query>")]
 pub async fn search_items(
     db: DbConn,
     user_guard: Option<UserGuard>,
     query: Option<&str>,
-    library_id: Option<i32>,
-) -> Result<Json<Vec<MediaItemSummary>>, Status> {
+) -> Result<Json<Vec<MediaSearchResult>>, Status> {
     let query = query.unwrap_or_default().to_string();
     let user_id = current_user_id(user_guard.as_ref())?;
-    if let Some(library_id) = library_id {
-        let can_access = db
-            .run(move |conn| user_can_access_library(conn, library_id, user_id))
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to check library access for {}: {}",
-                    library_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
-        if !can_access {
-            return Err(Status::NotFound);
-        }
-    }
-    let items = db
+    let results = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
-            search_media_items_with_preferred_languages(conn, &query, library_id, &languages)
+            let normalized_query = query.trim().to_ascii_lowercase();
+            let mut results =
+                search_media_items_with_preferred_languages(conn, &query, None, &languages)?
+                    .into_iter()
+                    .map(|item| MediaSearchResult::Item { item })
+                    .collect::<Vec<_>>();
+            if !normalized_query.is_empty() {
+                results.extend(
+                    list_metadata_collection_summaries_with_preferred_languages(
+                        conn,
+                        None,
+                        &languages,
+                        &[],
+                    )?
+                    .into_iter()
+                    .filter(|collection| collection_matches_query(collection, &normalized_query))
+                    .map(|collection| MediaSearchResult::Collection { collection }),
+                );
+                results.extend(
+                    search_metadata_people_with_preferred_languages(conn, &query, &languages)?
+                        .into_iter()
+                        .map(|person| MediaSearchResult::Person { person }),
+                );
+            }
+            Ok::<_, diesel::result::Error>(results)
         })
         .await
         .map_err(|error| {
@@ -4266,7 +4296,14 @@ pub async fn search_items(
             Status::InternalServerError
         })?;
 
-    Ok(Json(items))
+    Ok(Json(results))
+}
+
+fn collection_matches_query(
+    collection: &MetadataCollectionSummary,
+    query: &str,
+) -> bool {
+    collection.name.to_ascii_lowercase().contains(query)
 }
 
 #[cfg(test)]
@@ -4332,5 +4369,25 @@ mod tests {
             metadata_search_score("The Matrix", None, &tmdb_mismatched_case)
                 < metadata_search_score("The Matrix", None, &musicbrainz_mismatched_case)
         );
+    }
+
+    #[test]
+    fn collection_search_matches_title_only() {
+        let collection = MetadataCollectionSummary {
+            id: "collection:tmdb:1".into(),
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "james-bond-external-id".into(),
+            name: "James Bond Collection".into(),
+            overview: Some("A spy franchise overview.".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            theme_song_url: None,
+            item_ids: vec![1],
+            item_count: 1,
+        };
+
+        assert!(collection_matches_query(&collection, "james bond"));
+        assert!(!collection_matches_query(&collection, "spy"));
+        assert!(!collection_matches_query(&collection, "external"));
     }
 }

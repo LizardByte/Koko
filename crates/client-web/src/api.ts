@@ -364,6 +364,19 @@ export interface MediaCollectionSummary {
   item_count: number;
 }
 
+export interface MediaPlaylistSearchSummary {
+  id: string;
+  name: string;
+  overview?: string;
+  item_count: number;
+}
+
+export type MediaSearchResult =
+  | { result_type: 'item'; item: MediaItemSummary }
+  | { result_type: 'collection'; collection: MediaCollectionSummary }
+  | { result_type: 'person'; person: MetadataPersonSummary }
+  | { result_type: 'playlist'; playlist: MediaPlaylistSearchSummary };
+
 export interface MediaHome {
   library_id?: number;
   shelves: MediaShelf[];
@@ -938,10 +951,27 @@ export function getItems(libraryId?: number): Promise<MediaItemSummary[]> {
   return requestJson<MediaItemSummary[]>('GET', `/api/v1/items${query}`);
 }
 
-export function searchItems(query: string): Promise<MediaItemSummary[]> {
+export async function searchItems(query: string): Promise<MediaSearchResult[]> {
   const params = new URLSearchParams({ query });
 
-  return requestJson<MediaItemSummary[]>('GET', `/api/v1/search?${params.toString()}`);
+  const results = await requestJson<MediaSearchResult[]>('GET', `/api/v1/search?${params.toString()}`);
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery || !'playlists'.includes(normalizedQuery)) {
+    return results;
+  }
+
+  return [
+    ...results,
+    {
+      result_type: 'playlist',
+      playlist: {
+        id: 'Playlists',
+        name: 'Playlists',
+        overview: 'Playlist creation is planned. Items will appear here when playlists are available.',
+        item_count: 0,
+      },
+    },
+  ];
 }
 
 export function getItem(itemId: number): Promise<MediaItemDetail> {

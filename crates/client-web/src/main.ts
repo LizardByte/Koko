@@ -53,6 +53,7 @@ import {
   type MediaItemSummary,
   type MediaLibrary,
   type MediaLibrarySettings,
+  type MediaSearchResult,
   type MetadataProviderStatus,
   type MetadataProviderSettings,
   type MetadataPersonItemCredit,
@@ -153,7 +154,7 @@ interface AppState {
   home?: MediaHome;
   libraryItems: MediaItemSummary[];
   libraryItemsLoading: boolean;
-  searchResults: MediaItemSummary[];
+  searchResults: MediaSearchResult[];
   homePreviewItemId?: number;
   homePreviewCollectionId?: string;
   metadataProviders: MetadataProviderStatus[];
@@ -585,7 +586,7 @@ function shouldAutoRefreshMetadata(): boolean {
   }
 
   const visibleShelfItems = state.home?.shelves.flatMap((shelf) => shelf.items) ?? [];
-  return [...state.libraryItems, ...state.searchResults, ...visibleShelfItems]
+  return [...state.libraryItems, ...searchResultItems(), ...visibleShelfItems]
     .some((item) => item.metadata_refresh_state === 'pending');
 }
 
@@ -1383,7 +1384,7 @@ function homePreviewItemsById(): Map<number, MediaItemSummary> {
   const items = [
     ...state.libraryItems,
     ...(state.home?.shelves ?? []).flatMap((shelf) => shelf.items),
-    ...state.searchResults,
+    ...searchResultItems(),
   ];
 
   return new Map(items.map((item) => [item.id, item]));
@@ -1894,6 +1895,39 @@ type HomeFeaturePreview =
   | { kind: 'collection'; collection: MediaCollectionSummary }
   | { kind: 'item'; item: MediaItemSummary };
 
+function searchResultItems(): MediaItemSummary[] {
+  return state.searchResults.flatMap((result) => result.result_type === 'item' ? [result.item] : []);
+}
+
+function searchResultCollections(): MediaCollectionSummary[] {
+  return state.searchResults.flatMap((result) => result.result_type === 'collection' ? [result.collection] : []);
+}
+
+function homeSearchPreview(): HomeFeaturePreview | undefined {
+  if (typeof state.homePreviewItemId === 'number') {
+    const item = searchResultItems().find((entry) => entry.id === state.homePreviewItemId);
+    if (item) {
+      return { kind: 'item', item: showPreviewItemForHighlight(item) };
+    }
+  }
+  if (state.homePreviewCollectionId) {
+    const collection = searchResultCollections().find((entry) => entry.id === state.homePreviewCollectionId);
+    if (collection) {
+      return { kind: 'collection', collection };
+    }
+  }
+
+  for (const result of state.searchResults) {
+    if (result.result_type === 'item') {
+      return { kind: 'item', item: showPreviewItemForHighlight(result.item) };
+    }
+    if (result.result_type === 'collection') {
+      return { kind: 'collection', collection: result.collection };
+    }
+  }
+  return undefined;
+}
+
 function homeFeaturePreview(): HomeFeaturePreview | undefined {
   if (state.route.page === 'browse-detail' && state.route.kind === 'collection') {
     const collection = collectionForRoute();
@@ -1901,8 +1935,7 @@ function homeFeaturePreview(): HomeFeaturePreview | undefined {
   }
 
   if (state.route.page === 'home' && state.searchQuery.trim() && state.searchResults.length) {
-    const item = homePreviewItem();
-    return item ? { kind: 'item', item } : undefined;
+    return homeSearchPreview();
   }
 
   if (state.route.page === 'home' && state.homeTab === 'collections') {
@@ -1930,7 +1963,7 @@ function homePreviewCandidates(): MediaItemSummary[] {
   }
 
   if (state.route.page === 'home' && state.searchQuery.trim() && state.searchResults.length) {
-    return state.searchResults;
+    return searchResultItems();
   }
 
   switch (state.homeTab) {
@@ -2029,9 +2062,70 @@ function renderHomeFeature(): string {
   `;
 }
 
+function renderSearchResultRow(result: MediaSearchResult, compact: boolean): string {
+  if (result.result_type === 'item') {
+    const item = result.item;
+    const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
+    const library = state.libraries.find((entry) => entry.id === item.library_id);
+    return `
+      <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+        <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
+        <span class="search-result-copy">
+          <strong>${escapeHtml(item.display_title)}</strong>
+          <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}${compact ? '' : ` · ${formatChildCount(item)}`}`)}</span>
+          ${!compact && item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
+        </span>
+      </button>
+    `;
+  }
+
+  if (result.result_type === 'collection') {
+    const collection = result.collection;
+    const posterUrl = collection.artwork_url ?? collection.backdrop_url;
+    return `
+      <button type="button" class="search-result-row" data-collection-filter="${escapeHtml(collection.id)}" data-preview-collection-id="${escapeHtml(collection.id)}">
+        <span class="search-result-thumb" ${posterUrl ? `style="background-image: url('${escapeHtml(resolveApiUrl(posterUrl))}');"` : ''}>${posterUrl ? '' : renderIcon('image')}</span>
+        <span class="search-result-copy">
+          <strong>${escapeHtml(collection.name)}</strong>
+          <span>${escapeHtml(`Collection · ${collection.item_count} title${collection.item_count === 1 ? '' : 's'}`)}</span>
+          ${!compact && collection.overview ? `<small>${escapeHtml(collection.overview)}</small>` : ''}
+        </span>
+      </button>
+    `;
+  }
+
+  if (result.result_type === 'person') {
+    const person = result.person;
+    const imageUrl = person.cached_image_path || person.image_url ? getPersonImageUrl(person.id) : undefined;
+    const knownFor = person.known_for.slice(0, 3).join(' · ');
+    return `
+      <button type="button" class="search-result-row" data-person-id="${person.id}">
+        <span class="search-result-thumb" ${imageUrl ? `style="background-image: url('${escapeHtml(imageUrl)}');"` : ''}>${imageUrl ? '' : renderIcon('user-plus')}</span>
+        <span class="search-result-copy">
+          <strong>${escapeHtml(person.name)}</strong>
+          <span>${escapeHtml(knownFor ? `Person · ${knownFor}` : 'Person')}</span>
+          ${!compact && person.biography ? `<small>${escapeHtml(person.biography)}</small>` : ''}
+        </span>
+      </button>
+    `;
+  }
+
+  const playlist = result.playlist;
+  return `
+    <button type="button" class="search-result-row" data-playlist-filter="${escapeHtml(playlist.id)}">
+      <span class="search-result-thumb">${renderIcon('music')}</span>
+      <span class="search-result-copy">
+        <strong>${escapeHtml(playlist.name)}</strong>
+        <span>${escapeHtml(`Playlist · ${playlist.item_count} title${playlist.item_count === 1 ? '' : 's'}`)}</span>
+        ${!compact && playlist.overview ? `<small>${escapeHtml(playlist.overview)}</small>` : ''}
+      </span>
+    </button>
+  `;
+}
+
 function renderSearchResults(): string {
   if (!state.searchResults.length) {
-    return '<section class="shelf"><div class="empty-state">No media items matched the current search.</div></section>';
+    return '<section class="shelf"><div class="empty-state">No library content matched the current search.</div></section>';
   }
 
   return `
@@ -2041,20 +2135,7 @@ function renderSearchResults(): string {
         <span>${state.searchResults.length} matches</span>
       </div>
       <div class="search-results-list">
-        ${state.searchResults.map((item) => {
-          const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
-          const library = state.libraries.find((entry) => entry.id === item.library_id);
-          return `
-            <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
-              <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
-              <span class="search-result-copy">
-                <strong>${escapeHtml(item.display_title)}</strong>
-                <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)} · ${formatChildCount(item)}`)}</span>
-                ${item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
-              </span>
-            </button>
-          `;
-        }).join('')}
+        ${state.searchResults.map((result) => renderSearchResultRow(result, false)).join('')}
       </div>
     </section>
   `;
@@ -2489,7 +2570,7 @@ function renderSearchPopover(): string {
   }
 
   if (!state.searchResults.length) {
-    return '<div class="search-popover panel"><div class="empty-state tight">No media items matched the current search.</div></div>';
+    return '<div class="search-popover panel"><div class="empty-state tight">No library content matched the current search.</div></div>';
   }
 
   return `
@@ -2499,19 +2580,7 @@ function renderSearchPopover(): string {
         <span>${state.searchResults.length} match${state.searchResults.length === 1 ? '' : 'es'}</span>
       </div>
       <div class="search-results-list compact">
-        ${state.searchResults.slice(0, 8).map((item) => {
-          const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
-          const library = state.libraries.find((entry) => entry.id === item.library_id);
-          return `
-            <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
-              <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
-              <span class="search-result-copy">
-                <strong>${escapeHtml(item.display_title)}</strong>
-                <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`)}</span>
-              </span>
-            </button>
-          `;
-        }).join('')}
+        ${state.searchResults.slice(0, 8).map((result) => renderSearchResultRow(result, true)).join('')}
       </div>
     </div>
   `;
@@ -5895,11 +5964,16 @@ function bindEvents(): void {
       }
 
       const collection = collectionSummaries().find((entry) => entry.id === collectionId);
-      if (!collection) {
+      const searchCollection = searchResultCollections().find((entry) => entry.id === collectionId);
+      if (!collection && !searchCollection) {
         return;
       }
 
-      navigateTo(browseDetailPath('collection', collection.id));
+      if (collection) {
+        navigateTo(browseDetailPath('collection', collection.id));
+      } else {
+        navigateTo(`/items/collections/${encodeURIComponent(searchCollection!.id)}`);
+      }
     });
   });
 
@@ -6341,7 +6415,8 @@ function bindEvents(): void {
       }
       state.homePreviewCollectionId = collectionId;
       state.homePreviewItemId = undefined;
-      const collection = collectionSummaries().find((entry) => entry.id === collectionId);
+      const collection = collectionSummaries().find((entry) => entry.id === collectionId)
+        ?? searchResultCollections().find((entry) => entry.id === collectionId);
       const root = document.querySelector<HTMLElement>('.home-feature');
       if (root) {
         root.outerHTML = renderHomeFeature();

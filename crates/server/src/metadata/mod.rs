@@ -810,6 +810,85 @@ pub fn get_metadata_person_for_languages(
     Ok(preferred_person_row(rows, preferred_languages).map(to_metadata_person_summary))
 }
 
+/// Search normalized metadata people and return one preferred locale row per provider identity.
+pub fn search_metadata_people_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    query: &str,
+    preferred_languages: &[String],
+) -> Result<Vec<MetadataPersonSummary>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let matching_credit_person_ids = metadata_person_credit_character_person_ids(conn, &query)?;
+    let rows = people_dsl::metadata_people
+        .select(MetadataPerson::as_select())
+        .load::<MetadataPerson>(conn)?;
+    let mut grouped = HashMap::<(String, String), Vec<MetadataPerson>>::new();
+    for row in rows {
+        grouped
+            .entry((row.provider_id.clone(), row.identity_key.clone()))
+            .or_default()
+            .push(row);
+    }
+
+    let mut people = grouped
+        .into_values()
+        .filter(|rows| {
+            rows.iter().any(|row| {
+                metadata_person_matches_query(row, &query)
+                    || matching_credit_person_ids.contains(&row.id)
+            })
+        })
+        .filter_map(|rows| preferred_person_row(rows, preferred_languages))
+        .map(to_metadata_person_summary)
+        .collect::<Vec<_>>();
+    people.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then_with(|| {
+                left.provider_id
+                    .as_storage_value()
+                    .cmp(right.provider_id.as_storage_value())
+            })
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(people)
+}
+
+fn metadata_person_matches_query(
+    person: &MetadataPerson,
+    query: &str,
+) -> bool {
+    person.name.to_ascii_lowercase().contains(query)
+}
+
+fn metadata_person_credit_character_person_ids(
+    conn: &mut SqliteConnection,
+    query: &str,
+) -> Result<HashSet<i32>, diesel::result::Error> {
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    let rows = credit_dsl::metadata_person_credits
+        .select(MetadataPersonCredit::as_select())
+        .load::<MetadataPersonCredit>(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|credit| {
+            credit
+                .character_name
+                .as_deref()
+                .is_some_and(|value| value.to_ascii_lowercase().contains(query))
+        })
+        .map(|credit| credit.person_id)
+        .collect())
+}
+
 /// Return all localized person ids for the same provider person as `person_id`.
 pub fn get_metadata_person_locale_peer_ids(
     conn: &mut SqliteConnection,
@@ -3451,6 +3530,33 @@ mod tests {
             Some("Stored overview wins.")
         );
         assert_eq!(presentation.genres, vec!["Drama", "Mystery"]);
+    }
+
+    #[test]
+    fn person_search_matches_name_only_from_person_row() {
+        let person = MetadataPerson {
+            id: 1,
+            provider_id: "tmdb".into(),
+            external_id: Some("tom-cruise-external-id".into()),
+            identity_key: "tmdb:1".into(),
+            locale_key: "en-US".into(),
+            name: "Tom Cruise".into(),
+            known_for_json: Some(serde_json::json!(["Mission: Impossible"]).to_string()),
+            biography: Some("Worked with many performers.".into()),
+            gender: None,
+            birthday: None,
+            deathday: None,
+            birth_place: None,
+            profile_url: None,
+            image_url: None,
+            cached_image_path: None,
+            updated_at: None,
+        };
+
+        assert!(metadata_person_matches_query(&person, "tom cruise"));
+        assert!(!metadata_person_matches_query(&person, "mission"));
+        assert!(!metadata_person_matches_query(&person, "performers"));
+        assert!(!metadata_person_matches_query(&person, "external"));
     }
 
     #[test]

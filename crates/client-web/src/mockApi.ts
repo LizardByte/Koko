@@ -12,6 +12,7 @@ import type {
   MediaItemSummary,
   MediaLibrary,
   MediaLibrarySettings,
+  MediaSearchResult,
   MissingItemsCleanupResponse,
   MetadataProviderStatus,
   MetadataPersonResponse,
@@ -1000,17 +1001,53 @@ export function getMockItems(libraryId?: number): MediaItemSummary[] {
     .map(({ file_size: _fileSize, container: _container, bit_rate: _bitRate, video_codec: _videoCodec, audio_codec: _audioCodec, metadata_json: _metadataJson, metadata_updated_at: _metadataUpdatedAt, ...summary }) => applyMockPlaybackProgress(summary));
 }
 
-export function searchMockItems(query: string): MediaItemSummary[] {
+export function searchMockItems(query: string): MediaSearchResult[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return [];
   }
 
-  return getMockItems().filter((item) => {
+  const results: MediaSearchResult[] = getMockItems().filter((item) => {
     return item.display_title.toLowerCase().includes(normalizedQuery)
       || item.relative_path.toLowerCase().includes(normalizedQuery)
       || item.media_kind.toLowerCase().includes(normalizedQuery);
-  });
+  }).map((item) => ({ result_type: 'item', item }));
+
+  results.push(...collections
+    .filter((collection) => {
+      return collection.name.toLowerCase().includes(normalizedQuery);
+    })
+    .map((collection) => ({ result_type: 'collection' as const, collection })));
+
+  const people = new Map<number, MediaSearchResult>();
+  for (const response of Object.values(itemMetadata)) {
+    for (const match of response.matches) {
+      for (const person of match.people) {
+        if (
+          person.name.toLowerCase().includes(normalizedQuery)
+          || person.character_name?.toLowerCase().includes(normalizedQuery)
+        ) {
+          people.set(person.person_id, {
+            result_type: 'person',
+            person: {
+              id: person.person_id,
+              provider_id: match.provider_id,
+              external_id: person.external_id,
+              locale_key: person.locale_key ?? 'eng',
+              name: person.name,
+              known_for: [],
+              profile_url: person.profile_url,
+              image_url: person.image_url,
+              cached_image_path: person.cached_image_path,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  results.push(...people.values());
+  return results;
 }
 
 export function getMockSettings(): SettingsResponse {

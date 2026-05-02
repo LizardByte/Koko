@@ -14,16 +14,18 @@ use diesel_migrations::MigrationHarness;
 use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
 use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
 use koko::media::{
-    LibraryScanStatus, delete_missing_media_items, get_item_youtube_theme_collection_references,
+    LibraryScanStatus, ShowMetadataDescendantPlan, ShowMetadataEpisodePlan, ShowMetadataSeasonPlan,
+    delete_missing_media_items, get_item_youtube_theme_collection_references,
     get_item_youtube_theme_provider_references, get_library_files, get_media_home,
     get_media_home_with_preferred_languages, get_media_item,
     get_media_item_with_preferred_languages, get_persisted_library_summaries,
     get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
     inspect_transcoding_capability, list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_items,
-    mark_metadata_match_attempted, remove_library_setting, replace_library_settings,
-    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
-    sync_library_catalog, upsert_playback_progress,
+    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_item_children,
+    list_media_items, mark_metadata_match_attempted, remove_library_setting,
+    replace_library_settings, resolve_local_item_artwork_path, resolve_media_item_source_path,
+    search_media_items, sync_library_catalog, upsert_playback_progress,
+    upsert_show_metadata_descendant_items,
 };
 use koko::metadata::{
     ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, ProviderMetadataExtra,
@@ -696,6 +698,149 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
     assert_eq!(episode_detail.hierarchy.len(), 2);
     assert_eq!(episode_detail.hierarchy[0].id, show.id);
     assert_eq!(episode_detail.hierarchy[1].id, season.id);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_show_metadata_placeholders_materialize_missing_descendants() {
+    let root = unique_temp_dir("show_metadata_missing_descendants");
+    let season_one = root.join("Mock Show").join("Season 1");
+    fs::create_dir_all(&season_one).unwrap();
+    fs::write(season_one.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("show_metadata_missing_descendants_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let show = list_media_items(&mut connection, Some(library.id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "show")
+        .expect("Expected show item to exist");
+
+    let descendants = upsert_show_metadata_descendant_items(
+        &mut connection,
+        show.id,
+        &ShowMetadataDescendantPlan {
+            seasons: vec![
+                ShowMetadataSeasonPlan {
+                    season_number: 1,
+                    display_title: None,
+                },
+                ShowMetadataSeasonPlan {
+                    season_number: 2,
+                    display_title: None,
+                },
+            ],
+            episodes: vec![
+                ShowMetadataEpisodePlan {
+                    season_number: 1,
+                    episode_number: 1,
+                    display_title: None,
+                },
+                ShowMetadataEpisodePlan {
+                    season_number: 1,
+                    episode_number: 2,
+                    display_title: None,
+                },
+                ShowMetadataEpisodePlan {
+                    season_number: 1,
+                    episode_number: 3,
+                    display_title: None,
+                },
+                ShowMetadataEpisodePlan {
+                    season_number: 2,
+                    episode_number: 1,
+                    display_title: None,
+                },
+            ],
+        },
+    )
+    .unwrap();
+
+    assert!(descendants.seasons_by_number.contains_key(&1));
+    assert!(descendants.seasons_by_number.contains_key(&2));
+    assert!(descendants.episodes_by_number.contains_key(&(1, 1)));
+    assert!(descendants.episodes_by_number.contains_key(&(1, 2)));
+    assert!(descendants.episodes_by_number.contains_key(&(1, 3)));
+    assert!(!descendants.episodes_by_number.contains_key(&(2, 1)));
+
+    let show_children = list_media_item_children(&mut connection, show.id).unwrap();
+    assert_eq!(show_children.len(), 2);
+    let season_one_item = show_children
+        .iter()
+        .find(|item| item.season_number == Some(1))
+        .expect("Expected season 1");
+    let season_two_item = show_children
+        .iter()
+        .find(|item| item.season_number == Some(2))
+        .expect("Expected season 2");
+    assert_eq!(season_one_item.child_count, 3);
+    assert_eq!(season_two_item.child_count, 0);
+    assert!(season_two_item.missing_since.is_some());
+
+    let season_one_children =
+        list_media_item_children(&mut connection, season_one_item.id).unwrap();
+    assert_eq!(season_one_children.len(), 3);
+    let local_episode = season_one_children
+        .iter()
+        .find(|item| item.episode_number == Some(1))
+        .expect("Expected local episode");
+    assert!(local_episode.playable);
+    assert!(local_episode.missing_since.is_none());
+    for episode_number in [2, 3] {
+        let missing_episode = season_one_children
+            .iter()
+            .find(|item| item.episode_number == Some(episode_number))
+            .expect("Expected missing episode placeholder");
+        assert!(!missing_episode.playable);
+        assert!(missing_episode.missing_since.is_some());
+    }
+    assert!(
+        list_media_item_children(&mut connection, season_two_item.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let show_children_after_rescan = list_media_item_children(&mut connection, show.id).unwrap();
+    assert_eq!(show_children_after_rescan.len(), 2);
+
+    fs::write(
+        season_one.join("Mock Show - S01E02 - Added Locally.mkv"),
+        b"video",
+    )
+    .unwrap();
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let season_one_item = list_media_item_children(&mut connection, show.id)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.season_number == Some(1))
+        .expect("Expected season 1 after adding episode");
+    let season_one_children =
+        list_media_item_children(&mut connection, season_one_item.id).unwrap();
+    let episode_twos = season_one_children
+        .iter()
+        .filter(|item| item.episode_number == Some(2))
+        .collect::<Vec<_>>();
+    assert_eq!(episode_twos.len(), 1);
+    assert!(episode_twos[0].playable);
+    assert!(episode_twos[0].missing_since.is_none());
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();

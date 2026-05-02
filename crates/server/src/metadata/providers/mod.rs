@@ -260,6 +260,17 @@ impl MetadataProvider for TmdbMetadataProvider {
         ))
     }
 
+    fn load_show_descendant_targets<'a>(
+        &'a self,
+        settings: &'a MetadataSettings,
+        show_external_id: &'a str,
+    ) -> MetadataProviderFuture<'a, Vec<ProviderDescendantTarget>> {
+        Box::pin(tmdb::load_show_descendant_targets(
+            settings,
+            show_external_id,
+        ))
+    }
+
     fn metadata_details(
         &self,
         snapshot: &StoredMetadataSnapshot,

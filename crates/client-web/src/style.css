@@ -946,9 +946,7 @@ legend {
   aspect-ratio: 2 / 3;
   border-radius: 18px;
   padding: 0.9rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: start;
+  display: block;
   background: linear-gradient(180deg, rgba(93, 123, 255, 0.8), rgba(22, 31, 54, 0.92));
   background-position: center;
   background-repeat: no-repeat;
@@ -958,7 +956,6 @@ legend {
 
 .media-card-art.episode {
   aspect-ratio: 16 / 9;
-  align-items: end;
 }
 
 .media-card-art.audio {
@@ -971,11 +968,29 @@ legend {
 }
 
 .media-card-kind-row {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
   display: flex;
   justify-content: space-between;
   gap: 0.5rem;
   align-items: start;
-  width: 100%;
+  pointer-events: none;
+}
+
+.media-card-dynamic-badges {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: end;
+  pointer-events: none;
 }
 
 .media-card-kind,
@@ -1024,12 +1039,22 @@ legend {
   color: #dce6ff;
 }
 
-.media-card-status.is-missing {
+.media-card-dynamic-badges .media-card-status.is-loading {
   min-width: 1.45rem;
   min-height: 1.45rem;
   justify-content: center;
   background: rgba(10, 14, 24, 0.52);
+}
+
+.media-card-status.is-missing {
+  min-width: 1.45rem;
+  min-height: 1.45rem;
+  padding: 0.24rem 0.42rem;
+  justify-content: center;
+  gap: 0.28rem;
+  background: rgba(10, 14, 24, 0.52);
   color: #ffd78a;
+  white-space: nowrap;
 }
 
 .media-card-status .status-warning-icon {
@@ -1898,6 +1923,10 @@ legend {
 .tag.warning {
   background: rgba(255, 191, 84, 0.16);
   color: #ffd78a;
+}
+
+.tag.status-tag {
+  gap: 0.35rem;
 }
 
 .metadata-search-form,

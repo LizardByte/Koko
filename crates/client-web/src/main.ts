@@ -1889,8 +1889,23 @@ function missingItemBadgeMarkup(item: MediaItemSummary): string {
 
   const statusLabel = `Missing from disk since ${formatTimestamp(item.missing_since)}`;
   return `
-    <span class="media-card-status is-missing icon-only" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
-      ${renderIcon('trash-2', 'status-icon')}
+    <span class="media-card-status is-missing" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
+      ${renderIcon('triangle-alert', 'status-icon')}
+      <span>Missing</span>
+    </span>
+  `;
+}
+
+function missingItemDetailBadgeMarkup(item: MediaItemSummary): string {
+  if (!item.missing_since) {
+    return '';
+  }
+
+  const statusLabel = `Missing from disk since ${formatTimestamp(item.missing_since)}`;
+  return `
+    <span class="tag warning status-tag" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
+      ${renderIcon('triangle-alert', 'status-icon')}
+      <span>Missing</span>
     </span>
   `;
 }
@@ -1919,16 +1934,19 @@ function renderItemCard(item: MediaItemSummary): string {
     : state.route.page === 'home' && typeof state.route.libraryId === 'number'
       ? humanizeItemType(item.item_type)
       : `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`;
-  const badgeMarkup = `${missingItemBadgeMarkup(item)}${metadataBadgeMarkup(item)}`;
+  const metricMarkup = item.missing_since
+    ? missingItemBadgeMarkup(item)
+    : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
+  const badgeMarkup = metadataBadgeMarkup(item);
 
   return `
     <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
       <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(item.item_type)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
-          ${badgeMarkup}
           <span class="media-card-kind">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>
+          ${metricMarkup}
         </span>
-        <span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>
+        ${badgeMarkup ? `<span class="media-card-dynamic-badges">${badgeMarkup}</span>` : ''}
       </span>
       <span class="media-card-title">${escapeHtml(item.display_title)}</span>
       ${cardSubtitle ? `<span class="media-card-subtitle">${escapeHtml(cardSubtitle)}</span>` : ''}
@@ -3491,6 +3509,7 @@ function renderItemPage(): string {
             : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`}
           ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
           <div class="hero-meta-row">
+            ${missingItemDetailBadgeMarkup(state.selectedItem)}
             ${state.selectedItem.release_year ? `<span class="tag">${state.selectedItem.release_year}</span>` : ''}
             ${state.selectedItem.content_rating ? `<span class="tag">${escapeHtml(state.selectedItem.content_rating)}</span>` : ''}
             ${typeof state.selectedItem.rating === 'number' ? `<span class="tag">${escapeHtml(state.selectedItem.rating.toFixed(1))}</span>` : ''}

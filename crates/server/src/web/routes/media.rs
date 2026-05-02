@@ -34,25 +34,27 @@ use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
     MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
-    PersistedMediaFileSummary, PlaybackDecision, TranscodingCapability, delete_missing_media_items,
-    get_item_secondary_provider_references, get_item_youtube_theme_collection_references,
-    get_library_files, get_library_metadata_languages, get_library_metadata_providers,
+    PersistedMediaFileSummary, PlaybackDecision, ShowMetadataDescendantPlan,
+    ShowMetadataEpisodePlan, ShowMetadataSeasonPlan, TranscodingCapability,
+    delete_missing_media_items, get_item_secondary_provider_references,
+    get_item_youtube_theme_collection_references, get_library_files,
+    get_library_metadata_languages, get_library_metadata_providers,
     get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
     get_media_item_with_preferred_languages, get_persisted_library_summaries,
     get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
-    get_preferred_item_metadata_link, get_user_playback_progress, infer_episode_number,
-    inspect_transcoding_capability, library_exists, list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_item_children,
-    list_media_items, list_media_items_with_preferred_languages, mark_metadata_match_attempted,
+    get_preferred_item_metadata_link, get_user_playback_progress, inspect_transcoding_capability,
+    library_exists, list_automatic_metadata_candidates, list_automatic_metadata_refresh_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    list_media_items_with_preferred_languages, mark_metadata_match_attempted,
     preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
     resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
-    upsert_playback_progress, user_can_access_library,
+    upsert_playback_progress, upsert_show_metadata_descendant_items, user_can_access_library,
 };
 use crate::metadata::{
     ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
     MetadataPersonCreditSummary, MetadataPersonSummary, MetadataProviderRole,
-    MetadataProviderStatus, MetadataSearchResult, StoredMetadataSnapshot,
+    MetadataProviderStatus, MetadataSearchResult, ProviderDescendantTarget, StoredMetadataSnapshot,
     expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot_for_locale,
     fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot_for_locale,
@@ -1262,22 +1264,34 @@ async fn load_show_descendant_refresh_targets(
     provider_id: MetadataProviderId,
     show_external_id: &str,
 ) -> Result<Vec<MetadataRefreshTarget>, Status> {
-    if provider_id == MetadataProviderId::Tvdb {
-        return load_tvdb_show_descendant_refresh_targets(
-            db,
-            settings,
+    let lookup = load_provider_show_descendant_targets(
+        &settings.metadata,
+        provider_id.clone(),
+        show_external_id,
+    )
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to load {} descendant metadata for show item {}: {}",
+            provider_id.as_storage_value(),
             show_item_id,
-            show_external_id,
-        )
-        .await;
+            error
+        );
+        Status::ServiceUnavailable
+    })?;
+    if lookup.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let seasons = db
-        .run(move |conn| list_media_item_children(conn, show_item_id))
+    let descendant_plan = show_metadata_descendant_plan(&lookup);
+    let descendant_items = db
+        .run(move |conn| {
+            upsert_show_metadata_descendant_items(conn, show_item_id, &descendant_plan)
+        })
         .await
         .map_err(|error| {
             log::error!(
-                "Failed to load show children for automatic metadata propagation on item {}: {}",
+                "Failed to upsert missing show descendants for metadata propagation on item {}: {}",
                 show_item_id,
                 error
             );
@@ -1285,197 +1299,201 @@ async fn load_show_descendant_refresh_targets(
         })?;
 
     let mut targets = Vec::new();
-    for season in seasons
-        .into_iter()
-        .filter(|item| item.item_type == "season")
-    {
-        let Some(season_number) = season.season_number else {
+    for (season_number, season_target) in provider_season_targets_by_number(&lookup) {
+        let Some(season) = descendant_items
+            .seasons_by_number
+            .get(&season_number)
+            .cloned()
+        else {
             continue;
         };
-        let season_id = season.id;
-        targets.push(MetadataRefreshTarget {
-            item_id: season_id,
-            library_id: season.library_id,
-            provider_id: provider_id.clone(),
-            item_type: season.item_type.clone(),
-            display_title: season.display_title.clone(),
-            relative_path: season.relative_path.clone(),
-            external_id: format!("tv:{show_external_id}:season:{season_number}"),
-            media_type: "tv_season".into(),
-            fetch_kind: MetadataRefreshFetchKind::TmdbShowSeason {
-                show_external_id: show_external_id.to_string(),
-                season_number,
-            },
-        });
+        if let Some(target) = metadata_refresh_target_for_show_season(
+            provider_id.clone(),
+            show_external_id,
+            season,
+            &season_target,
+        ) {
+            targets.push(target);
+        }
 
-        let episodes = db
-            .run(move |conn| list_media_item_children(conn, season_id))
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to load season children for automatic metadata propagation on item {}: {}",
-                    season_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
-
-        for episode in episodes
-            .into_iter()
-            .filter(|item| item.item_type == "episode")
+        if !descendant_items
+            .seasons_with_local_episodes
+            .contains(&season_number)
         {
-            let Some(episode_number) = episode.episode_number.or_else(|| {
-                infer_episode_number(&episode.relative_path)
-                    .or_else(|| infer_episode_number(&episode.display_title))
-            }) else {
-                log::warn!(
-                    "Skipping TMDB episode metadata propagation for media item {} because no episode number could be inferred from {:?}",
-                    episode.id,
-                    episode.relative_path
-                );
+            continue;
+        }
+
+        let mut episode_targets = lookup
+            .iter()
+            .filter(|target| target.season_number == season_number && target.episode_number > 0)
+            .cloned()
+            .collect::<Vec<_>>();
+        episode_targets.sort_by_key(|target| target.episode_number);
+        episode_targets.dedup_by_key(|target| target.episode_number);
+        for episode_target in episode_targets {
+            let Some(episode) = descendant_items
+                .episodes_by_number
+                .get(&(season_number, episode_target.episode_number))
+                .cloned()
+            else {
                 continue;
             };
-            targets.push(MetadataRefreshTarget {
-                item_id: episode.id,
-                library_id: episode.library_id,
-                provider_id: provider_id.clone(),
-                item_type: episode.item_type.clone(),
-                display_title: episode.display_title.clone(),
-                relative_path: episode.relative_path.clone(),
-                external_id: format!(
-                    "tv:{show_external_id}:season:{season_number}:episode:{episode_number}"
-                ),
-                media_type: "tv_episode".into(),
-                fetch_kind: MetadataRefreshFetchKind::TmdbShowEpisode {
-                    show_external_id: show_external_id.to_string(),
-                    season_number,
-                    episode_number,
-                },
-            });
+            if let Some(target) = metadata_refresh_target_for_show_episode(
+                provider_id.clone(),
+                show_external_id,
+                episode,
+                &episode_target,
+            ) {
+                targets.push(target);
+            }
         }
     }
 
     Ok(targets)
 }
 
-async fn load_tvdb_show_descendant_refresh_targets(
-    db: &DbConn,
-    settings: &crate::config::Settings,
-    show_item_id: i32,
-    show_external_id: &str,
-) -> Result<Vec<MetadataRefreshTarget>, Status> {
-    let lookup = load_provider_show_descendant_targets(
-        &settings.metadata,
-        MetadataProviderId::Tvdb,
-        show_external_id,
-    )
-    .await
-    .map_err(|error| {
-        log::error!(
-            "Failed to load TheTVDB descendant metadata for show item {}: {}",
-            show_item_id,
-            error
-        );
-        Status::ServiceUnavailable
-    })?;
+fn show_metadata_descendant_plan(
+    lookup: &[ProviderDescendantTarget]
+) -> ShowMetadataDescendantPlan {
+    let mut season_numbers = HashSet::new();
+    let mut episode_numbers = HashSet::new();
+    for target in lookup {
+        if target.season_number > 0 {
+            season_numbers.insert(target.season_number);
+        }
+        if target.season_number > 0 && target.episode_number > 0 {
+            episode_numbers.insert((target.season_number, target.episode_number));
+        }
+    }
 
-    let seasons = db
-        .run(move |conn| list_media_item_children(conn, show_item_id))
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to load show children for TheTVDB metadata propagation on item {}: {}",
-                show_item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-
-    let mut targets = Vec::new();
-    for season in seasons
+    let mut seasons = season_numbers
         .into_iter()
-        .filter(|item| item.item_type == "season")
-    {
-        let Some(season_number) = season.season_number else {
-            continue;
-        };
-        let Some(first_episode) = lookup
-            .iter()
-            .find(|target| target.season_number == season_number)
-        else {
-            continue;
-        };
+        .map(|season_number| ShowMetadataSeasonPlan {
+            season_number,
+            display_title: None,
+        })
+        .collect::<Vec<_>>();
+    seasons.sort_by_key(|season| season.season_number);
 
-        targets.push(MetadataRefreshTarget {
+    let mut episodes = episode_numbers
+        .into_iter()
+        .map(|(season_number, episode_number)| ShowMetadataEpisodePlan {
+            season_number,
+            episode_number,
+            display_title: None,
+        })
+        .collect::<Vec<_>>();
+    episodes.sort_by_key(|episode| (episode.season_number, episode.episode_number));
+
+    ShowMetadataDescendantPlan { seasons, episodes }
+}
+
+fn provider_season_targets_by_number(
+    lookup: &[ProviderDescendantTarget]
+) -> Vec<(i32, ProviderDescendantTarget)> {
+    let mut by_number = HashMap::new();
+    for target in lookup.iter().filter(|target| target.season_number > 0) {
+        by_number
+            .entry(target.season_number)
+            .or_insert_with(|| target.clone());
+    }
+
+    let mut seasons = by_number.into_iter().collect::<Vec<_>>();
+    seasons.sort_by_key(|(season_number, _)| *season_number);
+    seasons
+}
+
+fn metadata_refresh_target_for_show_season(
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season: MediaItemSummary,
+    provider_target: &ProviderDescendantTarget,
+) -> Option<MetadataRefreshTarget> {
+    let season_number = provider_target.season_number;
+    match provider_id {
+        MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
             item_id: season.id,
             library_id: season.library_id,
-            provider_id: MetadataProviderId::Tvdb,
-            item_type: season.item_type.clone(),
-            display_title: season.display_title.clone(),
-            relative_path: season.relative_path.clone(),
+            provider_id,
+            item_type: season.item_type,
+            display_title: season.display_title,
+            relative_path: season.relative_path,
+            external_id: format!("tv:{show_external_id}:season:{season_number}"),
+            media_type: "tv_season".into(),
+            fetch_kind: MetadataRefreshFetchKind::TmdbShowSeason {
+                show_external_id: show_external_id.to_string(),
+                season_number,
+            },
+        }),
+        MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            item_id: season.id,
+            library_id: season.library_id,
+            provider_id,
+            item_type: season.item_type,
+            display_title: season.display_title,
+            relative_path: season.relative_path,
             external_id: format!(
                 "series:{show_external_id}:season:{}",
-                first_episode.season_external_id
+                provider_target.season_external_id
             ),
             media_type: "season".into(),
             fetch_kind: MetadataRefreshFetchKind::TvdbSeason {
                 show_external_id: show_external_id.to_string(),
                 season_number,
-                season_external_id: first_episode.season_external_id.clone(),
+                season_external_id: provider_target.season_external_id.clone(),
             },
-        });
-
-        let season_id = season.id;
-        let episodes = db
-            .run(move |conn| list_media_item_children(conn, season_id))
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to load season children for TheTVDB metadata propagation on item {}: {}",
-                    season_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
-
-        for episode in episodes
-            .into_iter()
-            .filter(|item| item.item_type == "episode")
-        {
-            let Some(episode_number) = episode.episode_number.or_else(|| {
-                infer_episode_number(&episode.relative_path)
-                    .or_else(|| infer_episode_number(&episode.display_title))
-            }) else {
-                continue;
-            };
-            let Some(target) = lookup.iter().find(|target| {
-                target.season_number == season_number && target.episode_number == episode_number
-            }) else {
-                continue;
-            };
-            targets.push(MetadataRefreshTarget {
-                item_id: episode.id,
-                library_id: episode.library_id,
-                provider_id: MetadataProviderId::Tvdb,
-                item_type: episode.item_type.clone(),
-                display_title: episode.display_title.clone(),
-                relative_path: episode.relative_path.clone(),
-                external_id: format!(
-                    "series:{show_external_id}:season:{season_number}:episode:{}",
-                    target.episode_external_id
-                ),
-                media_type: "episode".into(),
-                fetch_kind: MetadataRefreshFetchKind::TvdbEpisode {
-                    show_external_id: show_external_id.to_string(),
-                    season_number,
-                    episode_number,
-                    episode_external_id: target.episode_external_id.clone(),
-                },
-            });
-        }
+        }),
+        _ => None,
     }
+}
 
-    Ok(targets)
+fn metadata_refresh_target_for_show_episode(
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    episode: MediaItemSummary,
+    provider_target: &ProviderDescendantTarget,
+) -> Option<MetadataRefreshTarget> {
+    let season_number = provider_target.season_number;
+    let episode_number = provider_target.episode_number;
+    match provider_id {
+        MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
+            item_id: episode.id,
+            library_id: episode.library_id,
+            provider_id,
+            item_type: episode.item_type,
+            display_title: episode.display_title,
+            relative_path: episode.relative_path,
+            external_id: format!(
+                "tv:{show_external_id}:season:{season_number}:episode:{episode_number}"
+            ),
+            media_type: "tv_episode".into(),
+            fetch_kind: MetadataRefreshFetchKind::TmdbShowEpisode {
+                show_external_id: show_external_id.to_string(),
+                season_number,
+                episode_number,
+            },
+        }),
+        MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            item_id: episode.id,
+            library_id: episode.library_id,
+            provider_id,
+            item_type: episode.item_type,
+            display_title: episode.display_title,
+            relative_path: episode.relative_path,
+            external_id: format!(
+                "series:{show_external_id}:season:{season_number}:episode:{}",
+                provider_target.episode_external_id
+            ),
+            media_type: "episode".into(),
+            fetch_kind: MetadataRefreshFetchKind::TvdbEpisode {
+                show_external_id: show_external_id.to_string(),
+                season_number,
+                episode_number,
+                episode_external_id: provider_target.episode_external_id.clone(),
+            },
+        }),
+        _ => None,
+    }
 }
 
 async fn mark_metadata_refresh_target_pending(

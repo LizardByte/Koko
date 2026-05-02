@@ -10,12 +10,12 @@ use tmdb_client::models::{EpisodeDetails, MovieDetails, MovieObject, SeasonDetai
 use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
-    MetadataSearchResult, ProviderExternalId, ProviderMetadataCollection, ProviderMetadataDetails,
-    ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
-    managed_metadata_asset_dir, metadata_asset_db_path, metadata_response_cache_key,
-    movie_match_score, parse_movie_name, preferred_image_url_by_format, provider_settings,
-    read_metadata_response_cache_text, show_search_query, try_cache_item_artwork,
-    write_metadata_response_cache_text,
+    MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataCollection,
+    ProviderMetadataDetails, ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title,
+    extract_release_year, managed_metadata_asset_dir, metadata_asset_db_path,
+    metadata_response_cache_key, movie_match_score, parse_movie_name,
+    preferred_image_url_by_format, provider_settings, read_metadata_response_cache_text,
+    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
@@ -293,6 +293,67 @@ pub(crate) async fn guess_show_match(
     }
 
     Ok((best_score >= 0.78).then_some(best_result).flatten())
+}
+
+pub(crate) async fn load_show_descendant_targets(
+    settings: &MetadataSettings,
+    show_external_id: &str,
+) -> Result<Vec<ProviderDescendantTarget>, String> {
+    let provider = tmdb_provider_settings(settings)?;
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language;
+    let show_id = parse_external_id(show_external_id, "tv")?;
+    let show_external_id = show_external_id.to_string();
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        let details = client
+            .tv_api()
+            .get_tv_details(show_id, Some(&language), None, None)
+            .map_err(|error| {
+                format!(
+                    "TMDB descendant lookup for tv:{} failed: {}",
+                    show_external_id, error
+                )
+            })?;
+
+        let mut season_numbers = details
+            .seasons
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|season| season.season_number)
+            .filter(|season_number| *season_number > 0)
+            .collect::<Vec<_>>();
+        season_numbers.sort_unstable();
+        season_numbers.dedup();
+
+        let mut targets = Vec::new();
+        for season_number in season_numbers {
+            let season_details = client
+                .tv_seasons_api()
+                .get_tv_season_details(show_id, season_number, Some(&language), None, None)
+                .map_err(|error| {
+                    format!(
+                        "TMDB descendant lookup for tv:{} season {} failed: {}",
+                        show_external_id, season_number, error
+                    )
+                })?;
+            for episode in season_details.episodes.unwrap_or_default() {
+                let Some(episode_number) = episode.episode_number.filter(|number| *number > 0)
+                else {
+                    continue;
+                };
+                targets.push(ProviderDescendantTarget {
+                    season_number,
+                    episode_number,
+                    season_external_id: season_number.to_string(),
+                    episode_external_id: episode_number.to_string(),
+                });
+            }
+        }
+
+        Ok(targets)
+    })
+    .await
 }
 
 pub(crate) async fn fetch_season_snapshot(

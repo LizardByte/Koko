@@ -402,6 +402,46 @@ pub struct MediaItemDetail {
     pub missing_since: Option<i64>,
 }
 
+/// Provider-known season metadata that may not have a local library row yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowMetadataSeasonPlan {
+    /// Season number from the provider.
+    pub season_number: i32,
+    /// Optional provider title to use until full metadata is refreshed.
+    pub display_title: Option<String>,
+}
+
+/// Provider-known episode metadata that may not have a local library row yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowMetadataEpisodePlan {
+    /// Season number from the provider.
+    pub season_number: i32,
+    /// Episode number from the provider.
+    pub episode_number: i32,
+    /// Optional provider title to use until full metadata is refreshed.
+    pub display_title: Option<String>,
+}
+
+/// Provider-known descendants for one linked show.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShowMetadataDescendantPlan {
+    /// Seasons to keep visible and metadata-refreshable.
+    pub seasons: Vec<ShowMetadataSeasonPlan>,
+    /// Episodes to keep visible and metadata-refreshable when their season has local episodes.
+    pub episodes: Vec<ShowMetadataEpisodePlan>,
+}
+
+/// Local rows created or found for provider-known show descendants.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShowMetadataDescendantItems {
+    /// Season item rows keyed by season number.
+    pub seasons_by_number: HashMap<i32, MediaItemSummary>,
+    /// Episode item rows keyed by `(season_number, episode_number)`.
+    pub episodes_by_number: HashMap<(i32, i32), MediaItemSummary>,
+    /// Seasons where at least one playable local episode exists, so all provider episodes were materialized.
+    pub seasons_with_local_episodes: HashSet<i32>,
+}
+
 /// External media extra exposed on item details.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct MediaItemExtra {
@@ -1586,17 +1626,65 @@ fn sync_logical_media_items_for_library(
         .execute(conn)?;
     }
 
+    let placeholder_keep_ids = metadata_placeholder_keep_ids(&existing_items, &planned_keys);
     let stale_ids = existing_items
         .into_iter()
         .filter(|item| !planned_keys.contains(&item.identity_key))
+        .filter(|item| !placeholder_keep_ids.contains(&item.id))
         .filter(|item| item.deleted_at.is_none())
         .map(|item| item.id)
         .collect::<Vec<_>>();
     if !stale_ids.is_empty() {
         mark_media_items_deleted(conn, &stale_ids, current_timestamp())?;
     }
+    refresh_library_child_counts(conn, library.id)?;
 
     Ok(())
+}
+
+fn metadata_placeholder_keep_ids(
+    existing_items: &[MediaItem],
+    planned_keys: &HashSet<String>,
+) -> HashSet<i32> {
+    let planned_item_ids = existing_items
+        .iter()
+        .filter(|item| planned_keys.contains(&item.identity_key))
+        .map(|item| item.id)
+        .collect::<HashSet<_>>();
+
+    let mut keep_ids = HashSet::new();
+    loop {
+        let mut changed = false;
+        for item in existing_items {
+            if item.deleted_at.is_some()
+                || !is_metadata_placeholder_item(item)
+                || planned_keys.contains(&item.identity_key)
+                || keep_ids.contains(&item.id)
+            {
+                continue;
+            }
+
+            let Some(parent_id) = item.parent_id else {
+                continue;
+            };
+            if planned_item_ids.contains(&parent_id) || keep_ids.contains(&parent_id) {
+                changed |= keep_ids.insert(item.id);
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    keep_ids
+}
+
+fn is_metadata_placeholder_item(item: &MediaItem) -> bool {
+    item.missing_since.is_some()
+        && item.file_size.is_none()
+        && !item.playable
+        && matches!(item.item_type.as_str(), "season" | "episode")
 }
 
 /// Mark missing media files and items as deleted from the active catalog.
@@ -1693,6 +1781,299 @@ fn mark_media_items_deleted(
         .execute(conn)
 }
 
+/// Ensure provider-known missing seasons and episodes exist in the catalog for one show.
+///
+/// All provider seasons are materialized as missing season rows when absent. Provider episodes are
+/// materialized only for seasons that already have at least one playable local episode row.
+pub fn upsert_show_metadata_descendant_items(
+    conn: &mut SqliteConnection,
+    show_item_id: i32,
+    plan: &ShowMetadataDescendantPlan,
+) -> Result<ShowMetadataDescendantItems, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    let Some(show) = load_media_item_row(conn, show_item_id)? else {
+        return Err(diesel::result::Error::NotFound);
+    };
+    if show.item_type != "show" {
+        return Err(diesel::result::Error::NotFound);
+    }
+
+    let mut season_plans = plan
+        .seasons
+        .iter()
+        .filter(|season| season.season_number > 0)
+        .map(|season| (season.season_number, season.display_title.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut episodes_by_season = HashMap::<i32, Vec<ShowMetadataEpisodePlan>>::new();
+    for episode in plan
+        .episodes
+        .iter()
+        .filter(|episode| episode.season_number > 0 && episode.episode_number > 0)
+    {
+        season_plans
+            .entry(episode.season_number)
+            .or_insert_with(|| None);
+        episodes_by_season
+            .entry(episode.season_number)
+            .or_default()
+            .push(episode.clone());
+    }
+
+    if season_plans.is_empty() {
+        return Ok(ShowMetadataDescendantItems::default());
+    }
+
+    let mut existing_seasons = media_items_dsl::media_items
+        .filter(media_items_dsl::parent_id.eq(show.id))
+        .filter(media_items_dsl::item_type.eq("season"))
+        .filter(media_items_dsl::deleted_at.is_null())
+        .select(MediaItem::as_select())
+        .load::<MediaItem>(conn)?
+        .into_iter()
+        .filter_map(|season| season.season_number.map(|number| (number, season)))
+        .collect::<HashMap<_, _>>();
+
+    let now = current_timestamp();
+    let show_relative_path = placeholder_parent_path(&show);
+    let mut season_numbers = season_plans.keys().copied().collect::<Vec<_>>();
+    season_numbers.sort_unstable();
+    season_numbers.dedup();
+    for season_number in season_numbers {
+        if existing_seasons.contains_key(&season_number) {
+            continue;
+        }
+
+        let display_title = season_plans
+            .get(&season_number)
+            .and_then(|title| title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| format!("Season {}", season_number));
+        let values = NewMediaItem {
+            library_id: show.library_id,
+            parent_id: Some(show.id),
+            identity_key: format!("{}:season:{}", show.identity_key, season_number),
+            item_type: "season".into(),
+            display_title,
+            relative_path: Some(format!("{show_relative_path}/Season {season_number}")),
+            media_kind: Some("video".into()),
+            season_number: Some(season_number),
+            episode_number: None,
+            child_count: 0,
+            playable: false,
+            file_size: None,
+            duration_ms: None,
+            modified_at: None,
+            created_at: Some(now),
+            updated_at: Some(now),
+            missing_since: Some(now),
+            deleted_at: None,
+        };
+        let season = upsert_metadata_placeholder_item(conn, values)?;
+        existing_seasons.insert(season_number, season);
+    }
+
+    let mut seasons_with_local_episodes = HashSet::new();
+    for (season_number, season) in &existing_seasons {
+        let has_local_episode = media_items_dsl::media_items
+            .filter(media_items_dsl::parent_id.eq(season.id))
+            .filter(media_items_dsl::item_type.eq("episode"))
+            .filter(media_items_dsl::playable.eq(true))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .select(media_items_dsl::id)
+            .first::<i32>(conn)
+            .optional()?
+            .is_some();
+        if has_local_episode {
+            seasons_with_local_episodes.insert(*season_number);
+        }
+    }
+
+    let mut episodes_by_number = HashMap::<(i32, i32), MediaItem>::new();
+    let mut episode_numbers = episodes_by_season
+        .into_iter()
+        .filter(|(season_number, _)| seasons_with_local_episodes.contains(season_number))
+        .flat_map(|(season_number, episodes)| {
+            episodes
+                .into_iter()
+                .map(move |episode| ((season_number, episode.episode_number), episode))
+        })
+        .collect::<Vec<_>>();
+    episode_numbers.sort_by(|left, right| left.0.cmp(&right.0));
+    episode_numbers.dedup_by(|left, right| left.0 == right.0);
+
+    let mut materialized_season_numbers = episode_numbers
+        .iter()
+        .map(|((season_number, _), _)| *season_number)
+        .collect::<Vec<_>>();
+    materialized_season_numbers.sort_unstable();
+    materialized_season_numbers.dedup();
+    for season_number in materialized_season_numbers {
+        let Some(season) = existing_seasons.get(&season_number) else {
+            continue;
+        };
+        for episode in media_items_dsl::media_items
+            .filter(media_items_dsl::parent_id.eq(season.id))
+            .filter(media_items_dsl::item_type.eq("episode"))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .select(MediaItem::as_select())
+            .load::<MediaItem>(conn)?
+        {
+            if let Some(episode_number) = episode.episode_number {
+                episodes_by_number.insert((season_number, episode_number), episode);
+            }
+        }
+    }
+
+    for ((season_number, episode_number), episode_plan) in episode_numbers {
+        if episodes_by_number.contains_key(&(season_number, episode_number)) {
+            continue;
+        }
+        let Some(season) = existing_seasons.get(&season_number) else {
+            continue;
+        };
+
+        let display_title = episode_plan
+            .display_title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| format!("Episode {}", episode_number));
+        let season_relative_path = placeholder_parent_path(season);
+        let values = NewMediaItem {
+            library_id: show.library_id,
+            parent_id: Some(season.id),
+            identity_key: format!(
+                "{}:metadata-episode:{}",
+                season.identity_key, episode_number
+            ),
+            item_type: "episode".into(),
+            display_title,
+            relative_path: Some(format!("{season_relative_path}/Episode {episode_number}")),
+            media_kind: Some("video".into()),
+            season_number: Some(season_number),
+            episode_number: Some(episode_number),
+            child_count: 0,
+            playable: false,
+            file_size: None,
+            duration_ms: None,
+            modified_at: None,
+            created_at: Some(now),
+            updated_at: Some(now),
+            missing_since: Some(now),
+            deleted_at: None,
+        };
+        let episode = upsert_metadata_placeholder_item(conn, values)?;
+        episodes_by_number.insert((season_number, episode_number), episode);
+    }
+
+    let mut count_refresh_ids = existing_seasons
+        .values()
+        .map(|season| season.id)
+        .collect::<Vec<_>>();
+    count_refresh_ids.push(show.id);
+    refresh_media_item_child_counts(conn, &count_refresh_ids)?;
+
+    let mut result = ShowMetadataDescendantItems {
+        seasons_with_local_episodes,
+        ..ShowMetadataDescendantItems::default()
+    };
+    for (season_number, season) in existing_seasons {
+        if let Some(season) = load_media_item_row(conn, season.id)? {
+            result
+                .seasons_by_number
+                .insert(season_number, to_media_item_summary(season));
+        }
+    }
+    for ((season_number, episode_number), episode) in episodes_by_number {
+        if let Some(episode) = load_media_item_row(conn, episode.id)? {
+            result.episodes_by_number.insert(
+                (season_number, episode_number),
+                to_media_item_summary(episode),
+            );
+        }
+    }
+
+    Ok(result)
+}
+
+fn placeholder_parent_path(item: &MediaItem) -> String {
+    item.relative_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| item.display_title.clone())
+}
+
+fn upsert_metadata_placeholder_item(
+    conn: &mut SqliteConnection,
+    values: NewMediaItem,
+) -> Result<MediaItem, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    if let Some(existing) = media_items_dsl::media_items
+        .filter(media_items_dsl::identity_key.eq(&values.identity_key))
+        .select(MediaItem::as_select())
+        .first::<MediaItem>(conn)
+        .optional()?
+    {
+        let mut values = values;
+        values.created_at = existing.created_at.or(values.created_at);
+        diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq(existing.id)))
+            .set(&values)
+            .execute(conn)?;
+        return media_items_dsl::media_items
+            .filter(media_items_dsl::id.eq(existing.id))
+            .select(MediaItem::as_select())
+            .first(conn);
+    }
+
+    diesel::insert_into(media_items_dsl::media_items)
+        .values(&values)
+        .execute(conn)?;
+    media_items_dsl::media_items
+        .filter(media_items_dsl::identity_key.eq(values.identity_key))
+        .select(MediaItem::as_select())
+        .first(conn)
+}
+
+fn refresh_library_child_counts(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    let item_ids = media_items_dsl::media_items
+        .filter(media_items_dsl::library_id.eq(library_id))
+        .filter(media_items_dsl::deleted_at.is_null())
+        .select(media_items_dsl::id)
+        .load::<i32>(conn)?;
+    refresh_media_item_child_counts(conn, &item_ids)
+}
+
+fn refresh_media_item_child_counts(
+    conn: &mut SqliteConnection,
+    item_ids: &[i32],
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    let mut item_ids = item_ids.to_vec();
+    item_ids.sort_unstable();
+    item_ids.dedup();
+    for item_id in item_ids {
+        let child_count = media_items_dsl::media_items
+            .filter(media_items_dsl::parent_id.eq(item_id))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .count()
+            .get_result::<i64>(conn)?;
+        let child_count = i32::try_from(child_count).unwrap_or(i32::MAX);
+        diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq(item_id)))
+            .set(media_items_dsl::child_count.eq(child_count))
+            .execute(conn)?;
+    }
+
+    Ok(())
+}
+
 fn upsert_planned_media_item(
     conn: &mut SqliteConnection,
     library_id: i32,
@@ -1725,10 +2106,15 @@ fn upsert_planned_media_item(
         deleted_at: None,
     };
 
-    let target = existing_by_key.remove(&plan.identity_key).or_else(|| {
-        plan.explicit_id
-            .and_then(|id| existing_by_id.get(&id).cloned())
-    });
+    let target = existing_by_key
+        .remove(&plan.identity_key)
+        .or_else(|| {
+            plan.explicit_id
+                .and_then(|id| existing_by_id.get(&id))
+                .filter(|existing| existing_item_matches_plan(existing, parent_id, plan))
+                .cloned()
+        })
+        .or_else(|| take_matching_metadata_placeholder(existing_by_key, parent_id, plan));
 
     let item_id = if let Some(existing) = target {
         diesel::update(media_items_dsl::media_items.filter(media_items_dsl::id.eq(existing.id)))
@@ -1769,6 +2155,41 @@ fn upsert_planned_media_item(
 
     item_ids_by_key.insert(plan.identity_key.clone(), item_id);
     Ok(())
+}
+
+fn existing_item_matches_plan(
+    existing: &MediaItem,
+    parent_id: Option<i32>,
+    plan: &PlannedMediaItem,
+) -> bool {
+    existing.item_type == plan.item_type
+        && existing.parent_id == parent_id
+        && existing.season_number == plan.season_number
+        && existing.episode_number == plan.episode_number
+}
+
+fn take_matching_metadata_placeholder(
+    existing_by_key: &mut HashMap<String, MediaItem>,
+    parent_id: Option<i32>,
+    plan: &PlannedMediaItem,
+) -> Option<MediaItem> {
+    if !matches!(plan.item_type.as_str(), "season" | "episode") {
+        return None;
+    }
+
+    let matched_key = existing_by_key
+        .iter()
+        .find(|(_, item)| {
+            item.deleted_at.is_none()
+                && is_metadata_placeholder_item(item)
+                && item.parent_id == parent_id
+                && item.item_type == plan.item_type
+                && item.season_number == plan.season_number
+                && (plan.item_type != "episode" || item.episode_number == plan.episode_number)
+        })
+        .map(|(identity_key, _)| identity_key.clone())?;
+
+    existing_by_key.remove(&matched_key)
 }
 
 fn plan_library_media_items(

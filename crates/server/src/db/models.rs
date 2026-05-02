@@ -6,8 +6,9 @@ use diesel::prelude::*;
 // local imports
 use crate::db::schema::{
     app_settings, item_metadata_external_ids, item_metadata_links, item_metadata_people,
-    media_files, media_items, media_libraries, metadata_collection_items, metadata_collections,
-    metadata_people, metadata_person_credits, playback_progress, scan_state, users,
+    media_file_libraries, media_files, media_items, media_libraries, metadata_collection_items,
+    metadata_collections, metadata_people, metadata_person_credits, playback_progress, scan_state,
+    users,
 };
 
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]
@@ -96,19 +97,15 @@ pub struct NewScanState {
     pub other_files: i64,
 }
 
-#[derive(Queryable, Selectable, Identifiable, Associations, Debug)]
-#[diesel(belongs_to(MediaLibrary, foreign_key = library_id))]
+#[derive(Queryable, Selectable, Identifiable, Debug)]
 #[diesel(table_name = media_files)]
 pub struct MediaFile {
     pub id: i32,
-    pub library_id: i32,
-    pub source_root_path: String,
-    pub relative_path: String,
+    pub path: String,
     pub file_size: i64,
     pub modified_at: Option<i64>,
     pub media_kind: String,
     pub fingerprint_seed: String,
-    pub display_title: Option<String>,
     pub container: Option<String>,
     pub duration_ms: Option<i64>,
     pub bit_rate: Option<i64>,
@@ -118,6 +115,20 @@ pub struct MediaFile {
     pub audio_codec: Option<String>,
     pub metadata_json: Option<String>,
     pub metadata_updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug)]
+#[diesel(belongs_to(MediaFile, foreign_key = media_file_id))]
+#[diesel(belongs_to(MediaLibrary, foreign_key = library_id))]
+#[diesel(belongs_to(MediaItem, foreign_key = media_item_id))]
+#[diesel(table_name = media_file_libraries)]
+pub struct MediaFileLibrary {
+    pub id: i32,
+    pub media_file_id: i32,
+    pub library_id: i32,
+    pub source_root_path: String,
+    pub relative_path: String,
+    pub display_title: Option<String>,
     pub metadata_match_attempted_at: Option<i64>,
     pub media_item_id: Option<i32>,
     pub missing_since: Option<i64>,
@@ -457,14 +468,11 @@ pub struct NewPlaybackProgress {
 #[diesel(table_name = media_files)]
 #[diesel(treat_none_as_null = true)]
 pub struct NewMediaFile {
-    pub library_id: i32,
-    pub source_root_path: String,
-    pub relative_path: String,
+    pub path: String,
     pub file_size: i64,
     pub modified_at: Option<i64>,
     pub media_kind: String,
     pub fingerprint_seed: String,
-    pub display_title: Option<String>,
     pub container: Option<String>,
     pub duration_ms: Option<i64>,
     pub bit_rate: Option<i64>,
@@ -474,6 +482,17 @@ pub struct NewMediaFile {
     pub audio_codec: Option<String>,
     pub metadata_json: Option<String>,
     pub metadata_updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = media_file_libraries)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMediaFileLibrary {
+    pub media_file_id: i32,
+    pub library_id: i32,
+    pub source_root_path: String,
+    pub relative_path: String,
+    pub display_title: Option<String>,
     pub metadata_match_attempted_at: Option<i64>,
     pub media_item_id: Option<i32>,
     pub missing_since: Option<i64>,

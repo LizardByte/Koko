@@ -1107,7 +1107,7 @@ fn test_sync_restores_file_name_as_display_title() {
     let items = list_media_items(&mut connection, Some(library.id)).unwrap();
     let movie = items.first().unwrap();
 
-    diesel::sql_query("UPDATE media_files SET display_title = ? WHERE id = ?")
+    diesel::sql_query("UPDATE media_file_libraries SET display_title = ? WHERE media_item_id = ?")
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
             "Embedded Metadata Title".to_string(),
         ))
@@ -1979,11 +1979,13 @@ fn test_resolve_media_item_source_path_rejects_mismatched_backing_file() {
         .find(|item| item.item_type == "episode" && item.relative_path.contains("Beta Show"))
         .unwrap();
 
-    diesel::sql_query("UPDATE media_files SET media_item_id = NULL WHERE media_item_id = ?")
-        .bind::<diesel::sql_types::Integer, _>(alpha_episode.id)
-        .execute(&mut connection)
-        .unwrap();
-    diesel::sql_query("UPDATE media_files SET media_item_id = ? WHERE media_item_id = ?")
+    diesel::sql_query(
+        "UPDATE media_file_libraries SET media_item_id = NULL WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(alpha_episode.id)
+    .execute(&mut connection)
+    .unwrap();
+    diesel::sql_query("UPDATE media_file_libraries SET media_item_id = ? WHERE media_item_id = ?")
         .bind::<diesel::sql_types::Integer, _>(alpha_episode.id)
         .bind::<diesel::sql_types::Integer, _>(beta_episode.id)
         .execute(&mut connection)
@@ -2413,6 +2415,102 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
 }
 
 #[test]
+fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
+    let root = unique_temp_dir("sync_duplicate_movie_libraries_same_path");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("Example Movie.mkv"), b"video").unwrap();
+
+    let duplicate_libraries = vec![
+        MediaLibrarySettings {
+            name: "Movies - TMDB".into(),
+            path: root.to_string_lossy().to_string(),
+            paths: vec![root.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Movies,
+            metadata_providers: vec![MetadataProviderId::Tmdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
+        },
+        MediaLibrarySettings {
+            name: "Movies - TVDB".into(),
+            path: root.to_string_lossy().to_string(),
+            paths: vec![root.to_string_lossy().to_string()],
+            recursive: true,
+            kind: MediaLibraryKind::Movies,
+            metadata_providers: vec![MetadataProviderId::Tvdb],
+            metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+            metadata_languages: vec![],
+            allowed_user_ids: vec![],
+        },
+    ];
+
+    let (mut connection, db_path) =
+        create_test_connection("sync_duplicate_movie_libraries_same_path_db");
+
+    sync_library_catalog(
+        &mut connection,
+        &duplicate_libraries,
+        &FfmpegSettings::default(),
+    )
+    .expect("Expected duplicate movie libraries with the same path to sync");
+    sync_library_catalog(
+        &mut connection,
+        &duplicate_libraries,
+        &FfmpegSettings::default(),
+    )
+    .expect("Expected duplicate movie libraries with the same path to resync");
+
+    let summaries = get_persisted_library_summaries(&mut connection, &[])
+        .expect("Expected persisted library summaries after sync");
+    assert_eq!(summaries.len(), 2);
+
+    for summary in summaries {
+        let items = list_media_items(&mut connection, Some(summary.id))
+            .expect("Expected scoped media items for duplicate movie library");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].library_id, summary.id);
+
+        let files = get_library_files(&mut connection, summary.id)
+            .expect("Expected scoped media files for duplicate movie library");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].library_id, summary.id);
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let physical_file_count = diesel::sql_query("SELECT COUNT(*) AS count FROM media_files")
+        .get_result::<CountRow>(&mut connection)
+        .expect("Expected physical media file count")
+        .count;
+    let library_file_count =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM media_file_libraries")
+            .get_result::<CountRow>(&mut connection)
+            .expect("Expected library media file membership count")
+            .count;
+    let duplicate_identity_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM (\
+            SELECT identity_key FROM media_items GROUP BY identity_key HAVING COUNT(*) > 1\
+        )",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .expect("Expected duplicate identity count")
+    .count;
+
+    assert_eq!(physical_file_count, 1);
+    assert_eq!(library_file_count, 2);
+    assert_eq!(duplicate_identity_count, 0);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn test_sync_allows_duplicate_show_libraries_with_same_path() {
     let root = unique_temp_dir("sync_duplicate_show_libraries_same_path");
     let season = root.join("Example Show").join("Season 1");
@@ -2459,6 +2557,30 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
     let summaries = get_persisted_library_summaries(&mut connection, &[])
         .expect("Expected persisted library summaries after sync");
     assert_eq!(summaries.len(), 2);
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+
+    let physical_file_count = diesel::sql_query("SELECT COUNT(*) AS count FROM media_files")
+        .get_result::<CountRow>(&mut connection)
+        .expect("Expected physical media file count")
+        .count;
+    let library_file_count =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM media_file_libraries")
+            .get_result::<CountRow>(&mut connection)
+            .expect("Expected library media file membership count")
+            .count;
+    assert_eq!(
+        physical_file_count, 1,
+        "Expected duplicate library roots to share one physical media_files row"
+    );
+    assert_eq!(
+        library_file_count, 2,
+        "Expected one library membership per duplicate library"
+    );
 
     for summary in summaries {
         let items = list_media_items(&mut connection, Some(summary.id))
@@ -2724,25 +2846,25 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
         .find(|episode| episode.relative_path.contains("Gamma Show"))
         .expect("Expected Gamma Show episode to exist");
 
-    diesel::sql_query("UPDATE media_files SET media_item_id = NULL WHERE media_item_id = ?")
-        .bind::<diesel::sql_types::Integer, _>(target_episode.id)
-        .execute(&mut connection)
-        .unwrap();
-    diesel::sql_query("DELETE FROM media_files WHERE id = ?")
+    diesel::sql_query(
+        "UPDATE media_file_libraries SET media_item_id = NULL WHERE media_item_id = ?",
+    )
+    .bind::<diesel::sql_types::Integer, _>(target_episode.id)
+    .execute(&mut connection)
+    .unwrap();
+    diesel::sql_query("DELETE FROM media_file_libraries WHERE id = ?")
         .bind::<diesel::sql_types::Integer, _>(target_episode.id)
         .execute(&mut connection)
         .unwrap();
     diesel::sql_query(
-        "INSERT INTO media_files (\
-            id, library_id, source_root_path, relative_path, file_size, modified_at, media_kind, \
-            fingerprint_seed, display_title, container, duration_ms, bit_rate, width, height, \
-            video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, media_item_id\
+        "INSERT INTO media_file_libraries (\
+            id, media_file_id, library_id, source_root_path, relative_path, display_title, \
+            metadata_match_attempted_at, media_item_id\
         ) \
         SELECT \
-            ?, library_id, source_root_path, relative_path || '.id-collision', file_size, modified_at, media_kind, \
-            fingerprint_seed, display_title, container, duration_ms, bit_rate, width, height, \
-            video_codec, audio_codec, metadata_json, metadata_updated_at, metadata_match_attempted_at, ? \
-        FROM media_files WHERE media_item_id = ? LIMIT 1",
+            ?, media_file_id, library_id, source_root_path, relative_path || '.id-collision', display_title, \
+            metadata_match_attempted_at, ? \
+        FROM media_file_libraries WHERE media_item_id = ? LIMIT 1",
     )
         .bind::<diesel::sql_types::Integer, _>(target_episode.id)
         .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)

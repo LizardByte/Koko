@@ -137,14 +137,11 @@ table! {
 table! {
     media_files (id) {
         id -> Integer,
-        library_id -> Integer,
-        source_root_path -> Text,
-        relative_path -> Text,
+        path -> Text,
         file_size -> BigInt,
         modified_at -> Nullable<BigInt>,
         media_kind -> Text,
         fingerprint_seed -> Text,
-        display_title -> Nullable<Text>,
         container -> Nullable<Text>,
         duration_ms -> Nullable<BigInt>,
         bit_rate -> Nullable<BigInt>,
@@ -154,6 +151,17 @@ table! {
         audio_codec -> Nullable<Text>,
         metadata_json -> Nullable<Text>,
         metadata_updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
+    media_file_libraries (id) {
+        id -> Integer,
+        media_file_id -> Integer,
+        library_id -> Integer,
+        source_root_path -> Text,
+        relative_path -> Text,
+        display_title -> Nullable<Text>,
         metadata_match_attempted_at -> Nullable<BigInt>,
         media_item_id -> Nullable<Integer>,
         missing_since -> Nullable<BigInt>,
@@ -237,8 +245,9 @@ joinable!(item_metadata_links -> media_items (media_item_id));
 joinable!(item_metadata_people -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> metadata_people (person_id));
-joinable!(media_files -> media_libraries (library_id));
-joinable!(media_files -> media_items (media_item_id));
+joinable!(media_file_libraries -> media_files (media_file_id));
+joinable!(media_file_libraries -> media_libraries (library_id));
+joinable!(media_file_libraries -> media_items (media_item_id));
 joinable!(media_items -> media_libraries (library_id));
 joinable!(playback_progress -> users (user_id));
 joinable!(playback_progress -> media_items (media_item_id));
@@ -253,6 +262,7 @@ allow_tables_to_appear_in_same_query!(
     metadata_collections,
     metadata_people,
     metadata_person_credits,
+    media_file_libraries,
     media_files,
     media_items,
     media_libraries,

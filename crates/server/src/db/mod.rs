@@ -240,7 +240,9 @@ fn reconcile_legacy_migration_records(
             )?;
         }
     }
-    if sqlite_migration_record_exists(conn, "0000023")? {
+    if sqlite_migration_record_exists(conn, "0000023")?
+        && !sqlite_migration_record_exists(conn, "0000028")?
+    {
         repair_metadata_collection_schema(conn)?;
     }
 

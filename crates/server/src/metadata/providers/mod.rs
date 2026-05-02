@@ -436,16 +436,11 @@ impl MetadataProvider for ThemerrMetadataProvider {
         external_id: &'a str,
         _locale_key: &'a str,
     ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
-        Box::pin(async move {
-            Ok(
-                themerr::fetch_youtube_theme_url(media_type, database_id, external_id)
-                    .await?
-                    .map(|theme_song_url| ProviderMetadataDetails {
-                        theme_song_url: Some(theme_song_url),
-                        ..ProviderMetadataDetails::default()
-                    }),
-            )
-        })
+        Box::pin(themerr::fetch_youtube_theme_metadata(
+            media_type,
+            database_id,
+            external_id,
+        ))
     }
 
     fn fetch_secondary_collection_metadata<'a>(

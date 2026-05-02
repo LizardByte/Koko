@@ -2,7 +2,8 @@ use serde_json::Value;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
-    MediaLibraryKind, MetadataProviderDescriptor, MetadataProviderRole, youtube_watch_url,
+    METADATA_EXTRA_TYPE_THEME_SONG, MediaLibraryKind, MetadataProviderDescriptor,
+    MetadataProviderRole, ProviderMetadataDetails, ProviderMetadataExtra, youtube_watch_url,
 };
 
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
@@ -71,6 +72,59 @@ pub(crate) async fn fetch_youtube_theme_url(
     Ok(parse_youtube_theme_url(&payload))
 }
 
+pub(crate) async fn fetch_youtube_theme_metadata(
+    media_type: &str,
+    database_id: &str,
+    external_id: &str,
+) -> Result<Option<ProviderMetadataDetails>, String> {
+    let Some(theme_song_url) =
+        fetch_youtube_theme_url(media_type, database_id, external_id).await?
+    else {
+        return Ok(None);
+    };
+    let oembed = fetch_youtube_oembed_metadata(&theme_song_url).await;
+
+    Ok(Some(ProviderMetadataDetails {
+        theme_song_url: Some(theme_song_url.clone()),
+        extras: vec![ProviderMetadataExtra {
+            extra_type: METADATA_EXTRA_TYPE_THEME_SONG.to_string(),
+            title: oembed.as_ref().and_then(|metadata| metadata.title.clone()),
+            url: theme_song_url,
+            duration_seconds: None,
+            thumbnail_url: oembed.and_then(|metadata| metadata.thumbnail_url),
+            sort_order: 0,
+        }],
+        ..ProviderMetadataDetails::default()
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct YoutubeOEmbedMetadata {
+    title: Option<String>,
+    thumbnail_url: Option<String>,
+}
+
+async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadata> {
+    let response = reqwest::Client::new()
+        .get("https://www.youtube.com/oembed")
+        .query(&[
+            ("format", "json"),
+            ("url", url),
+        ])
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let payload = response.text().await.ok()?;
+    let payload = serde_json::from_str::<Value>(&payload).ok()?;
+    Some(YoutubeOEmbedMetadata {
+        title: text_field(&payload, &["title"]),
+        thumbnail_url: text_field(&payload, &["thumbnail_url"]),
+    })
+}
+
 fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
     match media_type.trim() {
         "movie" => Some("movies"),
@@ -100,6 +154,20 @@ fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(youtube_watch_url)
+}
+
+fn text_field(
+    value: &Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 #[cfg(test)]

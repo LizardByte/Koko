@@ -26,10 +26,10 @@ use koko::media::{
     sync_library_catalog, upsert_playback_progress,
 };
 use koko::metadata::{
-    ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, StoredMetadataSnapshot,
-    get_preferred_item_metadata_link_for_languages, get_primary_item_metadata_link,
-    set_item_metadata_refresh_state, upsert_item_metadata_link, upsert_item_metadata_snapshot,
-    upsert_secondary_collection_theme_song_url,
+    ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, ProviderMetadataExtra,
+    StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
+    get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_link,
+    upsert_item_metadata_snapshot, upsert_secondary_collection_theme_song_url,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1254,7 +1254,8 @@ fn test_item_detail_includes_linked_metadata_presentation() {
             .to_string(),
         ),
     };
-    upsert_item_metadata_snapshot(&mut connection, movie.id, &snapshot).unwrap();
+    let stored_summary =
+        upsert_item_metadata_snapshot(&mut connection, movie.id, &snapshot).unwrap();
     let stored_link = get_primary_item_metadata_link(&mut connection, movie.id)
         .unwrap()
         .expect("Expected stored metadata link");
@@ -1265,7 +1266,7 @@ fn test_item_detail_includes_linked_metadata_presentation() {
     assert_eq!(stored_link.rating, Some(8.2));
     assert_eq!(stored_link.content_rating.as_deref(), Some("R"));
     assert_eq!(
-        stored_link.trailer_title.as_deref(),
+        stored_summary.trailer_title.as_deref(),
         Some("Official Trailer")
     );
 
@@ -1743,6 +1744,14 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
         &ProviderMetadataDetails {
             trailer_title: Some("Trailer oficial".into()),
             trailer_url: Some("https://youtu.be/ZYXWVUT9876".into()),
+            extras: vec![ProviderMetadataExtra {
+                extra_type: "trailer".into(),
+                title: Some("Trailer oficial".into()),
+                url: "https://youtu.be/ZYXWVUT9876".into(),
+                duration_seconds: Some(148),
+                thumbnail_url: None,
+                sort_order: 0,
+            }],
             ..ProviderMetadataDetails::default()
         },
         "secondary",
@@ -1766,6 +1775,65 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
         detail.trailer_url.as_deref(),
         Some("https://www.youtube.com/watch?v=ZYXWVUT9876")
     );
+
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    #[derive(diesel::QueryableByName)]
+    struct ExternalMediaRow {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        title: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        thumbnail_url: Option<String>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+        duration_seconds: Option<i32>,
+    }
+
+    let trailer_extra_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM metadata_extras WHERE extra_type = 'trailer'",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(trailer_extra_count, 2);
+    let external_media_count = diesel::sql_query("SELECT COUNT(*) AS count FROM external_media")
+        .get_result::<CountRow>(&mut connection)
+        .unwrap()
+        .count;
+    assert_eq!(external_media_count, 2);
+    let spanish_external_media = diesel::sql_query(
+        "SELECT title, thumbnail_url, duration_seconds FROM external_media \
+         WHERE url = 'https://www.youtube.com/watch?v=ZYXWVUT9876'",
+    )
+    .get_result::<ExternalMediaRow>(&mut connection)
+    .unwrap();
+    assert_eq!(
+        spanish_external_media.title.as_deref(),
+        Some("Trailer oficial")
+    );
+    assert_eq!(
+        spanish_external_media.thumbnail_url.as_deref(),
+        Some("https://i.ytimg.com/vi/ZYXWVUT9876/hqdefault.jpg")
+    );
+    assert_eq!(spanish_external_media.duration_seconds, Some(148));
+    let legacy_url_column_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM pragma_table_info('item_metadata_links') \
+         WHERE name IN ('trailer_title', 'trailer_url', 'theme_song_url')",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(legacy_url_column_count, 0);
+    let normalized_url_column_count = diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM pragma_table_info('external_media') \
+         WHERE name = 'normalized_url'",
+    )
+    .get_result::<CountRow>(&mut connection)
+    .unwrap()
+    .count;
+    assert_eq!(normalized_url_column_count, 0);
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();

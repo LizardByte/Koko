@@ -28,9 +28,10 @@ use crate::config::{
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
-    ItemMetadataLink, MediaItem, MetadataCollection, MetadataCollectionItem, MetadataPerson,
-    MetadataPersonCredit, NewItemMetadataExternalId, NewItemMetadataLink, NewItemMetadataPerson,
-    NewMetadataCollection, NewMetadataCollectionItem, NewMetadataPerson, NewMetadataPersonCredit,
+    ExternalMedia, ItemMetadataLink, MediaItem, MetadataCollection, MetadataCollectionItem,
+    MetadataExtra, MetadataPerson, MetadataPersonCredit, NewExternalMedia,
+    NewItemMetadataExternalId, NewItemMetadataLink, NewItemMetadataPerson, NewMetadataCollection,
+    NewMetadataCollectionItem, NewMetadataExtra, NewMetadataPerson, NewMetadataPersonCredit,
 };
 use crate::utils::current_timestamp;
 
@@ -394,11 +395,62 @@ pub struct ProviderMetadataDetails {
     pub trailer_url: Option<String>,
     /// Theme-song URL.
     pub theme_song_url: Option<String>,
+    /// Provider-supplied external media extras.
+    pub extras: Vec<ProviderMetadataExtra>,
     /// Collections this metadata item belongs to.
     pub collections: Vec<ProviderMetadataCollection>,
     /// People credited by the provider.
     pub people: Vec<ProviderMetadataPerson>,
 }
+
+/// Provider-normalized external media extra ready for persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderMetadataExtra {
+    /// Koko extra type such as `trailer`, `clip`, or `theme_song`.
+    pub extra_type: String,
+    /// Human-friendly extra title.
+    pub title: Option<String>,
+    /// External media URL.
+    pub url: String,
+    /// External media duration in seconds, when the provider exposes it.
+    pub duration_seconds: Option<i32>,
+    /// Thumbnail URL, when available.
+    pub thumbnail_url: Option<String>,
+    /// Provider/source order for stable presentation.
+    pub sort_order: i32,
+}
+
+/// TrailerDB/TMDb-style trailer video.
+pub const METADATA_EXTRA_TYPE_TRAILER: &str = "trailer";
+/// Short trailer teaser.
+pub const METADATA_EXTRA_TYPE_TEASER: &str = "teaser";
+/// Scene clip or preview.
+pub const METADATA_EXTRA_TYPE_CLIP: &str = "clip";
+/// Behind-the-scenes or making-of video.
+pub const METADATA_EXTRA_TYPE_BEHIND_THE_SCENES: &str = "behind_the_scenes";
+/// Blooper reel.
+pub const METADATA_EXTRA_TYPE_BLOOPERS: &str = "bloopers";
+/// Featurette or interview-style promotional video.
+pub const METADATA_EXTRA_TYPE_FEATURETTE: &str = "featurette";
+/// Opening credits sequence.
+pub const METADATA_EXTRA_TYPE_OPENING_CREDITS: &str = "opening_credits";
+/// Episode or season recap.
+pub const METADATA_EXTRA_TYPE_RECAP: &str = "recap";
+/// Theme-song video or audio.
+pub const METADATA_EXTRA_TYPE_THEME_SONG: &str = "theme_song";
+
+/// Extra types currently understood by Koko.
+pub const SUPPORTED_METADATA_EXTRA_TYPES: &[&str] = &[
+    METADATA_EXTRA_TYPE_TRAILER,
+    METADATA_EXTRA_TYPE_TEASER,
+    METADATA_EXTRA_TYPE_CLIP,
+    METADATA_EXTRA_TYPE_BEHIND_THE_SCENES,
+    METADATA_EXTRA_TYPE_BLOOPERS,
+    METADATA_EXTRA_TYPE_FEATURETTE,
+    METADATA_EXTRA_TYPE_OPENING_CREDITS,
+    METADATA_EXTRA_TYPE_RECAP,
+    METADATA_EXTRA_TYPE_THEME_SONG,
+];
 
 /// Provider-normalized external identifier for cross-provider lookups.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,6 +666,45 @@ pub fn youtube_embed_url(
             if autoplay { 1 } else { 0 }
         )
     })
+}
+
+/// Normalize a provider extra type into Koko's storage vocabulary.
+pub fn normalize_metadata_extra_type(value: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut previous_was_separator = false;
+    for character in value.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            normalized.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let canonical = match normalized {
+        "trailer" | "trailers" => METADATA_EXTRA_TYPE_TRAILER,
+        "teaser" | "teasers" => METADATA_EXTRA_TYPE_TEASER,
+        "clip" | "clips" | "scene" | "scenes" => METADATA_EXTRA_TYPE_CLIP,
+        "behind_the_scenes" | "behind_the_scene" | "behindthescenes" | "behindthescene" | "bts"
+        | "making_of" | "makingof" => METADATA_EXTRA_TYPE_BEHIND_THE_SCENES,
+        "blooper" | "bloopers" => METADATA_EXTRA_TYPE_BLOOPERS,
+        "featurette" | "featurettes" => METADATA_EXTRA_TYPE_FEATURETTE,
+        "opening_credit" | "opening_credits" | "openingcredit" | "openingcredits" => {
+            METADATA_EXTRA_TYPE_OPENING_CREDITS
+        }
+        "recap" | "recaps" => METADATA_EXTRA_TYPE_RECAP,
+        "theme" | "theme_song" | "theme_songs" | "themesong" | "themesongs" => {
+            METADATA_EXTRA_TYPE_THEME_SONG
+        }
+        _ => normalized,
+    };
+
+    Some(canonical.to_string())
 }
 
 /// Normalize a Koko locale key into the canonical storage format.
@@ -1609,9 +1700,6 @@ pub fn upsert_item_metadata_link(
             genres_json: serde_json::to_string(&details.genres).ok(),
             rating: details.rating,
             content_rating: details.content_rating.clone(),
-            trailer_title: details.trailer_title.clone(),
-            trailer_url: normalized_youtube_url(details.trailer_url.as_deref()),
-            theme_song_url: normalized_youtube_url(details.theme_song_url.as_deref()),
             locale_key: snapshot.locale_key.clone(),
             provider_locale_key: snapshot.provider_locale_key.clone(),
             cached_artwork_path: if keep_cached_artwork {
@@ -1666,6 +1754,8 @@ pub fn upsert_item_metadata_link(
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 
+        sync_metadata_extras_for_link(conn, row.id, details, current_timestamp())?;
+
         if relation_kind == "primary" {
             sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, details)?;
             sync_item_metadata_external_ids(conn, row.id, snapshot, details)?;
@@ -1681,6 +1771,232 @@ fn normalized_youtube_url(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| youtube_watch_url(value).unwrap_or_else(|| value.to_string()))
+}
+
+fn provider_metadata_extras(details: &ProviderMetadataDetails) -> Vec<ProviderMetadataExtra> {
+    let mut extras = Vec::new();
+    let mut seen = HashSet::<(String, String)>::new();
+    for extra in &details.extras {
+        push_provider_metadata_extra(&mut extras, &mut seen, extra.clone());
+    }
+    if let Some(url) = details.trailer_url.as_deref() {
+        push_provider_metadata_extra(
+            &mut extras,
+            &mut seen,
+            ProviderMetadataExtra {
+                extra_type: METADATA_EXTRA_TYPE_TRAILER.to_string(),
+                title: details.trailer_title.clone(),
+                url: url.to_string(),
+                duration_seconds: None,
+                thumbnail_url: None,
+                sort_order: 0,
+            },
+        );
+    }
+    if let Some(url) = details.theme_song_url.as_deref() {
+        push_provider_metadata_extra(
+            &mut extras,
+            &mut seen,
+            ProviderMetadataExtra {
+                extra_type: METADATA_EXTRA_TYPE_THEME_SONG.to_string(),
+                title: None,
+                url: url.to_string(),
+                duration_seconds: None,
+                thumbnail_url: None,
+                sort_order: 0,
+            },
+        );
+    }
+    extras
+}
+
+fn push_provider_metadata_extra(
+    extras: &mut Vec<ProviderMetadataExtra>,
+    seen: &mut HashSet<(String, String)>,
+    extra: ProviderMetadataExtra,
+) {
+    let Some(extra_type) = normalize_metadata_extra_type(&extra.extra_type) else {
+        return;
+    };
+    let Some(url) = normalized_youtube_url(Some(&extra.url)) else {
+        return;
+    };
+    if !seen.insert((extra_type.clone(), url.clone())) {
+        return;
+    }
+    extras.push(ProviderMetadataExtra {
+        extra_type,
+        title: extra
+            .title
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty()),
+        duration_seconds: extra.duration_seconds.filter(|duration| *duration > 0),
+        thumbnail_url: extra
+            .thumbnail_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| youtube_thumbnail_url(&url)),
+        url,
+        sort_order: extra.sort_order,
+    });
+}
+
+fn sync_metadata_extras_for_link(
+    conn: &mut SqliteConnection,
+    metadata_link_id: i32,
+    details: &ProviderMetadataDetails,
+    now: i64,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_extras::dsl as extras_dsl;
+
+    diesel::delete(
+        extras_dsl::metadata_extras.filter(extras_dsl::metadata_link_id.eq(metadata_link_id)),
+    )
+    .execute(conn)?;
+
+    for (index, extra) in provider_metadata_extras(details).into_iter().enumerate() {
+        let external_media_id = upsert_external_media(
+            conn,
+            &extra.url,
+            extra.title.as_deref(),
+            extra.duration_seconds,
+            extra.thumbnail_url.as_deref(),
+            now,
+        )?;
+        let row = NewMetadataExtra {
+            metadata_link_id: Some(metadata_link_id),
+            collection_id: None,
+            external_media_id,
+            extra_type: extra.extra_type,
+            title: extra.title,
+            sort_order: if extra.sort_order >= 0 { extra.sort_order } else { index as i32 },
+            updated_at: Some(now),
+        };
+        diesel::insert_into(extras_dsl::metadata_extras)
+            .values(&row)
+            .execute(conn)?;
+    }
+
+    Ok(())
+}
+
+fn sync_collection_theme_song_extra(
+    conn: &mut SqliteConnection,
+    collection_id: i32,
+    theme_song_url: &str,
+    now: i64,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_extras::dsl as extras_dsl;
+
+    let Some(url) = normalized_youtube_url(Some(theme_song_url)) else {
+        return Ok(());
+    };
+    diesel::delete(
+        extras_dsl::metadata_extras
+            .filter(extras_dsl::collection_id.eq(collection_id))
+            .filter(extras_dsl::extra_type.eq(METADATA_EXTRA_TYPE_THEME_SONG)),
+    )
+    .execute(conn)?;
+
+    let external_media_id = upsert_external_media(
+        conn,
+        &url,
+        None,
+        None,
+        youtube_thumbnail_url(&url).as_deref(),
+        now,
+    )?;
+    let row = NewMetadataExtra {
+        metadata_link_id: None,
+        collection_id: Some(collection_id),
+        external_media_id,
+        extra_type: METADATA_EXTRA_TYPE_THEME_SONG.to_string(),
+        title: None,
+        sort_order: 0,
+        updated_at: Some(now),
+    };
+    diesel::insert_into(extras_dsl::metadata_extras)
+        .values(&row)
+        .execute(conn)?;
+
+    Ok(())
+}
+
+fn upsert_external_media(
+    conn: &mut SqliteConnection,
+    url: &str,
+    title: Option<&str>,
+    duration_seconds: Option<i32>,
+    thumbnail_url: Option<&str>,
+    now: i64,
+) -> Result<i32, diesel::result::Error> {
+    use crate::db::schema::external_media::dsl as media_dsl;
+
+    let url = normalized_youtube_url(Some(url)).unwrap_or_else(|| url.trim().to_string());
+    let (source, external_id) = external_media_identity(&url);
+    let existing = media_dsl::external_media
+        .filter(media_dsl::url.eq(&url))
+        .select(ExternalMedia::as_select())
+        .first::<ExternalMedia>(conn)
+        .optional()?;
+    let title = title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| existing.as_ref().and_then(|row| row.title.clone()));
+    let thumbnail_url = thumbnail_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| youtube_thumbnail_url(&url))
+        .or_else(|| existing.as_ref().and_then(|row| row.thumbnail_url.clone()));
+    let payload = NewExternalMedia {
+        source,
+        external_id,
+        url: url.clone(),
+        media_kind: "video".to_string(),
+        title,
+        duration_seconds: duration_seconds
+            .filter(|duration| *duration > 0)
+            .or_else(|| existing.as_ref().and_then(|row| row.duration_seconds)),
+        thumbnail_url,
+        updated_at: Some(now),
+    };
+
+    if let Some(existing) = existing {
+        diesel::update(media_dsl::external_media.filter(media_dsl::id.eq(existing.id)))
+            .set(&payload)
+            .execute(conn)?;
+        Ok(existing.id)
+    } else {
+        diesel::insert_into(media_dsl::external_media)
+            .values(&payload)
+            .execute(conn)?;
+        media_dsl::external_media
+            .filter(media_dsl::url.eq(&url))
+            .select(media_dsl::id)
+            .first::<i32>(conn)
+    }
+}
+
+fn youtube_thumbnail_url(url: &str) -> Option<String> {
+    extract_youtube_video_id(url)
+        .map(|video_id| format!("https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"))
+}
+
+fn external_media_identity(url: &str) -> (String, Option<String>) {
+    if let Some(video_id) = extract_youtube_video_id(url) {
+        return ("youtube".to_string(), Some(video_id));
+    }
+    let source = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(ToOwned::to_owned))
+        .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "url".to_string());
+    (source, None)
 }
 
 /// Create or update one metadata-link refresh state for asynchronous work tracking.
@@ -1742,9 +2058,6 @@ pub fn set_item_metadata_refresh_state(
             genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
             rating: existing.as_ref().and_then(|row| row.rating),
             content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
-            trailer_title: existing.as_ref().and_then(|row| row.trailer_title.clone()),
-            trailer_url: existing.as_ref().and_then(|row| row.trailer_url.clone()),
-            theme_song_url: existing.as_ref().and_then(|row| row.theme_song_url.clone()),
             locale_key: existing
                 .as_ref()
                 .map(|row| row.locale_key.clone())
@@ -1879,6 +2192,14 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
         .filter(collections_dsl::id.eq_any(collection_ids))
         .select(MetadataCollection::as_select())
         .load::<MetadataCollection>(conn)?;
+    let collection_theme_song_urls = metadata_extra_urls_by_collection_id(
+        conn,
+        &collection_rows
+            .iter()
+            .map(|collection| collection.id)
+            .collect::<Vec<_>>(),
+        METADATA_EXTRA_TYPE_THEME_SONG,
+    )?;
     let collections_by_id = collection_rows
         .into_iter()
         .map(|collection| (collection.id, collection))
@@ -1974,9 +2295,10 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
                 backdrop_url: first_collection_string(&collections, |collection| {
                     collection.backdrop_url.as_ref()
                 }),
-                theme_song_url: first_collection_string(&collections, |collection| {
-                    collection.theme_song_url.as_ref()
-                }),
+                theme_song_url: first_collection_extra_url(
+                    &collections,
+                    &collection_theme_song_urls,
+                ),
                 item_count: item_ids.len(),
                 item_ids,
             })
@@ -1984,6 +2306,41 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
         .collect::<Vec<_>>();
     summaries.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(summaries)
+}
+
+fn metadata_extra_urls_by_collection_id(
+    conn: &mut SqliteConnection,
+    collection_ids: &[i32],
+    extra_type: &str,
+) -> Result<HashMap<i32, String>, diesel::result::Error> {
+    use crate::db::schema::external_media::dsl as media_dsl;
+    use crate::db::schema::metadata_extras::dsl as extras_dsl;
+
+    if collection_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let collection_ids = collection_ids.iter().copied().map(Some).collect::<Vec<_>>();
+    let rows = extras_dsl::metadata_extras
+        .inner_join(media_dsl::external_media)
+        .filter(extras_dsl::collection_id.eq_any(collection_ids))
+        .filter(extras_dsl::extra_type.eq(extra_type))
+        .order((
+            extras_dsl::collection_id.asc(),
+            extras_dsl::sort_order.asc(),
+            extras_dsl::id.asc(),
+        ))
+        .select((extras_dsl::collection_id, media_dsl::url))
+        .load::<(Option<i32>, String)>(conn)?;
+
+    let mut urls = HashMap::new();
+    for (collection_id, url) in rows {
+        let Some(collection_id) = collection_id else {
+            continue;
+        };
+        urls.entry(collection_id).or_insert(url);
+    }
+    Ok(urls)
 }
 
 fn first_collection_string<F>(
@@ -1999,6 +2356,15 @@ where
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+fn first_collection_extra_url(
+    collections: &[MetadataCollection],
+    urls_by_collection_id: &HashMap<i32, String>,
+) -> Option<String> {
+    collections
+        .iter()
+        .find_map(|collection| urls_by_collection_id.get(&collection.id).cloned())
 }
 
 /// Upsert a secondary collection metadata row with a provider-supplied theme-song URL.
@@ -2172,7 +2538,7 @@ fn preferred_person_row(
 }
 
 /// Extract presentation-ready metadata from a stored link payload.
-pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadataPresentation {
+fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadataPresentation {
     let tagline = link.tagline.clone();
     let overview = link.overview.clone();
     let genres = link
@@ -2197,17 +2563,34 @@ pub fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadat
         logo_url,
         rating,
         content_rating,
-        trailer_title: link.trailer_title.clone(),
-        trailer_url: link.trailer_url.clone(),
-        theme_song_url: link.theme_song_url.clone(),
+        trailer_title: None,
+        trailer_url: None,
+        theme_song_url: None,
     }
 }
 
 /// Extract merged presentation metadata from ordered stored links.
-pub fn presentation_from_metadata_links(links: &[ItemMetadataLink]) -> LinkedMetadataPresentation {
+pub fn presentation_from_metadata_links(
+    conn: &mut SqliteConnection,
+    links: &[ItemMetadataLink],
+) -> Result<LinkedMetadataPresentation, diesel::result::Error> {
+    let extras_by_link_id =
+        metadata_extras_by_link_id(conn, &links.iter().map(|link| link.id).collect::<Vec<_>>())?;
     let mut merged = LinkedMetadataPresentation::default();
     for link in links {
-        let presentation = presentation_from_metadata_link(link);
+        let mut presentation = presentation_from_metadata_link(link);
+        if let Some(extras) = extras_by_link_id.get(&link.id) {
+            if let Some((title, url)) =
+                preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_TRAILER)
+            {
+                presentation.trailer_title = title;
+                presentation.trailer_url = Some(url);
+            }
+            if let Some((_, url)) = preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_THEME_SONG)
+            {
+                presentation.theme_song_url = Some(url);
+            }
+        }
         if merged.tagline.is_none() {
             merged.tagline = presentation.tagline;
         }
@@ -2245,7 +2628,59 @@ pub fn presentation_from_metadata_links(links: &[ItemMetadataLink]) -> LinkedMet
         }
     }
 
-    merged
+    Ok(merged)
+}
+
+fn metadata_extras_by_link_id(
+    conn: &mut SqliteConnection,
+    link_ids: &[i32],
+) -> Result<HashMap<i32, Vec<(MetadataExtra, ExternalMedia)>>, diesel::result::Error> {
+    use crate::db::schema::external_media::dsl as media_dsl;
+    use crate::db::schema::metadata_extras::dsl as extras_dsl;
+
+    if link_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let link_ids = link_ids.iter().copied().map(Some).collect::<Vec<_>>();
+    let rows = extras_dsl::metadata_extras
+        .inner_join(media_dsl::external_media)
+        .filter(extras_dsl::metadata_link_id.eq_any(link_ids))
+        .order((
+            extras_dsl::metadata_link_id.asc(),
+            extras_dsl::sort_order.asc(),
+            extras_dsl::id.asc(),
+        ))
+        .select((MetadataExtra::as_select(), ExternalMedia::as_select()))
+        .load::<(MetadataExtra, ExternalMedia)>(conn)?;
+
+    let mut by_link_id = HashMap::new();
+    for (extra, media) in rows {
+        let Some(link_id) = extra.metadata_link_id else {
+            continue;
+        };
+        by_link_id
+            .entry(link_id)
+            .or_insert_with(Vec::new)
+            .push((extra, media));
+    }
+    Ok(by_link_id)
+}
+
+fn preferred_metadata_extra(
+    extras: &[(MetadataExtra, ExternalMedia)],
+    extra_type: &str,
+) -> Option<(Option<String>, String)> {
+    extras
+        .iter()
+        .filter(|(extra, _)| extra.extra_type == extra_type)
+        .map(|(extra, media)| {
+            (
+                extra.title.clone().or_else(|| media.title.clone()),
+                media.url.clone(),
+            )
+        })
+        .next()
 }
 
 /// Persist stored metadata payload and cached artwork into the managed item asset structure.
@@ -2713,9 +3148,9 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
         people: Vec::new(),
         rating: link.rating,
         content_rating: link.content_rating,
-        trailer_title: link.trailer_title,
-        trailer_url: link.trailer_url,
-        theme_song_url: link.theme_song_url,
+        trailer_title: None,
+        trailer_url: None,
+        theme_song_url: None,
         locale_key: link.locale_key,
         provider_locale_key: link.provider_locale_key,
         cached_artwork_path: link.cached_artwork_path,
@@ -2747,8 +3182,19 @@ fn to_item_metadata_summary_with_people(
         .into_iter()
         .map(to_item_metadata_person_summary)
         .collect();
+    let extras_by_link_id = metadata_extras_by_link_id(conn, &[link.id])?;
+    let link_id = link.id;
     let mut summary = to_item_metadata_summary(link);
     summary.people = people;
+    if let Some(extras) = extras_by_link_id.get(&link_id) {
+        if let Some((title, url)) = preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_TRAILER) {
+            summary.trailer_title = title;
+            summary.trailer_url = Some(url);
+        }
+        if let Some((_, url)) = preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_THEME_SONG) {
+            summary.theme_song_url = Some(url);
+        }
+    }
     Ok(summary)
 }
 
@@ -3194,6 +3640,7 @@ fn upsert_metadata_collection(
 ) -> Result<i32, diesel::result::Error> {
     use crate::db::schema::metadata_collections::dsl as collections_dsl;
 
+    let theme_song_url = collection.theme_song_url.clone();
     let existing = collections_dsl::metadata_collections
         .filter(collections_dsl::provider_id.eq(provider_id))
         .filter(collections_dsl::external_id.eq(&collection.external_id))
@@ -3232,19 +3679,16 @@ fn upsert_metadata_collection(
         backdrop_url: collection
             .backdrop_url
             .or_else(|| existing.as_ref().and_then(|row| row.backdrop_url.clone())),
-        theme_song_url: collection
-            .theme_song_url
-            .or_else(|| existing.as_ref().and_then(|row| row.theme_song_url.clone())),
         updated_at: Some(now),
     };
 
-    if let Some(existing) = existing {
+    let collection_id = if let Some(existing) = existing {
         diesel::update(
             collections_dsl::metadata_collections.filter(collections_dsl::id.eq(existing.id)),
         )
         .set(&payload)
         .execute(conn)?;
-        Ok(existing.id)
+        existing.id
     } else {
         diesel::insert_into(collections_dsl::metadata_collections)
             .values(&payload)
@@ -3263,8 +3707,18 @@ fn upsert_metadata_collection(
             .filter(collections_dsl::relation_kind.eq(relation_kind))
             .filter(collections_dsl::locale_key.eq(locale_key))
             .select(collections_dsl::id)
-            .first::<i32>(conn)
+            .first::<i32>(conn)?
+    };
+
+    if let Some(theme_song_url) = theme_song_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sync_collection_theme_song_extra(conn, collection_id, theme_song_url, now)?;
     }
+
+    Ok(collection_id)
 }
 
 fn sync_item_metadata_external_ids(
@@ -3543,9 +3997,6 @@ mod tests {
             genres_json: Some(serde_json::json!(["Drama", "Mystery"]).to_string()),
             rating: None,
             content_rating: None,
-            trailer_title: None,
-            trailer_url: None,
-            theme_song_url: None,
             locale_key: "en-US".into(),
             provider_locale_key: None,
             cached_artwork_path: None,
@@ -3623,6 +4074,41 @@ mod tests {
             extract_youtube_video_id("https://example.com/watch?v=SLBACEP6LsI"),
             None
         );
+    }
+
+    #[test]
+    fn extra_type_normalization_covers_trailerdb_video_types_and_theme_song() {
+        let aliases = [
+            ("Trailer", METADATA_EXTRA_TYPE_TRAILER),
+            ("teaser", METADATA_EXTRA_TYPE_TEASER),
+            ("Clip", METADATA_EXTRA_TYPE_CLIP),
+            ("scene", METADATA_EXTRA_TYPE_CLIP),
+            ("Behind The Scenes", METADATA_EXTRA_TYPE_BEHIND_THE_SCENES),
+            ("bloopers", METADATA_EXTRA_TYPE_BLOOPERS),
+            ("Featurette", METADATA_EXTRA_TYPE_FEATURETTE),
+            ("Opening Credits", METADATA_EXTRA_TYPE_OPENING_CREDITS),
+            ("recaps", METADATA_EXTRA_TYPE_RECAP),
+            ("Theme Song", METADATA_EXTRA_TYPE_THEME_SONG),
+        ];
+        for (input, expected) in aliases {
+            assert_eq!(
+                normalize_metadata_extra_type(input).as_deref(),
+                Some(expected)
+            );
+        }
+        for expected in [
+            METADATA_EXTRA_TYPE_TRAILER,
+            METADATA_EXTRA_TYPE_TEASER,
+            METADATA_EXTRA_TYPE_CLIP,
+            METADATA_EXTRA_TYPE_BEHIND_THE_SCENES,
+            METADATA_EXTRA_TYPE_BLOOPERS,
+            METADATA_EXTRA_TYPE_FEATURETTE,
+            METADATA_EXTRA_TYPE_OPENING_CREDITS,
+            METADATA_EXTRA_TYPE_RECAP,
+            METADATA_EXTRA_TYPE_THEME_SONG,
+        ] {
+            assert!(SUPPORTED_METADATA_EXTRA_TYPES.contains(&expected));
+        }
     }
 
     #[test]

@@ -12,6 +12,20 @@ table! {
 }
 
 table! {
+    external_media (id) {
+        id -> Integer,
+        source -> Text,
+        external_id -> Nullable<Text>,
+        url -> Text,
+        media_kind -> Text,
+        title -> Nullable<Text>,
+        duration_seconds -> Nullable<Integer>,
+        thumbnail_url -> Nullable<Text>,
+        updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
     item_metadata_external_ids (id) {
         id -> Integer,
         metadata_link_id -> Integer,
@@ -41,9 +55,6 @@ table! {
         genres_json -> Nullable<Text>,
         rating -> Nullable<Float>,
         content_rating -> Nullable<Text>,
-        trailer_title -> Nullable<Text>,
-        trailer_url -> Nullable<Text>,
-        theme_song_url -> Nullable<Text>,
         locale_key -> Text,
         provider_locale_key -> Nullable<Text>,
         cached_artwork_path -> Nullable<Text>,
@@ -71,7 +82,6 @@ table! {
         overview -> Nullable<Text>,
         artwork_url -> Nullable<Text>,
         backdrop_url -> Nullable<Text>,
-        theme_song_url -> Nullable<Text>,
         updated_at -> Nullable<BigInt>,
     }
 }
@@ -82,6 +92,19 @@ table! {
         collection_id -> Integer,
         media_item_id -> Integer,
         metadata_link_id -> Integer,
+        updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
+    metadata_extras (id) {
+        id -> Integer,
+        metadata_link_id -> Nullable<Integer>,
+        collection_id -> Nullable<Integer>,
+        external_media_id -> Integer,
+        extra_type -> Text,
+        title -> Nullable<Text>,
+        sort_order -> Integer,
         updated_at -> Nullable<BigInt>,
     }
 }
@@ -237,6 +260,7 @@ table! {
     }
 }
 
+joinable!(metadata_extras -> external_media (external_media_id));
 joinable!(metadata_collection_items -> item_metadata_links (metadata_link_id));
 joinable!(metadata_collection_items -> media_items (media_item_id));
 joinable!(metadata_collection_items -> metadata_collections (collection_id));
@@ -255,11 +279,13 @@ joinable!(scan_state -> media_libraries (library_id));
 
 allow_tables_to_appear_in_same_query!(
     app_settings,
+    external_media,
     item_metadata_external_ids,
     item_metadata_links,
     item_metadata_people,
     metadata_collection_items,
     metadata_collections,
+    metadata_extras,
     metadata_people,
     metadata_person_credits,
     media_file_libraries,

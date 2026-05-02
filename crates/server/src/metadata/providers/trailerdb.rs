@@ -2,8 +2,9 @@ use serde_json::Value;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
-    MediaLibraryKind, MetadataProviderDescriptor, MetadataProviderRole, ProviderMetadataDetails,
-    normalize_locale_key, youtube_watch_url,
+    METADATA_EXTRA_TYPE_TRAILER, MediaLibraryKind, MetadataProviderDescriptor,
+    MetadataProviderRole, ProviderMetadataDetails, ProviderMetadataExtra, normalize_locale_key,
+    normalize_metadata_extra_type, youtube_watch_url,
 };
 
 const TRAILERDB_DATA_BASE: &str = "https://trailerdb.org/data";
@@ -93,60 +94,108 @@ fn parse_youtube_trailer(
     let payload = serde_json::from_str::<Value>(payload_json).ok()?;
     let language = provider_locale_key(locale_key);
 
-    trailer_from_groups(payload.get("trailer_groups"), &language)
-        .or_else(|| trailer_from_entries(payload.get("trailers"), &language))
-}
+    let mut extras = extras_from_groups(payload.get("trailer_groups"), &language);
+    if extras.is_empty() {
+        extras = extras_from_entries(payload.get("trailers"), &language);
+    }
+    if extras.is_empty() {
+        return None;
+    }
 
-fn trailer_from_groups(
-    groups: Option<&Value>,
-    language: &str,
-) -> Option<ProviderMetadataDetails> {
-    groups?.as_array()?.iter().find_map(|group| {
-        let languages = group.get("languages")?.as_object()?;
-        let translation = languages
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(language))
-            .map(|(_, value)| value)?;
-        let youtube_id = text_field(translation, &["youtube_id"])?;
-        let title = text_field(translation, &["title"]).or_else(|| text_field(group, &["title"]));
-        youtube_watch_url(&youtube_id).map(|url| ProviderMetadataDetails {
-            trailer_title: title,
-            trailer_url: Some(url),
-            ..ProviderMetadataDetails::default()
-        })
+    let preferred_trailer = extras
+        .iter()
+        .find(|extra| extra.extra_type == METADATA_EXTRA_TYPE_TRAILER)
+        .or_else(|| extras.first());
+    Some(ProviderMetadataDetails {
+        trailer_title: preferred_trailer.and_then(|extra| extra.title.clone()),
+        trailer_url: preferred_trailer.map(|extra| extra.url.clone()),
+        extras,
+        ..ProviderMetadataDetails::default()
     })
 }
 
-fn trailer_from_entries(
+fn extras_from_groups(
+    groups: Option<&Value>,
+    language: &str,
+) -> Vec<ProviderMetadataExtra> {
+    groups
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .enumerate()
+                .filter_map(|(index, group)| {
+                    let languages = group.get("languages")?.as_object()?;
+                    let translation = languages
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(language))
+                        .map(|(_, value)| value)?;
+                    let youtube_id = text_field(translation, &["youtube_id"])?;
+                    let url = youtube_watch_url(&youtube_id)?;
+                    let extra_type = normalize_metadata_extra_type(&text_field(group, &["type"])?)
+                        .unwrap_or_else(|| METADATA_EXTRA_TYPE_TRAILER.to_string());
+                    let title = text_field(translation, &["title"])
+                        .or_else(|| text_field(group, &["title"]));
+                    Some(ProviderMetadataExtra {
+                        extra_type,
+                        title,
+                        url,
+                        duration_seconds: None,
+                        thumbnail_url: None,
+                        sort_order: index as i32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extras_from_entries(
     trailers: Option<&Value>,
     language: &str,
-) -> Option<ProviderMetadataDetails> {
-    trailers?
-        .as_array()?
+) -> Vec<ProviderMetadataExtra> {
+    let Some(trailers) = trailers.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut entries = trailers
         .iter()
+        .enumerate()
         .filter(|entry| {
-            text_field(entry, &["language"])
+            text_field(entry.1, &["language"])
                 .as_deref()
                 .is_some_and(|entry_language| entry_language.eq_ignore_ascii_case(language))
         })
-        .fold(None, |best, entry| {
-            let score = trailer_entry_score(entry);
-            match best {
-                Some((best_score, best_entry)) if best_score >= score => {
-                    Some((best_score, best_entry))
-                }
-                _ => Some((score, entry)),
-            }
-        })
-        .and_then(|(_, entry)| trailer_from_entry(entry))
+        .collect::<Vec<_>>();
+    entries.sort_by(|(left_index, left), (right_index, right)| {
+        trailer_entry_score(right)
+            .cmp(&trailer_entry_score(left))
+            .then_with(|| left_index.cmp(right_index))
+    });
+
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(sort_order, (_, entry))| extra_from_entry(entry, sort_order as i32))
+        .collect()
 }
 
-fn trailer_from_entry(entry: &Value) -> Option<ProviderMetadataDetails> {
+fn extra_from_entry(
+    entry: &Value,
+    sort_order: i32,
+) -> Option<ProviderMetadataExtra> {
     let youtube_id = text_field(entry, &["youtube_id"])?;
-    youtube_watch_url(&youtube_id).map(|url| ProviderMetadataDetails {
-        trailer_title: text_field(entry, &["title"]),
-        trailer_url: Some(url),
-        ..ProviderMetadataDetails::default()
+    let url = youtube_watch_url(&youtube_id)?;
+    let extra_type = text_field(entry, &["type", "trailer_type"])
+        .and_then(|value| normalize_metadata_extra_type(&value))
+        .unwrap_or_else(|| METADATA_EXTRA_TYPE_TRAILER.to_string());
+    Some(ProviderMetadataExtra {
+        extra_type,
+        title: text_field(entry, &["title"]),
+        url,
+        duration_seconds: int_field(entry, &["duration", "duration_seconds"]),
+        thumbnail_url: text_field(entry, &["thumbnail_url", "thumbnail"]),
+        sort_order,
     })
 }
 
@@ -173,6 +222,19 @@ fn text_field(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
+    })
+}
+
+fn int_field(
+    value: &Value,
+    keys: &[&str],
+) -> Option<i32> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .filter(|value| *value > 0)
     })
 }
 
@@ -244,14 +306,16 @@ mod tests {
                     "title": "Spanish clip",
                     "type": "Clip",
                     "language": "es",
-                    "is_official": false
+                    "is_official": false,
+                    "duration": 52
                 },
                 {
                     "youtube_id": "bbbbbbbbbbb",
                     "title": "Trailer oficial",
                     "type": "Trailer",
                     "language": "es",
-                    "is_official": true
+                    "is_official": true,
+                    "duration": 148
                 },
                 {
                     "youtube_id": "ccccccccccc",
@@ -271,5 +335,14 @@ mod tests {
             trailer.trailer_url.as_deref(),
             Some("https://www.youtube.com/watch?v=bbbbbbbbbbb")
         );
+        assert_eq!(
+            trailer
+                .extras
+                .iter()
+                .map(|extra| extra.extra_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["trailer", "clip"]
+        );
+        assert_eq!(trailer.extras[0].duration_seconds, Some(148));
     }
 }

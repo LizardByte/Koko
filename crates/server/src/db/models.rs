@@ -5,10 +5,10 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    app_settings, item_metadata_external_ids, item_metadata_links, item_metadata_people,
-    media_file_libraries, media_files, media_items, media_libraries, metadata_collection_items,
-    metadata_collections, metadata_people, metadata_person_credits, playback_progress, scan_state,
-    users,
+    app_settings, external_media, item_metadata_external_ids, item_metadata_links,
+    item_metadata_people, media_file_libraries, media_files, media_items, media_libraries,
+    metadata_collection_items, metadata_collections, metadata_extras, metadata_people,
+    metadata_person_credits, playback_progress, scan_state, users,
 };
 
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]
@@ -185,6 +185,34 @@ pub struct NewMediaItem {
     pub deleted_at: Option<i64>,
 }
 
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = external_media)]
+pub struct ExternalMedia {
+    pub id: i32,
+    pub source: String,
+    pub external_id: Option<String>,
+    pub url: String,
+    pub media_kind: String,
+    pub title: Option<String>,
+    pub duration_seconds: Option<i32>,
+    pub thumbnail_url: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = external_media)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewExternalMedia {
+    pub source: String,
+    pub external_id: Option<String>,
+    pub url: String,
+    pub media_kind: String,
+    pub title: Option<String>,
+    pub duration_seconds: Option<i32>,
+    pub thumbnail_url: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
 #[diesel(belongs_to(MediaItem, foreign_key = media_item_id))]
 #[diesel(table_name = item_metadata_links)]
@@ -207,9 +235,6 @@ pub struct ItemMetadataLink {
     pub genres_json: Option<String>,
     pub rating: Option<f32>,
     pub content_rating: Option<String>,
-    pub trailer_title: Option<String>,
-    pub trailer_url: Option<String>,
-    pub theme_song_url: Option<String>,
     pub locale_key: String,
     pub provider_locale_key: Option<String>,
     pub cached_artwork_path: Option<String>,
@@ -243,9 +268,6 @@ pub struct NewItemMetadataLink {
     pub genres_json: Option<String>,
     pub rating: Option<f32>,
     pub content_rating: Option<String>,
-    pub trailer_title: Option<String>,
-    pub trailer_url: Option<String>,
-    pub theme_song_url: Option<String>,
     pub locale_key: String,
     pub provider_locale_key: Option<String>,
     pub cached_artwork_path: Option<String>,
@@ -276,6 +298,32 @@ pub struct NewItemMetadataExternalId {
     pub metadata_link_id: i32,
     pub source: String,
     pub external_id: String,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = metadata_extras)]
+pub struct MetadataExtra {
+    pub id: i32,
+    pub metadata_link_id: Option<i32>,
+    pub collection_id: Option<i32>,
+    pub external_media_id: i32,
+    pub extra_type: String,
+    pub title: Option<String>,
+    pub sort_order: i32,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = metadata_extras)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMetadataExtra {
+    pub metadata_link_id: Option<i32>,
+    pub collection_id: Option<i32>,
+    pub external_media_id: i32,
+    pub extra_type: String,
+    pub title: Option<String>,
+    pub sort_order: i32,
     pub updated_at: Option<i64>,
 }
 
@@ -393,7 +441,6 @@ pub struct MetadataCollection {
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
-    pub theme_song_url: Option<String>,
     pub updated_at: Option<i64>,
 }
 
@@ -412,7 +459,6 @@ pub struct NewMetadataCollection {
     pub overview: Option<String>,
     pub artwork_url: Option<String>,
     pub backdrop_url: Option<String>,
-    pub theme_song_url: Option<String>,
     pub updated_at: Option<i64>,
 }
 

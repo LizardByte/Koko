@@ -2390,7 +2390,7 @@ pub fn get_media_item_with_preferred_languages(
         {
             detail.display_title = title.to_string();
         }
-        let presentation = presentation_from_metadata_links(&metadata_links);
+        let presentation = presentation_from_metadata_links(conn, &metadata_links)?;
         detail.tagline = presentation.tagline;
         detail.overview = presentation.overview;
         detail.genres = presentation.genres;

@@ -2,10 +2,11 @@
 use diesel::Connection;
 use diesel::connection::SimpleConnection;
 use koko::config::{
-    FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId,
-    MetadataProviderSettings, MetadataSettings, Settings, load_database_settings,
-    save_database_settings, seed_database_settings, settings_for_persistence,
-    settings_yaml_for_persistence,
+    DatabaseMaintenanceTaskSettings, FfmpegSettings, MediaLibraryKind, MediaLibrarySettings,
+    MetadataProviderId, MetadataProviderSettings, MetadataRefreshTaskSettings, MetadataSettings,
+    ScheduledTaskWeekday, ScheduledTaskWindowSettings, ScheduledTasksSettings, Settings,
+    TrashCleanupTaskSettings, load_database_settings, save_database_settings,
+    seed_database_settings, settings_for_persistence, settings_yaml_for_persistence,
 };
 use koko::metadata::{
     StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
@@ -218,6 +219,28 @@ fn test_database_settings_round_trip_runtime_sections() {
         ffprobe_path: "C:/Tools/ffprobe.exe".into(),
     };
     settings.media.missing_item_auto_delete_days = Some(14);
+    settings.scheduled_tasks = ScheduledTasksSettings {
+        enabled: true,
+        window: ScheduledTaskWindowSettings {
+            start_time: "01:30".into(),
+            stop_time: "05:45".into(),
+            weekdays: vec![
+                ScheduledTaskWeekday::Monday,
+                ScheduledTaskWeekday::Wednesday,
+                ScheduledTaskWeekday::Friday,
+            ],
+        },
+        metadata_refresh: MetadataRefreshTaskSettings { enabled: false },
+        trash_cleanup: TrashCleanupTaskSettings {
+            enabled: true,
+            missing_item_auto_delete_days: Some(14),
+            interval_days: 2,
+        },
+        database_maintenance: DatabaseMaintenanceTaskSettings {
+            enabled: true,
+            interval_days: 3,
+        },
+    };
     settings.metadata.providers = vec![MetadataProviderSettings {
         id: MetadataProviderId::Tmdb,
         enabled: true,
@@ -232,7 +255,26 @@ fn test_database_settings_round_trip_runtime_sections() {
     let loaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
     assert_eq!(loaded.server.port, 8181);
     assert_eq!(loaded.ffmpeg.ffmpeg_path, "C:/Tools/ffmpeg.exe");
-    assert_eq!(loaded.media.missing_item_auto_delete_days, Some(14));
+    assert_eq!(loaded.media.missing_item_auto_delete_days, None);
+    assert_eq!(loaded.scheduled_tasks.window.start_time, "01:30");
+    assert_eq!(
+        loaded.scheduled_tasks.window.weekdays,
+        vec![
+            ScheduledTaskWeekday::Monday,
+            ScheduledTaskWeekday::Wednesday,
+            ScheduledTaskWeekday::Friday,
+        ]
+    );
+    assert!(!loaded.scheduled_tasks.metadata_refresh.enabled);
+    assert_eq!(
+        loaded
+            .scheduled_tasks
+            .trash_cleanup
+            .missing_item_auto_delete_days,
+        Some(14)
+    );
+    assert_eq!(loaded.scheduled_tasks.trash_cleanup.interval_days, 2);
+    assert_eq!(loaded.scheduled_tasks.database_maintenance.interval_days, 3);
     assert_eq!(
         loaded.metadata.providers[0].api_key.as_deref(),
         Some("tmdb-key")
@@ -242,11 +284,15 @@ fn test_database_settings_round_trip_runtime_sections() {
     updated.server.port = 8282;
     updated.ffmpeg.ffmpeg_path = "D:/ffmpeg.exe".into();
     updated.media.missing_item_auto_delete_days = None;
+    updated.scheduled_tasks.window.start_time = "03:00".into();
+    updated.scheduled_tasks.database_maintenance.enabled = false;
     save_database_settings(&mut conn, &updated).unwrap();
     let reloaded = load_database_settings(&mut conn, &Settings::default()).unwrap();
     assert_eq!(reloaded.server.port, 8282);
     assert_eq!(reloaded.ffmpeg.ffmpeg_path, "D:/ffmpeg.exe");
     assert_eq!(reloaded.media.missing_item_auto_delete_days, None);
+    assert_eq!(reloaded.scheduled_tasks.window.start_time, "03:00");
+    assert!(!reloaded.scheduled_tasks.database_maintenance.enabled);
 }
 
 #[test]

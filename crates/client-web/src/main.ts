@@ -32,6 +32,7 @@ import {
   linkItemMetadata,
   loginUser,
   resolveApiUrl,
+  runScheduledTask,
   scanLibrary,
   searchItemMetadata,
   searchItems,
@@ -63,6 +64,7 @@ import {
   type LogEntriesResponse,
   type PlaybackDecision,
   type ProfileImageUploadRequest,
+  type ScheduledTaskId,
   type SettingsResponse,
   type SettingsSnapshot,
   type ServerCapabilities,
@@ -82,7 +84,7 @@ type AppRoute =
   | { page: 'settings'; section?: SettingsSection };
 
 type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
-type SettingsSection = 'general' | 'libraries' | 'providers' | 'dashboard' | 'logs';
+type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'dashboard' | 'logs';
 
 interface BrowseFilter {
   kind: 'category' | 'collection' | 'playlist';
@@ -463,7 +465,7 @@ function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
 function parseRoute(): AppRoute {
   const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
 
-  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|providers|dashboard|logs))?$/);
+  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }
@@ -2903,6 +2905,7 @@ function renderSettingsSectionNav(): string {
     { id: 'general', label: 'General', path: '/settings' },
     { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
     { id: 'providers', label: 'Providers', path: '/settings/providers' },
+    { id: 'scheduled', label: 'Scheduled', path: '/settings/scheduled' },
     { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
     { id: 'logs', label: 'Logs', path: '/settings/logs' },
   ];
@@ -3692,30 +3695,140 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
     .join('');
 }
 
-function renderMissingItemsSettings(settings: SettingsSnapshot): string {
-  const autoDeleteDays = settings.media.missing_item_auto_delete_days ?? null;
-  const autoDeleteEnabled = autoDeleteDays !== null;
+function scheduledWeekdayLabel(weekday: string): string {
+  return weekday.slice(0, 3).toUpperCase();
+}
+
+function renderScheduledTaskRunButton(taskId: ScheduledTaskId): string {
+  return `<button type="button" class="secondary-button" data-run-scheduled-task="${taskId}">${renderButtonContent('Run now', 'play')}</button>`;
+}
+
+function renderScheduledTasksPage(settings: SettingsSnapshot): string {
+  const scheduled = settings.scheduled_tasks;
+  const selectedWeekdays = new Set(scheduled.window.weekdays);
+  const weekdays: SettingsSnapshot['scheduled_tasks']['window']['weekdays'] = [
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+    'sunday',
+  ];
+  const trashCleanupDays = scheduled.trash_cleanup.missing_item_auto_delete_days ?? 30;
 
   return `
-    <section class="settings-library-card">
-      <div class="settings-library-header">
-        <div>
-          <p class="eyebrow">Missing media</p>
-          <h3>Trash cleanup</h3>
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <div class="section-heading">
+            <h3>Scheduled tasks</h3>
+          </div>
+          <div class="settings-library-card">
+            <div class="settings-library-header">
+              <div>
+                <p class="eyebrow">Runner</p>
+                <h3>Task window</h3>
+              </div>
+              <span class="tag ${scheduled.enabled ? 'success' : ''}">${scheduled.enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <div class="form-row checkbox-row">
+              <label><input name="scheduled_tasks_enabled" type="checkbox" ${scheduled.enabled ? 'checked' : ''} /> Enable scheduled task runner</label>
+            </div>
+            <div class="form-row">
+              <label>Start time<input name="scheduled_window_start_time" type="time" value="${escapeHtml(scheduled.window.start_time)}" /></label>
+              <label>Stop time<input name="scheduled_window_stop_time" type="time" value="${escapeHtml(scheduled.window.stop_time)}" /></label>
+            </div>
+            <fieldset>
+              <legend>Run days</legend>
+              <div class="weekday-toggle-row">
+                ${weekdays.map((weekday) => `
+                  <label class="checkbox-inline">
+                    <input name="scheduled_window_weekday" type="checkbox" value="${weekday}" ${selectedWeekdays.has(weekday) ? 'checked' : ''} />
+                    ${scheduledWeekdayLabel(weekday)}
+                  </label>
+                `).join('')}
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="settings-library-list">
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Metadata refresh</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.metadata_refresh.enabled ? 'success' : ''}">${scheduled.metadata_refresh.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('metadata_refresh')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_metadata_refresh_enabled" type="checkbox" ${scheduled.metadata_refresh.enabled ? 'checked' : ''} /> Run stale metadata refreshes automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Refresh interval
+                  <select name="metadata_refresh_interval_days">
+                    <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
+                    <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
+                    <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
+                    <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Trash cleanup</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.trash_cleanup.enabled ? 'warning' : ''}">${scheduled.trash_cleanup.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('trash_cleanup')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_trash_cleanup_enabled" type="checkbox" ${scheduled.trash_cleanup.enabled ? 'checked' : ''} /> Delete missing items automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Days missing
+                  <input name="scheduled_trash_cleanup_days" type="number" min="1" max="3650" value="${trashCleanupDays}" />
+                </label>
+                <label>Run interval
+                  <input name="scheduled_trash_cleanup_interval_days" type="number" min="1" max="365" value="${scheduled.trash_cleanup.interval_days}" />
+                </label>
+              </div>
+            </section>
+
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Database maintenance</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.database_maintenance.enabled ? 'success' : ''}">${scheduled.database_maintenance.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('database_maintenance')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_database_maintenance_enabled" type="checkbox" ${scheduled.database_maintenance.enabled ? 'checked' : ''} /> Checkpoint, vacuum, and optimize automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Run interval
+                  <input name="scheduled_database_maintenance_interval_days" type="number" min="1" max="365" value="${scheduled.database_maintenance.interval_days}" />
+                </label>
+              </div>
+            </section>
+          </div>
+        </section>
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save scheduled tasks', 'save')}</button>
         </div>
-        <span class="tag ${autoDeleteEnabled ? 'warning' : ''}">${autoDeleteEnabled ? 'Automatic' : 'Manual'}</span>
-      </div>
-      <div class="form-row">
-        <label>Automatic delete
-          <select name="missing_item_auto_delete_mode">
-            <option value="disabled" ${autoDeleteEnabled ? '' : 'selected'}>Disabled</option>
-            <option value="auto" ${autoDeleteEnabled ? 'selected' : ''}>Enabled</option>
-          </select>
-        </label>
-        <label>Days missing
-          <input name="missing_item_auto_delete_days" type="number" min="1" max="3650" value="${autoDeleteDays ?? 30}" />
-        </label>
-      </div>
+      </form>
     </section>
   `;
 }
@@ -3776,16 +3889,6 @@ function renderProviderSettingsPage(settings: SettingsSnapshot): string {
           <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
           <div class="settings-library-list">
             ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
-          </div>
-          <div class="form-row">
-            <label>Automatic refresh
-              <select name="metadata_refresh_interval_days">
-                <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
-                <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
-                <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
-                <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
-              </select>
-            </label>
           </div>
           <div class="form-row">
             <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
@@ -3859,6 +3962,7 @@ function renderSettingsPage(): string {
     </section>
     ` : ''}
     ${section === 'providers' ? renderProviderSettingsPage(settings) : ''}
+    ${section === 'scheduled' ? renderScheduledTasksPage(settings) : ''}
     ${section === 'libraries' ? `
       <section class="panel page-panel settings-page-panel">
         <form id="settings-form" class="settings-form">
@@ -3867,7 +3971,6 @@ function renderSettingsPage(): string {
               <h3>Libraries</h3>
             </div>
             <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
-            ${renderMissingItemsSettings(settings)}
             <div class="settings-library-list">
               ${renderExistingLibrariesSettings(settings)}
             </div>
@@ -4621,7 +4724,7 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
       data_dir: String(formData.get('data_dir') ?? current.general.data_dir),
     },
     media: {
-      missing_item_auto_delete_days: parseMissingItemAutoDeleteDays(formData, current),
+      missing_item_auto_delete_days: null,
       libraries: current.media.libraries.map((library, index) => {
         const pathsField = `existing_library_paths_${index}`;
         if (!formData.has(pathsField)) {
@@ -4693,24 +4796,65 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
       ffmpeg_path: String(formData.get('ffmpeg_path') ?? current.ffmpeg.ffmpeg_path),
       ffprobe_path: String(formData.get('ffprobe_path') ?? current.ffmpeg.ffprobe_path),
     },
+    scheduled_tasks: parseScheduledTasksSettings(formData, current),
   };
 }
 
-function parseMissingItemAutoDeleteDays(formData: FormData, current: SettingsSnapshot): number | null {
-  if (!formData.has('missing_item_auto_delete_mode')) {
-    return current.media.missing_item_auto_delete_days ?? null;
+function parseBoundedInteger(value: FormDataEntryValue | null, fallback: number, min: number, max: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
   }
 
-  if (String(formData.get('missing_item_auto_delete_mode') ?? 'disabled') !== 'auto') {
-    return null;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function parseScheduledTasksSettings(formData: FormData, current: SettingsSnapshot): SettingsSnapshot['scheduled_tasks'] {
+  if (!formData.has('scheduled_window_start_time')) {
+    return current.scheduled_tasks;
   }
 
-  const parsedDays = Number(formData.get('missing_item_auto_delete_days') ?? 30);
-  if (!Number.isFinite(parsedDays)) {
-    return current.media.missing_item_auto_delete_days ?? 30;
-  }
+  const weekdays = formData.getAll('scheduled_window_weekday')
+    .map((value) => String(value))
+    .filter((value): value is SettingsSnapshot['scheduled_tasks']['window']['weekdays'][number] => (
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].includes(value)
+    ));
 
-  return Math.max(1, Math.min(3650, Math.floor(parsedDays)));
+  return {
+    enabled: formData.get('scheduled_tasks_enabled') === 'on',
+    window: {
+      start_time: String(formData.get('scheduled_window_start_time') ?? current.scheduled_tasks.window.start_time),
+      stop_time: String(formData.get('scheduled_window_stop_time') ?? current.scheduled_tasks.window.stop_time),
+      weekdays: weekdays.length ? weekdays : current.scheduled_tasks.window.weekdays,
+    },
+    metadata_refresh: {
+      enabled: formData.get('scheduled_metadata_refresh_enabled') === 'on',
+    },
+    trash_cleanup: {
+      enabled: formData.get('scheduled_trash_cleanup_enabled') === 'on',
+      missing_item_auto_delete_days: parseBoundedInteger(
+        formData.get('scheduled_trash_cleanup_days'),
+        current.scheduled_tasks.trash_cleanup.missing_item_auto_delete_days ?? 30,
+        1,
+        3650,
+      ),
+      interval_days: parseBoundedInteger(
+        formData.get('scheduled_trash_cleanup_interval_days'),
+        current.scheduled_tasks.trash_cleanup.interval_days,
+        1,
+        365,
+      ),
+    },
+    database_maintenance: {
+      enabled: formData.get('scheduled_database_maintenance_enabled') === 'on',
+      interval_days: parseBoundedInteger(
+        formData.get('scheduled_database_maintenance_interval_days'),
+        current.scheduled_tasks.database_maintenance.interval_days,
+        1,
+        365,
+      ),
+    },
+  };
 }
 
 function themeSongLayer(): HTMLElement {
@@ -6458,6 +6602,25 @@ function bindEvents(): void {
       state.error = error instanceof Error ? error.message : 'Failed to clear metadata cache.';
       render();
     }
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-run-scheduled-task]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const taskId = button.dataset.runScheduledTask as ScheduledTaskId | undefined;
+      if (!taskId) {
+        return;
+      }
+
+      try {
+        setButtonBusy(button, true);
+        const response = await runScheduledTask(taskId);
+        state.error = response.message;
+        await refreshData(false);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start scheduled task.';
+        render();
+      }
+    });
   });
 
   document.querySelector<HTMLFormElement>('#metadata-dashboard-filter-form')?.addEventListener('submit', (event) => {

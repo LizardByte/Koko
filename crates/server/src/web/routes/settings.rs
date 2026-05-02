@@ -48,6 +48,17 @@ pub struct MetadataCacheClearResponse {
     pub removed_files: usize,
 }
 
+/// Scheduled task manual run response.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScheduledTaskRunResponse {
+    /// Scheduled task identifier.
+    pub task_id: String,
+    /// Whether the task was accepted for background execution.
+    pub started: bool,
+    /// Human-readable status message.
+    pub message: String,
+}
+
 /// Add-library request payload.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AddLibraryRequest {
@@ -264,6 +275,36 @@ pub fn clear_metadata_cache() -> Result<Json<MetadataCacheClearResponse>, Status
             Status::InternalServerError
         })?;
     Ok(Json(MetadataCacheClearResponse { removed_files }))
+}
+
+/// Start one scheduled task immediately.
+#[openapi(tag = "Settings")]
+#[post("/api/v1/scheduled-tasks/<task_id>/run")]
+pub fn run_scheduled_task(
+    db: DbConn,
+    task_id: &str,
+) -> Result<Json<ScheduledTaskRunResponse>, Status> {
+    let message = match task_id {
+        "metadata_refresh" => {
+            crate::scheduled_tasks::start_metadata_refresh_task(db);
+            "Metadata refresh started"
+        }
+        "trash_cleanup" => {
+            crate::scheduled_tasks::start_trash_cleanup_task(db);
+            "Trash cleanup started"
+        }
+        "database_maintenance" => {
+            crate::scheduled_tasks::start_database_maintenance_task(db);
+            "Database maintenance started"
+        }
+        _ => return Err(Status::NotFound),
+    };
+
+    Ok(Json(ScheduledTaskRunResponse {
+        task_id: task_id.to_string(),
+        started: true,
+        message: message.to_string(),
+    }))
 }
 
 /// Return structured application logs for the settings page.

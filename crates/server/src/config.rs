@@ -23,6 +23,7 @@ const METADATA_SETTINGS_KEY: &str = "metadata";
 const MEDIA_SETTINGS_KEY: &str = "media";
 const SERVER_SETTINGS_KEY: &str = "server";
 const FFMPEG_SETTINGS_KEY: &str = "ffmpeg";
+const SCHEDULED_TASKS_SETTINGS_KEY: &str = "scheduled_tasks";
 
 /// General settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -95,6 +96,42 @@ fn default_metadata_refresh_interval_days() -> Option<u32> {
 
 fn default_missing_item_auto_delete_days() -> Option<u32> {
     None
+}
+
+fn default_trash_cleanup_enabled() -> bool {
+    false
+}
+
+fn default_scheduled_tasks_enabled() -> bool {
+    true
+}
+
+fn default_scheduled_task_window_start() -> String {
+    "02:00".into()
+}
+
+fn default_scheduled_task_window_stop() -> String {
+    "06:00".into()
+}
+
+fn default_scheduled_task_weekdays() -> Vec<ScheduledTaskWeekday> {
+    vec![
+        ScheduledTaskWeekday::Monday,
+        ScheduledTaskWeekday::Tuesday,
+        ScheduledTaskWeekday::Wednesday,
+        ScheduledTaskWeekday::Thursday,
+        ScheduledTaskWeekday::Friday,
+        ScheduledTaskWeekday::Saturday,
+        ScheduledTaskWeekday::Sunday,
+    ]
+}
+
+fn default_database_maintenance_interval_days() -> u32 {
+    7
+}
+
+fn default_trash_cleanup_interval_days() -> u32 {
+    1
 }
 
 fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProviderSettings {
@@ -376,6 +413,94 @@ pub struct MetadataSettings {
     pub refresh_interval_days: Option<u32>,
 }
 
+/// Days when scheduled tasks can run.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduledTaskWeekday {
+    /// Monday.
+    #[default]
+    Monday,
+    /// Tuesday.
+    Tuesday,
+    /// Wednesday.
+    Wednesday,
+    /// Thursday.
+    Thursday,
+    /// Friday.
+    Friday,
+    /// Saturday.
+    Saturday,
+    /// Sunday.
+    Sunday,
+}
+
+/// Shared time window for scheduled tasks.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ScheduledTaskWindowSettings {
+    /// Local time when scheduled tasks may start, formatted as HH:MM.
+    #[serde(default = "default_scheduled_task_window_start")]
+    pub start_time: String,
+    /// Local time when scheduled tasks must stop starting, formatted as HH:MM.
+    #[serde(default = "default_scheduled_task_window_stop")]
+    pub stop_time: String,
+    /// Local weekdays when scheduled tasks may run. Empty means every day.
+    #[serde(default = "default_scheduled_task_weekdays")]
+    pub weekdays: Vec<ScheduledTaskWeekday>,
+}
+
+/// Scheduled metadata refresh task settings.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MetadataRefreshTaskSettings {
+    /// Whether automatic stale metadata refreshes run from the scheduled task runner.
+    #[serde(default = "default_scheduled_tasks_enabled")]
+    pub enabled: bool,
+}
+
+/// Scheduled trash cleanup task settings.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct TrashCleanupTaskSettings {
+    /// Whether missing media item cleanup runs automatically.
+    #[serde(default = "default_trash_cleanup_enabled")]
+    pub enabled: bool,
+    /// Number of days an item must be missing before automatic cleanup deletes it.
+    #[serde(default = "default_missing_item_auto_delete_days")]
+    pub missing_item_auto_delete_days: Option<u32>,
+    /// Minimum number of days between trash cleanup runs.
+    #[serde(default = "default_trash_cleanup_interval_days")]
+    pub interval_days: u32,
+}
+
+/// Scheduled database maintenance task settings.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct DatabaseMaintenanceTaskSettings {
+    /// Whether database checkpoint, cleanup, and vacuum maintenance runs automatically.
+    #[serde(default = "default_scheduled_tasks_enabled")]
+    pub enabled: bool,
+    /// Minimum number of days between database maintenance runs.
+    #[serde(default = "default_database_maintenance_interval_days")]
+    pub interval_days: u32,
+}
+
+/// Scheduled task settings.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ScheduledTasksSettings {
+    /// Whether the scheduled task runner is enabled.
+    #[serde(default = "default_scheduled_tasks_enabled")]
+    pub enabled: bool,
+    /// Shared local run window for scheduled tasks.
+    #[serde(default)]
+    pub window: ScheduledTaskWindowSettings,
+    /// Stale metadata refresh task.
+    #[serde(default)]
+    pub metadata_refresh: MetadataRefreshTaskSettings,
+    /// Missing item trash cleanup task.
+    #[serde(default)]
+    pub trash_cleanup: TrashCleanupTaskSettings,
+    /// Database cleanup and vacuum task.
+    #[serde(default)]
+    pub database_maintenance: DatabaseMaintenanceTaskSettings,
+}
+
 /// FFmpeg-related tooling settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct FfmpegSettings {
@@ -428,6 +553,9 @@ pub struct Settings {
     /// FFmpeg tooling settings.
     #[serde(default)]
     pub ffmpeg: FfmpegSettings,
+    /// Scheduled task settings.
+    #[serde(default)]
+    pub scheduled_tasks: ScheduledTasksSettings,
 }
 
 impl Default for GeneralSettings {
@@ -497,6 +625,55 @@ impl Default for MetadataSettings {
     }
 }
 
+impl Default for ScheduledTaskWindowSettings {
+    fn default() -> Self {
+        Self {
+            start_time: default_scheduled_task_window_start(),
+            stop_time: default_scheduled_task_window_stop(),
+            weekdays: default_scheduled_task_weekdays(),
+        }
+    }
+}
+
+impl Default for MetadataRefreshTaskSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_scheduled_tasks_enabled(),
+        }
+    }
+}
+
+impl Default for TrashCleanupTaskSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_trash_cleanup_enabled(),
+            missing_item_auto_delete_days: default_missing_item_auto_delete_days(),
+            interval_days: default_trash_cleanup_interval_days(),
+        }
+    }
+}
+
+impl Default for DatabaseMaintenanceTaskSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_scheduled_tasks_enabled(),
+            interval_days: default_database_maintenance_interval_days(),
+        }
+    }
+}
+
+impl Default for ScheduledTasksSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_scheduled_tasks_enabled(),
+            window: ScheduledTaskWindowSettings::default(),
+            metadata_refresh: MetadataRefreshTaskSettings::default(),
+            trash_cleanup: TrashCleanupTaskSettings::default(),
+            database_maintenance: DatabaseMaintenanceTaskSettings::default(),
+        }
+    }
+}
+
 impl Settings {
     /// Create a new instance of `Settings`.
     pub fn new() -> Result<Self, ConfigError> {
@@ -538,9 +715,22 @@ pub fn normalize_settings(settings: &mut Settings) {
     for library in &mut settings.media.libraries {
         library.normalize();
     }
-    if let Some(days) = settings.media.missing_item_auto_delete_days {
-        settings.media.missing_item_auto_delete_days = (days > 0).then_some(days.min(3650));
+    if let Some(days) = settings.media.missing_item_auto_delete_days.take() {
+        if days > 0
+            && settings
+                .scheduled_tasks
+                .trash_cleanup
+                .missing_item_auto_delete_days
+                .is_none()
+        {
+            settings.scheduled_tasks.trash_cleanup.enabled = true;
+            settings
+                .scheduled_tasks
+                .trash_cleanup
+                .missing_item_auto_delete_days = Some(days.min(3650));
+        }
     }
+    normalize_scheduled_tasks_settings(&mut settings.scheduled_tasks);
 
     let mut seen_provider_ids = std::collections::HashSet::new();
     settings
@@ -587,6 +777,67 @@ pub fn normalize_settings(settings: &mut Settings) {
                 .push(default_metadata_provider_settings(provider_id));
         }
     }
+}
+
+fn normalize_scheduled_time(
+    value: &mut String,
+    default_value: String,
+) {
+    let trimmed = value.trim();
+    let parts = trimmed.split(':').collect::<Vec<_>>();
+    let parsed = if parts.len() == 2 {
+        parts[0]
+            .parse::<u32>()
+            .ok()
+            .zip(parts[1].parse::<u32>().ok())
+            .filter(|(hour, minute)| *hour < 24 && *minute < 60)
+    } else {
+        None
+    };
+
+    *value = if let Some((hour, minute)) = parsed {
+        format!("{hour:02}:{minute:02}")
+    } else {
+        default_value
+    };
+}
+
+fn normalize_scheduled_tasks_settings(settings: &mut ScheduledTasksSettings) {
+    normalize_scheduled_time(
+        &mut settings.window.start_time,
+        default_scheduled_task_window_start(),
+    );
+    normalize_scheduled_time(
+        &mut settings.window.stop_time,
+        default_scheduled_task_window_stop(),
+    );
+    settings.window.weekdays.sort_by_key(|day| match day {
+        ScheduledTaskWeekday::Monday => 1,
+        ScheduledTaskWeekday::Tuesday => 2,
+        ScheduledTaskWeekday::Wednesday => 3,
+        ScheduledTaskWeekday::Thursday => 4,
+        ScheduledTaskWeekday::Friday => 5,
+        ScheduledTaskWeekday::Saturday => 6,
+        ScheduledTaskWeekday::Sunday => 7,
+    });
+    settings.window.weekdays.dedup();
+    if settings.window.weekdays.is_empty() {
+        settings.window.weekdays = default_scheduled_task_weekdays();
+    }
+    if let Some(days) = settings.trash_cleanup.missing_item_auto_delete_days {
+        settings.trash_cleanup.missing_item_auto_delete_days = (days > 0).then_some(days.min(3650));
+    }
+    if settings.trash_cleanup.enabled
+        && settings
+            .trash_cleanup
+            .missing_item_auto_delete_days
+            .is_none()
+    {
+        settings.trash_cleanup.missing_item_auto_delete_days = Some(30);
+    }
+    settings.trash_cleanup.interval_days = settings.trash_cleanup.interval_days.clamp(1, 365);
+    settings.database_maintenance.interval_days =
+        settings.database_maintenance.interval_days.clamp(1, 365);
 }
 
 /// Return a settings snapshot suitable for YAML persistence.
@@ -702,6 +953,11 @@ pub fn save_database_settings(
         FFMPEG_SETTINGS_KEY,
         runtime_setting_value(&normalized.ffmpeg)?,
     )?;
+    upsert_runtime_setting(
+        conn,
+        SCHEDULED_TASKS_SETTINGS_KEY,
+        runtime_setting_value(&normalized.scheduled_tasks)?,
+    )?;
     Ok(())
 }
 
@@ -733,6 +989,11 @@ pub fn seed_database_settings(
         FFMPEG_SETTINGS_KEY,
         runtime_setting_value(&normalized.ffmpeg)?,
     )?;
+    insert_runtime_setting_if_missing(
+        conn,
+        SCHEDULED_TASKS_SETTINGS_KEY,
+        runtime_setting_value(&normalized.scheduled_tasks)?,
+    )?;
     Ok(())
 }
 
@@ -747,6 +1008,7 @@ pub fn load_database_settings(
             MEDIA_SETTINGS_KEY,
             SERVER_SETTINGS_KEY,
             FFMPEG_SETTINGS_KEY,
+            SCHEDULED_TASKS_SETTINGS_KEY,
         ]))
         .select(AppSetting::as_select())
         .load::<AppSetting>(conn)
@@ -768,6 +1030,10 @@ pub fn load_database_settings(
             }
             FFMPEG_SETTINGS_KEY => {
                 settings.ffmpeg = parse_runtime_setting(&row.value, FFMPEG_SETTINGS_KEY)?;
+            }
+            SCHEDULED_TASKS_SETTINGS_KEY => {
+                settings.scheduled_tasks =
+                    parse_runtime_setting(&row.value, SCHEDULED_TASKS_SETTINGS_KEY)?;
             }
             _ => {}
         }

@@ -20,6 +20,8 @@ import type {
   LogEntriesResponse,
   PlaybackDecision,
   PlaybackProgressRequest,
+  ScheduledTaskId,
+  ScheduledTaskRunResponse,
   ServerCapabilities,
   SettingsResponse,
   SettingsSnapshot,
@@ -666,6 +668,26 @@ let settings: SettingsSnapshot = {
     ],
     refresh_interval_days: 30,
   },
+  scheduled_tasks: {
+    enabled: true,
+    window: {
+      start_time: '02:00',
+      stop_time: '06:00',
+      weekdays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    },
+    metadata_refresh: {
+      enabled: true,
+    },
+    trash_cleanup: {
+      enabled: false,
+      missing_item_auto_delete_days: null,
+      interval_days: 1,
+    },
+    database_maintenance: {
+      enabled: true,
+      interval_days: 7,
+    },
+  },
   server: {
     use_https: false,
     address: '127.0.0.1',
@@ -1071,6 +1093,18 @@ function mockProfileImageUrl(upload?: { mime_type: string; data_base64: string }
 
 export function clearMockMetadataCache(): { removed_files: number } {
   return { removed_files: 0 };
+}
+
+export function runMockScheduledTask(taskId: ScheduledTaskId): ScheduledTaskRunResponse {
+  if (!['metadata_refresh', 'trash_cleanup', 'database_maintenance'].includes(taskId)) {
+    throw new Error('404 Not Found');
+  }
+
+  return {
+    task_id: taskId,
+    started: true,
+    message: `${taskId.replace(/_/g, ' ')} started`,
+  };
 }
 
 export function addMockLibrary(request: { library: MediaLibrarySettings }): SettingsResponse {

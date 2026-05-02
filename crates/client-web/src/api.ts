@@ -27,6 +27,7 @@ import {
   updateMockPlaybackProgress,
   updateMockSettings,
   clearMockMetadataCache,
+  runMockScheduledTask,
 } from './mockApi';
 
 const REQUEST_TIMEOUT_MS = 15000;
@@ -581,6 +582,26 @@ export interface SettingsSnapshot {
     providers: MetadataProviderSettings[];
     refresh_interval_days?: number | null;
   };
+  scheduled_tasks: {
+    enabled: boolean;
+    window: {
+      start_time: string;
+      stop_time: string;
+      weekdays: ScheduledTaskWeekday[];
+    };
+    metadata_refresh: {
+      enabled: boolean;
+    };
+    trash_cleanup: {
+      enabled: boolean;
+      missing_item_auto_delete_days?: number | null;
+      interval_days: number;
+    };
+    database_maintenance: {
+      enabled: boolean;
+      interval_days: number;
+    };
+  };
   server: {
     use_https: boolean;
     address: string;
@@ -595,9 +616,26 @@ export interface SettingsSnapshot {
   };
 }
 
+export type ScheduledTaskWeekday =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+
+export type ScheduledTaskId = 'metadata_refresh' | 'trash_cleanup' | 'database_maintenance';
+
 export interface SettingsResponse {
   settings: SettingsSnapshot;
   settings_path: string;
+}
+
+export interface ScheduledTaskRunResponse {
+  task_id: ScheduledTaskId;
+  started: boolean;
+  message: string;
 }
 
 export interface MetadataCacheClearResponse {
@@ -785,6 +823,11 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
 
   if (method === 'POST' && url.pathname === '/api/v1/settings/metadata-cache/clear') {
     return clearMockMetadataCache() as T;
+  }
+
+  const scheduledTaskRunMatch = url.pathname.match(/^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/);
+  if (method === 'POST' && scheduledTaskRunMatch) {
+    return runMockScheduledTask(scheduledTaskRunMatch[1] as ScheduledTaskId) as T;
   }
 
   const removeLibraryMatch = url.pathname.match(/^\/api\/v1\/settings\/libraries\/(\d+)$/);
@@ -1094,6 +1137,10 @@ export function updateSettings(settings: SettingsSnapshot): Promise<SettingsResp
 
 export function clearMetadataCache(): Promise<MetadataCacheClearResponse> {
   return requestJson<MetadataCacheClearResponse>('POST', '/api/v1/settings/metadata-cache/clear');
+}
+
+export function runScheduledTask(taskId: ScheduledTaskId): Promise<ScheduledTaskRunResponse> {
+  return requestJson<ScheduledTaskRunResponse>('POST', `/api/v1/scheduled-tasks/${taskId}/run`);
 }
 
 export function addLibrary(library: MediaLibrarySettings): Promise<SettingsResponse> {

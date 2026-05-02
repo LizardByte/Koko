@@ -13,6 +13,7 @@ pub mod globals;
 mod logging;
 pub mod media;
 pub mod metadata;
+pub mod scheduled_tasks;
 pub mod signal_handler;
 pub mod transcode;
 pub mod tray;

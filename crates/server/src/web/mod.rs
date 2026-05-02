@@ -1,7 +1,7 @@
 //! Web server utilities for the application.
 
 // modules
-mod routes;
+pub(crate) mod routes;
 
 // lib imports
 use diesel::Connection;
@@ -100,14 +100,20 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         .attach(DbConn::fairing())
         .attach(Migrate)
         .attach(ReleaseDatabase)
-        .attach(AdHoc::on_liftoff("Start library monitor", |rocket| {
+        .attach(AdHoc::on_liftoff("Start background workers", |rocket| {
             Box::pin(async move {
-                if let Some(db) = DbConn::get_one(rocket).await {
-                    routes::media::start_library_monitor(db);
-                } else {
-                    log::error!(
-                        "Failed to acquire database connection for library monitor startup"
-                    );
+                let monitor_db = DbConn::get_one(rocket).await;
+                let scheduled_tasks_db = DbConn::get_one(rocket).await;
+                match (monitor_db, scheduled_tasks_db) {
+                    (Some(monitor_db), Some(scheduled_tasks_db)) => {
+                        routes::media::start_library_monitor(monitor_db);
+                        crate::scheduled_tasks::start_scheduled_task_runner(scheduled_tasks_db);
+                    }
+                    _ => {
+                        log::error!(
+                            "Failed to acquire database connection for background worker startup"
+                        );
+                    }
                 }
             })
         }))

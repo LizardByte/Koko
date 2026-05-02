@@ -2143,6 +2143,12 @@ legend {
   width: auto;
 }
 
+.weekday-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .add-library-form {
   margin-top: 1rem;
 }

@@ -1961,37 +1961,13 @@ async fn run_due_metadata_refreshes(
     .await;
 }
 
-async fn run_due_missing_item_cleanup(
+/// Run scheduled metadata refresh work.
+pub(crate) async fn run_scheduled_metadata_refreshes(
     db: &DbConn,
     settings: &crate::config::Settings,
 ) {
-    let Some(days) = settings.media.missing_item_auto_delete_days else {
-        return;
-    };
-    if days == 0 {
-        return;
-    }
-
-    let cutoff = current_timestamp().saturating_sub(i64::from(days) * 24 * 60 * 60);
-    match db
-        .run(move |conn| delete_missing_media_items(conn, None, Some(cutoff)))
-        .await
-    {
-        Ok(summary) if summary.deleted_items > 0 || summary.deleted_files > 0 => {
-            log::info!(
-                "Automatically deleted {} missing item rows and {} missing file rows from active catalog",
-                summary.deleted_items,
-                summary.deleted_files
-            );
-        }
-        Ok(_) => {}
-        Err(error) => {
-            log::error!(
-                "Failed to automatically delete missing media items: {}",
-                error
-            );
-        }
-    }
+    recover_pending_metadata_refreshes(db, settings).await;
+    run_due_metadata_refreshes(db, settings).await;
 }
 
 async fn build_metadata_refresh_job(
@@ -2726,9 +2702,6 @@ pub fn start_library_monitor(db: DbConn) {
                 );
             }
 
-            recover_pending_metadata_refreshes(&db, &settings).await;
-            run_due_metadata_refreshes(&db, &settings).await;
-            run_due_missing_item_cleanup(&db, &settings).await;
             tokio::time::sleep(tokio::time::Duration::from_secs(
                 LIBRARY_MONITOR_INTERVAL_SECONDS,
             ))

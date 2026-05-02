@@ -45,6 +45,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         settings::get_settings,
         settings::get_logs,
         settings::clear_metadata_cache,
+        settings::run_scheduled_task,
         settings::update_settings,
         settings::add_library,
         settings::remove_library,

@@ -30,9 +30,9 @@ use crate::db::models::{
     NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
-    ArtworkKind, DEFAULT_METADATA_LOCALE, MetadataCollectionSummary, MetadataRegistry,
-    list_metadata_collection_summaries_with_preferred_languages, normalize_locale_key,
-    presentation_from_metadata_links,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, LinkedMetadataExtra, MetadataCollectionSummary,
+    MetadataRegistry, list_metadata_collection_summaries_with_preferred_languages,
+    metadata_extras_from_metadata_links, normalize_locale_key, presentation_from_metadata_links,
 };
 use crate::utils::current_timestamp;
 
@@ -384,6 +384,8 @@ pub struct MediaItemDetail {
     pub trailer_title: Option<String>,
     /// Trailer URL, when available.
     pub trailer_url: Option<String>,
+    /// Provider-supplied external media extras for this item.
+    pub extras: Vec<MediaItemExtra>,
     /// Audio streams discovered in the source container.
     pub audio_tracks: Vec<MediaAudioTrack>,
     /// Discovered subtitle sidecars for this item.
@@ -398,6 +400,33 @@ pub struct MediaItemDetail {
     pub playback_duration_ms: Option<i64>,
     /// When this item was first observed as missing from disk.
     pub missing_since: Option<i64>,
+}
+
+/// External media extra exposed on item details.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MediaItemExtra {
+    /// Koko extra type such as `trailer`, `clip`, or `theme_song`.
+    pub extra_type: String,
+    /// Human-friendly title, when available.
+    pub title: Option<String>,
+    /// External media URL.
+    pub url: String,
+    /// Duration in seconds, when known.
+    pub duration_seconds: Option<i32>,
+    /// Thumbnail URL, when available.
+    pub thumbnail_url: Option<String>,
+}
+
+impl From<LinkedMetadataExtra> for MediaItemExtra {
+    fn from(extra: LinkedMetadataExtra) -> Self {
+        Self {
+            extra_type: extra.extra_type,
+            title: extra.title,
+            url: extra.url,
+            duration_seconds: extra.duration_seconds,
+            thumbnail_url: extra.thumbnail_url,
+        }
+    }
 }
 
 /// Result of removing missing items from the active catalog.
@@ -2410,6 +2439,10 @@ pub fn get_media_item_with_preferred_languages(
         detail.trailer_title = presentation.trailer_title;
         detail.trailer_url = presentation.trailer_url;
         detail.theme_song_url = presentation.theme_song_url;
+        detail.extras = metadata_extras_from_metadata_links(conn, &metadata_links)?
+            .into_iter()
+            .map(MediaItemExtra::from)
+            .collect();
         if presentation.poster_available {
             detail.poster_url = Some(format!("/api/v1/items/{}/artwork?kind=poster", item_id));
         }
@@ -4668,6 +4701,7 @@ fn to_media_item_detail(
         artwork_updated_at: None,
         trailer_title: None,
         trailer_url: None,
+        extras: Vec::new(),
         audio_tracks: Vec::new(),
         subtitle_tracks: Vec::new(),
         hierarchy: Vec::new(),

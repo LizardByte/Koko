@@ -1775,6 +1775,23 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
         detail.trailer_url.as_deref(),
         Some("https://www.youtube.com/watch?v=ZYXWVUT9876")
     );
+    assert_eq!(detail.extras.len(), 1);
+    let spanish_extra = detail
+        .extras
+        .iter()
+        .find(|extra| extra.url == "https://www.youtube.com/watch?v=ZYXWVUT9876")
+        .expect("Expected Spanish trailer extra");
+    assert_eq!(spanish_extra.extra_type, "trailer");
+    assert_eq!(spanish_extra.title.as_deref(), Some("Trailer oficial"));
+    assert_eq!(
+        spanish_extra.url.as_str(),
+        "https://www.youtube.com/watch?v=ZYXWVUT9876"
+    );
+    assert_eq!(spanish_extra.duration_seconds, Some(148));
+    assert_eq!(
+        spanish_extra.thumbnail_url.as_deref(),
+        Some("https://i.ytimg.com/vi/ZYXWVUT9876/hqdefault.jpg")
+    );
 
     #[derive(diesel::QueryableByName)]
     struct CountRow {

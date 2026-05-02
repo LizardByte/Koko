@@ -550,6 +550,21 @@ pub struct LinkedMetadataPresentation {
     pub theme_song_url: Option<String>,
 }
 
+/// Presentation-ready external media extra attached to an item metadata link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedMetadataExtra {
+    /// Koko extra type such as `trailer`, `clip`, or `theme_song`.
+    pub extra_type: String,
+    /// Human-friendly extra title, when available.
+    pub title: Option<String>,
+    /// External media URL.
+    pub url: String,
+    /// External media duration in seconds, when known.
+    pub duration_seconds: Option<i32>,
+    /// External thumbnail URL, when available.
+    pub thumbnail_url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMovieName {
     title: String,
@@ -2629,6 +2644,43 @@ pub fn presentation_from_metadata_links(
     }
 
     Ok(merged)
+}
+
+/// Extract ordered, deduplicated external media extras from stored metadata links.
+pub fn metadata_extras_from_metadata_links(
+    conn: &mut SqliteConnection,
+    links: &[ItemMetadataLink],
+) -> Result<Vec<LinkedMetadataExtra>, diesel::result::Error> {
+    let extras_by_link_id =
+        metadata_extras_by_link_id(conn, &links.iter().map(|link| link.id).collect::<Vec<_>>())?;
+    let mut seen = HashSet::new();
+    let mut extras = Vec::new();
+
+    for link in links {
+        let Some(link_extras) = extras_by_link_id.get(&link.id) else {
+            continue;
+        };
+
+        for (extra, media) in link_extras {
+            let url = media.url.trim();
+            if url.is_empty() {
+                continue;
+            }
+            if !seen.insert((extra.extra_type.clone(), url.to_string())) {
+                continue;
+            }
+
+            extras.push(LinkedMetadataExtra {
+                extra_type: extra.extra_type.clone(),
+                title: extra.title.clone().or_else(|| media.title.clone()),
+                url: url.to_string(),
+                duration_seconds: media.duration_seconds,
+                thumbnail_url: media.thumbnail_url.clone(),
+            });
+        }
+    }
+
+    Ok(extras)
 }
 
 fn metadata_extras_by_link_id(

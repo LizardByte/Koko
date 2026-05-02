@@ -179,6 +179,7 @@ export interface MediaItemDetail extends MediaItemSummary {
   linked_media_type?: string;
   trailer_title?: string;
   trailer_url?: string;
+  extras: MediaItemExtra[];
   artwork_updated_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
@@ -186,6 +187,14 @@ export interface MediaItemDetail extends MediaItemSummary {
   subtitle_tracks: MediaSubtitleTrack[];
   hierarchy: MediaItemSummary[];
   children: MediaItemSummary[];
+}
+
+export interface MediaItemExtra {
+  extra_type: string;
+  title?: string;
+  url: string;
+  duration_seconds?: number;
+  thumbnail_url?: string;
 }
 
 export interface MediaSubtitleTrack {

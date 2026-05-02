@@ -50,6 +50,7 @@ import {
   type ItemMetadataResponse,
   type LoginRequest,
   type MediaHome,
+  type MediaItemExtra,
   type MediaShelf,
   type MediaItemDetail,
   type MediaItemSummary,
@@ -812,15 +813,55 @@ function buildYouTubeWatchUrl(url: string): string | undefined {
   return videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined;
 }
 
+function mediaExtraTypeLabel(extraType: string): string {
+  return extraType
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ') || 'Extra';
+}
+
+function mediaExtraTitle(extra: MediaItemExtra): string {
+  return extra.title?.trim() || mediaExtraTypeLabel(extra.extra_type);
+}
+
+function mediaExtraDurationLabel(extra: MediaItemExtra): string {
+  return typeof extra.duration_seconds === 'number' && extra.duration_seconds > 0
+    ? formatMediaTime(extra.duration_seconds)
+    : 'Unknown length';
+}
+
+function mediaExtraToTrailerOption(extra: MediaItemExtra): TrailerOption {
+  return {
+    title: mediaExtraTitle(extra),
+    url: extra.url,
+    label: mediaExtraTypeLabel(extra.extra_type),
+  };
+}
+
 function currentTrailerOptions(): TrailerOption[] {
-  if (!state.selectedItem?.trailer_url) {
-    return [];
+  const options: TrailerOption[] = [];
+  const seenUrls = new Set<string>();
+
+  if (state.selectedItem?.trailer_url) {
+    const url = state.selectedItem.trailer_url;
+    seenUrls.add(url);
+    options.push({
+      title: state.selectedItem.trailer_title?.trim() || 'Trailer',
+      url,
+    });
   }
 
-  return [{
-    title: state.selectedItem.trailer_title?.trim() || 'Trailer',
-    url: state.selectedItem.trailer_url,
-  }];
+  for (const extra of state.selectedItem?.extras ?? []) {
+    if (extra.extra_type !== 'trailer' || !extra.url || seenUrls.has(extra.url)) {
+      continue;
+    }
+
+    seenUrls.add(extra.url);
+    options.push(mediaExtraToTrailerOption(extra));
+  }
+
+  return options;
 }
 
 function currentThemeSongTarget(): { title: string; url: string } | undefined {
@@ -2994,6 +3035,62 @@ function renderPeopleRail(): string {
   `;
 }
 
+function selectedItemExtras(): MediaItemExtra[] {
+  return (state.selectedItem?.extras ?? []).filter((extra) => Boolean(extra.url?.trim()));
+}
+
+function mediaExtraThumbnailUrl(extra: MediaItemExtra): string | undefined {
+  if (extra.thumbnail_url?.trim()) {
+    return resolveApiUrl(extra.thumbnail_url.trim());
+  }
+
+  const videoId = extractYouTubeVideoId(extra.url);
+  return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : undefined;
+}
+
+function renderMediaExtraCard(extra: MediaItemExtra, index: number): string {
+  const title = mediaExtraTitle(extra);
+  const typeLabel = mediaExtraTypeLabel(extra.extra_type);
+  const durationLabel = mediaExtraDurationLabel(extra);
+  const thumbnailUrl = mediaExtraThumbnailUrl(extra);
+  return `
+    <button type="button" class="media-extra-card" data-play-extra-index="${index}" title="${escapeHtml(title)}">
+      <span class="media-extra-thumbnail ${thumbnailUrl ? 'has-image' : ''}">
+        ${thumbnailUrl ? `<img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(title)} thumbnail" loading="lazy" />` : renderIcon(extra.extra_type === 'theme_song' ? 'music' : 'play', 'media-extra-placeholder-icon')}
+        <span class="media-extra-play-icon">${renderIcon('play', 'button-icon')}</span>
+      </span>
+      <span class="media-extra-title">${escapeHtml(title)}</span>
+      <span class="media-extra-meta">
+        <span>${escapeHtml(typeLabel)}</span>
+        <span>${escapeHtml(durationLabel)}</span>
+      </span>
+    </button>
+  `;
+}
+
+function renderItemExtrasRail(): string {
+  const extras = selectedItemExtras();
+  if (!extras.length) {
+    return '';
+  }
+
+  return `
+    <section class="panel page-panel item-section item-extras-section">
+      <div class="section-heading section-heading-actions">
+        <h3>Extras</h3>
+        <span class="muted">${extras.length} video${extras.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="shelf-row-shell">
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+        <div class="shelf-row extras-row" data-shelf-row="item-extras">
+          ${extras.map(renderMediaExtraCard).join('')}
+        </div>
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+      </div>
+    </section>
+  `;
+}
+
 function renderSelectedItemCollectionRails(): string {
   const rails = selectedItemCollectionRails();
   if (!rails.length) {
@@ -3433,6 +3530,8 @@ function renderItemPage(): string {
       </section>
 
       ${renderPeopleRail()}
+
+      ${renderItemExtrasRail()}
 
       ${children.length ? `
         <section class="panel page-panel item-section">
@@ -4043,6 +4142,9 @@ function renderPlayerOverlay(): string {
     const videoId = extractYouTubeVideoId(state.activeTrailer.url);
     const watchUrl = buildYouTubeWatchUrl(state.activeTrailer.url);
     const label = state.activeTrailer.label ?? 'Trailer';
+    const externalUrl = watchUrl ?? state.activeTrailer.url;
+    const externalLinkLabel = watchUrl ? 'Open on YouTube' : 'Open Source';
+    const errorHint = watchUrl ? 'Open it on YouTube or try again in a moment.' : 'Open the source link or try another extra.';
     const itemTitle = state.selectedItem?.display_title.trim();
     const itemLogoUrl = state.selectedItem?.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
     const trailerTitle = itemLogoUrl || !itemTitle
@@ -4054,15 +4156,15 @@ function renderPlayerOverlay(): string {
           <div class="trailer-frame-shell" aria-label="${escapeHtml(state.activeTrailer.title)}">
             ${videoId
               ? '<div id="trailer-player" class="trailer-youtube-player"></div>'
-              : '<div class="trailer-unavailable">This trailer URL is not a controllable YouTube video.</div>'}
+              : '<div class="trailer-unavailable">This external media URL is not a controllable YouTube video.</div>'}
           </div>
           <div class="trailer-youtube-chrome-mask" aria-hidden="true"></div>
           <div class="player-loading-indicator" aria-live="polite">
             <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
           </div>
           <div class="player-error-indicator" aria-live="polite">
-            <strong>Trailer could not start</strong>
-            <span>Open it on YouTube or try again in a moment.</span>
+            <strong>${escapeHtml(label)} could not start</strong>
+            <span>${escapeHtml(errorHint)}</span>
           </div>
           <div class="player-idle-hit-area trailer-idle-hit-area" aria-hidden="true"></div>
           <div class="player-top-controls player-controls trailer-top-controls">
@@ -4076,7 +4178,7 @@ function renderPlayerOverlay(): string {
               ` : `<h2>${escapeHtml(trailerTitle)}</h2>`}
             </div>
             <div class="player-top-actions">
-              ${watchUrl ? `<a class="button-link secondary-button" href="${escapeHtml(watchUrl)}" target="_blank" rel="noreferrer">${renderButtonContent('Open on YouTube', 'arrow-right')}</a>` : ''}
+              ${externalUrl ? `<a class="button-link secondary-button" href="${escapeHtml(externalUrl)}" target="_blank" rel="noreferrer">${renderButtonContent(externalLinkLabel, 'arrow-right')}</a>` : ''}
               <button id="close-trailer" class="player-icon-button" type="button" title="Close trailer" aria-label="Close trailer">${renderIcon('x', 'player-control-icon')}</button>
             </div>
           </div>
@@ -6520,6 +6622,20 @@ function bindEvents(): void {
       }
 
       openTrailer(currentTrailerOptions()[trailerIndex]);
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-play-extra-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const extraIndex = Number(button.dataset.playExtraIndex);
+      if (!Number.isFinite(extraIndex)) {
+        return;
+      }
+
+      const extra = selectedItemExtras()[extraIndex];
+      if (extra) {
+        openVideoOverlay(mediaExtraToTrailerOption(extra));
+      }
     });
   });
 

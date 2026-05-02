@@ -162,6 +162,22 @@ const items: MediaItemDetail[] = [
     artwork_updated_at: 1760923200,
     trailer_title: 'Official Trailer',
     trailer_url: 'https://www.youtube.com/watch?v=vKQi3bBA1y8',
+    extras: [
+      {
+        extra_type: 'trailer',
+        title: 'Official Trailer',
+        url: 'https://www.youtube.com/watch?v=vKQi3bBA1y8',
+        duration_seconds: 136,
+        thumbnail_url: 'https://i.ytimg.com/vi/vKQi3bBA1y8/hqdefault.jpg',
+      },
+      {
+        extra_type: 'theme_song',
+        title: 'Main Theme',
+        url: 'https://www.youtube.com/watch?v=SLBACEP6LsI',
+        duration_seconds: 74,
+        thumbnail_url: 'https://i.ytimg.com/vi/SLBACEP6LsI/hqdefault.jpg',
+      },
+    ],
     audio_tracks: [
       { index: 0, label: 'Japanese', codec: 'aac', language: 'jpn', default: true },
       { index: 1, label: 'English', codec: 'aac', language: 'eng', default: false },
@@ -192,6 +208,7 @@ const items: MediaItemDetail[] = [
     has_metadata: true,
     metadata_refresh_state: 'fresh',
     theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [],
@@ -230,6 +247,7 @@ const items: MediaItemDetail[] = [
     has_metadata: true,
     metadata_refresh_state: 'fresh',
     theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [
@@ -300,6 +318,7 @@ const items: MediaItemDetail[] = [
     has_metadata: true,
     metadata_refresh_state: 'fresh',
     theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
+    extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [
@@ -352,6 +371,7 @@ const items: MediaItemDetail[] = [
     metadata_json: JSON.stringify({ format: { format_name: 'flac', duration: '215.0' } }, null, 2),
     metadata_updated_at: 1760923000,
     genres: [],
+    extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [],
@@ -375,6 +395,7 @@ const items: MediaItemDetail[] = [
     metadata_json: JSON.stringify({ format: { format_name: 'mp3', duration: '198.0' } }, null, 2),
     metadata_updated_at: 1760922900,
     genres: [],
+    extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
     hierarchy: [],

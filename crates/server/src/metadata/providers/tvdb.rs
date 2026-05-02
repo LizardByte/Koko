@@ -8,10 +8,10 @@ use crate::metadata::{
     MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
     MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataDetails,
     ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
-    format_payload_snippet, managed_metadata_asset_dir, metadata_asset_db_path,
-    metadata_response_cache_key, movie_match_score, parse_movie_name, provider_settings,
-    read_metadata_response_cache_text, show_search_query, try_cache_item_artwork,
-    write_metadata_response_cache_text,
+    format_payload_snippet, image_format_preference_rank, managed_metadata_asset_dir,
+    metadata_asset_db_path, metadata_response_cache_key, movie_match_score, parse_movie_name,
+    provider_settings, read_metadata_response_cache_text, show_search_query,
+    try_cache_item_artwork, write_metadata_response_cache_text,
 };
 use std::time::{Duration, Instant};
 
@@ -1093,22 +1093,32 @@ fn tvdb_artwork_url_with_language(
                     .unwrap_or(true)
             })
             .max_by(|left, right| {
+                let left_format_rank = tvdb_artwork_image_url(left)
+                    .map(image_format_preference_rank)
+                    .unwrap_or(0);
+                let right_format_rank = tvdb_artwork_image_url(right)
+                    .map(image_format_preference_rank)
+                    .unwrap_or(0);
                 let left_score = left.get("score").and_then(Value::as_f64).unwrap_or(0.0);
                 let right_score = right.get("score").and_then(Value::as_f64).unwrap_or(0.0);
-                left_score
-                    .partial_cmp(&right_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                left_format_rank.cmp(&right_format_rank).then_with(|| {
+                    left_score
+                        .partial_cmp(&right_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
             })
-            .and_then(|artwork| {
-                artwork
-                    .get("image")
-                    .or_else(|| artwork.get("thumbnail"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|url| !url.is_empty())
-                    .map(ToOwned::to_owned)
-            })
+            .and_then(tvdb_artwork_image_url)
+            .map(ToOwned::to_owned)
     })
+}
+
+fn tvdb_artwork_image_url(artwork: &Value) -> Option<&str> {
+    artwork
+        .get("image")
+        .or_else(|| artwork.get("thumbnail"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
 }
 
 fn tvdb_genres(value: &Value) -> Vec<String> {
@@ -1889,7 +1899,7 @@ fn episode_number(value: &Value) -> Option<i32> {
 mod tests {
     use super::{
         artwork_url, backdrop_url, best_overview, metadata_details, movie_snapshot_from_value,
-        search_result_from_value, tvdb_people_with_language,
+        search_result_from_value, tvdb_logo_url, tvdb_people_with_language,
     };
     use serde_json::json;
 
@@ -2053,6 +2063,36 @@ mod tests {
         assert_eq!(
             backdrop_url(&payload).as_deref(),
             Some("https://example.test/backdrop.jpg")
+        );
+    }
+
+    #[test]
+    fn tvdb_logo_url_prefers_svg_over_higher_scored_png() {
+        let payload = json!({
+            "artworks": [
+                { "type": 25, "image": "https://example.test/logo.png", "language": "eng", "score": 99.0 },
+                { "type": 25, "image": "https://example.test/logo.svg", "language": "eng", "score": 1.0 }
+            ]
+        });
+
+        assert_eq!(
+            tvdb_logo_url(&payload, "eng").as_deref(),
+            Some("https://example.test/logo.svg")
+        );
+    }
+
+    #[test]
+    fn tvdb_logo_url_falls_back_to_png_when_svg_missing() {
+        let payload = json!({
+            "artworks": [
+                { "type": 25, "image": "https://example.test/logo.jpg", "language": "eng", "score": 99.0 },
+                { "type": 25, "image": "https://example.test/logo.png", "language": "eng", "score": 1.0 }
+            ]
+        });
+
+        assert_eq!(
+            tvdb_logo_url(&payload, "eng").as_deref(),
+            Some("https://example.test/logo.png")
         );
     }
 

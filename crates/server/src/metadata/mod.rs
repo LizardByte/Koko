@@ -3018,6 +3018,40 @@ fn artwork_url_extension(url: &str) -> String {
         .to_ascii_lowercase()
 }
 
+pub(crate) fn image_format_preference_rank(url: &str) -> u8 {
+    match artwork_url_extension(url).as_str() {
+        "svg" => 2,
+        "png" => 1,
+        _ => 0,
+    }
+}
+
+pub(crate) fn preferred_image_url_by_format<I, S>(urls: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut best = None::<(u8, String)>;
+    for url in urls {
+        let url = url.as_ref().trim();
+        if url.is_empty() {
+            continue;
+        }
+        let rank = image_format_preference_rank(url);
+        if best
+            .as_ref()
+            .map(|(best_rank, _)| rank > *best_rank)
+            .unwrap_or(true)
+        {
+            best = Some((rank, url.to_string()));
+            if rank == 2 {
+                break;
+            }
+        }
+    }
+    best.map(|(_, url)| url)
+}
+
 fn stable_artwork_url_hash(url: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);

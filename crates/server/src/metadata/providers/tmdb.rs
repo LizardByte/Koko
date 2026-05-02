@@ -13,8 +13,9 @@ use crate::metadata::{
     MetadataSearchResult, ProviderExternalId, ProviderMetadataCollection, ProviderMetadataDetails,
     ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
     managed_metadata_asset_dir, metadata_asset_db_path, metadata_response_cache_key,
-    movie_match_score, parse_movie_name, provider_settings, read_metadata_response_cache_text,
-    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
+    movie_match_score, parse_movie_name, preferred_image_url_by_format, provider_settings,
+    read_metadata_response_cache_text, show_search_query, try_cache_item_artwork,
+    write_metadata_response_cache_text,
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
@@ -1136,13 +1137,13 @@ fn tmdb_logo_url(payload: &Value) -> Option<String> {
         .and_then(|images| images.get("logos"))
         .and_then(Value::as_array)
         .and_then(|logos| {
-            logos.iter().find_map(|logo| {
+            preferred_image_url_by_format(logos.iter().filter_map(|logo| {
                 logo.get("file_path")
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|path| !path.is_empty())
                     .map(|path| tmdb_image_url(path, "w500"))
-            })
+            }))
         })
 }
 
@@ -1420,4 +1421,44 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
     });
     people.truncate(80);
     people
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tmdb_logo_url;
+    use serde_json::json;
+
+    #[test]
+    fn tmdb_logo_url_prefers_svg_over_png() {
+        let payload = json!({
+            "images": {
+                "logos": [
+                    { "file_path": "/logo.png" },
+                    { "file_path": "/logo.svg" }
+                ]
+            }
+        });
+
+        assert_eq!(
+            tmdb_logo_url(&payload).as_deref(),
+            Some("https://image.tmdb.org/t/p/w500/logo.svg")
+        );
+    }
+
+    #[test]
+    fn tmdb_logo_url_falls_back_to_png_when_svg_missing() {
+        let payload = json!({
+            "images": {
+                "logos": [
+                    { "file_path": "/logo.jpg" },
+                    { "file_path": "/logo.png" }
+                ]
+            }
+        });
+
+        assert_eq!(
+            tmdb_logo_url(&payload).as_deref(),
+            Some("https://image.tmdb.org/t/p/w500/logo.png")
+        );
+    }
 }

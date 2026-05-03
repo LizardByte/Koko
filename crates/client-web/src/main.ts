@@ -317,6 +317,7 @@ let trailerVolume = 1;
 let trailerMuted = false;
 let spinnerVisibilityObserver: IntersectionObserver | undefined;
 let shelfScrollResizeBound = false;
+let renderEventController: AbortController | undefined;
 const activeGamepadButtons = new Set<string>();
 
 function visibleSpinnerObserver(): IntersectionObserver | undefined {
@@ -341,6 +342,316 @@ function syncVisibleSpinners(): void {
 
   observer.disconnect();
   spinners.forEach((spinner) => observer.observe(spinner));
+}
+
+interface ScrollPosition {
+  top: number;
+  left: number;
+}
+
+interface RenderSnapshot {
+  activeSelector?: string;
+  activeSelection?: { start: number; end: number };
+  scrollPositions: Map<string, ScrollPosition>;
+}
+
+const DOM_PATCH_KEY_ATTRIBUTES = [
+  'id',
+  'data-shelf-row',
+  'data-lazy-shelf-id',
+  'data-shelf-scroll',
+  'data-item-id',
+  'data-preview-item-id',
+  'data-preview-collection-id',
+  'data-person-id',
+  'data-home-tab',
+  'data-settings-section-path',
+  'data-nav-library-id',
+  'data-category-filter',
+  'data-playlist-filter',
+  'data-collection-filter',
+  'data-link-metadata',
+  'data-provider-settings',
+  'data-provider-move',
+  'data-run-scheduled-task',
+  'data-refresh-library-id',
+  'data-scan-library-id',
+  'data-delete-missing-library-id',
+  'data-remove-library-index',
+  'data-update-user-id',
+  'data-play-trailer-index',
+  'data-play-extra-index',
+  'data-play-selected-item-start-ms',
+  'data-player-seek',
+  'data-player-audio-track-index',
+  'data-trailer-seek',
+] as const;
+
+function elementSelectorForFocus(element: Element | null): string | undefined {
+  if (!element) {
+    return undefined;
+  }
+  if (element.id) {
+    return `#${CSS.escape(element.id)}`;
+  }
+  const namedControl = element instanceof HTMLInputElement
+    || element instanceof HTMLSelectElement
+    || element instanceof HTMLTextAreaElement
+    ? element
+    : undefined;
+  const name = namedControl?.name;
+  const formId = namedControl?.form?.id;
+  return name && formId
+    ? `#${CSS.escape(formId)} [name="${CSS.escape(name)}"]`
+    : undefined;
+}
+
+function domPatchKey(node: Node): string | undefined {
+  if (!(node instanceof Element)) {
+    return undefined;
+  }
+  const tagName = node.tagName.toLowerCase();
+  const keyAttribute = DOM_PATCH_KEY_ATTRIBUTES.find((attribute) => {
+    const value = node.getAttribute(attribute);
+    return value !== null && value !== '';
+  });
+  return keyAttribute ? `${tagName}:${keyAttribute}:${node.getAttribute(keyAttribute)}` : undefined;
+}
+
+function scrollPositionKey(element: Element, index: number): string | undefined {
+  const patchKey = domPatchKey(element);
+  if (patchKey) {
+    return patchKey;
+  }
+  if (element.classList.contains('main-shell')) {
+    return 'main-shell';
+  }
+  if (element.classList.contains('rail-nav')) {
+    return 'rail-nav';
+  }
+  if (element.classList.contains('table-shell')) {
+    const rootId = element.closest<HTMLElement>('[id]')?.id ?? 'page';
+    return `table-shell:${rootId}:${index}`;
+  }
+  return undefined;
+}
+
+function captureRenderSnapshot(): RenderSnapshot {
+  const activeElement = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  const activeSelection = activeElement
+    && typeof activeElement.selectionStart === 'number'
+    && typeof activeElement.selectionEnd === 'number'
+      ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
+      : undefined;
+  const scrollPositions = new Map<string, ScrollPosition>();
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+    const key = scrollPositionKey(element, index);
+    if (key) {
+      scrollPositions.set(key, { top: element.scrollTop, left: element.scrollLeft });
+    }
+  });
+
+  return {
+    activeSelector: elementSelectorForFocus(document.activeElement instanceof Element ? document.activeElement : null),
+    activeSelection,
+    scrollPositions,
+  };
+}
+
+function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
+  window.requestAnimationFrame(() => {
+    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+      const key = scrollPositionKey(element, index);
+      const position = key ? snapshot.scrollPositions.get(key) : undefined;
+      if (position) {
+        element.scrollTop = position.top;
+        element.scrollLeft = position.left;
+      }
+    });
+
+    const activeElement = snapshot.activeSelector
+      ? document.querySelector<HTMLInputElement | HTMLTextAreaElement>(snapshot.activeSelector)
+      : undefined;
+    activeElement?.focus({ preventScroll: true });
+    if (snapshot.activeSelection && activeElement?.setSelectionRange) {
+      activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
+    }
+  });
+}
+
+function nodesCanPatch(current: Node, next: Node): boolean {
+  if (current.nodeType !== next.nodeType) {
+    return false;
+  }
+  if (current instanceof Element && next instanceof Element) {
+    if (current.tagName !== next.tagName) {
+      return false;
+    }
+    const currentKey = domPatchKey(current);
+    const nextKey = domPatchKey(next);
+    if (currentKey || nextKey) {
+      return currentKey === nextKey;
+    }
+    if (
+      current instanceof HTMLMediaElement
+      && next instanceof HTMLMediaElement
+      && current.getAttribute('src') !== next.getAttribute('src')
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function patchAttributes(current: Element, next: Element): void {
+  current.getAttributeNames().forEach((name) => {
+    if (!next.hasAttribute(name)) {
+      current.removeAttribute(name);
+    }
+  });
+  next.getAttributeNames().forEach((name) => {
+    const value = next.getAttribute(name);
+    if (value !== null && current.getAttribute(name) !== value) {
+      current.setAttribute(name, value);
+    }
+  });
+}
+
+function syncFormControlState(current: Element, next: Element): void {
+  const isActive = current === document.activeElement;
+  if (current instanceof HTMLInputElement && next instanceof HTMLInputElement) {
+    current.defaultValue = next.defaultValue;
+    current.defaultChecked = next.defaultChecked;
+    if (!isActive) {
+      current.value = next.value;
+      current.checked = next.checked;
+    }
+    return;
+  }
+
+  if (current instanceof HTMLTextAreaElement && next instanceof HTMLTextAreaElement) {
+    current.defaultValue = next.defaultValue;
+    if (!isActive) {
+      current.value = next.value;
+    }
+    return;
+  }
+
+  if (current instanceof HTMLSelectElement && next instanceof HTMLSelectElement && !isActive) {
+    current.value = next.value;
+  }
+}
+
+function patchNode(current: Node, next: Node): Node {
+  if (!nodesCanPatch(current, next)) {
+    current.parentNode?.replaceChild(next, current);
+    return next;
+  }
+
+  if (current.nodeType === Node.TEXT_NODE) {
+    if (current.nodeValue !== next.nodeValue) {
+      current.nodeValue = next.nodeValue;
+    }
+    return current;
+  }
+
+  if (current instanceof Element && next instanceof Element) {
+    patchAttributes(current, next);
+    patchChildren(current, next);
+    syncFormControlState(current, next);
+  }
+
+  return current;
+}
+
+function findKeyedPatchCandidate(parent: Node, startIndex: number, next: Node): Node | undefined {
+  const nextKey = domPatchKey(next);
+  if (!nextKey) {
+    return undefined;
+  }
+  return Array.from(parent.childNodes)
+    .slice(startIndex)
+    .find((candidate) => domPatchKey(candidate) === nextKey && nodesCanPatch(candidate, next));
+}
+
+function patchChildren(parent: Node, nextParent: ParentNode): void {
+  const nextChildren = Array.from(nextParent.childNodes);
+  let index = 0;
+  while (index < nextChildren.length || index < parent.childNodes.length) {
+    const currentChild = parent.childNodes[index];
+    const nextChild = nextChildren[index];
+
+    if (!nextChild) {
+      currentChild?.remove();
+      continue;
+    }
+
+    if (!currentChild) {
+      parent.appendChild(nextChild);
+      index += 1;
+      continue;
+    }
+
+    if (nodesCanPatch(currentChild, nextChild)) {
+      patchNode(currentChild, nextChild);
+      index += 1;
+      continue;
+    }
+
+    const keyedCandidate = findKeyedPatchCandidate(parent, index + 1, nextChild);
+    if (keyedCandidate) {
+      parent.insertBefore(keyedCandidate, currentChild);
+      patchNode(keyedCandidate, nextChild);
+      index += 1;
+      continue;
+    }
+
+    parent.replaceChild(nextChild, currentChild);
+    index += 1;
+  }
+}
+
+function expandLazyShelfRowsForPatch(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>('[data-lazy-shelf-id]').forEach((row) => {
+    const shelfId = row.dataset.lazyShelfId;
+    const shelf = shelfId ? state.home?.shelves.find((entry) => entry.id === shelfId) : undefined;
+    const currentRow = shelfId
+      ? document.querySelector<HTMLElement>(`[data-lazy-shelf-id="${CSS.escape(shelfId)}"]`)
+      : undefined;
+    if (!shelf || !currentRow) {
+      return;
+    }
+
+    const currentRenderedCount = Number(currentRow.dataset.lazyRenderedCount ?? currentRow.children.length);
+    const nextRenderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
+    const targetCount = Math.min(
+      shelf.items.length,
+      Math.max(
+        Number.isFinite(currentRenderedCount) ? currentRenderedCount : currentRow.children.length,
+        Number.isFinite(nextRenderedCount) ? nextRenderedCount : row.children.length,
+      ),
+    );
+    if (targetCount > row.children.length) {
+      row.insertAdjacentHTML('beforeend', shelf.items.slice(row.children.length, targetCount).map(renderItemCard).join(''));
+    }
+    row.dataset.lazyRenderedCount = String(targetCount);
+    row.dataset.lazyComplete = targetCount >= shelf.items.length ? 'true' : 'false';
+  });
+}
+
+function setElementHtml(root: HTMLElement, html: string, preserveDom = true): void {
+  if (!preserveDom || !root.childNodes.length) {
+    renderEventController?.abort();
+    root.innerHTML = html;
+    return;
+  }
+
+  const snapshot = captureRenderSnapshot();
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  expandLazyShelfRowsForPatch(template.content);
+  patchChildren(root, template.content);
+  restoreRenderSnapshot(snapshot);
 }
 
 function activeMetadataRefreshActivities(): SystemActivity[] {
@@ -4443,32 +4754,21 @@ function render(preserveScroll = true): void {
     document.body.style.cursor = '';
   }
 
-  const previousScrollTop = preserveScroll
-    ? document.querySelector<HTMLElement>('.main-shell')?.scrollTop ?? 0
-    : 0;
-  const activeElement = document.activeElement as HTMLInputElement | null;
-  const activeElementId = activeElement?.id;
-  const activeSelection = activeElement
-    && typeof activeElement.selectionStart === 'number'
-    && typeof activeElement.selectionEnd === 'number'
-      ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
-      : undefined;
-
   if (!state.bootstrap && state.isLoading) {
-    appRoot.innerHTML = renderAuthShell('Loading Koko', 'Checking server state and account access.', '');
+    setElementHtml(appRoot, renderAuthShell('Loading Koko', 'Checking server state and account access.', ''), preserveScroll);
     createIcons({ icons });
     return;
   }
 
   if (requiresSetup()) {
-    appRoot.innerHTML = renderWelcomeScreen();
+    setElementHtml(appRoot, renderWelcomeScreen(), preserveScroll);
     createIcons({ icons });
     bindEvents();
     return;
   }
 
   if (requiresLogin()) {
-    appRoot.innerHTML = renderLoginScreen();
+    setElementHtml(appRoot, renderLoginScreen(), preserveScroll);
     createIcons({ icons });
     bindEvents();
     return;
@@ -4486,7 +4786,7 @@ function render(preserveScroll = true): void {
     ? ' home-page-backdrop'
     : '';
 
-  appRoot.innerHTML = `
+  setElementHtml(appRoot, `
     <div class="app-shell${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
       ${pageBackdropUrl ? `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(pageBackdropUrl)}');"></div>` : ''}
       ${renderRail()}
@@ -4498,27 +4798,12 @@ function render(preserveScroll = true): void {
       </div>
       ${renderPlayerOverlay()}
     </div>
-  `;
+  `, preserveScroll);
 
   createIcons({ icons });
   bindEvents();
   syncVisibleSpinners();
   syncThemeSongPlayer();
-  if (preserveScroll) {
-    window.requestAnimationFrame(() => {
-      const shell = document.querySelector<HTMLElement>('.main-shell');
-      if (shell) {
-        shell.scrollTop = previousScrollTop;
-      }
-      if (activeElementId) {
-        const nextActiveElement = document.getElementById(activeElementId) as HTMLInputElement | null;
-        nextActiveElement?.focus();
-        if (activeSelection && nextActiveElement?.setSelectionRange) {
-          nextActiveElement.setSelectionRange(activeSelection.start, activeSelection.end);
-        }
-      }
-    });
-  }
 }
 
 async function refreshData(showLoading = true): Promise<void> {
@@ -5267,7 +5552,7 @@ async function refreshLogsView(): Promise<void> {
       render();
       return;
     }
-    root.innerHTML = renderLogViewer();
+    setElementHtml(root, renderLogViewer());
     createIcons({ icons });
     bindEvents();
   }
@@ -6244,6 +6529,34 @@ function refreshShelfScrollControls(): void {
 }
 
 function bindEvents(): void {
+  renderEventController?.abort();
+  renderEventController = new AbortController();
+  const signal = renderEventController.signal;
+  const originalAddEventListener = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function (
+    this: EventTarget,
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    if (this === window) {
+      originalAddEventListener.call(this, type, listener, options);
+      return;
+    }
+    const optionsWithSignal = typeof options === 'boolean'
+      ? { capture: options, signal }
+      : { ...(options ?? {}), signal };
+    originalAddEventListener.call(this, type, listener, optionsWithSignal);
+  } as typeof EventTarget.prototype.addEventListener;
+
+  try {
+    bindRenderEvents();
+  } finally {
+    EventTarget.prototype.addEventListener = originalAddEventListener;
+  }
+}
+
+function bindRenderEvents(): void {
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement | null;
@@ -6826,7 +7139,7 @@ function bindEvents(): void {
       render();
       return;
     }
-    root.innerHTML = renderMetadataDashboard();
+    setElementHtml(root, renderMetadataDashboard());
     createIcons({ icons });
     bindEvents();
   });
@@ -6843,7 +7156,7 @@ function bindEvents(): void {
       render();
       return;
     }
-    root.innerHTML = renderMetadataDashboard();
+    setElementHtml(root, renderMetadataDashboard());
     createIcons({ icons });
     bindEvents();
   });

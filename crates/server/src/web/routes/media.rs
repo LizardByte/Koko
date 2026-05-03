@@ -49,7 +49,8 @@ use crate::media::{
     preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
     resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_with_preferred_languages, sync_persisted_library_catalog,
-    upsert_playback_progress, upsert_show_metadata_descendant_items, user_can_access_library,
+    sync_persisted_library_catalog_for_library, upsert_playback_progress,
+    upsert_show_metadata_descendant_items, user_can_access_library,
 };
 use crate::metadata::{
     ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
@@ -437,6 +438,7 @@ static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<tokio::sync::RwLock<HashSet<i32>
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
+static ACTIVE_MANUAL_CATALOG_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
@@ -455,6 +457,16 @@ fn next_system_activity_id() -> String {
         "activity-{}",
         NEXT_SYSTEM_ACTIVITY_ID.fetch_add(1, Ordering::SeqCst)
     )
+}
+
+fn begin_catalog_scan_execution() -> bool {
+    ACTIVE_MANUAL_CATALOG_SCAN_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+fn finish_catalog_scan_execution() {
+    ACTIVE_MANUAL_CATALOG_SCAN_RUNNING.store(false, Ordering::SeqCst);
 }
 
 fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
@@ -1019,6 +1031,62 @@ async fn finish_library_metadata_refresh(library_id: i32) {
         .write()
         .await
         .remove(&library_id);
+}
+
+async fn register_library_scan_activity(
+    library_id: i32,
+    library_name: &str,
+) -> String {
+    let activity_id = next_system_activity_id();
+    let now = current_timestamp();
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
+        activity_id.clone(),
+        MetadataRefreshActivityRecord {
+            activity: SystemActivity {
+                id: activity_id.clone(),
+                category: "library_scan".into(),
+                scope: "library".into(),
+                source: "manual_library_scan".into(),
+                state: "queued".into(),
+                label: format!("Scan library catalog for {library_name}"),
+                provider_id: None,
+                library_id: Some(library_id),
+                root_item_id: None,
+                item_ids: Vec::new(),
+                total_items: 1,
+                completed_items: 0,
+                failed_items: 0,
+                queued_at: now,
+                started_at: None,
+                updated_at: now,
+            },
+        },
+    );
+    activity_id
+}
+
+async fn mark_library_scan_activity_running(activity_id: &str) {
+    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
+        record.activity.state = "running".into();
+        record
+            .activity
+            .started_at
+            .get_or_insert_with(current_timestamp);
+        record.activity.updated_at = current_timestamp();
+    }
+}
+
+async fn complete_library_scan_activity(
+    activity_id: &str,
+    failed: bool,
+) {
+    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
+        record.activity.state = if failed { "failed" } else { "completed" }.into();
+        record.activity.completed_items = 1;
+        record.activity.failed_items = if failed { 1 } else { 0 };
+        record.activity.updated_at = current_timestamp();
+    }
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.remove(activity_id);
 }
 
 async fn register_metadata_refresh_activity(
@@ -2767,41 +2835,74 @@ pub async fn scan_library(
     library_id: i32,
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
-    let legacy_libraries = settings.media.libraries.clone();
-    let ffmpeg_settings = settings.ffmpeg.clone();
-
-    let exists = db
-        .run(move |conn| library_exists(conn, library_id))
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to inspect library {} before manual scan: {}",
-                library_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-    if !exists {
-        return Err(Status::NotFound);
+    let library_summary = load_library_summary(&db, &settings, library_id).await?;
+    if !begin_catalog_scan_execution() {
+        log::info!(
+            "Skipping duplicate manual library {} scan request; a catalog scan is already running",
+            library_id
+        );
+        return Ok(Json(library_summary));
     }
 
-    let summary = load_library_summary(&db, &settings, library_id).await?;
+    let legacy_libraries = settings.media.libraries.clone();
+    let ffmpeg_settings = settings.ffmpeg.clone();
+    let library_name = library_summary.name.clone();
+    let activity_id = register_library_scan_activity(library_id, &library_name).await;
     tokio::spawn(async move {
-        if let Err(error) = db
+        mark_library_scan_activity_running(&activity_id).await;
+        log::info!(
+            "Starting manual media library catalog scan for library {} ({})",
+            library_id,
+            library_name
+        );
+        let sync_result = db
             .run(move |conn| {
-                sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings)
+                sync_persisted_library_catalog_for_library(
+                    conn,
+                    &legacy_libraries,
+                    &ffmpeg_settings,
+                    library_id,
+                )
             })
-            .await
-        {
-            log::error!(
-                "Failed to run manual library scan for library {}: {}",
-                library_id,
-                error
+            .await;
+        let failed = match sync_result {
+            Ok(Some(summary)) => {
+                log::info!(
+                    "Completed manual media library catalog scan for library {} ({}): {} file(s), status {}",
+                    summary.id,
+                    summary.name,
+                    summary.total_files,
+                    format!("{:?}", summary.status)
+                );
+                false
+            }
+            Ok(None) => {
+                log::warn!(
+                    "Manual media library catalog scan requested missing library {}",
+                    library_id
+                );
+                true
+            }
+            Err(error) => {
+                log::error!(
+                    "Failed to run manual library scan for library {}: {}",
+                    library_id,
+                    error
+                );
+                true
+            }
+        };
+        if failed {
+            log::warn!(
+                "Manual media library catalog scan did not complete successfully for library {}",
+                library_id
             );
         }
+        complete_library_scan_activity(&activity_id, failed).await;
+        finish_catalog_scan_execution();
     });
 
-    Ok(Json(summary))
+    Ok(Json(library_summary))
 }
 
 /// Delete items currently marked missing from one library's active catalog.

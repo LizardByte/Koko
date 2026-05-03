@@ -3,26 +3,22 @@
 // standard imports
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::UNIX_EPOCH;
 
 // lib imports
 use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper,
     SqliteConnection, sql_types,
 };
-use once_cell::sync::Lazy;
-use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // local imports
 use crate::config::{
-    FfmpegSettings, MediaLibraryKind, MediaLibraryMetadataLanguageMode, MediaLibrarySettings,
-    MetadataProviderId,
+    FfmpegSettings, MediaLibraryKind, MediaLibraryMetadataLanguageMode, MediaLibraryScanner,
+    MediaLibrarySettings, MetadataProviderId,
 };
 use crate::db::models::{
     ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, MetadataCollection,
@@ -34,6 +30,13 @@ use crate::metadata::{
     MetadataRegistry, list_metadata_collection_summaries_with_preferred_languages,
     metadata_extras_from_metadata_links, normalize_locale_key, presentation_from_metadata_links,
 };
+use crate::scanner::shows::parse_show_path;
+pub use crate::scanner::shows::{infer_episode_number, infer_season_number};
+use crate::scanner::{
+    DiscoveredMediaFile, FileHashCandidate, ScannerSink, fallback_title_from_relative_path,
+    inspect_library, inspect_library_streaming,
+};
+pub use crate::scanner::{LibraryScanStatus, LibraryScanSummary};
 use crate::utils::current_timestamp;
 
 #[derive(Debug, Clone)]
@@ -50,55 +53,6 @@ struct SummaryMetadataLink {
     refresh_error: Option<String>,
     updated_at: Option<i64>,
     locale_key: String,
-}
-
-/// Scan status for a configured media library.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LibraryScanStatus {
-    /// The library exists in configuration but has not been scanned yet.
-    NeverScanned,
-    /// The library path exists and was scanned successfully.
-    Available,
-    /// The library path was empty.
-    EmptyPath,
-    /// The library path does not exist.
-    MissingPath,
-    /// The configured path exists but is not a directory.
-    NotDirectory,
-    /// The library path could not be read completely.
-    Unreadable,
-}
-
-/// Summary of one configured media library.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
-pub struct LibraryScanSummary {
-    /// Human-friendly library name.
-    pub name: String,
-    /// Configured filesystem path.
-    pub path: String,
-    /// Configured filesystem paths for this logical library.
-    pub paths: Vec<String>,
-    /// Whether the scan is recursive.
-    pub recursive: bool,
-    /// Intended media category for the library.
-    pub kind: MediaLibraryKind,
-    /// Scan status for this library.
-    pub status: LibraryScanStatus,
-    /// Total number of files discovered.
-    pub total_files: u64,
-    /// Number of video files discovered.
-    pub video_files: u64,
-    /// Number of audio files discovered.
-    pub audio_files: u64,
-    /// Number of image files discovered.
-    pub image_files: u64,
-    /// Number of book or document files discovered.
-    pub book_files: u64,
-    /// Number of files that do not match known media extensions.
-    pub other_files: u64,
-    /// The last scan error, if any.
-    pub error: Option<String>,
 }
 
 /// Details about a discovered executable used for media processing.
@@ -138,6 +92,8 @@ pub struct PersistedLibrarySummary {
     pub recursive: bool,
     /// Intended media category for the library.
     pub kind: MediaLibraryKind,
+    /// Scanner used for the library inventory.
+    pub scanner: MediaLibraryScanner,
     /// Ordered metadata providers configured for this library.
     pub metadata_providers: Vec<MetadataProviderId>,
     /// Whether metadata languages are inferred from users or set manually.
@@ -187,15 +143,16 @@ struct LibraryMetadataRefreshCounts {
 }
 
 const CATALOG_MEDIA_FILE_COLUMNS: &str = "\
-    files.id AS id,\
-    memberships.id AS library_file_id,\
-    memberships.library_id AS library_id,\
-    memberships.source_root_path AS source_root_path,\
-    memberships.relative_path AS relative_path,\
+      files.id AS id,\
+      files.path AS path,\
+      memberships.id AS library_file_id,\
+      memberships.library_id AS library_id,\
+      memberships.source_root_path AS source_root_path,\
+      memberships.relative_path AS relative_path,\
     files.file_size AS file_size,\
     files.modified_at AS modified_at,\
     files.media_kind AS media_kind,\
-    files.fingerprint_seed AS fingerprint_seed,\
+    files.file_hash AS file_hash,\
     memberships.display_title AS display_title,\
     files.container AS container,\
     files.duration_ms AS duration_ms,\
@@ -226,8 +183,8 @@ pub struct PersistedMediaFileSummary {
     pub modified_at: Option<i64>,
     /// Classified media type for the file.
     pub media_kind: String,
-    /// Basic fingerprint seed for future change detection.
-    pub fingerprint_seed: String,
+    /// Scanner-owned file hash used to detect when probing should be refreshed.
+    pub file_hash: String,
     /// Browser-friendly title for the item.
     pub display_title: String,
     /// Container format reported by ffprobe when available.
@@ -628,40 +585,13 @@ pub struct AutomaticMetadataCandidate {
     pub metadata_providers: Vec<MetadataProviderId>,
 }
 
-#[derive(Debug, Default)]
-struct FileCounters {
-    total_files: u64,
-    video_files: u64,
-    audio_files: u64,
-    image_files: u64,
-    book_files: u64,
-    other_files: u64,
-}
-
-#[derive(Debug, Clone)]
-struct LibraryInspection {
-    summary: LibraryScanSummary,
-    files: Vec<DiscoveredMediaFile>,
-    scanned_root_paths: HashSet<String>,
-}
-
-#[derive(Debug, Clone)]
-struct DiscoveredMediaFile {
-    full_path: PathBuf,
-    source_root_path: String,
-    relative_path: String,
-    file_size: i64,
-    modified_at: Option<i64>,
-    media_kind: String,
-    fingerprint_seed: String,
-    default_title: String,
-}
-
 #[derive(Debug, Clone, diesel::QueryableByName)]
 #[diesel(table_name = crate::db::schema::media_files)]
 struct CatalogMediaFile {
     #[diesel(sql_type = sql_types::Integer)]
     id: i32,
+    #[diesel(sql_type = sql_types::Text)]
+    path: String,
     #[diesel(sql_type = sql_types::Integer)]
     library_file_id: i32,
     #[diesel(sql_type = sql_types::Integer)]
@@ -677,7 +607,7 @@ struct CatalogMediaFile {
     #[diesel(sql_type = sql_types::Text)]
     media_kind: String,
     #[diesel(sql_type = sql_types::Text)]
-    fingerprint_seed: String,
+    file_hash: String,
     #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     display_title: Option<String>,
     #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
@@ -748,18 +678,6 @@ struct PlannedLibraryItems {
     leaf_identity_by_file_id: HashMap<i32, String>,
 }
 
-#[derive(Debug, Clone)]
-struct ParsedShowPath {
-    show_title: String,
-    show_key: String,
-    season_title: String,
-    season_key: String,
-    season_number: Option<i32>,
-    episode_title: String,
-    episode_key: String,
-    episode_number: Option<i32>,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct ProbeContext<'a> {
     ffprobe_path: &'a str,
@@ -770,7 +688,7 @@ struct ProbeContext<'a> {
 pub fn inspect_libraries(libraries: &[MediaLibrarySettings]) -> Vec<LibraryScanSummary> {
     libraries
         .iter()
-        .map(inspect_library_with_inventory)
+        .map(inspect_library)
         .map(|inspection| inspection.summary)
         .collect()
 }
@@ -1017,6 +935,18 @@ pub fn sync_persisted_library_catalog(
     sync_library_catalog(conn, &libraries, ffmpeg_settings)
 }
 
+/// Sync one persisted media library from the database into the media catalog.
+pub fn sync_persisted_library_catalog_for_library(
+    conn: &mut SqliteConnection,
+    legacy_libraries: &[MediaLibrarySettings],
+    ffmpeg_settings: &FfmpegSettings,
+    library_id: i32,
+) -> Result<Option<PersistedLibrarySummary>, diesel::result::Error> {
+    let libraries = list_library_settings(conn, legacy_libraries)?;
+    sync_library_catalog_filtered(conn, &libraries, ffmpeg_settings, Some(library_id))
+        .map(|mut summaries| summaries.pop())
+}
+
 /// Return persisted media-library summaries without triggering a foreground rescan.
 pub fn get_persisted_library_summaries(
     conn: &mut SqliteConnection,
@@ -1135,6 +1065,7 @@ pub fn get_persisted_library_summaries(
             let settings = media_library_settings_from_row(library.clone());
             let state = states.get(&library.id);
             let metadata_counts = refresh_counts.get(&library.id).cloned().unwrap_or_default();
+            let scanner = settings.scanner.effective_for_kind(&settings.kind);
             PersistedLibrarySummary {
                 id: library.id,
                 name: settings.name,
@@ -1142,6 +1073,7 @@ pub fn get_persisted_library_summaries(
                 paths: settings.paths,
                 recursive: settings.recursive,
                 kind: settings.kind,
+                scanner,
                 metadata_providers: settings.metadata_providers,
                 metadata_language_mode: settings.metadata_language_mode,
                 metadata_languages: settings.metadata_languages,
@@ -1225,6 +1157,30 @@ fn load_catalog_file_for_item(
         .map(|mut rows| rows.pop())
 }
 
+fn load_catalog_file_for_library_path(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    source_root_path: &str,
+    relative_path: &str,
+) -> Result<Option<CatalogMediaFile>, diesel::result::Error> {
+    let sql = format!(
+        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} \
+         FROM media_file_libraries AS memberships \
+         INNER JOIN media_files AS files ON files.id = memberships.media_file_id \
+         WHERE memberships.library_id = ? \
+           AND memberships.source_root_path = ? \
+           AND memberships.relative_path = ? \
+         ORDER BY memberships.id ASC \
+         LIMIT 1"
+    );
+    diesel::sql_query(sql)
+        .bind::<sql_types::Integer, _>(library_id)
+        .bind::<sql_types::Text, _>(source_root_path)
+        .bind::<sql_types::Text, _>(relative_path)
+        .load::<CatalogMediaFile>(conn)
+        .map(|mut rows| rows.pop())
+}
+
 fn load_media_file_by_path(
     conn: &mut SqliteConnection,
     path: &str,
@@ -1238,14 +1194,316 @@ fn load_media_file_by_path(
         .optional()
 }
 
+fn catalog_file_needs_update(
+    existing: &CatalogMediaFile,
+    discovered: &DiscoveredMediaFile,
+    physical_path: &str,
+) -> bool {
+    existing.path != physical_path
+        || existing.file_hash != discovered.file_hash
+        || existing.file_size != discovered.file_size
+        || existing.modified_at != discovered.modified_at
+        || existing.media_kind != discovered.media_kind
+}
+
+fn media_file_row_needs_update(
+    existing: &MediaFile,
+    discovered: &DiscoveredMediaFile,
+    physical_path: &str,
+) -> bool {
+    existing.path != physical_path
+        || existing.file_hash != discovered.file_hash
+        || existing.file_size != discovered.file_size
+        || existing.modified_at != discovered.modified_at
+        || existing.media_kind != discovered.media_kind
+}
+
+fn clear_metadata_match_attempts_for_media_file(
+    conn: &mut SqliteConnection,
+    media_file_id: i32,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::media_file_libraries::dsl as media_file_libraries_dsl;
+
+    diesel::update(
+        media_file_libraries_dsl::media_file_libraries
+            .filter(media_file_libraries_dsl::media_file_id.eq(media_file_id)),
+    )
+    .set(media_file_libraries_dsl::metadata_match_attempted_at.eq::<Option<i64>>(None))
+    .execute(conn)?;
+
+    Ok(())
+}
+
+fn delete_unreferenced_media_files(
+    conn: &mut SqliteConnection
+) -> Result<usize, diesel::result::Error> {
+    diesel::sql_query(
+        "DELETE FROM media_files \
+         WHERE NOT EXISTS ( \
+           SELECT 1 FROM media_file_libraries \
+           WHERE media_file_libraries.media_file_id = media_files.id \
+         )",
+    )
+    .execute(conn)
+}
+
+fn mark_library_root_files_missing(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    source_root_path: &str,
+    missing_since: i64,
+) -> Result<usize, diesel::result::Error> {
+    use crate::db::schema::media_file_libraries::dsl as media_file_libraries_dsl;
+
+    diesel::update(
+        media_file_libraries_dsl::media_file_libraries
+            .filter(media_file_libraries_dsl::library_id.eq(library_id))
+            .filter(media_file_libraries_dsl::source_root_path.eq(source_root_path))
+            .filter(media_file_libraries_dsl::deleted_at.is_null())
+            .filter(media_file_libraries_dsl::missing_since.is_null()),
+    )
+    .set(media_file_libraries_dsl::missing_since.eq(missing_since))
+    .execute(conn)
+}
+
+fn mark_unscanned_library_roots_missing(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    roots: &[String],
+    scanned_roots: &HashSet<String>,
+    missing_since: i64,
+) -> Result<usize, diesel::result::Error> {
+    let mut marked = 0;
+    for root in roots {
+        if scanned_roots.contains(root) {
+            continue;
+        }
+        marked += mark_library_root_files_missing(conn, library_id, root, missing_since)?;
+    }
+    Ok(marked)
+}
+
+fn stat_matches_catalog_file(
+    file: &CatalogMediaFile,
+    candidate: &FileHashCandidate<'_>,
+) -> bool {
+    file.file_size == candidate.file_size && file.modified_at == candidate.modified_at
+}
+
+fn stat_matches_media_file(
+    file: &MediaFile,
+    candidate: &FileHashCandidate<'_>,
+) -> bool {
+    file.file_size == candidate.file_size && file.modified_at == candidate.modified_at
+}
+
+fn reusable_scanner_hash(hash: &str) -> Option<String> {
+    hash.strip_prefix("imohash:")
+        .filter(|value| {
+            value.len() == 32 && value.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .map(|_| hash.to_string())
+}
+
+fn reusable_file_hash_for_scan(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    candidate: FileHashCandidate<'_>,
+) -> Result<Option<String>, diesel::result::Error> {
+    if let Some(existing_file) = load_catalog_file_for_library_path(
+        conn,
+        library_id,
+        candidate.source_root_path,
+        candidate.relative_path,
+    )? {
+        if stat_matches_catalog_file(&existing_file, &candidate) {
+            if let Some(hash) = reusable_scanner_hash(&existing_file.file_hash) {
+                return Ok(Some(hash));
+            }
+        }
+    }
+
+    let physical_path = candidate.full_path.to_string_lossy().to_string();
+    if let Some(existing_physical_file) = load_media_file_by_path(conn, &physical_path)? {
+        if stat_matches_media_file(&existing_physical_file, &candidate) {
+            if let Some(hash) = reusable_scanner_hash(&existing_physical_file.file_hash) {
+                return Ok(Some(hash));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn sync_discovered_media_file(
+    conn: &mut SqliteConnection,
+    library_row: &MediaLibrary,
+    discovered_file: &DiscoveredMediaFile,
+    probe_context: ProbeContext<'_>,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::media_file_libraries::dsl as media_file_libraries_dsl;
+    use crate::db::schema::media_files::dsl as media_files_dsl;
+
+    let existing_file = load_catalog_file_for_library_path(
+        conn,
+        library_row.id,
+        &discovered_file.source_root_path,
+        &discovered_file.relative_path,
+    )?;
+    let physical_path = discovered_file.physical_path();
+    let existing_physical_file = load_media_file_by_path(conn, &physical_path)?;
+    let metadata_source_hash = existing_physical_file
+        .as_ref()
+        .map(|file| file.file_hash.as_str())
+        .or_else(|| existing_file.as_ref().map(|file| file.file_hash.as_str()));
+    let should_refresh_title = existing_file
+        .as_ref()
+        .map(|file| file.display_title.as_deref() != Some(discovered_file.default_title.as_str()))
+        .unwrap_or(true);
+    let should_refresh_metadata = metadata_source_hash
+        .map(|file_hash| file_hash != discovered_file.file_hash)
+        .unwrap_or(true);
+    let should_restore_file = existing_file
+        .as_ref()
+        .map(|file| file.missing_since.is_some() || file.deleted_at.is_some())
+        .unwrap_or(false);
+
+    let metadata = if should_refresh_metadata {
+        extract_metadata(discovered_file, probe_context)
+    } else {
+        existing_physical_file
+            .as_ref()
+            .map(extracted_metadata_from_file_row)
+            .or_else(|| existing_file.as_ref().map(extracted_metadata_from_existing))
+            .unwrap_or_else(|| default_metadata(discovered_file))
+    };
+    let display_title = Some(discovered_file.default_title.clone());
+    let metadata_match_attempted_at = if should_refresh_metadata || should_refresh_title {
+        None
+    } else {
+        existing_file
+            .as_ref()
+            .and_then(|file| file.metadata_match_attempted_at)
+    };
+    let file_values = discovered_file.to_new_media_file(metadata);
+    let media_file_id = if let Some(existing_physical_file) = existing_physical_file.as_ref() {
+        let file_hash_changed = existing_physical_file.file_hash != discovered_file.file_hash;
+        if media_file_row_needs_update(existing_physical_file, discovered_file, &physical_path) {
+            diesel::update(
+                media_files_dsl::media_files
+                    .filter(media_files_dsl::id.eq(existing_physical_file.id)),
+            )
+            .set(&file_values)
+            .execute(conn)?;
+            if file_hash_changed {
+                clear_metadata_match_attempts_for_media_file(conn, existing_physical_file.id)?;
+            }
+        }
+        existing_physical_file.id
+    } else if let Some(existing_file) = existing_file.as_ref() {
+        let file_hash_changed = existing_file.file_hash != discovered_file.file_hash;
+        if catalog_file_needs_update(existing_file, discovered_file, &physical_path) {
+            diesel::update(
+                media_files_dsl::media_files.filter(media_files_dsl::id.eq(existing_file.id)),
+            )
+            .set(&file_values)
+            .execute(conn)?;
+            if file_hash_changed {
+                clear_metadata_match_attempts_for_media_file(conn, existing_file.id)?;
+            }
+        }
+        existing_file.id
+    } else {
+        diesel::insert_into(media_files_dsl::media_files)
+            .values(&file_values)
+            .execute(conn)?;
+        media_files_dsl::media_files
+            .filter(media_files_dsl::path.eq(&physical_path))
+            .select(media_files_dsl::id)
+            .first::<i32>(conn)?
+    };
+    let membership_values = discovered_file.to_new_media_file_library(
+        media_file_id,
+        library_row.id,
+        display_title,
+        metadata_match_attempted_at,
+    );
+
+    if let Some(existing_file) = existing_file {
+        if existing_file.file_hash != discovered_file.file_hash
+            || should_refresh_title
+            || should_restore_file
+            || existing_file.id != media_file_id
+        {
+            diesel::update(
+                media_file_libraries_dsl::media_file_libraries
+                    .filter(media_file_libraries_dsl::id.eq(existing_file.library_file_id)),
+            )
+            .set(&membership_values)
+            .execute(conn)?;
+        }
+    } else {
+        diesel::insert_into(media_file_libraries_dsl::media_file_libraries)
+            .values(&membership_values)
+            .execute(conn)?;
+    };
+
+    Ok(())
+}
+
+struct CatalogSyncScannerSink<'a, 'b, 'c> {
+    conn: &'a mut SqliteConnection,
+    library_row: &'b MediaLibrary,
+    probe_context: ProbeContext<'c>,
+    scan_started_at: i64,
+}
+
+impl ScannerSink for CatalogSyncScannerSink<'_, '_, '_> {
+    type Error = diesel::result::Error;
+
+    fn scanned_root(
+        &mut self,
+        source_root_path: &str,
+    ) -> Result<(), Self::Error> {
+        mark_library_root_files_missing(
+            self.conn,
+            self.library_row.id,
+            source_root_path,
+            self.scan_started_at,
+        )?;
+        Ok(())
+    }
+
+    fn file_hash(
+        &mut self,
+        candidate: FileHashCandidate<'_>,
+    ) -> Result<Option<String>, Self::Error> {
+        reusable_file_hash_for_scan(self.conn, self.library_row.id, candidate)
+    }
+
+    fn file(
+        &mut self,
+        file: DiscoveredMediaFile,
+    ) -> Result<(), Self::Error> {
+        sync_discovered_media_file(self.conn, self.library_row, &file, self.probe_context)
+    }
+}
+
 /// Sync configured libraries into the persistent catalog and refresh their inventory.
 pub fn sync_library_catalog(
     conn: &mut SqliteConnection,
     libraries: &[MediaLibrarySettings],
     ffmpeg_settings: &FfmpegSettings,
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
-    use crate::db::schema::media_file_libraries::dsl as media_file_libraries_dsl;
-    use crate::db::schema::media_files::dsl as media_files_dsl;
+    sync_library_catalog_filtered(conn, libraries, ffmpeg_settings, None)
+}
+
+fn sync_library_catalog_filtered(
+    conn: &mut SqliteConnection,
+    libraries: &[MediaLibrarySettings],
+    ffmpeg_settings: &FfmpegSettings,
+    target_library_id: Option<i32>,
+) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
     use crate::db::schema::scan_state::dsl as scan_state_dsl;
 
@@ -1253,45 +1511,38 @@ pub fn sync_library_catalog(
         ffprobe_path: &ffmpeg_settings.ffprobe_path,
         enabled: detect_binary(&ffmpeg_settings.ffprobe_path).available,
     };
-    let inspections: Vec<LibraryInspection> = libraries
-        .iter()
-        .map(inspect_library_with_inventory)
-        .collect();
     let existing_library_rows = media_libraries_dsl::media_libraries
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
-    let mut persisted = Vec::with_capacity(inspections.len());
+    let mut persisted = Vec::with_capacity(
+        target_library_id
+            .map(|_| 1)
+            .unwrap_or_else(|| libraries.len()),
+    );
 
-    for (index, (library, inspection)) in libraries.iter().zip(inspections.into_iter()).enumerate()
-    {
-        let library_values = NewMediaLibrary {
-            name: inspection.summary.name.clone(),
-            path: inspection.summary.path.clone(),
-            paths_json: serde_json::to_string(&inspection.summary.paths)
-                .unwrap_or_else(|_| "[]".into()),
-            kind: inspection.summary.kind.as_storage_value(),
-            recursive: inspection.summary.recursive,
-            metadata_providers_json: serde_json::to_string(
-                &library
-                    .metadata_providers
-                    .iter()
-                    .map(|provider| provider.as_storage_value())
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|_| "[\"tmdb\"]".into()),
-            metadata_language_mode: match library.metadata_language_mode {
-                MediaLibraryMetadataLanguageMode::Auto => "auto",
-                MediaLibraryMetadataLanguageMode::Manual => "manual",
-            }
-            .into(),
-            metadata_languages_json: serde_json::to_string(&library.metadata_languages)
-                .unwrap_or_else(|_| "[\"en-US\"]".into()),
-            allowed_user_ids_json: serde_json::to_string(&library.allowed_user_ids)
-                .unwrap_or_else(|_| "[]".into()),
-        };
-
+    for (index, library) in libraries.iter().enumerate() {
         let existing_library = existing_library_rows.get(index).cloned();
+        if target_library_id
+            .zip(existing_library.as_ref().map(|library| library.id))
+            .is_some_and(|(target_library_id, existing_id)| target_library_id != existing_id)
+        {
+            continue;
+        }
+
+        let library_label = existing_library
+            .as_ref()
+            .map(|row| format!("{} ({})", row.id, row.name))
+            .unwrap_or_else(|| format!("new library {}", index + 1));
+        let mut library_values = media_library_record_values(library);
+        if library_values.name.trim().is_empty() {
+            library_values.name = Path::new(&library_values.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_string())
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Unnamed library".into());
+        }
 
         let library_row = if let Some(existing_library) = existing_library {
             diesel::update(
@@ -1325,162 +1576,39 @@ pub fn sync_library_catalog(
             .as_ref()
             .map(|state| state.scan_revision + 1)
             .unwrap_or(1);
-        let last_scanned_at = Some(current_timestamp());
+        let scan_started_at = current_timestamp();
+        let last_scanned_at = Some(scan_started_at);
 
-        let existing_files = load_catalog_files_for_library(conn, library_row.id, true)?;
-        let mut existing_files_by_path: HashMap<String, CatalogMediaFile> = existing_files
-            .into_iter()
-            .map(|file| (media_file_inventory_key(&file), file))
-            .collect();
-        let mut seen_paths = HashSet::new();
-
-        for discovered_file in &inspection.files {
-            let inventory_key = discovered_media_file_inventory_key(discovered_file);
-            if !seen_paths.insert(inventory_key.clone()) {
-                continue;
-            }
-
-            let existing_file = existing_files_by_path.remove(&inventory_key);
-            let physical_path = discovered_file.physical_path();
-            let existing_physical_file = load_media_file_by_path(conn, &physical_path)?;
-            let should_refresh_title = existing_file
-                .as_ref()
-                .map(|file| {
-                    file.display_title.as_deref() != Some(discovered_file.default_title.as_str())
-                })
-                .unwrap_or(true);
-            let should_refresh_metadata = existing_file
-                .as_ref()
-                .map(|file| file.fingerprint_seed != discovered_file.fingerprint_seed)
-                .or_else(|| {
-                    existing_physical_file
-                        .as_ref()
-                        .map(|file| file.fingerprint_seed != discovered_file.fingerprint_seed)
-                })
-                .unwrap_or(true);
-            let should_restore_file = existing_file
-                .as_ref()
-                .map(|file| file.missing_since.is_some() || file.deleted_at.is_some())
-                .unwrap_or(false);
-
-            let metadata = if should_refresh_metadata {
-                extract_metadata(discovered_file, probe_context)
-            } else {
-                existing_file
-                    .as_ref()
-                    .map(extracted_metadata_from_existing)
-                    .or_else(|| {
-                        existing_physical_file
-                            .as_ref()
-                            .map(extracted_metadata_from_file_row)
-                    })
-                    .unwrap_or_else(|| default_metadata(discovered_file))
+        log::info!("Scanning media library catalog for {library_label} with streaming persistence");
+        let inspection = {
+            let mut scanner_sink = CatalogSyncScannerSink {
+                conn,
+                library_row: &library_row,
+                probe_context,
+                scan_started_at,
             };
-            let display_title = Some(discovered_file.default_title.clone());
-            let metadata_match_attempted_at = if should_refresh_metadata || should_refresh_title {
-                None
-            } else {
-                existing_file
-                    .as_ref()
-                    .and_then(|file| file.metadata_match_attempted_at)
-            };
-            let file_values = discovered_file.to_new_media_file(metadata);
-            let media_file_id = if let Some(existing_physical_file) = existing_physical_file {
-                if existing_physical_file.fingerprint_seed != discovered_file.fingerprint_seed {
-                    diesel::update(
-                        media_files_dsl::media_files
-                            .filter(media_files_dsl::id.eq(existing_physical_file.id)),
-                    )
-                    .set(&file_values)
-                    .execute(conn)?;
-                    diesel::update(media_file_libraries_dsl::media_file_libraries.filter(
-                        media_file_libraries_dsl::media_file_id.eq(existing_physical_file.id),
-                    ))
-                    .set(
-                        media_file_libraries_dsl::metadata_match_attempted_at
-                            .eq::<Option<i64>>(None),
-                    )
-                    .execute(conn)?;
-                }
-                existing_physical_file.id
-            } else {
-                diesel::insert_into(media_files_dsl::media_files)
-                    .values(&file_values)
-                    .execute(conn)?;
-                media_files_dsl::media_files
-                    .filter(media_files_dsl::path.eq(&physical_path))
-                    .select(media_files_dsl::id)
-                    .first::<i32>(conn)?
-            };
-            let membership_values = discovered_file.to_new_media_file_library(
-                media_file_id,
+            inspect_library_streaming(library, &mut scanner_sink)?
+        };
+        log::info!(
+            "Finished streaming media library catalog for {}: {} file(s)",
+            library_label,
+            inspection.summary.total_files
+        );
+
+        let missing_unscanned_files = mark_unscanned_library_roots_missing(
+            conn,
+            library_row.id,
+            &inspection.summary.paths,
+            &inspection.scanned_root_paths,
+            scan_started_at,
+        )?;
+        if missing_unscanned_files > 0 {
+            log::warn!(
+                "Marked {} existing file row(s) as missing in library {} ({}) because their source roots were not scanned successfully",
+                missing_unscanned_files,
                 library_row.id,
-                display_title,
-                metadata_match_attempted_at,
+                library_row.name
             );
-
-            if let Some(existing_file) = existing_file {
-                if existing_file.fingerprint_seed != discovered_file.fingerprint_seed
-                    || should_refresh_title
-                    || should_restore_file
-                    || existing_file.id != media_file_id
-                {
-                    diesel::update(
-                        media_file_libraries_dsl::media_file_libraries
-                            .filter(media_file_libraries_dsl::id.eq(existing_file.library_file_id)),
-                    )
-                    .set(&membership_values)
-                    .execute(conn)?;
-                }
-            } else {
-                diesel::insert_into(media_file_libraries_dsl::media_file_libraries)
-                    .values(&membership_values)
-                    .execute(conn)?;
-            };
-        }
-
-        let missing_file_ids: Vec<i32> = existing_files_by_path
-            .values()
-            .filter(|file| file.deleted_at.is_none())
-            .map(|file| file.library_file_id)
-            .collect();
-        let missing_file_count = missing_file_ids.len();
-        if !missing_file_ids.is_empty() {
-            diesel::update(
-                media_file_libraries_dsl::media_file_libraries
-                    .filter(media_file_libraries_dsl::id.eq_any(missing_file_ids))
-                    .filter(media_file_libraries_dsl::missing_since.is_null()),
-            )
-            .set(media_file_libraries_dsl::missing_since.eq(current_timestamp()))
-            .execute(conn)?;
-        }
-
-        if inspection.scanned_root_paths.is_empty() {
-            if missing_file_count > 0 {
-                log::warn!(
-                    "No configured roots were scanned successfully for library {} ({}); marked {} existing file rows as missing",
-                    library_row.id,
-                    library_row.name,
-                    missing_file_count
-                );
-            }
-        } else {
-            let missing_unscanned_files = existing_files_by_path
-                .values()
-                .filter(|file| {
-                    !inspection
-                        .scanned_root_paths
-                        .contains(&file.source_root_path)
-                })
-                .count();
-            if missing_unscanned_files > 0 {
-                log::warn!(
-                    "Marked {} existing file rows as missing in library {} ({}) because their source roots were not scanned successfully",
-                    missing_unscanned_files,
-                    library_row.id,
-                    library_row.name
-                );
-            }
         }
         sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
 
@@ -1517,6 +1645,7 @@ pub fn sync_library_catalog(
             paths: inspection.summary.paths,
             recursive: inspection.summary.recursive,
             kind: inspection.summary.kind,
+            scanner: inspection.summary.scanner,
             metadata_providers: library.metadata_providers.clone(),
             metadata_language_mode: library.metadata_language_mode.clone(),
             metadata_languages: library.metadata_languages.clone(),
@@ -1538,6 +1667,8 @@ pub fn sync_library_catalog(
             missing_items: 0,
         });
     }
+
+    delete_unreferenced_media_files(conn)?;
 
     Ok(persisted)
 }
@@ -2430,143 +2561,6 @@ fn parent_relative_path(
         .map(str::to_string)
         .collect::<Vec<_>>();
     (!parts.is_empty()).then(|| parts.join("/"))
-}
-
-fn parse_show_path(
-    relative_path: &str,
-    fallback_title: &str,
-    library_id: i32,
-) -> ParsedShowPath {
-    let normalized = relative_path.replace('\\', "/");
-    let parts = normalized
-        .split('/')
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>();
-    let show_title = parts
-        .first()
-        .copied()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(fallback_title)
-        .trim()
-        .to_string();
-    let season_source =
-        if parts.len() >= 2 { parts[parts.len().saturating_sub(2)] } else { fallback_title };
-    let season_number = infer_season_number(season_source)
-        .or_else(|| infer_season_number(fallback_title))
-        .filter(|value| *value > 0);
-    let episode_number = infer_episode_number(fallback_title)
-        .or_else(|| infer_episode_number(parts.last().copied().unwrap_or_default()))
-        .filter(|value| *value > 0);
-    let episode_title = cleaned_episode_title(fallback_title, episode_number)
-        .or_else(|| Some(fallback_title.trim().to_string()))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| fallback_title.to_string());
-    let season_title = season_number
-        .map(|number| format!("Season {}", number))
-        .unwrap_or_else(|| season_source.trim().to_string());
-    let show_key = format!(
-        "library:{}:show:{}",
-        library_id,
-        normalize_identity_segment(&show_title)
-    );
-    let season_key = format!(
-        "{}:season:{}",
-        show_key,
-        season_number
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| normalize_identity_segment(&season_title))
-    );
-    let episode_key = format!(
-        "{}:episode:{}:{}",
-        season_key,
-        episode_number
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".into()),
-        normalize_identity_segment(&episode_title)
-    );
-
-    ParsedShowPath {
-        show_title,
-        show_key,
-        season_title,
-        season_key,
-        season_number,
-        episode_title,
-        episode_key,
-        episode_number,
-    }
-}
-
-/// Infer a season number from common folder or filename patterns.
-pub fn infer_season_number(value: &str) -> Option<i32> {
-    static SEASON_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-        vec![
-            Regex::new(r"(?i)(?:^|[^a-z0-9])season\s*(\d{1,3})(?:[^0-9]|$)").unwrap(),
-            Regex::new(r"(?i)(?:^|[^a-z0-9])series\s*(\d{1,3})(?:[^0-9]|$)").unwrap(),
-            Regex::new(r"(?i)(?:^|[^a-z0-9])s(\d{1,3})(?:\s*e\d{1,3}|[^0-9]|$)").unwrap(),
-        ]
-    });
-
-    first_pattern_number(value, &SEASON_PATTERNS)
-}
-
-/// Infer an episode number from common filename patterns such as `S03E01` or `3x01`.
-pub fn infer_episode_number(value: &str) -> Option<i32> {
-    static EPISODE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-        vec![
-            Regex::new(r"(?i)(?:^|[^a-z0-9])s\d{1,3}\s*e(\d{1,3})(?:[^0-9]|$)").unwrap(),
-            Regex::new(r"(?i)(?:^|[^a-z0-9])\d{1,3}x(\d{1,3})(?:[^0-9]|$)").unwrap(),
-            Regex::new(r"(?i)(?:^|[^a-z0-9])e(\d{1,3})(?:[^0-9]|$)").unwrap(),
-        ]
-    });
-
-    first_pattern_number(value, &EPISODE_PATTERNS)
-}
-
-fn first_pattern_number(
-    value: &str,
-    patterns: &[Regex],
-) -> Option<i32> {
-    patterns.iter().find_map(|pattern| {
-        pattern
-            .captures(value)
-            .and_then(|captures| captures.get(1))
-            .and_then(|matched| matched.as_str().parse::<i32>().ok())
-    })
-}
-
-fn cleaned_episode_title(
-    value: &str,
-    episode_number: Option<i32>,
-) -> Option<String> {
-    let mut cleaned = value.replace(['.', '_'], " ");
-    if let Some(number) = episode_number {
-        let markers = [
-            format!("E{:02}", number),
-            format!("e{:02}", number),
-            format!("x{:02}", number),
-        ];
-        for marker in markers {
-            cleaned = cleaned.replace(&marker, " ");
-        }
-    }
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!collapsed.trim().is_empty()).then(|| collapsed.trim().to_string())
-}
-
-fn normalize_identity_segment(value: &str) -> String {
-    value
-        .chars()
-        .map(
-            |character| {
-                if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '-' }
-            },
-        )
-        .collect::<String>()
-        .split('-')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
 }
 
 /// Return persisted media files for a synchronized library.
@@ -3970,119 +3964,6 @@ fn detect_mime_type(file: &CatalogMediaFile) -> Option<String> {
     }
 }
 
-fn inspect_library_with_inventory(library: &MediaLibrarySettings) -> LibraryInspection {
-    let configured_paths = library.configured_paths();
-    let path = configured_paths.first().cloned().unwrap_or_default();
-    let name = display_name(library, &path);
-
-    if configured_paths.is_empty() {
-        return LibraryInspection {
-            summary: LibraryScanSummary {
-                name,
-                path,
-                paths: Vec::new(),
-                recursive: library.recursive,
-                kind: library.kind.clone(),
-                status: LibraryScanStatus::EmptyPath,
-                total_files: 0,
-                video_files: 0,
-                audio_files: 0,
-                image_files: 0,
-                book_files: 0,
-                other_files: 0,
-                error: Some("Library path is empty".into()),
-            },
-            files: Vec::new(),
-            scanned_root_paths: HashSet::new(),
-        };
-    }
-
-    let mut counters = FileCounters::default();
-    let mut files = Vec::new();
-    let mut scanned_root_paths = HashSet::new();
-    let mut errors = Vec::new();
-    let mut first_failure_status = None;
-
-    for configured_path in &configured_paths {
-        let filesystem_path = Path::new(configured_path);
-        if !filesystem_path.exists() {
-            first_failure_status.get_or_insert(LibraryScanStatus::MissingPath);
-            errors.push(format!("{}: path does not exist", configured_path));
-            continue;
-        }
-
-        if !filesystem_path.is_dir() {
-            first_failure_status.get_or_insert(LibraryScanStatus::NotDirectory);
-            errors.push(format!("{}: path is not a directory", configured_path));
-            continue;
-        }
-
-        match scan_directory(
-            filesystem_path,
-            filesystem_path,
-            library.recursive,
-            &library.kind,
-        ) {
-            Ok((nested, nested_files)) => {
-                scanned_root_paths.insert(configured_path.clone());
-                counters.total_files += nested.total_files;
-                counters.video_files += nested.video_files;
-                counters.audio_files += nested.audio_files;
-                counters.image_files += nested.image_files;
-                counters.book_files += nested.book_files;
-                counters.other_files += nested.other_files;
-                files.extend(nested_files);
-            }
-            Err(error) => {
-                first_failure_status.get_or_insert(LibraryScanStatus::Unreadable);
-                errors.push(format!("{}: {}", configured_path, error));
-            }
-        }
-    }
-
-    if !files.is_empty() || errors.len() < configured_paths.len() {
-        LibraryInspection {
-            summary: LibraryScanSummary {
-                name,
-                path,
-                paths: configured_paths,
-                recursive: library.recursive,
-                kind: library.kind.clone(),
-                status: LibraryScanStatus::Available,
-                total_files: counters.total_files,
-                video_files: counters.video_files,
-                audio_files: counters.audio_files,
-                image_files: counters.image_files,
-                book_files: counters.book_files,
-                other_files: counters.other_files,
-                error: (!errors.is_empty()).then(|| errors.join("; ")),
-            },
-            files,
-            scanned_root_paths,
-        }
-    } else {
-        LibraryInspection {
-            summary: LibraryScanSummary {
-                name,
-                path,
-                paths: configured_paths,
-                recursive: library.recursive,
-                kind: library.kind.clone(),
-                status: first_failure_status.unwrap_or(LibraryScanStatus::Unreadable),
-                total_files: 0,
-                video_files: 0,
-                audio_files: 0,
-                image_files: 0,
-                book_files: 0,
-                other_files: 0,
-                error: Some(errors.join("; ")),
-            },
-            files: Vec::new(),
-            scanned_root_paths,
-        }
-    }
-}
-
 impl LibraryScanStatus {
     fn as_storage_value(&self) -> &'static str {
         match self {
@@ -4166,6 +4047,7 @@ fn media_library_settings_from_row(row: MediaLibrary) -> MediaLibrarySettings {
         paths,
         recursive: row.recursive,
         kind: MediaLibraryKind::from_storage_value(&row.kind),
+        scanner: MediaLibraryScanner::from_storage_value(&row.scanner),
         metadata_providers,
         metadata_language_mode,
         metadata_languages,
@@ -4185,6 +4067,7 @@ fn media_library_record_values(library: &MediaLibrarySettings) -> NewMediaLibrar
         path: primary_path,
         paths_json: serde_json::to_string(&normalized.paths).unwrap_or_else(|_| "[]".into()),
         kind: normalized.kind.as_storage_value(),
+        scanner: normalized.scanner.as_storage_value().to_string(),
         recursive: normalized.recursive,
         metadata_providers_json: serde_json::to_string(
             &normalized
@@ -4247,7 +4130,7 @@ impl DiscoveredMediaFile {
             file_size: self.file_size,
             modified_at: self.modified_at,
             media_kind: self.media_kind.clone(),
-            fingerprint_seed: self.fingerprint_seed.clone(),
+            file_hash: self.file_hash.clone(),
             container: metadata.container,
             duration_ms: metadata.duration_ms,
             bit_rate: metadata.bit_rate,
@@ -4540,7 +4423,7 @@ fn to_persisted_file_summary(row: CatalogMediaFile) -> PersistedMediaFileSummary
         file_size: row.file_size,
         modified_at: row.modified_at,
         media_kind: row.media_kind,
-        fingerprint_seed: row.fingerprint_seed,
+        file_hash: row.file_hash,
         display_title: row
             .display_title
             .unwrap_or_else(|| fallback_title_from_relative_path(&row.relative_path)),
@@ -5226,106 +5109,6 @@ pub fn list_media_item_children_with_preferred_languages(
     Ok(items)
 }
 
-fn display_name(
-    library: &MediaLibrarySettings,
-    path: &str,
-) -> String {
-    if !library.name.trim().is_empty() {
-        return library.name.trim().to_string();
-    }
-
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "Unnamed library".into())
-}
-
-fn scan_directory(
-    root: &Path,
-    path: &Path,
-    recursive: bool,
-    library_kind: &MediaLibraryKind,
-) -> io::Result<(FileCounters, Vec<DiscoveredMediaFile>)> {
-    let mut counters = FileCounters::default();
-    let mut files = Vec::new();
-
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-
-        if entry_path.is_dir() {
-            if recursive {
-                let (nested, nested_files) = scan_directory(root, &entry_path, true, library_kind)?;
-                counters.total_files += nested.total_files;
-                counters.video_files += nested.video_files;
-                counters.audio_files += nested.audio_files;
-                counters.image_files += nested.image_files;
-                counters.book_files += nested.book_files;
-                counters.other_files += nested.other_files;
-                files.extend(nested_files);
-            }
-            continue;
-        }
-
-        if entry_path.is_file() {
-            let kind = classify_file(&entry_path);
-            if !should_include_library_item(&entry_path, kind, library_kind) {
-                continue;
-            }
-
-            counters.total_files += 1;
-            match kind {
-                FileKind::Video => counters.video_files += 1,
-                FileKind::Audio => counters.audio_files += 1,
-                FileKind::Image => counters.image_files += 1,
-                FileKind::Book => counters.book_files += 1,
-                FileKind::Other => counters.other_files += 1,
-            }
-
-            let metadata = entry.metadata()?;
-            let file_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .and_then(|duration| i64::try_from(duration.as_secs()).ok());
-            let relative_path = normalize_relative_path(root, &entry_path);
-            let media_kind = kind.as_storage_value().to_string();
-            let raw_default_title = entry_path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| fallback_title_from_relative_path(&relative_path));
-            let default_title = match library_kind {
-                MediaLibraryKind::Movies => movie_display_title_from_name(&raw_default_title),
-                _ => raw_default_title,
-            };
-
-            files.push(DiscoveredMediaFile {
-                full_path: entry_path,
-                source_root_path: root.to_string_lossy().to_string(),
-                fingerprint_seed: format!(
-                    "{}:{}:{}:{}",
-                    root.to_string_lossy(),
-                    relative_path,
-                    file_size,
-                    modified_at.unwrap_or_default()
-                ),
-                relative_path,
-                file_size,
-                modified_at,
-                media_kind,
-                default_title,
-            });
-        }
-    }
-
-    Ok((counters, files))
-}
-
 fn detect_binary(binary: &str) -> BinaryCapability {
     let output = Command::new(binary).arg("-version").output();
 
@@ -5371,63 +5154,6 @@ fn detect_binary(binary: &str) -> BinaryCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileKind {
-    Video,
-    Audio,
-    Image,
-    Book,
-    Other,
-}
-
-impl FileKind {
-    fn as_storage_value(&self) -> &'static str {
-        match self {
-            FileKind::Video => "video",
-            FileKind::Audio => "audio",
-            FileKind::Image => "image",
-            FileKind::Book => "book",
-            FileKind::Other => "other",
-        }
-    }
-}
-
-fn classify_file(path: &Path) -> FileKind {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
-
-    match extension.as_deref() {
-        Some("mkv" | "mp4" | "avi" | "mov" | "wmv" | "m4v" | "webm" | "ts") => FileKind::Video,
-        Some("mp3" | "flac" | "aac" | "wav" | "ogg" | "m4a" | "opus") => FileKind::Audio,
-        Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff") => FileKind::Image,
-        Some("pdf" | "epub" | "cbz" | "cbr" | "mobi") => FileKind::Book,
-        _ => FileKind::Other,
-    }
-}
-
-fn should_include_library_item(
-    path: &Path,
-    kind: FileKind,
-    library_kind: &MediaLibraryKind,
-) -> bool {
-    match library_kind {
-        MediaLibraryKind::Movies | MediaLibraryKind::Shows | MediaLibraryKind::HomeVideos => {
-            kind == FileKind::Video
-        }
-        MediaLibraryKind::Music => kind == FileKind::Audio,
-        MediaLibraryKind::Photos => kind == FileKind::Image,
-        MediaLibraryKind::Books => kind == FileKind::Book,
-        MediaLibraryKind::Mixed => {
-            matches!(
-                kind,
-                FileKind::Video | FileKind::Audio | FileKind::Image | FileKind::Book
-            ) && !is_named_theme_asset(path)
-        }
-    }
-}
-
 fn parse_library_storage_paths(value: &str) -> Vec<String> {
     let trimmed = value.trim();
     if trimmed.starts_with('[') {
@@ -5437,14 +5163,6 @@ fn parse_library_storage_paths(value: &str) -> Vec<String> {
     } else {
         vec![trimmed.to_string()]
     }
-}
-
-fn media_file_inventory_key(file: &CatalogMediaFile) -> String {
-    format!("{}\u{1f}{}", file.source_root_path, file.relative_path)
-}
-
-fn discovered_media_file_inventory_key(file: &DiscoveredMediaFile) -> String {
-    format!("{}\u{1f}{}", file.source_root_path, file.relative_path)
 }
 
 #[derive(Debug, Default)]
@@ -5649,13 +5367,6 @@ fn subtitle_label_from_path(
         .unwrap_or_else(|| "Subtitle".into())
 }
 
-fn is_named_theme_asset(path: &Path) -> bool {
-    path.file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("theme"))
-        .unwrap_or(false)
-}
-
 fn is_subtitle_extension(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -5664,71 +5375,6 @@ fn is_subtitle_extension(path: &Path) -> bool {
             .as_deref(),
         Some("srt" | "vtt" | "ass" | "ssa" | "sub")
     )
-}
-
-fn normalize_relative_path(
-    root: &Path,
-    path: &Path,
-) -> String {
-    let relative: PathBuf = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-    relative.to_string_lossy().replace('\\', "/")
-}
-
-fn fallback_title_from_relative_path(relative_path: &str) -> String {
-    Path::new(relative_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| relative_path.to_string())
-}
-
-fn movie_display_title_from_name(value: &str) -> String {
-    static BRACKETED_TAG_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"[\{\[]([^\}\]]*)[\}\]]").unwrap());
-    static YEAR_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"\b(19\d{2}|20\d{2}|21\d{2})\b").unwrap());
-    static PARENTHETICAL_YEAR_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"[\(\[]\s*(19\d{2}|20\d{2}|21\d{2})\s*[\)\]]").unwrap());
-    static DASH_FORMAT_SUFFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)\s+[-–]\s+(?:bluray|blu-ray|brrip|web[- ]?dl|webrip|remux|dvdrip|hdtv|uhd|dvd|proper|repack|extended|unrated|director'?s cut|theatrical|final cut)?(?:[\s._-]*(?:2160p|1080p|720p|480p|4k|uhd|hdr|dv|x264|x265|h264|h265|hevc|av1|aac|dts|truehd|atmos|remux|bluray|blu-ray|web[- ]?dl|webrip|brrip|dvdrip))*\s*$",
-        )
-        .unwrap()
-    });
-    static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|x264|x265|h264|h265|hevc|av1|hdr|dv|webrip|web[- ]?dl|bluray|blu-ray|brrip|dvdrip|remux|aac|dts|truehd|atmos)\b",
-        )
-        .unwrap()
-    });
-    static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+").unwrap());
-
-    let without_tags = BRACKETED_TAG_REGEX.replace_all(value, " ");
-    let mut normalized = DASH_FORMAT_SUFFIX_REGEX
-        .replace(&without_tags, " ")
-        .to_string();
-    normalized = PARENTHETICAL_YEAR_REGEX
-        .replace(&normalized, " ")
-        .to_string();
-    normalized = normalized.replace(['.', '_'], " ");
-    if let Some(year_match) = YEAR_REGEX.find(&normalized) {
-        if !normalized[..year_match.start()].trim().is_empty() {
-            normalized = normalized[..year_match.start()].to_string();
-        }
-    }
-    normalized = TITLE_COLON_DASH_REGEX
-        .replace_all(&normalized, ": ")
-        .to_string();
-    normalized = NOISE_TOKEN_REGEX.replace_all(&normalized, " ").to_string();
-    let cleaned = normalized
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim_matches(|character: char| !character.is_ascii_alphanumeric())
-        .to_string();
-
-    if cleaned.is_empty() { value.to_string() } else { cleaned }
 }
 
 #[cfg(test)]

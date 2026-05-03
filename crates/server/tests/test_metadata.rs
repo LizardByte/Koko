@@ -142,6 +142,7 @@ fn test_settings_persistence_clears_library_definitions() {
         paths: vec!["C:/Media/Movies".into()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],

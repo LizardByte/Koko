@@ -48,6 +48,7 @@ const libraries: MediaLibrary[] = [
     paths: ['C:/Media/Movies', 'D:/Overflow/Movies'],
     recursive: true,
     kind: 'movies',
+    scanner: 'movies',
     metadata_providers: ['tmdb'],
     metadata_language_mode: 'auto',
     metadata_languages: ['en-US'],
@@ -74,6 +75,7 @@ const libraries: MediaLibrary[] = [
     paths: ['C:/Media/Shows'],
     recursive: true,
     kind: 'shows',
+    scanner: 'shows',
     metadata_providers: ['tmdb'],
     metadata_language_mode: 'auto',
     metadata_languages: ['en-US', 'ja-JP'],
@@ -100,6 +102,7 @@ const libraries: MediaLibrary[] = [
     paths: ['C:/Media/Music'],
     recursive: true,
     kind: 'music',
+    scanner: 'music',
     metadata_providers: [],
     metadata_language_mode: 'auto',
     metadata_languages: ['en-US'],
@@ -628,6 +631,7 @@ let settings: SettingsSnapshot = {
         paths: ['C:/Media/Movies', 'D:/Overflow/Movies'],
         recursive: true,
         kind: 'movies',
+        scanner: 'auto',
         metadata_providers: ['tmdb'],
         metadata_language_mode: 'auto',
         metadata_languages: ['en-US'],
@@ -639,6 +643,7 @@ let settings: SettingsSnapshot = {
         paths: ['C:/Media/Shows'],
         recursive: true,
         kind: 'shows',
+        scanner: 'auto',
         metadata_providers: ['tmdb'],
         metadata_language_mode: 'auto',
         metadata_languages: ['en-US', 'ja-JP'],
@@ -650,6 +655,7 @@ let settings: SettingsSnapshot = {
         paths: ['C:/Media/Music'],
         recursive: true,
         kind: 'music',
+        scanner: 'auto',
         metadata_providers: [],
         metadata_language_mode: 'auto',
         metadata_languages: ['en-US'],
@@ -1134,6 +1140,7 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
   normalizedLibrary.path = normalizedLibrary.paths[0] ?? normalizedLibrary.path;
   normalizedLibrary.metadata_languages = normalizedLibrary.metadata_languages?.length ? normalizedLibrary.metadata_languages : ['en-US'];
   normalizedLibrary.metadata_language_mode = normalizedLibrary.metadata_language_mode ?? 'auto';
+  normalizedLibrary.scanner = normalizedLibrary.scanner ?? 'auto';
   normalizedLibrary.allowed_user_ids = normalizedLibrary.allowed_user_ids ?? [];
   settings.media.libraries.push(normalizedLibrary);
   libraries.push({
@@ -1143,6 +1150,7 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
     paths: [...normalizedLibrary.paths],
     recursive: normalizedLibrary.recursive,
     kind: normalizedLibrary.kind,
+    scanner: normalizedLibrary.scanner,
     metadata_providers: [...normalizedLibrary.metadata_providers],
     metadata_language_mode: normalizedLibrary.metadata_language_mode,
     metadata_languages: [...normalizedLibrary.metadata_languages],

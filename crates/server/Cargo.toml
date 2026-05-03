@@ -55,6 +55,7 @@ diesel_migrations = "2.2.0"
 dirs = "6.0.0"
 fern = { version = "0.7.1", features = ["colored"] }
 image = "0.25.5"
+imohash = "0.1.2"
 jsonwebtoken = "9.3.1"
 libsqlite3-sys = { version = "0.35", features = ["bundled"] }  # this is needed for proper linking
 log = "0.4.25"

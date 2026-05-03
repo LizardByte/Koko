@@ -107,6 +107,7 @@ export interface MediaLibrary {
   paths: string[];
   recursive: boolean;
   kind: string;
+  scanner: string;
   metadata_providers: string[];
   metadata_language_mode: 'auto' | 'manual';
   metadata_languages: string[];
@@ -573,6 +574,7 @@ export interface MediaLibrarySettings {
   paths: string[];
   recursive: boolean;
   kind: string;
+  scanner: string;
   metadata_providers: string[];
   metadata_language_mode: 'auto' | 'manual';
   metadata_languages: string[];

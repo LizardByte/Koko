@@ -11,7 +11,9 @@ use diesel::connection::SimpleConnection;
 use diesel_migrations::MigrationHarness;
 
 // local imports
-use koko::config::{FfmpegSettings, MediaLibraryKind, MediaLibrarySettings, MetadataProviderId};
+use koko::config::{
+    FfmpegSettings, MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings, MetadataProviderId,
+};
 use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
 use koko::media::{
     LibraryScanStatus, ShowMetadataDescendantPlan, ShowMetadataEpisodePlan, ShowMetadataSeasonPlan,
@@ -35,6 +37,36 @@ use koko::metadata::{
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(diesel::QueryableByName)]
+struct SqlCountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    count: i64,
+}
+
+fn sql_count(
+    connection: &mut SqliteConnection,
+    sql: &str,
+) -> i64 {
+    diesel::sql_query(sql)
+        .get_result::<SqlCountRow>(connection)
+        .expect("Expected SQL count")
+        .count
+}
+
+fn assert_scanner_hash(hash: &str) {
+    let valid_imohash = hash
+        .strip_prefix("imohash:")
+        .map(|value| {
+            value.len() == 32 && value.chars().all(|character| character.is_ascii_hexdigit())
+        })
+        .unwrap_or(false);
+
+    assert!(
+        valid_imohash,
+        "Expected scanner hash with imohash prefix, got {hash}"
+    );
+}
 
 fn unique_temp_dir(name: &str) -> PathBuf {
     let test_id = MEDIA_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -77,6 +109,7 @@ fn test_inspect_libraries_counts_media_types() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Mixed,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -100,6 +133,72 @@ fn test_inspect_libraries_counts_media_types() {
 }
 
 #[test]
+fn test_auto_scanner_resolves_to_library_kind_scanner() {
+    let root = unique_temp_dir("auto_scanner_defaults");
+    fs::create_dir_all(&root).unwrap();
+
+    let base_library = |kind: MediaLibraryKind| MediaLibrarySettings {
+        name: format!("{kind:?}"),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind,
+        scanner: MediaLibraryScanner::Auto,
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    };
+
+    let summaries = inspect_libraries(&[
+        base_library(MediaLibraryKind::Movies),
+        base_library(MediaLibraryKind::Shows),
+        base_library(MediaLibraryKind::Music),
+        base_library(MediaLibraryKind::Photos),
+        base_library(MediaLibraryKind::Books),
+        base_library(MediaLibraryKind::Mixed),
+    ]);
+
+    assert_eq!(summaries[0].scanner, MediaLibraryScanner::Movies);
+    assert_eq!(summaries[1].scanner, MediaLibraryScanner::Shows);
+    assert_eq!(summaries[2].scanner, MediaLibraryScanner::Music);
+    assert_eq!(summaries[3].scanner, MediaLibraryScanner::Photos);
+    assert_eq!(summaries[4].scanner, MediaLibraryScanner::Books);
+    assert_eq!(summaries[5].scanner, MediaLibraryScanner::Directory);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn test_explicit_scanner_controls_inventory_independently_from_library_kind() {
+    let root = unique_temp_dir("explicit_scanner_inventory");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+    fs::write(root.join("album.flac"), b"audio").unwrap();
+
+    let summaries = inspect_libraries(&[MediaLibrarySettings {
+        name: "Movie library with music scanner".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: MediaLibraryScanner::Music,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }]);
+
+    assert_eq!(summaries[0].kind, MediaLibraryKind::Movies);
+    assert_eq!(summaries[0].scanner, MediaLibraryScanner::Music);
+    assert_eq!(summaries[0].total_files, 1);
+    assert_eq!(summaries[0].video_files, 0);
+    assert_eq!(summaries[0].audio_files, 1);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn test_inspect_libraries_detects_missing_and_empty_paths() {
     let missing_path = unique_temp_dir("missing_library")
         .to_string_lossy()
@@ -111,6 +210,7 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
             paths: vec![],
             recursive: true,
             kind: MediaLibraryKind::Mixed,
+            scanner: Default::default(),
             metadata_providers: vec![],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -122,6 +222,7 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
             paths: vec![missing_path],
             recursive: true,
             kind: MediaLibraryKind::Movies,
+            scanner: Default::default(),
             metadata_providers: vec![],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -150,6 +251,7 @@ fn test_movie_library_ignores_sidecar_audio_and_json_files() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -198,6 +300,7 @@ fn test_sync_library_catalog_persists_library_and_inventory() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Mixed,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -226,6 +329,16 @@ fn test_sync_library_catalog_persists_library_and_inventory() {
             .iter()
             .any(|file| file.relative_path == "nested/episode.mp4")
     );
+    let movie_file = files
+        .iter()
+        .find(|file| file.relative_path == "movie.mkv")
+        .unwrap();
+    let nested_episode_file = files
+        .iter()
+        .find(|file| file.relative_path == "nested/episode.mp4")
+        .unwrap();
+    assert_scanner_hash(&movie_file.file_hash);
+    assert_scanner_hash(&nested_episode_file.file_hash);
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -246,6 +359,7 @@ fn test_sync_library_catalog_updates_incrementally() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Mixed,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -284,6 +398,9 @@ fn test_sync_library_catalog_updates_incrementally() {
     assert_eq!(second_library.image_files, 1);
     assert_eq!(second_files.len(), 3);
     assert_eq!(first_movie.id, second_movie.id);
+    assert_scanner_hash(&first_movie.file_hash);
+    assert_scanner_hash(&second_movie.file_hash);
+    assert_ne!(first_movie.file_hash, second_movie.file_hash);
     assert!(
         second_files
             .iter()
@@ -294,6 +411,153 @@ fn test_sync_library_catalog_updates_incrementally() {
         .find(|file| file.relative_path == "song.mp3")
         .expect("Expected removed file to stay in trash state");
     assert!(missing_song.missing_since.is_some());
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_sync_library_catalog_replaces_legacy_file_hashes() {
+    let root = unique_temp_dir("legacy_file_hash_refresh");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Legacy hash library".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("legacy_file_hash_refresh_db");
+    let first_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = first_sync[0].id;
+    let original_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_scanner_hash(&original_file.file_hash);
+
+    diesel::sql_query(
+        "UPDATE media_files \
+         SET file_hash = 'stat-v1:legacy-hash'",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    let legacy_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(legacy_file.file_hash, "stat-v1:legacy-hash");
+
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let refreshed_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(refreshed_file.file_hash, original_file.file_hash);
+
+    diesel::sql_query(
+        "UPDATE media_files \
+         SET file_hash = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    let sha256_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        sha256_file.file_hash,
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    );
+
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let migrated_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(migrated_file.file_hash, original_file.file_hash);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_sync_library_catalog_repairs_path_duplicate_hashes() {
+    let root = unique_temp_dir("path_duplicate_hash_refresh");
+    fs::create_dir_all(&root).unwrap();
+    let movie_path = root.join("movie.mkv");
+    fs::write(&movie_path, b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Path duplicate library".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("path_duplicate_hash_refresh_db");
+    let first_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = first_sync[0].id;
+    let original_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let expected_hash = original_file.file_hash.clone();
+    let physical_path = movie_path.to_string_lossy().to_string();
+    let legacy_path = format!("{}\\legacy-path\\movie.mkv", root.to_string_lossy());
+
+    diesel::sql_query(
+        "UPDATE media_files \
+         SET path = ?, file_hash = 'stat-v1:legacy-membership' \
+         WHERE id = ?",
+    )
+    .bind::<diesel::sql_types::Text, _>(&legacy_path)
+    .bind::<diesel::sql_types::Integer, _>(original_file.id)
+    .execute(&mut connection)
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO media_files (path, file_size, modified_at, media_kind, file_hash) \
+         VALUES (?, ?, ?, 'video', 'stat-v1:duplicate-physical')",
+    )
+    .bind::<diesel::sql_types::Text, _>(&physical_path)
+    .bind::<diesel::sql_types::BigInt, _>(original_file.file_size)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(original_file.modified_at)
+    .execute(&mut connection)
+    .unwrap();
+    assert_eq!(
+        sql_count(&mut connection, "SELECT COUNT(*) AS count FROM media_files"),
+        2
+    );
+
+    sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let refreshed_file = get_library_files(&mut connection, library_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(refreshed_file.file_hash, expected_hash);
+    assert_eq!(
+        sql_count(&mut connection, "SELECT COUNT(*) AS count FROM media_files"),
+        1,
+        "Expected stale unreferenced physical file rows to be pruned after scan"
+    );
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -312,6 +576,7 @@ fn test_sync_library_catalog_preserves_inventory_when_root_is_missing() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -365,6 +630,90 @@ fn test_sync_library_catalog_preserves_inventory_when_root_is_missing() {
     fs::remove_file(db_path).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn test_sync_library_catalog_skips_unreadable_file_without_poisoning_root() {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let root = unique_temp_dir("unreadable_file_preserves_root");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("readable.mkv"), b"video").unwrap();
+    let locked_path = root.join("locked.mkv");
+    fs::write(&locked_path, b"locked-video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("unreadable_file_preserves_root_db");
+    let first_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library_id = first_sync[0].id;
+    assert_eq!(
+        get_library_files(&mut connection, library_id)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let locked_handle = OpenOptions::new()
+        .write(true)
+        .share_mode(0)
+        .open(&locked_path)
+        .unwrap();
+    diesel::sql_query(
+        "UPDATE media_files \
+         SET file_hash = 'stat-v1:legacy-hash'",
+    )
+    .execute(&mut connection)
+    .unwrap();
+
+    let second_sync =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    assert_eq!(second_sync[0].status, LibraryScanStatus::Available);
+    assert_eq!(second_sync[0].total_files, 1);
+    assert!(
+        second_sync[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("locked.mkv"))
+    );
+
+    let files = get_library_files(&mut connection, library_id).unwrap();
+    assert_eq!(files.len(), 2);
+    let readable = files
+        .iter()
+        .find(|file| file.relative_path == "readable.mkv")
+        .unwrap();
+    assert!(
+        readable.missing_since.is_none(),
+        "Expected readable files in the root to be restored after an unreadable sibling is skipped"
+    );
+    let locked = files
+        .iter()
+        .find(|file| file.relative_path == "locked.mkv")
+        .unwrap();
+    assert!(
+        locked.missing_since.is_some(),
+        "Expected only the unreadable file to remain marked missing"
+    );
+
+    drop(locked_handle);
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
 #[test]
 fn test_delete_missing_media_items_removes_active_rows_without_losing_history_metadata() {
     let root = unique_temp_dir("delete_missing_media_items");
@@ -377,6 +726,7 @@ fn test_delete_missing_media_items_removes_active_rows_without_losing_history_me
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -533,6 +883,7 @@ fn test_sync_library_catalog_marks_missing_files_without_deleting_rows() {
         ],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -598,6 +949,7 @@ fn test_item_queries_and_search_work_on_persisted_catalog() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Mixed,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -645,6 +997,7 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -717,6 +1070,7 @@ fn test_show_metadata_placeholders_materialize_missing_descendants() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -861,6 +1215,66 @@ fn test_episode_number_parser_handles_show_titles_before_sxxexx() {
         infer_season_number("Marvel's Agents of S H I E L D (2013) - S03E01 - Laws of Nature.mkv"),
         Some(3)
     );
+    assert_eq!(
+        infer_season_number("Marvel's Agents of S H I E L D (2013) - 3x22 - Ascension.mkv"),
+        Some(3)
+    );
+}
+
+#[test]
+fn test_show_scanner_parses_documented_show_naming_forms() {
+    let root = unique_temp_dir("show_scanner_documented_names");
+    let season = root
+        .join("Example Show (2020) [tmdb-12345] [tvdb-67890]")
+        .join("Series 2");
+    fs::create_dir_all(&season).unwrap();
+    fs::write(
+        season.join("Example Show - 2x03 - Episode Name.mkv"),
+        b"video",
+    )
+    .unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        scanner: MediaLibraryScanner::Shows,
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("show_scanner_documented_names_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let files = get_library_files(&mut connection, library.id).unwrap();
+    assert_eq!(files[0].display_title, "Episode Name");
+
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let show = items.iter().find(|item| item.item_type == "show").unwrap();
+    let season = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode")
+        .unwrap();
+
+    assert_eq!(show.display_title, "Example Show");
+    assert_eq!(season.display_title, "Season 2");
+    assert_eq!(season.season_number, Some(2));
+    assert_eq!(episode.display_title, "Episode Name");
+    assert_eq!(episode.season_number, Some(2));
+    assert_eq!(episode.episode_number, Some(3));
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
 }
 
 #[test]
@@ -876,6 +1290,7 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -916,6 +1331,7 @@ fn test_refresh_metadata_candidates_retry_previously_attempted_unlinked_movies()
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -988,6 +1404,7 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1049,6 +1466,7 @@ fn test_home_includes_real_collection_summaries() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1239,6 +1657,7 @@ fn test_sync_restores_file_name_as_display_title() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1292,6 +1711,7 @@ fn test_movie_scan_strips_year_provider_tags_and_format_from_display_title() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1334,6 +1754,7 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1464,6 +1885,7 @@ fn test_metadata_links_can_store_multiple_locales_for_same_provider() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1544,6 +1966,7 @@ fn test_item_detail_uses_primary_metadata_link_only() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -1633,6 +2056,7 @@ fn test_item_detail_merges_metadata_links_by_library_provider_order() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![
             MetadataProviderId::Tmdb,
             MetadataProviderId::Tvdb,
@@ -1716,6 +2140,7 @@ fn test_secondary_theme_song_metadata_is_stored_and_presented() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![
             MetadataProviderId::Tmdb,
             MetadataProviderId::Themerr,
@@ -1807,6 +2232,7 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![
             MetadataProviderId::Tmdb,
             MetadataProviderId::TrailerDb,
@@ -2014,6 +2440,7 @@ fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2103,6 +2530,7 @@ fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_e
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2188,6 +2616,7 @@ fn test_resolve_media_item_source_path_rejects_mismatched_backing_file() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2244,6 +2673,7 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2338,6 +2768,7 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2424,6 +2855,7 @@ fn test_secondary_theme_song_reference_includes_external_id_fallbacks() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2494,6 +2926,7 @@ fn test_library_settings_are_persisted_in_database() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -2513,6 +2946,7 @@ fn test_library_settings_are_persisted_in_database() {
             paths: vec![updated_root.to_string_lossy().to_string()],
             recursive: false,
             kind: MediaLibraryKind::Shows,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tmdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2554,6 +2988,7 @@ fn test_replace_library_settings_allows_duplicate_paths() {
                 paths: vec![movies.to_string_lossy().to_string()],
                 recursive: true,
                 kind: MediaLibraryKind::Movies,
+                scanner: Default::default(),
                 metadata_providers: vec![MetadataProviderId::Tmdb],
                 metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
                 metadata_languages: vec![],
@@ -2565,6 +3000,7 @@ fn test_replace_library_settings_allows_duplicate_paths() {
                 paths: vec![movies.to_string_lossy().to_string()],
                 recursive: true,
                 kind: MediaLibraryKind::Shows,
+                scanner: Default::default(),
                 metadata_providers: vec![
                     MetadataProviderId::Tmdb,
                     MetadataProviderId::Tvdb,
@@ -2600,6 +3036,7 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
             paths: vec![media.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Movies,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tmdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2611,6 +3048,7 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
             paths: vec![media.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Shows,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tvdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2657,6 +3095,7 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
             paths: vec![root.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Movies,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tmdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2668,6 +3107,7 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
             paths: vec![root.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Movies,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tvdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2754,6 +3194,7 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
             paths: vec![root.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Shows,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tmdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2765,6 +3206,7 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
             paths: vec![root.to_string_lossy().to_string()],
             recursive: true,
             kind: MediaLibraryKind::Shows,
+            scanner: Default::default(),
             metadata_providers: vec![MetadataProviderId::Tvdb],
             metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
             metadata_languages: vec![],
@@ -2859,6 +3301,7 @@ fn test_latest_metadata_migration_preserves_existing_library_catalog_rows() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -3052,6 +3495,7 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
         metadata_providers: vec![],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],
@@ -3132,6 +3576,7 @@ fn test_playback_progress_is_scoped_per_user() {
         paths: vec![root.to_string_lossy().to_string()],
         recursive: true,
         kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
         metadata_providers: vec![MetadataProviderId::Tmdb],
         metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
         metadata_languages: vec![],

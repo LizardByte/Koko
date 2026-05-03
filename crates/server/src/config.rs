@@ -54,6 +54,80 @@ pub enum MediaLibraryKind {
     HomeVideos,
 }
 
+/// Scanner implementation used to inventory a media library.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaLibraryScanner {
+    /// Choose the scanner that matches the library type.
+    #[default]
+    Auto,
+    /// Generic directory scanner.
+    Directory,
+    /// Movie scanner.
+    Movies,
+    /// TV show scanner.
+    Shows,
+    /// Music scanner.
+    Music,
+    /// Photo scanner.
+    Photos,
+    /// Book scanner.
+    Books,
+}
+
+impl MediaLibraryScanner {
+    /// Return the concrete scanner used for the given library kind.
+    pub fn effective_for_kind(
+        &self,
+        kind: &MediaLibraryKind,
+    ) -> Self {
+        match self {
+            MediaLibraryScanner::Auto => Self::default_for_kind(kind),
+            scanner => scanner.clone(),
+        }
+    }
+
+    /// Return the default scanner for a library kind.
+    pub fn default_for_kind(kind: &MediaLibraryKind) -> Self {
+        match kind {
+            MediaLibraryKind::Movies => MediaLibraryScanner::Movies,
+            MediaLibraryKind::Shows => MediaLibraryScanner::Shows,
+            MediaLibraryKind::Music => MediaLibraryScanner::Music,
+            MediaLibraryKind::Photos => MediaLibraryScanner::Photos,
+            MediaLibraryKind::Books => MediaLibraryScanner::Books,
+            MediaLibraryKind::Mixed | MediaLibraryKind::HomeVideos => {
+                MediaLibraryScanner::Directory
+            }
+        }
+    }
+
+    /// Return the stable storage representation.
+    pub fn as_storage_value(&self) -> &'static str {
+        match self {
+            MediaLibraryScanner::Auto => "auto",
+            MediaLibraryScanner::Directory => "directory",
+            MediaLibraryScanner::Movies => "movies",
+            MediaLibraryScanner::Shows => "shows",
+            MediaLibraryScanner::Music => "music",
+            MediaLibraryScanner::Photos => "photos",
+            MediaLibraryScanner::Books => "books",
+        }
+    }
+
+    /// Parse a scanner storage value.
+    pub fn from_storage_value(value: &str) -> Self {
+        match value.trim() {
+            "directory" => MediaLibraryScanner::Directory,
+            "movies" => MediaLibraryScanner::Movies,
+            "shows" => MediaLibraryScanner::Shows,
+            "music" => MediaLibraryScanner::Music,
+            "photos" => MediaLibraryScanner::Photos,
+            "books" => MediaLibraryScanner::Books,
+            _ => MediaLibraryScanner::Auto,
+        }
+    }
+}
+
 fn default_recursive_scan() -> bool {
     true
 }
@@ -250,6 +324,9 @@ pub struct MediaLibrarySettings {
     /// The intended media category for the library.
     #[serde(default)]
     pub kind: MediaLibraryKind,
+    /// Scanner used to inventory files for the library.
+    #[serde(default)]
+    pub scanner: MediaLibraryScanner,
     /// Ordered metadata providers to use for this library.
     #[serde(default = "default_library_metadata_providers")]
     pub metadata_providers: Vec<MetadataProviderId>,

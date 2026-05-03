@@ -351,6 +351,21 @@ function activeMetadataRefreshActivities(): SystemActivity[] {
   });
 }
 
+function activeLibraryScanActivities(): SystemActivity[] {
+  return state.systemActivities.filter((activity) => {
+    return activity.category === 'library_scan'
+      && activity.state !== 'completed'
+      && activity.state !== 'failed';
+  });
+}
+
+function hasActiveLibraryScan(libraryId?: number): boolean {
+  const activities = activeLibraryScanActivities();
+  return libraryId === undefined
+    ? activities.length > 0
+    : activities.some((activity) => activity.library_id === libraryId);
+}
+
 function activeMetadataRefreshItemIds(): Set<number> {
   return new Set(activeMetadataRefreshActivities().flatMap((activity) => activity.item_ids));
 }
@@ -568,6 +583,10 @@ function librariesHavePendingMetadataRefresh(): boolean {
 }
 
 function shouldAutoRefreshMetadata(): boolean {
+  if (activeLibraryScanActivities().length > 0) {
+    return true;
+  }
+
   if (state.route.page === 'settings') {
     return false;
   }
@@ -2265,6 +2284,7 @@ export function renderLibraryOverview(): string {
   const library = activeLibrary();
   const refreshProgress = library ? libraryRefreshProgress(library) : undefined;
   const stalePending = library ? Math.max(0, library.metadata_refresh_pending - activeLibraryPendingRefreshCount(library.id)) : 0;
+  const scanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
 
   if (!library) {
     return `
@@ -2295,6 +2315,7 @@ export function renderLibraryOverview(): string {
           <h3>${escapeHtml(library.name)}</h3>
         </div>
         <div class="library-overview-actions">
+          ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
           ${refreshProgress
             ? `<span class="tag warning">Refreshing metadata ${refreshProgress.completed}/${refreshProgress.total}</span>`
             : ''}
@@ -2662,6 +2683,7 @@ function renderSearchPopover(): string {
 function renderHomeNavbar(): string {
   const library = activeLibrary();
   const libraryRefreshPending = library ? Boolean(libraryRefreshProgress(library)) : false;
+  const libraryScanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
   const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
   const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
 
@@ -2679,13 +2701,13 @@ function renderHomeNavbar(): string {
             aria-label="${searchToggleLabel}"
             ${hasSearch ? 'data-clear-search' : ''}
           >${renderIcon(hasSearch ? 'x' : 'search')}</button>
-        </form>
-        ${library
-          ? `
-            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library">${renderIcon('folder-sync')}</button>
+          </form>
+          ${library
+            ? `
+            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library" ${libraryScanPending ? 'disabled' : ''}>${renderIcon('folder-sync')}</button>
             <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderIcon('database-zap')}</button>
-          `
-          : ''}
+            `
+            : ''}
       </div>
       ${renderSearchPopover()}
     </header>
@@ -3745,6 +3767,7 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
     .map((library, index) => {
       const persistedLibrary = persistedLibraryForSettings(library);
       const refreshPending = persistedLibrary ? Boolean(libraryRefreshProgress(persistedLibrary)) : false;
+      const scanPending = persistedLibrary ? hasActiveLibraryScan(persistedLibrary.id) : hasActiveLibraryScan();
       const refreshLabel = refreshPending
         ? 'Refreshing metadata'
         : 'Refresh metadata';
@@ -3760,6 +3783,7 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
             <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
             ${persistedLibrary
               ? `<div class="settings-library-tags">
+                ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
                 <span class="tag ${hasMissingItems ? 'warning' : 'success'}">${escapeHtml(hasMissingItems ? `${missingItems} missing items` : 'No missing items')}</span>
                 ${missingFiles > 0 ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>` : ''}
               </div>`
@@ -3768,7 +3792,7 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
           <div class="settings-library-actions">
             ${persistedLibrary
               ? `
-                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}">${renderButtonContent('Scan now', 'refresh-cw')}</button>
+                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}" ${scanPending ? 'disabled' : ''}>${renderButtonContent(scanPending ? 'Scanning' : 'Scan now', 'refresh-cw')}</button>
                 <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
                 <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${hasMissingItems ? '' : 'disabled'}>${renderButtonContent('Delete missing', 'trash-2')}</button>
               `
@@ -3781,6 +3805,11 @@ function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
           <label>Type
             <select name="existing_library_kind_${index}">
               ${libraryKindOptions(library.kind)}
+            </select>
+          </label>
+          <label>Scanner
+            <select name="existing_library_scanner_${index}">
+              ${libraryScannerOptions(library.scanner ?? 'auto')}
             </select>
           </label>
         </div>
@@ -3964,6 +3993,20 @@ function libraryKindOptions(selectedKind: string): string {
     .join('');
 }
 
+function libraryScannerOptions(selectedScanner: string): string {
+  return [
+    ['auto', 'Auto'],
+    ['directory', 'Directory'],
+    ['movies', 'Movies'],
+    ['shows', 'Shows'],
+    ['music', 'Music'],
+    ['photos', 'Photos'],
+    ['books', 'Books'],
+  ]
+    .map(([value, label]) => `<option value="${value}" ${selectedScanner === value ? 'selected' : ''}>${label}</option>`)
+    .join('');
+}
+
 function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
   const label = providerDisplayName(provider.id);
   const status = state.metadataProviders.find((entry) => entry.id === provider.id);
@@ -4109,6 +4152,11 @@ function renderSettingsPage(): string {
               <label>Type
                 <select name="library_kind">
                   ${libraryKindOptions('movies')}
+                </select>
+              </label>
+              <label>Scanner
+                <select name="library_scanner">
+                  ${libraryScannerOptions('auto')}
                 </select>
               </label>
               <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
@@ -4860,6 +4908,7 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
           kind: String(formData.get(`existing_library_kind_${index}`) ?? library.kind),
+          scanner: String(formData.get(`existing_library_scanner_${index}`) ?? library.scanner ?? 'auto'),
           metadata_providers: formData.getAll(providerField).map((value) => String(value)),
           metadata_language_mode: String(formData.get(`existing_library_metadata_language_mode_${index}`) ?? library.metadata_language_mode ?? 'auto') === 'manual'
             ? 'manual'
@@ -7002,6 +7051,7 @@ function bindEvents(): void {
       paths,
       recursive: formData.get('library_recursive') === 'on',
       kind: String(formData.get('library_kind') ?? 'movies'),
+      scanner: String(formData.get('library_scanner') ?? 'auto'),
       metadata_providers: formData.getAll('library_metadata_provider').map((value) => String(value)),
       metadata_language_mode: String(formData.get('library_metadata_language_mode') ?? 'auto') === 'manual' ? 'manual' : 'auto',
       metadata_languages: normalizedMetadataLanguages(formData.getAll('library_metadata_language').map((value) => String(value))),

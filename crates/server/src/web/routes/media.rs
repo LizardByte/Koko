@@ -98,7 +98,6 @@ use crate::media::{
     resolve_local_item_artwork_path,
     resolve_media_item_source_path,
     search_media_items_with_preferred_languages,
-    sync_persisted_library_catalog,
     sync_persisted_library_catalog_for_library,
     upsert_playback_progress,
     upsert_show_metadata_descendant_items,
@@ -505,7 +504,6 @@ pub struct CreateSessionRequest {
     pub client_profile: crate::media::ClientProfile,
 }
 
-static BACKGROUND_LIBRARY_MONITOR_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static NEXT_SYSTEM_ACTIVITY_ID: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(1));
 static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
     tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>,
@@ -523,7 +521,6 @@ static ACTIVE_PLAYBACK_SESSIONS: Lazy<
 static ACTIVE_TRANSCODE_TASKS: Lazy<
     tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
-const LIBRARY_MONITOR_INTERVAL_SECONDS: u64 = 20;
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
@@ -2849,40 +2846,6 @@ async fn load_library_summary(
         .ok_or(Status::NotFound)
 }
 
-pub fn start_library_monitor(db: DbConn) {
-    if !BACKGROUND_LIBRARY_MONITOR_RUNNING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
-        return;
-    }
-
-    tokio::spawn(async move {
-        loop {
-            let settings = current_settings();
-            let legacy_libraries = settings.media.libraries.clone();
-            let ffmpeg_settings = settings.ffmpeg.clone();
-            let sync_result = db
-                .run(move |conn| {
-                    sync_persisted_library_catalog(conn, &legacy_libraries, &ffmpeg_settings)
-                })
-                .await;
-
-            if let Err(error) = sync_result {
-                log::error!(
-                    "Failed to sync media library catalog in monitor loop: {}",
-                    error
-                );
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_secs(
-                LIBRARY_MONITOR_INTERVAL_SECONDS,
-            ))
-            .await;
-        }
-    });
-}
-
 /// Return server bootstrap information for future browser and native clients.
 #[openapi(tag = "Media")]
 #[get("/api/v1/system/capabilities")]
@@ -2901,7 +2864,6 @@ pub async fn get_server_capabilities(
             log::error!("Failed to count persisted libraries: {}", error);
             Status::InternalServerError
         })?;
-    start_library_monitor(db);
 
     Ok(Json(ServerCapabilitiesResponse {
         app_name: globals::GLOBAL_APP_NAME.to_string(),

@@ -370,8 +370,8 @@ function activeMetadataRefreshItemIds(): Set<number> {
   return new Set(activeMetadataRefreshActivities().flatMap((activity) => activity.item_ids));
 }
 
-function itemHasActiveMetadataRefresh(itemId?: number): boolean {
-  return typeof itemId === 'number' && activeMetadataRefreshItemIds().has(itemId);
+function itemHasActiveMetadataRefresh(item: Pick<MediaItemSummary, 'id' | 'metadata_refresh_state'> | undefined): boolean {
+  return item?.metadata_refresh_state === 'pending' && activeMetadataRefreshItemIds().has(item.id);
 }
 
 function activityProgress(activity: Pick<SystemActivity, 'completed_items' | 'total_items' | 'failed_items'>): {
@@ -563,7 +563,7 @@ function clearPendingMetadataRefresh(): void {
 }
 
 function itemIsMetadataPending(item: Pick<MediaItemSummary, 'id' | 'metadata_refresh_state'> | undefined): boolean {
-  return item?.metadata_refresh_state === 'pending' || itemHasActiveMetadataRefresh(item?.id);
+  return item?.metadata_refresh_state === 'pending';
 }
 
 function itemPageMetadataRefreshItemIds(): Set<number> {
@@ -965,7 +965,7 @@ function activeLibraryPendingRefreshCount(libraryId: number): number {
 
 function metadataDashboardRefreshState(item: MediaItemSummary): 'pending' | 'stalled' | 'error' | 'fresh' | 'unmatched' {
   if (itemIsMetadataPending(item)) {
-    return itemHasActiveMetadataRefresh(item.id) ? 'pending' : 'stalled';
+    return itemHasActiveMetadataRefresh(item) ? 'pending' : 'stalled';
   }
 
   if (item.metadata_refresh_state === 'error') {

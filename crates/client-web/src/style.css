@@ -466,8 +466,8 @@ legend {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 0.95rem;
-  height: 0.95rem;
+  width: 1.12rem;
+  height: 1.12rem;
   flex: 0 0 auto;
 }
 
@@ -1013,8 +1013,10 @@ legend {
 }
 
 .media-card-status.icon-only {
-  min-width: auto;
-  min-height: auto;
+  width: 1.96rem;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  min-height: 1.96rem;
   justify-content: center;
   padding: 0;
 }
@@ -1031,7 +1033,9 @@ legend {
 }
 
 .media-card-status.is-unmatched.icon-only {
+  width: 1.45rem;
   min-width: 1.45rem;
+  height: 1.45rem;
   min-height: 1.45rem;
 }
 
@@ -1040,8 +1044,6 @@ legend {
 }
 
 .media-card-dynamic-badges .media-card-status.is-loading {
-  min-width: 1.45rem;
-  min-height: 1.45rem;
   justify-content: center;
   background: rgba(10, 14, 24, 0.52);
 }
@@ -1063,8 +1065,8 @@ legend {
 }
 
 .loading-spinner {
-  width: 0.96rem;
-  height: 0.96rem;
+  width: 1.12rem;
+  height: 1.12rem;
   border-radius: 999px;
   border: 2px solid rgba(255, 255, 255, 0.25);
   border-top-color: currentColor;

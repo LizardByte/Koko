@@ -6466,6 +6466,7 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   row.dataset.lazyComplete = nextCount >= shelf.items.length ? 'true' : 'false';
   bindMediaCardInteractions(row);
   createIcons({ icons });
+  syncVisibleSpinners();
   updateShelfScrollControls(row);
   return true;
 }

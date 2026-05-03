@@ -1,7 +1,11 @@
 //! Database schema for the application.
 
 // lib imports
-use diesel::{allow_tables_to_appear_in_same_query, joinable, table};
+use diesel::{
+    allow_tables_to_appear_in_same_query,
+    joinable,
+    table,
+};
 
 table! {
     app_settings (key) {

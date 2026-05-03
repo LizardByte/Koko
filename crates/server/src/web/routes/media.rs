@@ -1,25 +1,46 @@
 //! Media and system discovery routes.
 
 // lib imports
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+    HashMap,
+    HashSet,
+};
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicBool,
+    AtomicU64,
+    Ordering,
+};
 
 use once_cell::sync::Lazy;
 use rocket::delete;
 use rocket::fs::NamedFile;
 use rocket::get;
-use rocket::http::{ContentType, Status};
+use rocket::http::{
+    ContentType,
+    Status,
+};
 use rocket::outcome::Outcome;
 use rocket::post;
-use rocket::request::{FromRequest, Request};
+use rocket::request::{
+    FromRequest,
+    Request,
+};
 use rocket::response::stream::ReaderStream;
-use rocket::response::{self, Responder, Response};
+use rocket::response::{
+    self,
+    Responder,
+    Response,
+};
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
 use rocket::tokio::fs::File;
-use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
+use rocket::tokio::io::{
+    AsyncReadExt,
+    AsyncSeekExt,
+    Take,
+};
 use rocket::tokio::process::ChildStdout;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
@@ -28,49 +49,106 @@ use strsim::normalized_levenshtein;
 
 // local imports
 use crate::auth::UserGuard;
-use crate::config::{MetadataProviderId, Settings, current_settings};
+use crate::config::{
+    MetadataProviderId,
+    Settings,
+    current_settings,
+};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
-    MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
-    PersistedMediaFileSummary, PlaybackDecision, ShowMetadataDescendantPlan,
-    ShowMetadataEpisodePlan, ShowMetadataSeasonPlan, TranscodingCapability,
-    delete_missing_media_items, get_item_secondary_provider_references,
-    get_item_youtube_theme_collection_references, get_library_files,
-    get_library_metadata_languages, get_library_metadata_providers,
-    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
-    get_media_item_with_preferred_languages, get_persisted_library_summaries,
-    get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
-    get_preferred_item_metadata_link, get_user_playback_progress, inspect_transcoding_capability,
-    library_exists, list_automatic_metadata_candidates, list_automatic_metadata_refresh_candidates,
-    list_library_settings, list_media_item_children, list_media_items,
-    list_media_items_with_preferred_languages, mark_metadata_match_attempted,
-    preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
-    resolve_local_item_artwork_path, resolve_media_item_source_path,
-    search_media_items_with_preferred_languages, sync_persisted_library_catalog,
-    sync_persisted_library_catalog_for_library, upsert_playback_progress,
-    upsert_show_metadata_descendant_items, user_can_access_library,
+    MediaHome,
+    MediaItemDetail,
+    MediaItemSummary,
+    PersistedLibrarySummary,
+    PersistedMediaFileSummary,
+    PlaybackDecision,
+    ShowMetadataDescendantPlan,
+    ShowMetadataEpisodePlan,
+    ShowMetadataSeasonPlan,
+    TranscodingCapability,
+    delete_missing_media_items,
+    get_item_secondary_provider_references,
+    get_item_youtube_theme_collection_references,
+    get_library_files,
+    get_library_metadata_languages,
+    get_library_metadata_providers,
+    get_media_home_with_preferred_languages,
+    get_media_item,
+    get_media_item_summary,
+    get_media_item_with_preferred_languages,
+    get_persisted_library_summaries,
+    get_playback_decision,
+    get_preferred_item_artwork_metadata_link_for_languages,
+    get_preferred_item_metadata_link,
+    get_user_playback_progress,
+    inspect_transcoding_capability,
+    library_exists,
+    list_automatic_metadata_candidates,
+    list_automatic_metadata_refresh_candidates,
+    list_library_settings,
+    list_media_item_children,
+    list_media_items,
+    list_media_items_with_preferred_languages,
+    mark_metadata_match_attempted,
+    preferred_audio_stream_index,
+    resolve_item_subtitle_path,
+    resolve_item_theme_song_path,
+    resolve_local_item_artwork_path,
+    resolve_media_item_source_path,
+    search_media_items_with_preferred_languages,
+    sync_persisted_library_catalog,
+    sync_persisted_library_catalog_for_library,
+    upsert_playback_progress,
+    upsert_show_metadata_descendant_items,
+    user_can_access_library,
 };
 use crate::metadata::{
-    ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
-    MetadataPersonCreditSummary, MetadataPersonSummary, MetadataProviderRole,
-    MetadataProviderStatus, MetadataSearchResult, ProviderDescendantTarget, StoredMetadataSnapshot,
-    expected_artwork_cache_path, fetch_provider_episode_metadata_snapshot_for_locale,
+    ArtworkKind,
+    DEFAULT_METADATA_LOCALE,
+    ItemMetadataSummary,
+    MetadataCollectionSummary,
+    MetadataPersonCreditSummary,
+    MetadataPersonSummary,
+    MetadataProviderRole,
+    MetadataProviderStatus,
+    MetadataSearchResult,
+    ProviderDescendantTarget,
+    StoredMetadataSnapshot,
+    expected_artwork_cache_path,
+    fetch_provider_episode_metadata_snapshot_for_locale,
     fetch_provider_metadata_snapshot_for_locale,
     fetch_provider_season_metadata_snapshot_for_locale,
-    fetch_provider_secondary_collection_metadata, fetch_provider_secondary_metadata,
-    get_item_metadata_summaries, get_metadata_person_for_languages,
-    get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
-    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    fetch_provider_secondary_collection_metadata,
+    fetch_provider_secondary_metadata,
+    get_item_metadata_summaries,
+    get_metadata_person_for_languages,
+    get_metadata_person_locale_peer_ids,
+    get_primary_item_metadata_link,
+    guess_provider_movie_match,
+    guess_provider_show_match,
+    list_due_item_metadata_links,
     list_metadata_collection_summaries_with_preferred_languages,
-    list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
-    list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
-    metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
-    persist_metadata_people_assets, provider_locale_key, provider_uses_localized_metadata,
-    resolve_metadata_asset_db_path, search_metadata_people_with_preferred_languages,
-    search_provider, set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
-    try_cache_item_artwork, update_cached_artwork_path, upsert_item_metadata_link,
+    list_metadata_person_credit_summaries_for_person_ids,
+    list_pending_item_metadata_links,
+    list_provider_statuses,
+    load_provider_show_descendant_targets,
+    managed_metadata_asset_dir,
+    metadata_asset_db_path,
+    normalize_locale_key,
+    persist_item_metadata_assets,
+    persist_metadata_people_assets,
+    provider_locale_key,
+    provider_uses_localized_metadata,
+    resolve_metadata_asset_db_path,
+    search_metadata_people_with_preferred_languages,
+    search_provider,
+    set_item_metadata_refresh_state,
+    sort_item_metadata_summaries_for_languages,
+    try_cache_item_artwork,
+    update_cached_artwork_path,
+    upsert_item_metadata_link,
     upsert_item_metadata_snapshot_with_refresh_interval,
     upsert_secondary_collection_theme_song_url,
 };
@@ -630,7 +708,8 @@ async fn persist_secondary_metadata_for_item(
                     Ok(None) => {}
                     Err(error) => {
                         log::warn!(
-                            "Failed to load {} secondary metadata for media item {} locale {} ({} {} {}): {}",
+                            "Failed to load {} secondary metadata for media item {} locale {} ({} \
+                             {} {}): {}",
                             provider_id.as_storage_value(),
                             item_id,
                             locale_key,
@@ -647,19 +726,18 @@ async fn persist_secondary_metadata_for_item(
         let collection_references = db
             .run({
                 let provider_id = provider_id.clone();
-                move |conn| {
-                    get_item_youtube_theme_collection_references(conn, item_id, provider_id)
-                }
+                move |conn| get_item_youtube_theme_collection_references(conn, item_id, provider_id)
             })
             .await
             .map_err(|error| {
                 log::error!(
-                    "Failed to resolve secondary collection theme-song references for media item {}: {}",
+                    "Failed to resolve secondary collection theme-song references for media item \
+                     {}: {}",
                     item_id,
                     error
                 );
                 Status::InternalServerError
-        })?;
+            })?;
 
         for (collection_id, media_type, database_id, external_id) in collection_references {
             match fetch_provider_secondary_collection_metadata(
@@ -695,7 +773,8 @@ async fn persist_secondary_metadata_for_item(
                     .await
                     .map_err(|error| {
                         log::error!(
-                            "Failed to persist secondary collection theme-song metadata for media item {}: {}",
+                            "Failed to persist secondary collection theme-song metadata for media \
+                             item {}: {}",
                             item_id,
                             error
                         );
@@ -706,7 +785,8 @@ async fn persist_secondary_metadata_for_item(
                 Ok(None) => {}
                 Err(error) => {
                     log::warn!(
-                        "Failed to load {} secondary collection metadata for media item {} ({} {} {}): {}",
+                        "Failed to load {} secondary collection metadata for media item {} ({} {} \
+                         {}): {}",
                         provider_id.as_storage_value(),
                         item_id,
                         media_type,
@@ -1739,7 +1819,8 @@ async fn execute_metadata_refresh_target(
 ) -> bool {
     if !begin_metadata_refresh_execution(target.item_id).await {
         log::info!(
-            "Skipping duplicate {} metadata refresh for {}; another refresh for this item is already running",
+            "Skipping duplicate {} metadata refresh for {}; another refresh for this item is \
+             already running",
             target.provider_id.as_storage_value(),
             describe_metadata_refresh_target(target)
         );
@@ -2092,7 +2173,8 @@ async fn build_metadata_refresh_job(
             Err(status) => {
                 if status == Status::ServiceUnavailable {
                     log::warn!(
-                        "Skipping descendant metadata refresh expansion for {} because {} is unavailable; the root item will still be refreshed",
+                        "Skipping descendant metadata refresh expansion for {} because {} is \
+                         unavailable; the root item will still be refreshed",
                         describe_metadata_refresh_target(&root),
                         root.provider_id.as_storage_value()
                     );
@@ -2604,7 +2686,12 @@ fn user_preferred_metadata_languages(
     user_id: Option<i32>,
 ) -> Result<Vec<String>, diesel::result::Error> {
     use crate::db::schema::users::dsl as users_dsl;
-    use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
+    use diesel::{
+        ExpressionMethods,
+        OptionalExtension,
+        QueryDsl,
+        RunQueryDsl,
+    };
 
     let Some(user_id) = user_id else {
         return Ok(vec![crate::metadata::DEFAULT_METADATA_LOCALE.to_string()]);
@@ -2868,7 +2955,8 @@ pub async fn scan_library(
         let failed = match sync_result {
             Ok(Some(summary)) => {
                 log::info!(
-                    "Completed manual media library catalog scan for library {} ({}): {} file(s), status {}",
+                    "Completed manual media library catalog scan for library {} ({}): {} file(s), \
+                     status {}",
                     summary.id,
                     summary.name,
                     summary.total_files,
@@ -3925,7 +4013,8 @@ pub async fn link_item_metadata(
                         mark_metadata_refresh_targets_pending(&db, &additional_targets).await
                     {
                         log::warn!(
-                            "Failed to mark manual metadata link descendants pending for item {}: {:?}",
+                            "Failed to mark manual metadata link descendants pending for item {}: \
+                             {:?}",
                             item_id,
                             status
                         );

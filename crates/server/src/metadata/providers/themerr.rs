@@ -2,8 +2,13 @@ use serde_json::Value;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
-    METADATA_EXTRA_TYPE_THEME_SONG, MediaLibraryKind, MetadataProviderDescriptor,
-    MetadataProviderRole, ProviderMetadataDetails, ProviderMetadataExtra, youtube_watch_url,
+    METADATA_EXTRA_TYPE_THEME_SONG,
+    MediaLibraryKind,
+    MetadataProviderDescriptor,
+    MetadataProviderRole,
+    ProviderMetadataDetails,
+    ProviderMetadataExtra,
+    youtube_watch_url,
 };
 
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
@@ -12,8 +17,9 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
         id: MetadataProviderId::Themerr,
         display_name: "ThemerrDB".into(),
-        description:
-            "Secondary provider for theme-song metadata linked to movie, show, and collection metadata.".into(),
+        description: "Secondary provider for theme-song metadata linked to movie, show, and \
+                      collection metadata."
+            .into(),
         supported_kinds: vec![
             MediaLibraryKind::Movies,
             MediaLibraryKind::Shows,
@@ -172,7 +178,11 @@ fn text_field(
 
 #[cfg(test)]
 mod tests {
-    use super::{database_path_for_media_type, normalize_database_id, parse_youtube_theme_url};
+    use super::{
+        database_path_for_media_type,
+        normalize_database_id,
+        parse_youtube_theme_url,
+    };
 
     #[test]
     fn parse_youtube_theme_url_extracts_watch_url() {

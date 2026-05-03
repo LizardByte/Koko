@@ -3,7 +3,10 @@
 // standard imports
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicU64,
+    Ordering,
+};
 
 // lib imports
 use tokio::fs;
@@ -120,7 +123,8 @@ impl TranscodeSpec {
                 // Simple scale filter that preserves aspect ratio and doesn't up-scale
                 args.push("-vf".into());
                 args.push(format!(
-                    "scale=w='min({w}\\,iw)':h='min({h}\\,ih)':force_original_aspect_ratio=decrease"
+                    "scale=w='min({w}\\,iw)':h='min({h}\\,ih)':\
+                     force_original_aspect_ratio=decrease"
                 ));
             }
         } else {

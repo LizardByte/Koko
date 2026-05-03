@@ -1,19 +1,46 @@
 use serde_json::Value;
 use strsim::normalized_levenshtein;
-use tvdb4::apis::{self, login_api};
+use tvdb4::apis::{
+    self,
+    login_api,
+};
 use tvdb4::models::LoginPostRequest;
 
-use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
-use crate::metadata::{
-    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
-    MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataDetails,
-    ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
-    format_payload_snippet, image_format_preference_rank, managed_metadata_asset_dir,
-    metadata_asset_db_path, metadata_response_cache_key, movie_match_score, parse_movie_name,
-    provider_settings, read_metadata_response_cache_text, show_search_query,
-    try_cache_item_artwork, write_metadata_response_cache_text,
+use crate::config::{
+    MetadataProviderId,
+    MetadataProviderSettings,
+    MetadataSettings,
 };
-use std::time::{Duration, Instant};
+use crate::metadata::{
+    MediaLibraryKind,
+    MetadataItemKind,
+    MetadataProviderDescriptor,
+    MetadataProviderRole,
+    MetadataSearchResult,
+    ProviderDescendantTarget,
+    ProviderExternalId,
+    ProviderMetadataDetails,
+    ProviderMetadataPerson,
+    StoredMetadataSnapshot,
+    cleanup_movie_title,
+    extract_release_year,
+    format_payload_snippet,
+    image_format_preference_rank,
+    managed_metadata_asset_dir,
+    metadata_asset_db_path,
+    metadata_response_cache_key,
+    movie_match_score,
+    parse_movie_name,
+    provider_settings,
+    read_metadata_response_cache_text,
+    show_search_query,
+    try_cache_item_artwork,
+    write_metadata_response_cache_text,
+};
+use std::time::{
+    Duration,
+    Instant,
+};
 
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 
@@ -32,8 +59,13 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
         id: MetadataProviderId::Tvdb,
         display_name: "TheTVDB".into(),
-        description: "Alternative movie and television metadata provider with strong series and episode coverage.".into(),
-        supported_kinds: vec![MediaLibraryKind::Movies, MediaLibraryKind::Shows],
+        description: "Alternative movie and television metadata provider with strong series and \
+                      episode coverage."
+            .into(),
+        supported_kinds: vec![
+            MediaLibraryKind::Movies,
+            MediaLibraryKind::Shows,
+        ],
         requires_api_key: true,
         implemented: true,
         role: MetadataProviderRole::Primary,
@@ -268,7 +300,8 @@ pub(crate) async fn fetch_episode_snapshot(
         &format!("episodes/{episode_id}/extended"),
         vec![("meta", "translations".to_string())],
         &format!(
-            "episode lookup for series:{show_external_id}:season:{season_number}:episode:{episode_external_id}"
+            "episode lookup for \
+             series:{show_external_id}:season:{season_number}:episode:{episode_external_id}"
         ),
     )
     .await?;
@@ -507,7 +540,8 @@ async fn get_text(
                     let backoff =
                         retry_after.unwrap_or_else(|| base_backoff.saturating_mul(multiplier));
                     log::warn!(
-                        "TheTVDB request retry scheduled for {} after status {}{}{} (attempt {}/{} in {} ms)",
+                        "TheTVDB request retry scheduled for {} after status {}{}{} (attempt \
+                         {}/{} in {} ms)",
                         context,
                         status,
                         if rate_limited { " [rate limited]" } else { "" },
@@ -536,7 +570,8 @@ async fn get_text(
                         .unwrap_or(u32::MAX);
                     let backoff = base_backoff.saturating_mul(multiplier);
                     log::warn!(
-                        "TheTVDB request retry scheduled for {} after transport error: {} (attempt {}/{} in {} ms)",
+                        "TheTVDB request retry scheduled for {} after transport error: {} \
+                         (attempt {}/{} in {} ms)",
                         context,
                         error,
                         attempt_number,
@@ -1898,8 +1933,14 @@ fn episode_number(value: &Value) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        artwork_url, backdrop_url, best_overview, metadata_details, movie_snapshot_from_value,
-        search_result_from_value, tvdb_logo_url, tvdb_people_with_language,
+        artwork_url,
+        backdrop_url,
+        best_overview,
+        metadata_details,
+        movie_snapshot_from_value,
+        search_result_from_value,
+        tvdb_logo_url,
+        tvdb_people_with_language,
     };
     use serde_json::json;
 
@@ -2070,8 +2111,18 @@ mod tests {
     fn tvdb_logo_url_prefers_svg_over_higher_scored_png() {
         let payload = json!({
             "artworks": [
-                { "type": 25, "image": "https://example.test/logo.png", "language": "eng", "score": 99.0 },
-                { "type": 25, "image": "https://example.test/logo.svg", "language": "eng", "score": 1.0 }
+                {
+                    "type": 25,
+                    "image": "https://example.test/logo.png",
+                    "language": "eng",
+                    "score": 99.0.
+                },
+                {
+                    "type": 25,
+                    "image": "https://example.test/logo.svg",
+                    "language": "eng",
+                    "score": 1.0,
+                }
             ]
         });
 
@@ -2085,8 +2136,18 @@ mod tests {
     fn tvdb_logo_url_falls_back_to_png_when_svg_missing() {
         let payload = json!({
             "artworks": [
-                { "type": 25, "image": "https://example.test/logo.jpg", "language": "eng", "score": 99.0 },
-                { "type": 25, "image": "https://example.test/logo.png", "language": "eng", "score": 1.0 }
+                {
+                    "type": 25,
+                    "image": "https://example.test/logo.jpg",
+                    "language": "eng",
+                    "score": 99.0,
+                },
+                {
+                    "type": 25,
+                    "image": "https://example.test/logo.png",
+                    "language": "eng",
+                    "score": 1.0.
+                }
             ]
         });
 

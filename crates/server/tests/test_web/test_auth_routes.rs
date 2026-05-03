@@ -7,7 +7,11 @@ use serde_json::json;
 
 // test imports
 use crate::test_utils::{
-    create_and_login_user, create_test_client, create_test_user, login_user, make_request,
+    create_and_login_user,
+    create_test_client,
+    create_test_user,
+    login_user,
+    make_request,
 };
 
 #[rocket::async_test]

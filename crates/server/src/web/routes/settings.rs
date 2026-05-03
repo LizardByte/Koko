@@ -1,7 +1,14 @@
 //! Settings and library-management routes.
 
 // lib imports
-use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{
+    DateTime,
+    Local,
+    LocalResult,
+    NaiveDate,
+    NaiveDateTime,
+    TimeZone,
+};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rocket::delete;
@@ -12,18 +19,32 @@ use rocket::put;
 use rocket::serde::json::Json;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
 // local imports
 use crate::config::{
-    MediaLibrarySettings, Settings, current_settings, replace_current_settings,
-    save_database_settings, save_settings, settings_file_path,
+    MediaLibrarySettings,
+    Settings,
+    current_settings,
+    replace_current_settings,
+    save_database_settings,
+    save_settings,
+    settings_file_path,
 };
 use crate::db::DbConn;
 use crate::globals;
-use crate::logging::{normalize_display_path, normalize_log_source_path};
+use crate::logging::{
+    normalize_display_path,
+    normalize_log_source_path,
+};
 use crate::media::{
-    add_library_setting, count_persisted_libraries, list_library_settings, remove_library_setting,
+    add_library_setting,
+    count_persisted_libraries,
+    list_library_settings,
+    remove_library_setting,
     replace_library_settings,
 };
 
@@ -347,11 +368,12 @@ pub async fn update_settings(
                 count_persisted_libraries(conn).map_err(|error| error.to_string())? as usize;
             let persisted_libraries = if libraries.len() < existing_count {
                 log::warn!(
-                    "Preserving {} persisted media libraries omitted from settings update; use the library delete route to remove libraries",
+                    "Preserving {} persisted media libraries omitted from settings update; use \
+                     the library delete route to remove libraries",
                     existing_count - libraries.len()
                 );
-                let mut merged = list_library_settings(conn, &[])
-                    .map_err(|error| error.to_string())?;
+                let mut merged =
+                    list_library_settings(conn, &[]).map_err(|error| error.to_string())?;
                 for (index, library) in libraries.iter().cloned().enumerate() {
                     if let Some(existing) = merged.get_mut(index) {
                         *existing = library;

@@ -1,11 +1,18 @@
 //! Shared test utilities to eliminate code duplication across test files.
 
 // standard imports
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicU64,
+    Ordering,
+};
 
 // lib imports
 use once_cell::sync::Lazy;
-use rocket::http::{ContentType, Header, Status};
+use rocket::http::{
+    ContentType,
+    Header,
+    Status,
+};
 use rocket::local::asynchronous::Client;
 use serde_json::Value;
 

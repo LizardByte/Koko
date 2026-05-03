@@ -1,10 +1,18 @@
 // lib imports
 use rocket::http::Status;
-use rocket::serde::json::{json, serde_json};
+use rocket::serde::json::{
+    json,
+    serde_json,
+};
 use rstest::rstest;
 
 // test imports
-use crate::test_utils::{create_test_client, create_test_user, login_user, make_request};
+use crate::test_utils::{
+    create_test_client,
+    create_test_user,
+    login_user,
+    make_request,
+};
 
 const TINY_PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";

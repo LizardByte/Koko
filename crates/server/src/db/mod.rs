@@ -10,12 +10,24 @@ use std::path::Path;
 // lib imports
 use diesel::Connection;
 use diesel::connection::SimpleConnection;
-use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use rocket::{
-    Build, Rocket,
-    fairing::{Fairing, Info, Kind},
+use diesel_migrations::{
+    EmbeddedMigrations,
+    MigrationHarness,
+    embed_migrations,
 };
-use rocket_sync_db_pools::{database, diesel};
+use rocket::{
+    Build,
+    Rocket,
+    fairing::{
+        Fairing,
+        Info,
+        Kind,
+    },
+};
+use rocket_sync_db_pools::{
+    database,
+    diesel,
+};
 
 /// Embedded migrations for the SQLite database.
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
@@ -32,10 +44,8 @@ pub fn configure_sqlite_connection(
     conn: &mut diesel::SqliteConnection
 ) -> diesel::result::QueryResult<()> {
     conn.batch_execute(
-        "PRAGMA foreign_keys = ON;\
-         PRAGMA journal_mode = WAL;\
-         PRAGMA synchronous = NORMAL;\
-         PRAGMA busy_timeout = 5000;",
+        "PRAGMA foreign_keys = ON;PRAGMA journal_mode = WAL;PRAGMA synchronous = NORMAL;PRAGMA \
+         busy_timeout = 5000;",
     )
 }
 
@@ -94,10 +104,7 @@ fn clear_stale_sqlite_lock_files(db_path: &str) {
 }
 
 fn release_sqlite_database_lock(conn: &mut diesel::SqliteConnection) {
-    if let Err(error) = conn.batch_execute(
-        "PRAGMA wal_checkpoint(TRUNCATE);\
-         PRAGMA optimize;",
-    ) {
+    if let Err(error) = conn.batch_execute("PRAGMA wal_checkpoint(TRUNCATE);PRAGMA optimize;") {
         log::warn!(
             "Failed to checkpoint SQLite database during shutdown: {}",
             error
@@ -110,68 +117,72 @@ fn reconcile_legacy_migration_records(
 ) -> diesel::result::QueryResult<()> {
     use diesel::connection::SimpleConnection;
     conn.batch_execute(
-        "CREATE TABLE IF NOT EXISTS __diesel_schema_migrations (\
-            version VARCHAR(50) PRIMARY KEY NOT NULL,\
-            run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\
-        );\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+        "CREATE TABLE IF NOT EXISTS __diesel_schema_migrations (version VARCHAR(50) PRIMARY KEY \
+         NOT NULL,run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);INSERT OR IGNORE INTO \
+         __diesel_schema_migrations(version, run_on)
             SELECT '0000001', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         'users');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000002', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_files');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         'media_files');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000003', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('scan_state') WHERE name = 'scan_revision');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('scan_state') WHERE name = \
+         'scan_revision');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000004', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item_metadata_links');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         'item_metadata_links');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000005', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'media_type');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'media_type');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000006', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_files') WHERE name = 'source_root_path');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_files') WHERE name = \
+         'source_root_path');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000007', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'paths_json');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = \
+         'paths_json');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000008', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'media_type');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'media_type');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000009', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_files') WHERE name = 'metadata_match_attempted_at');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_files') WHERE name = \
+         'metadata_match_attempted_at');INSERT OR IGNORE INTO __diesel_schema_migrations(version, \
+         run_on)
             SELECT '0000010', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('playback_progress') WHERE name = 'user_id');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('playback_progress') WHERE name = \
+         'user_id');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000011', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_items');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         'media_items');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000012', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('users') WHERE name = 'birthday');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('users') WHERE name = 'birthday');INSERT \
+         OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000013', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'metadata_providers_json');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = \
+         'metadata_providers_json');INSERT OR IGNORE INTO __diesel_schema_migrations(version, \
+         run_on)
             SELECT '0000014', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'locale_key');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'locale_key');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000015', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'locale_key');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'locale_key');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000016', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'logo_url');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'logo_url');INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
             SELECT '0000021', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = 'metadata_language_mode');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('media_libraries') WHERE name = \
+         'metadata_language_mode');INSERT OR IGNORE INTO __diesel_schema_migrations(version, \
+         run_on)
             SELECT '0000022', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_url')
-               OR EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = 'theme_song_youtube_url');\
-        INSERT OR IGNORE INTO __diesel_schema_migrations(version, run_on)
+            WHERE EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'theme_song_url')
+               OR EXISTS (SELECT 1 FROM pragma_table_info('item_metadata_links') WHERE name = \
+         'theme_song_youtube_url');INSERT OR IGNORE INTO __diesel_schema_migrations(version, \
+         run_on)
             SELECT '0000023', CURRENT_TIMESTAMP
-            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metadata_collections');",
+            WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = \
+         'metadata_collections');",
     )?;
 
     ensure_sqlite_column(
@@ -204,21 +215,24 @@ fn reconcile_legacy_migration_records(
             "media_libraries",
             Some("metadata_providers_json"),
             "metadata_language_mode",
-            "ALTER TABLE media_libraries ADD COLUMN metadata_language_mode TEXT NOT NULL DEFAULT 'auto'",
+            "ALTER TABLE media_libraries ADD COLUMN metadata_language_mode TEXT NOT NULL DEFAULT \
+             'auto'",
         )?;
         ensure_sqlite_column(
             conn,
             "media_libraries",
             Some("metadata_providers_json"),
             "metadata_languages_json",
-            "ALTER TABLE media_libraries ADD COLUMN metadata_languages_json TEXT NOT NULL DEFAULT '[\"en-US\"]'",
+            "ALTER TABLE media_libraries ADD COLUMN metadata_languages_json TEXT NOT NULL DEFAULT \
+             '[\"en-US\"]'",
         )?;
         ensure_sqlite_column(
             conn,
             "media_libraries",
             Some("metadata_providers_json"),
             "allowed_user_ids_json",
-            "ALTER TABLE media_libraries ADD COLUMN allowed_user_ids_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE media_libraries ADD COLUMN allowed_user_ids_json TEXT NOT NULL DEFAULT \
+             '[]'",
         )?;
     }
     if sqlite_migration_record_exists(conn, "0000022")? {
@@ -303,36 +317,20 @@ fn repair_metadata_collection_schema(
     }
 
     conn.batch_execute(
-        "DROP TABLE IF EXISTS metadata_collection_items_next;\
-         DROP TABLE IF EXISTS metadata_collections_next;\
-         CREATE TABLE metadata_collections_next (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT,\
-            provider_id TEXT NOT NULL,\
-            external_id TEXT NOT NULL,\
-            source_provider_id TEXT NOT NULL,\
-            source_external_id TEXT NOT NULL,\
-            relation_kind TEXT NOT NULL,\
-            locale_key TEXT NOT NULL,\
-            provider_locale_key TEXT DEFAULT NULL,\
-            name TEXT DEFAULT NULL,\
-            overview TEXT DEFAULT NULL,\
-            artwork_url TEXT DEFAULT NULL,\
-            backdrop_url TEXT DEFAULT NULL,\
-            theme_song_url TEXT DEFAULT NULL,\
-            updated_at BIGINT DEFAULT NULL,\
-            UNIQUE (provider_id, external_id, relation_kind, locale_key)\
-         );\
-         CREATE TABLE metadata_collection_items_next (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT,\
-            collection_id INTEGER NOT NULL,\
-            media_item_id INTEGER NOT NULL,\
-            metadata_link_id INTEGER NOT NULL,\
-            updated_at BIGINT DEFAULT NULL,\
-            FOREIGN KEY (collection_id) REFERENCES metadata_collections_next(id) ON DELETE CASCADE,\
-            FOREIGN KEY (media_item_id) REFERENCES media_items(id) ON DELETE CASCADE,\
-            FOREIGN KEY (metadata_link_id) REFERENCES item_metadata_links(id) ON DELETE CASCADE,\
-            UNIQUE (collection_id, media_item_id)\
-         );",
+        "DROP TABLE IF EXISTS metadata_collection_items_next;DROP TABLE IF EXISTS \
+         metadata_collections_next;CREATE TABLE metadata_collections_next (id INTEGER PRIMARY KEY \
+         AUTOINCREMENT,provider_id TEXT NOT NULL,external_id TEXT NOT NULL,source_provider_id \
+         TEXT NOT NULL,source_external_id TEXT NOT NULL,relation_kind TEXT NOT NULL,locale_key \
+         TEXT NOT NULL,provider_locale_key TEXT DEFAULT NULL,name TEXT DEFAULT NULL,overview TEXT \
+         DEFAULT NULL,artwork_url TEXT DEFAULT NULL,backdrop_url TEXT DEFAULT NULL,theme_song_url \
+         TEXT DEFAULT NULL,updated_at BIGINT DEFAULT NULL,UNIQUE (provider_id, external_id, \
+         relation_kind, locale_key));CREATE TABLE metadata_collection_items_next (id INTEGER \
+         PRIMARY KEY AUTOINCREMENT,collection_id INTEGER NOT NULL,media_item_id INTEGER NOT \
+         NULL,metadata_link_id INTEGER NOT NULL,updated_at BIGINT DEFAULT NULL,FOREIGN KEY \
+         (collection_id) REFERENCES metadata_collections_next(id) ON DELETE CASCADE,FOREIGN KEY \
+         (media_item_id) REFERENCES media_items(id) ON DELETE CASCADE,FOREIGN KEY \
+         (metadata_link_id) REFERENCES item_metadata_links(id) ON DELETE CASCADE,UNIQUE \
+         (collection_id, media_item_id));",
     )?;
 
     let source_provider_expr = if collection_has_source_provider {
@@ -363,8 +361,8 @@ fn repair_metadata_collection_schema(
         .as_ref()
         .map(|join_condition| {
             format!(
-                "LEFT JOIN metadata_collection_items ci ON ci.collection_id = c.id\n\
-                 LEFT JOIN item_metadata_links ml ON {join_condition}"
+                "LEFT JOIN metadata_collection_items ci ON ci.collection_id = c.id\nLEFT JOIN \
+                 item_metadata_links ml ON {join_condition}"
             )
         })
         .unwrap_or_default();
@@ -388,7 +386,8 @@ fn repair_metadata_collection_schema(
     };
     let name_expr = if collection_has_name {
         if collection_has_relation {
-            "CASE WHEN c.provider_id = 'themerr' AND COALESCE(c.relation_kind, 'primary') = 'secondary' THEN NULL ELSE NULLIF(TRIM(c.name), '') END"
+            "CASE WHEN c.provider_id = 'themerr' AND COALESCE(c.relation_kind, 'primary') = \
+             'secondary' THEN NULL ELSE NULLIF(TRIM(c.name), '') END"
         } else {
             "NULLIF(TRIM(c.name), '')"
         }
@@ -467,21 +466,18 @@ ORDER BY {item_updated_expr} DESC, ci.id DESC;
     }
 
     conn.batch_execute(
-        "PRAGMA foreign_keys = OFF;\
-         DROP INDEX IF EXISTS idx_metadata_collection_items_metadata_link_id;\
-         DROP INDEX IF EXISTS idx_metadata_collection_items_media_item_id;\
-         DROP INDEX IF EXISTS idx_metadata_collection_items_collection_id;\
-         DROP TABLE IF EXISTS metadata_collection_items;\
-         DROP TABLE metadata_collections;\
-         ALTER TABLE metadata_collections_next RENAME TO metadata_collections;\
-         ALTER TABLE metadata_collection_items_next RENAME TO metadata_collection_items;\
-         CREATE INDEX idx_metadata_collection_items_collection_id \
-            ON metadata_collection_items (collection_id);\
-         CREATE INDEX idx_metadata_collection_items_media_item_id \
-            ON metadata_collection_items (media_item_id);\
-         CREATE INDEX idx_metadata_collection_items_metadata_link_id \
-            ON metadata_collection_items (metadata_link_id);\
-         PRAGMA foreign_keys = ON;",
+        "PRAGMA foreign_keys = OFF;DROP INDEX IF EXISTS \
+         idx_metadata_collection_items_metadata_link_id;DROP INDEX IF EXISTS \
+         idx_metadata_collection_items_media_item_id;DROP INDEX IF EXISTS \
+         idx_metadata_collection_items_collection_id;DROP TABLE IF EXISTS \
+         metadata_collection_items;DROP TABLE metadata_collections;ALTER TABLE \
+         metadata_collections_next RENAME TO metadata_collections;ALTER TABLE \
+         metadata_collection_items_next RENAME TO metadata_collection_items;CREATE INDEX \
+         idx_metadata_collection_items_collection_id ON metadata_collection_items \
+         (collection_id);CREATE INDEX idx_metadata_collection_items_media_item_id ON \
+         metadata_collection_items (media_item_id);CREATE INDEX \
+         idx_metadata_collection_items_metadata_link_id ON metadata_collection_items \
+         (metadata_link_id);PRAGMA foreign_keys = ON;",
     )
 }
 
@@ -499,7 +495,8 @@ fn sqlite_table_exists(
 
     let escaped_table = table_name.replace('\'', "''");
     let row = diesel::sql_query(format!(
-        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = '{escaped_table}'"
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = \
+         '{escaped_table}'"
     ))
     .get_result::<CountRow>(conn)?;
 
@@ -522,7 +519,8 @@ fn sqlite_column_exists(
     let escaped_table = table_name.replace('\'', "''");
     let escaped_column = column_name.replace('\'', "''");
     let row = diesel::sql_query(format!(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = '{escaped_column}'"
+        "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = \
+         '{escaped_column}'"
     ))
     .get_result::<CountRow>(conn)?;
 
@@ -545,9 +543,8 @@ fn sqlite_column_not_null(
     let escaped_table = table_name.replace('\'', "''");
     let escaped_column = column_name.replace('\'', "''");
     let row = diesel::sql_query(format!(
-        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count \
-         FROM pragma_table_info('{escaped_table}') \
-         WHERE name = '{escaped_column}'"
+        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count FROM \
+         pragma_table_info('{escaped_table}') WHERE name = '{escaped_column}'"
     ))
     .get_result::<CountRow>(conn)?;
 
@@ -568,7 +565,8 @@ fn sqlite_migration_record_exists(
 
     let escaped_version = version.replace('\'', "''");
     let row = diesel::sql_query(format!(
-        "SELECT COUNT(*) AS count FROM __diesel_schema_migrations WHERE version = '{escaped_version}'"
+        "SELECT COUNT(*) AS count FROM __diesel_schema_migrations WHERE version = \
+         '{escaped_version}'"
     ))
     .get_result::<CountRow>(conn)?;
 
@@ -593,7 +591,8 @@ fn ensure_sqlite_column(
     let escaped_table = table_name.replace('\'', "''");
     let escaped_column = column_name.replace('\'', "''");
     let table_row = diesel::sql_query(format!(
-        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = '{escaped_table}'"
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = \
+         '{escaped_table}'"
     ))
     .get_result::<CountRow>(conn)?;
     if table_row.count == 0 {
@@ -602,7 +601,8 @@ fn ensure_sqlite_column(
     if let Some(required_column_name) = required_column_name {
         let escaped_required_column = required_column_name.replace('\'', "''");
         let prerequisite_row = diesel::sql_query(format!(
-            "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = '{escaped_required_column}'"
+            "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = \
+             '{escaped_required_column}'"
         ))
         .get_result::<CountRow>(conn)?;
         if prerequisite_row.count == 0 {
@@ -610,7 +610,8 @@ fn ensure_sqlite_column(
         }
     }
     let row = diesel::sql_query(format!(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = '{escaped_column}'"
+        "SELECT COUNT(*) AS count FROM pragma_table_info('{escaped_table}') WHERE name = \
+         '{escaped_column}'"
     ))
     .get_result::<CountRow>(conn)?;
     if row.count == 0 {

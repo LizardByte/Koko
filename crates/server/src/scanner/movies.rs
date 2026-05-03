@@ -3,9 +3,19 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use crate::config::{MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings};
-use crate::scanner::directory::{self, ScannerRules};
-use crate::scanner::{LibraryInspection, ScannerSink};
+use crate::config::{
+    MediaLibraryKind,
+    MediaLibraryScanner,
+    MediaLibrarySettings,
+};
+use crate::scanner::directory::{
+    self,
+    ScannerRules,
+};
+use crate::scanner::{
+    LibraryInspection,
+    ScannerSink,
+};
 
 pub(crate) fn scan(library: &MediaLibrarySettings) -> LibraryInspection {
     directory::scan_with_rules(

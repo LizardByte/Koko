@@ -1,27 +1,55 @@
 // lib imports
-use std::path::{Path, PathBuf};
+use std::path::{
+    Path,
+    PathBuf,
+};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
 
-use base64::{Engine as _, engine::general_purpose};
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper};
+use base64::{
+    Engine as _,
+    engine::general_purpose,
+};
+use diesel::{
+    ExpressionMethods,
+    OptionalExtension,
+    QueryDsl,
+    RunQueryDsl,
+    SelectableHelper,
+};
 use rocket::fs::NamedFile;
 use rocket::get;
 use rocket::http::Status;
 use rocket::post;
 use rocket::put;
-use rocket::serde::{Deserialize, Serialize, json::Json};
+use rocket::serde::{
+    Deserialize,
+    Serialize,
+    json::Json,
+};
 use rocket::tokio::fs;
 use rocket_okapi::JsonSchema;
 use rocket_okapi::openapi;
-use sha2::{Digest, Sha256};
+use sha2::{
+    Digest,
+    Sha256,
+};
 
 // local imports
-use crate::auth::{AdminGuard, UserGuard};
+use crate::auth::{
+    AdminGuard,
+    UserGuard,
+};
 use crate::config::current_settings;
 use crate::db::DbConn;
 use crate::db::models::User;
-use crate::globals::{CURRENT_ENV, Environment};
+use crate::globals::{
+    CURRENT_ENV,
+    Environment,
+};
 
 const PROFILE_IMAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const PROFILE_IMAGE_ROUTE_PREFIX: &str = "/api/v1/user-profile-images/";

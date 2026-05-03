@@ -17,7 +17,10 @@ use koko::globals::CURRENT_ENV;
 use koko::web::rocket;
 
 // test imports
-use crate::test_utils::{TestResponse, make_request};
+use crate::test_utils::{
+    TestResponse,
+    make_request,
+};
 
 pub struct TestDb {
     pub client: Client,

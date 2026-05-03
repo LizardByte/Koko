@@ -1,12 +1,21 @@
 //! Authentication tests for the application.
 
 // lib imports
-use chrono::{Duration, Utc};
+use chrono::{
+    Duration,
+    Utc,
+};
 use rstest::rstest;
 
 // local imports
 use koko::auth::{
-    AdminGuard, AuthGuard, UserGuard, create_token, decode_token, hash_password, verify_password,
+    AdminGuard,
+    AuthGuard,
+    UserGuard,
+    create_token,
+    decode_token,
+    hash_password,
+    verify_password,
 };
 
 #[rstest]

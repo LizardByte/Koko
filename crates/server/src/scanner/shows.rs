@@ -3,9 +3,19 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-use crate::config::{MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings};
-use crate::scanner::directory::{self, ScannerRules};
-use crate::scanner::{LibraryInspection, ScannerSink};
+use crate::config::{
+    MediaLibraryKind,
+    MediaLibraryScanner,
+    MediaLibrarySettings,
+};
+use crate::scanner::directory::{
+    self,
+    ScannerRules,
+};
+use crate::scanner::{
+    LibraryInspection,
+    ScannerSink,
+};
 
 /// Show, season, and episode fields derived from a library-relative episode path.
 #[derive(Debug, Clone, PartialEq, Eq)]

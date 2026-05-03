@@ -2,15 +2,32 @@
 use diesel::Connection;
 use diesel::connection::SimpleConnection;
 use koko::config::{
-    DatabaseMaintenanceTaskSettings, FfmpegSettings, MediaLibraryKind, MediaLibrarySettings,
-    MetadataProviderId, MetadataProviderSettings, MetadataRefreshTaskSettings, MetadataSettings,
-    ScheduledTaskWeekday, ScheduledTaskWindowSettings, ScheduledTasksSettings, Settings,
-    TrashCleanupTaskSettings, load_database_settings, save_database_settings,
-    seed_database_settings, settings_for_persistence, settings_yaml_for_persistence,
+    DatabaseMaintenanceTaskSettings,
+    FfmpegSettings,
+    MediaLibraryKind,
+    MediaLibrarySettings,
+    MetadataProviderId,
+    MetadataProviderSettings,
+    MetadataRefreshTaskSettings,
+    MetadataSettings,
+    ScheduledTaskWeekday,
+    ScheduledTaskWindowSettings,
+    ScheduledTasksSettings,
+    Settings,
+    TrashCleanupTaskSettings,
+    load_database_settings,
+    save_database_settings,
+    seed_database_settings,
+    settings_for_persistence,
+    settings_yaml_for_persistence,
 };
 use koko::metadata::{
-    StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
-    managed_metadata_asset_dir, metadata_asset_uuid, persist_item_metadata_assets,
+    StoredMetadataSnapshot,
+    expected_artwork_cache_path,
+    list_provider_statuses,
+    managed_metadata_asset_dir,
+    metadata_asset_uuid,
+    persist_item_metadata_assets,
 };
 use std::fs;
 
@@ -205,11 +222,8 @@ fn test_database_settings_round_trip_runtime_sections() {
     let mut conn =
         diesel::SqliteConnection::establish(":memory:").expect("Expected in-memory SQLite");
     conn.batch_execute(
-        "CREATE TABLE app_settings (\
-            key TEXT PRIMARY KEY NOT NULL,\
-            value TEXT NOT NULL,\
-            updated_at BIGINT DEFAULT NULL\
-        );",
+        "CREATE TABLE app_settings (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL,updated_at \
+         BIGINT DEFAULT NULL);",
     )
     .unwrap();
 

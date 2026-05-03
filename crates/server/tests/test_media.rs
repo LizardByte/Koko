@@ -1,7 +1,10 @@
 // standard imports
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicU64,
+    Ordering,
+};
 
 // lib imports
 use diesel::Connection;
@@ -12,28 +15,62 @@ use diesel_migrations::MigrationHarness;
 
 // local imports
 use koko::config::{
-    FfmpegSettings, MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings, MetadataProviderId,
+    FfmpegSettings,
+    MediaLibraryKind,
+    MediaLibraryScanner,
+    MediaLibrarySettings,
+    MetadataProviderId,
 };
-use koko::db::{MIGRATIONS, reconcile_legacy_sqlite_schema};
+use koko::db::{
+    MIGRATIONS,
+    reconcile_legacy_sqlite_schema,
+};
 use koko::media::{
-    LibraryScanStatus, ShowMetadataDescendantPlan, ShowMetadataEpisodePlan, ShowMetadataSeasonPlan,
-    delete_missing_media_items, get_item_youtube_theme_collection_references,
-    get_item_youtube_theme_provider_references, get_library_files, get_media_home,
-    get_media_home_with_preferred_languages, get_media_item,
-    get_media_item_with_preferred_languages, get_persisted_library_summaries,
-    get_preferred_item_metadata_link, infer_episode_number, infer_season_number, inspect_libraries,
-    inspect_transcoding_capability, list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates, list_library_settings, list_media_item_children,
-    list_media_items, mark_metadata_match_attempted, remove_library_setting,
-    replace_library_settings, resolve_local_item_artwork_path, resolve_media_item_source_path,
-    search_media_items, sync_library_catalog, upsert_playback_progress,
+    LibraryScanStatus,
+    ShowMetadataDescendantPlan,
+    ShowMetadataEpisodePlan,
+    ShowMetadataSeasonPlan,
+    delete_missing_media_items,
+    get_item_youtube_theme_collection_references,
+    get_item_youtube_theme_provider_references,
+    get_library_files,
+    get_media_home,
+    get_media_home_with_preferred_languages,
+    get_media_item,
+    get_media_item_with_preferred_languages,
+    get_persisted_library_summaries,
+    get_preferred_item_metadata_link,
+    infer_episode_number,
+    infer_season_number,
+    inspect_libraries,
+    inspect_transcoding_capability,
+    list_automatic_metadata_candidates,
+    list_automatic_metadata_refresh_candidates,
+    list_library_settings,
+    list_media_item_children,
+    list_media_items,
+    mark_metadata_match_attempted,
+    remove_library_setting,
+    replace_library_settings,
+    resolve_local_item_artwork_path,
+    resolve_media_item_source_path,
+    search_media_items,
+    sync_library_catalog,
+    upsert_playback_progress,
     upsert_show_metadata_descendant_items,
 };
 use koko::metadata::{
-    ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, ProviderMetadataExtra,
-    StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
-    get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_link,
-    upsert_item_metadata_snapshot, upsert_secondary_collection_theme_song_url,
+    ArtworkKind,
+    ProviderMetadataCollection,
+    ProviderMetadataDetails,
+    ProviderMetadataExtra,
+    StoredMetadataSnapshot,
+    get_preferred_item_metadata_link_for_languages,
+    get_primary_item_metadata_link,
+    set_item_metadata_refresh_state,
+    upsert_item_metadata_link,
+    upsert_item_metadata_snapshot,
+    upsert_secondary_collection_theme_song_url,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -446,12 +483,9 @@ fn test_sync_library_catalog_replaces_legacy_file_hashes() {
         .unwrap();
     assert_scanner_hash(&original_file.file_hash);
 
-    diesel::sql_query(
-        "UPDATE media_files \
-         SET file_hash = 'stat-v1:legacy-hash'",
-    )
-    .execute(&mut connection)
-    .unwrap();
+    diesel::sql_query("UPDATE media_files SET file_hash = 'stat-v1:legacy-hash'")
+        .execute(&mut connection)
+        .unwrap();
     let legacy_file = get_library_files(&mut connection, library_id)
         .unwrap()
         .pop()
@@ -466,8 +500,8 @@ fn test_sync_library_catalog_replaces_legacy_file_hashes() {
     assert_eq!(refreshed_file.file_hash, original_file.file_hash);
 
     diesel::sql_query(
-        "UPDATE media_files \
-         SET file_hash = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+        "UPDATE media_files SET file_hash = \
+         'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
     )
     .execute(&mut connection)
     .unwrap();
@@ -525,17 +559,15 @@ fn test_sync_library_catalog_repairs_path_duplicate_hashes() {
     let legacy_path = format!("{}\\legacy-path\\movie.mkv", root.to_string_lossy());
 
     diesel::sql_query(
-        "UPDATE media_files \
-         SET path = ?, file_hash = 'stat-v1:legacy-membership' \
-         WHERE id = ?",
+        "UPDATE media_files SET path = ?, file_hash = 'stat-v1:legacy-membership' WHERE id = ?",
     )
     .bind::<diesel::sql_types::Text, _>(&legacy_path)
     .bind::<diesel::sql_types::Integer, _>(original_file.id)
     .execute(&mut connection)
     .unwrap();
     diesel::sql_query(
-        "INSERT INTO media_files (path, file_size, modified_at, media_kind, file_hash) \
-         VALUES (?, ?, ?, 'video', 'stat-v1:duplicate-physical')",
+        "INSERT INTO media_files (path, file_size, modified_at, media_kind, file_hash) VALUES (?, \
+         ?, ?, 'video', 'stat-v1:duplicate-physical')",
     )
     .bind::<diesel::sql_types::Text, _>(&physical_path)
     .bind::<diesel::sql_types::BigInt, _>(original_file.file_size)
@@ -671,12 +703,9 @@ fn test_sync_library_catalog_skips_unreadable_file_without_poisoning_root() {
         .share_mode(0)
         .open(&locked_path)
         .unwrap();
-    diesel::sql_query(
-        "UPDATE media_files \
-         SET file_hash = 'stat-v1:legacy-hash'",
-    )
-    .execute(&mut connection)
-    .unwrap();
+    diesel::sql_query("UPDATE media_files SET file_hash = 'stat-v1:legacy-hash'")
+        .execute(&mut connection)
+        .unwrap();
 
     let second_sync =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
@@ -1605,8 +1634,8 @@ fn test_home_includes_real_collection_summaries() {
     )
     .unwrap();
     let themerr_collection_name = diesel::sql_query(
-        "SELECT name AS value FROM metadata_collections \
-         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+        "SELECT name AS value FROM metadata_collections WHERE provider_id = 'themerr' AND \
+         relation_kind = 'secondary'",
     )
     .get_result::<TextRow>(&mut connection)
     .unwrap()
@@ -1614,8 +1643,8 @@ fn test_home_includes_real_collection_summaries() {
     assert_eq!(themerr_collection_name, None);
 
     diesel::sql_query(
-        "UPDATE metadata_collections SET name = 'Test Saga' \
-         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+        "UPDATE metadata_collections SET name = 'Test Saga' WHERE provider_id = 'themerr' AND \
+         relation_kind = 'secondary'",
     )
     .execute(&mut connection)
     .unwrap();
@@ -1630,8 +1659,8 @@ fn test_home_includes_real_collection_summaries() {
     )
     .unwrap();
     let repaired_themerr_collection_name = diesel::sql_query(
-        "SELECT name AS value FROM metadata_collections \
-         WHERE provider_id = 'themerr' AND relation_kind = 'secondary'",
+        "SELECT name AS value FROM metadata_collections WHERE provider_id = 'themerr' AND \
+         relation_kind = 'secondary'",
     )
     .get_result::<TextRow>(&mut connection)
     .unwrap()
@@ -2001,12 +2030,12 @@ fn test_item_detail_uses_primary_metadata_link_only() {
     .unwrap();
 
     diesel::sql_query(
-        "INSERT INTO item_metadata_links (\
-            media_item_id, provider_id, external_id, title, overview, tagline, artwork_url, backdrop_url, \
-            release_year, media_type, relation_kind, match_state, cached_artwork_path, \
-            cached_backdrop_path, refresh_state, refresh_interval_seconds, last_refreshed_at, next_refresh_at, \
-            refresh_error, updated_at\
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?, 0, NULL, NULL, NULL, ?)",
+        "INSERT INTO item_metadata_links (media_item_id, provider_id, external_id, title, \
+         overview, tagline, artwork_url, backdrop_url, release_year, media_type, relation_kind, \
+         match_state, cached_artwork_path, cached_backdrop_path, refresh_state, \
+         refresh_interval_seconds, last_refreshed_at, next_refresh_at, refresh_error, updated_at) \
+         VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?, 0, NULL, NULL, NULL, \
+         ?)",
     )
     .bind::<diesel::sql_types::Integer, _>(movie.id)
     .bind::<diesel::sql_types::Text, _>("musicbrainz")
@@ -2020,9 +2049,7 @@ fn test_item_detail_uses_primary_metadata_link_only() {
     .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
         "https://example.invalid/wrong.jpg".to_string(),
     ))
-    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
-        "collection".to_string(),
-    ))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some("collection".to_string()))
     .bind::<diesel::sql_types::Text, _>("collection")
     .bind::<diesel::sql_types::Text, _>("linked")
     .bind::<diesel::sql_types::Text, _>("fresh")
@@ -2407,16 +2434,16 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
     );
     assert_eq!(spanish_external_media.duration_seconds, Some(148));
     let legacy_url_column_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('item_metadata_links') \
-         WHERE name IN ('trailer_title', 'trailer_url', 'theme_song_url')",
+        "SELECT COUNT(*) AS count FROM pragma_table_info('item_metadata_links') WHERE name IN \
+         ('trailer_title', 'trailer_url', 'theme_song_url')",
     )
     .get_result::<CountRow>(&mut connection)
     .unwrap()
     .count;
     assert_eq!(legacy_url_column_count, 0);
     let normalized_url_column_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('external_media') \
-         WHERE name = 'normalized_url'",
+        "SELECT COUNT(*) AS count FROM pragma_table_info('external_media') WHERE name = \
+         'normalized_url'",
     )
     .get_result::<CountRow>(&mut connection)
     .unwrap()
@@ -2474,7 +2501,8 @@ fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
     )
     .unwrap();
     diesel::sql_query(
-        "UPDATE item_metadata_links SET cached_artwork_path = ?, cached_backdrop_path = ? WHERE media_item_id = ?",
+        "UPDATE item_metadata_links SET cached_artwork_path = ?, cached_backdrop_path = ? WHERE \
+         media_item_id = ?",
     )
     .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(Some(
         "C:/tmp/old-poster.jpg".to_string(),
@@ -3163,9 +3191,8 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
             .expect("Expected library media file membership count")
             .count;
     let duplicate_identity_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM (\
-            SELECT identity_key FROM media_items GROUP BY identity_key HAVING COUNT(*) > 1\
-        )",
+        "SELECT COUNT(*) AS count FROM (SELECT identity_key FROM media_items GROUP BY \
+         identity_key HAVING COUNT(*) > 1)",
     )
     .get_result::<CountRow>(&mut connection)
     .expect("Expected duplicate identity count")
@@ -3358,49 +3385,27 @@ fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
 
     connection
         .batch_execute(
-            "CREATE TABLE __diesel_schema_migrations (\
-                version VARCHAR(50) PRIMARY KEY NOT NULL,\
-                run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\
-             );\
-             INSERT INTO __diesel_schema_migrations(version) VALUES ('0000023');\
-             CREATE TABLE media_items (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT\
-             );\
-             CREATE TABLE item_metadata_links (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                media_item_id INTEGER NOT NULL,\
-                provider_id TEXT NOT NULL,\
-                locale_key TEXT NOT NULL,\
-                provider_locale_key TEXT DEFAULT NULL\
-             );\
-             CREATE TABLE metadata_collections (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                provider_id TEXT NOT NULL,\
-                external_id TEXT NOT NULL,\
-                name TEXT NOT NULL,\
-                overview TEXT DEFAULT NULL,\
-                artwork_url TEXT DEFAULT NULL,\
-                backdrop_url TEXT DEFAULT NULL,\
-                theme_song_url TEXT DEFAULT NULL,\
-                updated_at BIGINT DEFAULT NULL,\
-                UNIQUE (provider_id, external_id)\
-             );\
-             CREATE TABLE metadata_collection_items (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                collection_id INTEGER NOT NULL,\
-                media_item_id INTEGER NOT NULL,\
-                updated_at BIGINT DEFAULT NULL,\
-                UNIQUE (collection_id, media_item_id)\
-             );\
-             INSERT INTO media_items(id) VALUES (1);\
-             INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, provider_locale_key)\
-                VALUES (10, 1, 'tmdb', 'en-US', 'en-US');\
-             INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, provider_locale_key)\
-                VALUES (11, 1, 'tmdb', 'es-ES', 'es-ES');\
-             INSERT INTO metadata_collections(id, provider_id, external_id, name, overview, updated_at)\
-                VALUES (20, 'tmdb', '4242', 'Test Saga', 'English overview', 100);\
-             INSERT INTO metadata_collection_items(collection_id, media_item_id, updated_at)\
-                VALUES (20, 1, 100);",
+            "CREATE TABLE __diesel_schema_migrations (version VARCHAR(50) PRIMARY KEY NOT \
+             NULL,run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);INSERT INTO \
+             __diesel_schema_migrations(version) VALUES ('0000023');CREATE TABLE media_items (id \
+             INTEGER PRIMARY KEY AUTOINCREMENT);CREATE TABLE item_metadata_links (id INTEGER \
+             PRIMARY KEY AUTOINCREMENT,media_item_id INTEGER NOT NULL,provider_id TEXT NOT \
+             NULL,locale_key TEXT NOT NULL,provider_locale_key TEXT DEFAULT NULL);CREATE TABLE \
+             metadata_collections (id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT \
+             NULL,external_id TEXT NOT NULL,name TEXT NOT NULL,overview TEXT DEFAULT \
+             NULL,artwork_url TEXT DEFAULT NULL,backdrop_url TEXT DEFAULT NULL,theme_song_url \
+             TEXT DEFAULT NULL,updated_at BIGINT DEFAULT NULL,UNIQUE (provider_id, \
+             external_id));CREATE TABLE metadata_collection_items (id INTEGER PRIMARY KEY \
+             AUTOINCREMENT,collection_id INTEGER NOT NULL,media_item_id INTEGER NOT \
+             NULL,updated_at BIGINT DEFAULT NULL,UNIQUE (collection_id, media_item_id));INSERT \
+             INTO media_items(id) VALUES (1);INSERT INTO item_metadata_links(id, media_item_id, \
+             provider_id, locale_key, provider_locale_key)VALUES (10, 1, 'tmdb', 'en-US', \
+             'en-US');INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, \
+             provider_locale_key)VALUES (11, 1, 'tmdb', 'es-ES', 'es-ES');INSERT INTO \
+             metadata_collections(id, provider_id, external_id, name, overview, updated_at)VALUES \
+             (20, 'tmdb', '4242', 'Test Saga', 'English overview', 100);INSERT INTO \
+             metadata_collection_items(collection_id, media_item_id, updated_at)VALUES (20, 1, \
+             100);",
         )
         .expect("Expected legacy collection schema fixture to be created");
 
@@ -3420,17 +3425,16 @@ fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
     }
 
     let source_column_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('metadata_collections') \
-         WHERE name = 'source_provider_id'",
+        "SELECT COUNT(*) AS count FROM pragma_table_info('metadata_collections') WHERE name = \
+         'source_provider_id'",
     )
     .get_result::<CountRow>(&mut connection)
     .unwrap()
     .count;
     assert_eq!(source_column_count, 1);
     let name_not_null = diesel::sql_query(
-        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count \
-         FROM pragma_table_info('metadata_collections') \
-         WHERE name = 'name'",
+        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count FROM \
+         pragma_table_info('metadata_collections') WHERE name = 'name'",
     )
     .get_result::<CountRow>(&mut connection)
     .unwrap()
@@ -3454,8 +3458,8 @@ fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
     );
 
     let membership_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM metadata_collection_items \
-         WHERE metadata_link_id IS NOT NULL",
+        "SELECT COUNT(*) AS count FROM metadata_collection_items WHERE metadata_link_id IS NOT \
+         NULL",
     )
     .get_result::<CountRow>(&mut connection)
     .unwrap()
@@ -3463,10 +3467,9 @@ fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
     assert_eq!(membership_count, 2);
 
     diesel::sql_query(
-        "INSERT INTO metadata_collections (\
-            provider_id, external_id, source_provider_id, source_external_id,\
-            relation_kind, locale_key, name\
-         ) VALUES ('tmdb', '4242', 'tmdb', '4242', 'primary', 'fr-FR', 'Saga FR')",
+        "INSERT INTO metadata_collections (provider_id, external_id, source_provider_id, \
+         source_external_id,relation_kind, locale_key, name) VALUES ('tmdb', '4242', 'tmdb', \
+         '4242', 'primary', 'fr-FR', 'Saga FR')",
     )
     .execute(&mut connection)
     .expect("Expected repaired collection uniqueness to include locale");
@@ -3531,20 +3534,17 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
         .execute(&mut connection)
         .unwrap();
     diesel::sql_query(
-        "INSERT INTO media_file_libraries (\
-            id, media_file_id, library_id, source_root_path, relative_path, display_title, \
-            metadata_match_attempted_at, media_item_id\
-        ) \
-        SELECT \
-            ?, media_file_id, library_id, source_root_path, relative_path || '.id-collision', display_title, \
-            metadata_match_attempted_at, ? \
-        FROM media_file_libraries WHERE media_item_id = ? LIMIT 1",
+        "INSERT INTO media_file_libraries (id, media_file_id, library_id, source_root_path, \
+         relative_path, display_title, metadata_match_attempted_at, media_item_id) SELECT ?, \
+         media_file_id, library_id, source_root_path, relative_path || '.id-collision', \
+         display_title, metadata_match_attempted_at, ? FROM media_file_libraries WHERE \
+         media_item_id = ? LIMIT 1",
     )
-        .bind::<diesel::sql_types::Integer, _>(target_episode.id)
-        .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
-        .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
-        .execute(&mut connection)
-        .unwrap();
+    .bind::<diesel::sql_types::Integer, _>(target_episode.id)
+    .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
+    .bind::<diesel::sql_types::Integer, _>(fallback_episode.id)
+    .execute(&mut connection)
+    .unwrap();
 
     let resolved = resolve_local_item_artwork_path(
         &mut connection,
@@ -3584,9 +3584,12 @@ fn test_playback_progress_is_scoped_per_user() {
     }];
 
     let (mut connection, db_path) = create_test_connection("playback_progress_per_user_db");
-    diesel::sql_query("INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1), ('bob', 'hash', NULL, 0)")
-        .execute(&mut connection)
-        .unwrap();
+    diesel::sql_query(
+        "INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1), \
+         ('bob', 'hash', NULL, 0)",
+    )
+    .execute(&mut connection)
+    .unwrap();
     let persisted =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];

@@ -1,10 +1,16 @@
 //! Scheduled metadata refresh task.
 
 // local imports
-use crate::config::{ScheduledTasksSettings, current_settings};
+use crate::config::{
+    ScheduledTasksSettings,
+    current_settings,
+};
 use crate::db::DbConn;
 
-use super::{ScheduledTask, ScheduledTaskFuture};
+use super::{
+    ScheduledTask,
+    ScheduledTaskFuture,
+};
 
 static TASK: MetadataRefreshTask = MetadataRefreshTask;
 

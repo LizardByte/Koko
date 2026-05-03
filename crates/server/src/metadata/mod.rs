@@ -2,36 +2,75 @@
 
 // standard imports
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+    HashMap,
+    HashSet,
+};
 use std::fs;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::hash::{
+    Hash,
+    Hasher,
+};
+use std::path::{
+    Path,
+    PathBuf,
+};
 use std::time::Duration;
 
 // lib imports
 use diesel::{
-    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper, SqliteConnection,
+    ExpressionMethods,
+    OptionalExtension,
+    QueryDsl,
+    RunQueryDsl,
+    SelectableHelper,
+    SqliteConnection,
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use serde::{
+    Deserialize,
+    Serialize,
+};
+use sha2::{
+    Digest,
+    Sha256,
+};
 use strsim::normalized_levenshtein;
 
 mod providers;
-pub use providers::{MetadataProvider, MetadataRegistry};
+pub use providers::{
+    MetadataProvider,
+    MetadataRegistry,
+};
 
 // local imports
 use crate::config::{
-    MediaLibraryKind, MetadataProviderId, MetadataProviderSettings, MetadataSettings,
+    MediaLibraryKind,
+    MetadataProviderId,
+    MetadataProviderSettings,
+    MetadataSettings,
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
-    ExternalMedia, ItemMetadataLink, MediaItem, MetadataCollection, MetadataCollectionItem,
-    MetadataExtra, MetadataPerson, MetadataPersonCredit, NewExternalMedia,
-    NewItemMetadataExternalId, NewItemMetadataLink, NewItemMetadataPerson, NewMetadataCollection,
-    NewMetadataCollectionItem, NewMetadataExtra, NewMetadataPerson, NewMetadataPersonCredit,
+    ExternalMedia,
+    ItemMetadataLink,
+    MediaItem,
+    MetadataCollection,
+    MetadataCollectionItem,
+    MetadataExtra,
+    MetadataPerson,
+    MetadataPersonCredit,
+    NewExternalMedia,
+    NewItemMetadataExternalId,
+    NewItemMetadataLink,
+    NewItemMetadataPerson,
+    NewMetadataCollection,
+    NewMetadataCollectionItem,
+    NewMetadataExtra,
+    NewMetadataPerson,
+    NewMetadataPersonCredit,
 };
 use crate::utils::current_timestamp;
 
@@ -600,7 +639,8 @@ static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-/// Extract a YouTube video id from a raw id, watch URL, short URL, embed URL, shorts URL, or live URL.
+/// Extract a YouTube video id from a raw id, watch URL, short URL, embed URL, shorts URL, or live
+/// URL.
 pub fn extract_youtube_video_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2789,7 +2829,8 @@ pub async fn persist_item_metadata_assets_with_logo(
     Ok((poster_path, backdrop_path, logo_path))
 }
 
-/// Cache person artwork referenced by a metadata payload and return a snapshot with cached paths embedded.
+/// Cache person artwork referenced by a metadata payload and return a snapshot with cached paths
+/// embedded.
 pub async fn persist_metadata_people_assets(
     snapshot: &StoredMetadataSnapshot,
     data_dir: &str,

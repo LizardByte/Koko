@@ -2,7 +2,10 @@
 use rocket::http::Status;
 
 // test imports
-use crate::test_utils::{create_test_client, make_request};
+use crate::test_utils::{
+    create_test_client,
+    make_request,
+};
 
 #[rocket::async_test]
 async fn test_root_route() {

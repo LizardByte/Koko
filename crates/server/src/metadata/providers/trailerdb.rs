@@ -2,9 +2,15 @@ use serde_json::Value;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
-    METADATA_EXTRA_TYPE_TRAILER, MediaLibraryKind, MetadataProviderDescriptor,
-    MetadataProviderRole, ProviderMetadataDetails, ProviderMetadataExtra, normalize_locale_key,
-    normalize_metadata_extra_type, youtube_watch_url,
+    METADATA_EXTRA_TYPE_TRAILER,
+    MediaLibraryKind,
+    MetadataProviderDescriptor,
+    MetadataProviderRole,
+    ProviderMetadataDetails,
+    ProviderMetadataExtra,
+    normalize_locale_key,
+    normalize_metadata_extra_type,
+    youtube_watch_url,
 };
 
 const TRAILERDB_DATA_BASE: &str = "https://trailerdb.org/data";
@@ -240,7 +246,10 @@ fn int_field(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_youtube_trailer, trailerdb_path};
+    use super::{
+        parse_youtube_trailer,
+        trailerdb_path,
+    };
 
     #[test]
     fn movie_lookup_uses_imdb_detail_endpoint() {

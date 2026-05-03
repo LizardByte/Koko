@@ -1,42 +1,88 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
 // standard imports
-use std::collections::{HashMap, HashSet};
+use std::collections::{
+    HashMap,
+    HashSet,
+};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{
+    Path,
+    PathBuf,
+};
 use std::process::Command;
 
 // lib imports
 use diesel::{
-    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper,
-    SqliteConnection, sql_types,
+    ExpressionMethods,
+    OptionalExtension,
+    QueryDsl,
+    RunQueryDsl,
+    SelectableHelper,
+    SqliteConnection,
+    sql_types,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use serde_json::Value;
 
 // local imports
 use crate::config::{
-    FfmpegSettings, MediaLibraryKind, MediaLibraryMetadataLanguageMode, MediaLibraryScanner,
-    MediaLibrarySettings, MetadataProviderId,
+    FfmpegSettings,
+    MediaLibraryKind,
+    MediaLibraryMetadataLanguageMode,
+    MediaLibraryScanner,
+    MediaLibrarySettings,
+    MetadataProviderId,
 };
 use crate::db::models::{
-    ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, MetadataCollection,
-    MetadataCollectionItem, NewMediaFile, NewMediaFileLibrary, NewMediaItem, NewMediaLibrary,
-    NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
+    ItemMetadataLink,
+    MediaFile,
+    MediaItem,
+    MediaLibrary,
+    MetadataCollection,
+    MetadataCollectionItem,
+    NewMediaFile,
+    NewMediaFileLibrary,
+    NewMediaItem,
+    NewMediaLibrary,
+    NewPlaybackProgress,
+    NewScanState,
+    PlaybackProgress,
+    ScanState,
+    User,
 };
 use crate::metadata::{
-    ArtworkKind, DEFAULT_METADATA_LOCALE, LinkedMetadataExtra, MetadataCollectionSummary,
-    MetadataRegistry, list_metadata_collection_summaries_with_preferred_languages,
-    metadata_extras_from_metadata_links, normalize_locale_key, presentation_from_metadata_links,
+    ArtworkKind,
+    DEFAULT_METADATA_LOCALE,
+    LinkedMetadataExtra,
+    MetadataCollectionSummary,
+    MetadataRegistry,
+    list_metadata_collection_summaries_with_preferred_languages,
+    metadata_extras_from_metadata_links,
+    normalize_locale_key,
+    presentation_from_metadata_links,
 };
 use crate::scanner::shows::parse_show_path;
-pub use crate::scanner::shows::{infer_episode_number, infer_season_number};
-use crate::scanner::{
-    DiscoveredMediaFile, FileHashCandidate, ScannerSink, fallback_title_from_relative_path,
-    inspect_library, inspect_library_streaming,
+pub use crate::scanner::shows::{
+    infer_episode_number,
+    infer_season_number,
 };
-pub use crate::scanner::{LibraryScanStatus, LibraryScanSummary};
+use crate::scanner::{
+    DiscoveredMediaFile,
+    FileHashCandidate,
+    ScannerSink,
+    fallback_title_from_relative_path,
+    inspect_library,
+    inspect_library_streaming,
+};
+pub use crate::scanner::{
+    LibraryScanStatus,
+    LibraryScanSummary,
+};
 use crate::utils::current_timestamp;
 
 #[derive(Debug, Clone)]
@@ -142,31 +188,19 @@ struct LibraryMetadataRefreshCounts {
     failed_items: i64,
 }
 
-const CATALOG_MEDIA_FILE_COLUMNS: &str = "\
-      files.id AS id,\
-      files.path AS path,\
-      memberships.id AS library_file_id,\
-      memberships.library_id AS library_id,\
-      memberships.source_root_path AS source_root_path,\
-      memberships.relative_path AS relative_path,\
-    files.file_size AS file_size,\
-    files.modified_at AS modified_at,\
-    files.media_kind AS media_kind,\
-    files.file_hash AS file_hash,\
-    memberships.display_title AS display_title,\
-    files.container AS container,\
-    files.duration_ms AS duration_ms,\
-    files.bit_rate AS bit_rate,\
-    files.width AS width,\
-    files.height AS height,\
-    files.video_codec AS video_codec,\
-    files.audio_codec AS audio_codec,\
-    files.metadata_json AS metadata_json,\
-    files.metadata_updated_at AS metadata_updated_at,\
-    memberships.metadata_match_attempted_at AS metadata_match_attempted_at,\
-    memberships.media_item_id AS media_item_id,\
-    memberships.missing_since AS missing_since,\
-    memberships.deleted_at AS deleted_at";
+const CATALOG_MEDIA_FILE_COLUMNS: &str =
+    "\
+      files.id AS id,files.path AS path,memberships.id AS library_file_id,memberships.library_id \
+     AS library_id,memberships.source_root_path AS source_root_path,memberships.relative_path AS \
+     relative_path,files.file_size AS file_size,files.modified_at AS modified_at,files.media_kind \
+     AS media_kind,files.file_hash AS file_hash,memberships.display_title AS \
+     display_title,files.container AS container,files.duration_ms AS duration_ms,files.bit_rate \
+     AS bit_rate,files.width AS width,files.height AS height,files.video_codec AS \
+     video_codec,files.audio_codec AS audio_codec,files.metadata_json AS \
+     metadata_json,files.metadata_updated_at AS \
+     metadata_updated_at,memberships.metadata_match_attempted_at AS \
+     metadata_match_attempted_at,memberships.media_item_id AS \
+     media_item_id,memberships.missing_since AS missing_since,memberships.deleted_at AS deleted_at";
 
 /// Persisted media file summary for a library.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -395,7 +429,8 @@ pub struct ShowMetadataDescendantItems {
     pub seasons_by_number: HashMap<i32, MediaItemSummary>,
     /// Episode item rows keyed by `(season_number, episode_number)`.
     pub episodes_by_number: HashMap<(i32, i32), MediaItemSummary>,
-    /// Seasons where at least one playable local episode exists, so all provider episodes were materialized.
+    /// Seasons where at least one playable local episode exists, so all provider episodes were
+    /// materialized.
     pub seasons_with_local_episodes: HashSet<i32>,
 }
 
@@ -1113,11 +1148,9 @@ fn load_catalog_files_for_library(
 ) -> Result<Vec<CatalogMediaFile>, diesel::result::Error> {
     let deleted_filter = if include_deleted { "" } else { " AND memberships.deleted_at IS NULL" };
     let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} \
-         FROM media_file_libraries AS memberships \
-         INNER JOIN media_files AS files ON files.id = memberships.media_file_id \
-         WHERE memberships.library_id = ?{deleted_filter} \
-         ORDER BY memberships.relative_path ASC"
+        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
+         media_files AS files ON files.id = memberships.media_file_id WHERE \
+         memberships.library_id = ?{deleted_filter} ORDER BY memberships.relative_path ASC"
     );
     diesel::sql_query(sql)
         .bind::<sql_types::Integer, _>(library_id)
@@ -1128,12 +1161,10 @@ fn load_active_catalog_files(
     conn: &mut SqliteConnection
 ) -> Result<Vec<CatalogMediaFile>, diesel::result::Error> {
     let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} \
-         FROM media_file_libraries AS memberships \
-         INNER JOIN media_files AS files ON files.id = memberships.media_file_id \
-         WHERE memberships.deleted_at IS NULL \
-           AND memberships.missing_since IS NULL \
-         ORDER BY files.modified_at DESC, files.id ASC"
+        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
+         media_files AS files ON files.id = memberships.media_file_id WHERE \
+         memberships.deleted_at IS NULL AND memberships.missing_since IS NULL ORDER BY \
+         files.modified_at DESC, files.id ASC"
     );
     diesel::sql_query(sql).load::<CatalogMediaFile>(conn)
 }
@@ -1143,13 +1174,10 @@ fn load_catalog_file_for_item(
     item_id: i32,
 ) -> Result<Option<CatalogMediaFile>, diesel::result::Error> {
     let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} \
-         FROM media_file_libraries AS memberships \
-         INNER JOIN media_files AS files ON files.id = memberships.media_file_id \
-         WHERE memberships.media_item_id = ? \
-           AND memberships.deleted_at IS NULL \
-         ORDER BY memberships.id ASC \
-         LIMIT 1"
+        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
+         media_files AS files ON files.id = memberships.media_file_id WHERE \
+         memberships.media_item_id = ? AND memberships.deleted_at IS NULL ORDER BY memberships.id \
+         ASC LIMIT 1"
     );
     diesel::sql_query(sql)
         .bind::<sql_types::Integer, _>(item_id)
@@ -1164,14 +1192,10 @@ fn load_catalog_file_for_library_path(
     relative_path: &str,
 ) -> Result<Option<CatalogMediaFile>, diesel::result::Error> {
     let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} \
-         FROM media_file_libraries AS memberships \
-         INNER JOIN media_files AS files ON files.id = memberships.media_file_id \
-         WHERE memberships.library_id = ? \
-           AND memberships.source_root_path = ? \
-           AND memberships.relative_path = ? \
-         ORDER BY memberships.id ASC \
-         LIMIT 1"
+        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
+         media_files AS files ON files.id = memberships.media_file_id WHERE \
+         memberships.library_id = ? AND memberships.source_root_path = ? AND \
+         memberships.relative_path = ? ORDER BY memberships.id ASC LIMIT 1"
     );
     diesel::sql_query(sql)
         .bind::<sql_types::Integer, _>(library_id)
@@ -1238,11 +1262,8 @@ fn delete_unreferenced_media_files(
     conn: &mut SqliteConnection
 ) -> Result<usize, diesel::result::Error> {
     diesel::sql_query(
-        "DELETE FROM media_files \
-         WHERE NOT EXISTS ( \
-           SELECT 1 FROM media_file_libraries \
-           WHERE media_file_libraries.media_file_id = media_files.id \
-         )",
+        "DELETE FROM media_files WHERE NOT EXISTS ( SELECT 1 FROM media_file_libraries WHERE \
+         media_file_libraries.media_file_id = media_files.id )",
     )
     .execute(conn)
 }
@@ -1604,7 +1625,8 @@ fn sync_library_catalog_filtered(
         )?;
         if missing_unscanned_files > 0 {
             log::warn!(
-                "Marked {} existing file row(s) as missing in library {} ({}) because their source roots were not scanned successfully",
+                "Marked {} existing file row(s) as missing in library {} ({}) because their \
+                 source roots were not scanned successfully",
                 missing_unscanned_files,
                 library_row.id,
                 library_row.name
@@ -2795,7 +2817,8 @@ pub fn get_media_item(
     get_media_item_with_preferred_languages(conn, item_id, data_dir, &[])
 }
 
-/// Return a single browser-facing media item by its stable identifier and preferred metadata languages.
+/// Return a single browser-facing media item by its stable identifier and preferred metadata
+/// languages.
 pub fn get_media_item_with_preferred_languages(
     conn: &mut SqliteConnection,
     item_id: i32,
@@ -3155,7 +3178,8 @@ pub fn resolve_media_item_source_path(
     {
         if item_relative_path != media_file.relative_path {
             log::warn!(
-                "Ignoring mismatched backing media file for item {}: item path {:?}, media file path {:?}",
+                "Ignoring mismatched backing media file for item {}: item path {:?}, media file \
+                 path {:?}",
                 item_id,
                 item_relative_path,
                 media_file.relative_path

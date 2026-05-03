@@ -6,7 +6,11 @@ use crate::db::DbConn;
 use crate::media::delete_missing_media_items;
 use crate::utils::current_timestamp;
 
-use super::{ScheduledTask, ScheduledTaskFuture, save_scheduled_task_last_run};
+use super::{
+    ScheduledTask,
+    ScheduledTaskFuture,
+    save_scheduled_task_last_run,
+};
 
 const LAST_RUN_KEY: &str = "scheduled_tasks.trash_cleanup.last_run_at";
 
@@ -65,7 +69,8 @@ impl ScheduledTask for TrashCleanupTask {
                 let summary = delete_missing_media_items(conn, None, Some(cutoff))?;
                 if summary.deleted_items > 0 || summary.deleted_files > 0 {
                     log::info!(
-                        "Scheduled trash cleanup deleted {} missing item rows and {} missing file rows",
+                        "Scheduled trash cleanup deleted {} missing item rows and {} missing file \
+                         rows",
                         summary.deleted_items,
                         summary.deleted_files
                     );

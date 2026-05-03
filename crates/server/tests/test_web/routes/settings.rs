@@ -1,7 +1,14 @@
 use rocket::http::Status;
-use rocket::serde::json::{Value, json, serde_json};
+use rocket::serde::json::{
+    Value,
+    json,
+    serde_json,
+};
 
-use crate::test_utils::{create_test_client, make_request};
+use crate::test_utils::{
+    create_test_client,
+    make_request,
+};
 use koko::globals;
 
 #[rocket::async_test]
@@ -331,7 +338,11 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
     std::fs::write(
         &globals::APP_PATHS.log_path,
         format!(
-            "2026-04-22T11:05:02.631-04:00 [INFO] [rocket::server] [C:\\Users\\ReenigneArcher\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\rocket-0.5.1\\src\\server.rs:134] Response succeeded. {unique}\n2026-04-22T11:10:02.636-04:00 [WARN] [koko] [crates\\server\\src\\lib.rs:32] Web server thread completed {unique}\n"
+            "2026-04-22T11:05:02.631-04:00 [INFO] [rocket::server] \
+             [C:\\Users\\ReenigneArcher\\.cargo\\registry\\src\\index.crates.io-1949cf8c6b5b557f\\\
+             rocket-0.5.1\\src\\server.rs:134] Response succeeded. \
+             {unique}\n2026-04-22T11:10:02.636-04:00 [WARN] [koko] \
+             [crates\\server\\src\\lib.rs:32] Web server thread completed {unique}\n"
         ),
     )
     .unwrap();

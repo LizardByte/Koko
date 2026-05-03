@@ -2,12 +2,18 @@
 
 // standard imports
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::{
+    Path,
+    PathBuf,
+};
 
 // lib imports
 use rocket::fs::NamedFile;
 use rocket::get;
-use rocket::http::uri::{Segments, fmt::Path as UriPath};
+use rocket::http::uri::{
+    Segments,
+    fmt::Path as UriPath,
+};
 use rocket::response::content::RawHtml;
 
 // local imports

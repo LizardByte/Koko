@@ -10,14 +10,25 @@ use rocket::config::TlsConfig;
 use rocket::fairing::AdHoc;
 use rocket::figment::Figment;
 use rocket_okapi::settings::UrlObject;
-use rocket_okapi::{rapidoc::*, swagger_ui::*};
+use rocket_okapi::{
+    rapidoc::*,
+    swagger_ui::*,
+};
 
 // local imports
 use crate::certs;
 use crate::config::{
-    current_settings, load_database_settings, replace_current_settings, seed_database_settings,
+    current_settings,
+    load_database_settings,
+    replace_current_settings,
+    seed_database_settings,
 };
-use crate::db::{DbConn, Migrate, ReleaseDatabase, initialize_sqlite_database};
+use crate::db::{
+    DbConn,
+    Migrate,
+    ReleaseDatabase,
+    initialize_sqlite_database,
+};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 

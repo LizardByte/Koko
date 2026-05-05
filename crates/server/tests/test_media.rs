@@ -3983,6 +3983,15 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
         true,
     )
     .unwrap();
+    let alice_between_episodes_home =
+        get_media_home(&mut connection, Some(1), Some(persisted[0].id)).unwrap();
+    assert_eq!(alice_between_episodes_home.shelves[0].items.len(), 1);
+    assert_eq!(alice_between_episodes_home.shelves[0].items[0].id, show.id);
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0].item_type,
+        "show"
+    );
+
     upsert_playback_progress(
         &mut connection,
         1,
@@ -3992,6 +4001,10 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
         false,
     )
     .unwrap();
+    let alice_in_progress_home =
+        get_media_home(&mut connection, Some(1), Some(persisted[0].id)).unwrap();
+    assert_eq!(alice_in_progress_home.shelves[0].items.len(), 1);
+    assert_eq!(alice_in_progress_home.shelves[0].items[0].id, show.id);
 
     let mut alice_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
         .unwrap()

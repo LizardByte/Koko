@@ -3099,8 +3099,7 @@ pub fn get_media_home_with_preferred_languages(
         preferred_languages,
     )?;
 
-    let continue_watching =
-        get_continue_watching_items(conn, user_id, library_id, preferred_languages)?;
+    let continue_watching = get_continue_watching_items(conn, user_id, library_id, &items)?;
     let recently_added = sort_recently_added(&items);
     let recommended = sort_recommended(&items, &continue_watching);
     let collection_provider_order = match library_id {
@@ -4272,30 +4271,68 @@ fn get_continue_watching_items(
     conn: &mut SqliteConnection,
     user_id: Option<i32>,
     library_id: Option<i32>,
-    preferred_languages: &[String],
+    visible_items: &[MediaItemSummary],
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     use crate::db::schema::playback_progress::dsl as playback_progress_dsl;
 
     let Some(user_id) = user_id else {
         return Ok(Vec::new());
     };
+    let visible_items_by_id = visible_items
+        .iter()
+        .cloned()
+        .map(|item| (item.id, item))
+        .collect::<HashMap<_, _>>();
 
     let progress_rows = playback_progress_dsl::playback_progress
         .filter(playback_progress_dsl::user_id.eq(user_id))
-        .filter(playback_progress_dsl::completed.eq(false))
         .order(playback_progress_dsl::updated_at.desc())
         .select(PlaybackProgress::as_select())
         .load::<PlaybackProgress>(conn)?;
 
     let mut items = Vec::new();
+    let mut seen_item_ids = HashSet::new();
     for progress in progress_rows {
-        if let Some(row) = load_media_item_row(conn, progress.media_item_id)? {
-            let mut item =
-                media_item_summary_with_preferred_languages(conn, row, preferred_languages)?;
-            apply_playback_progress_to_summary(&mut item, &progress);
-            if library_id.is_none() || Some(item.library_id) == library_id {
-                items.push(item);
+        let Some(row) = load_media_item_row(conn, progress.media_item_id)? else {
+            continue;
+        };
+
+        if row.item_type == "episode" {
+            let Some(episode) = visible_items_by_id.get(&row.id) else {
+                continue;
+            };
+            let Some(show_id) = root_show_item_id(episode, &visible_items_by_id) else {
+                continue;
+            };
+            let Some(show) = visible_items_by_id.get(&show_id) else {
+                continue;
+            };
+            if show.playback_completed
+                || (show.playback_position_ms.unwrap_or_default() <= 0
+                    && show.watch_count == 0
+                    && show.last_watched_at.is_none())
+                || !seen_item_ids.insert(show.id)
+            {
+                continue;
             }
+            if library_id.is_none() || Some(show.library_id) == library_id {
+                items.push(show.clone());
+            }
+            continue;
+        }
+
+        if progress.completed {
+            continue;
+        }
+
+        let Some(mut item) = visible_items_by_id.get(&row.id).cloned() else {
+            continue;
+        };
+        apply_playback_progress_to_summary(&mut item, &progress);
+        if (library_id.is_none() || Some(item.library_id) == library_id)
+            && seen_item_ids.insert(item.id)
+        {
+            items.push(item);
         }
     }
 

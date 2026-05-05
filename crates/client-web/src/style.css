@@ -1064,6 +1064,11 @@ legend {
   color: #8bf3ca;
 }
 
+.media-card-status.is-watched .status-icon svg {
+  width: 1.12rem;
+  height: 1.12rem;
+}
+
 .media-card-progress {
   --watch-progress: 0%;
   position: relative;
@@ -1087,9 +1092,11 @@ legend {
   background: rgba(10, 14, 24, 0.82);
 }
 
-.media-card-progress span {
-  position: relative;
-  z-index: 1;
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .media-card-status .status-warning-icon {

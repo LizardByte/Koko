@@ -2269,11 +2269,9 @@ function playbackStatusBadgeMarkup(item: MediaItemSummary): string {
   const badges: string[] = [];
   const progressPercent = playbackProgressPercent(item);
   if (progressPercent !== undefined) {
-    const label = `${progressPercent}% watched`;
+    const label = `In progress: ${progressPercent}% watched`;
     badges.push(`
-      <span class="media-card-progress" style="--watch-progress: ${progressPercent}%;" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
-        <span>${progressPercent}</span>
-      </span>
+      <span class="media-card-progress" style="--watch-progress: ${progressPercent}%;" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>
     `);
   }
 

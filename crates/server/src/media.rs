@@ -2924,12 +2924,61 @@ pub fn get_media_item_with_preferred_languages(
             })
             .collect();
     }
+    if detail.theme_song_url.is_none() {
+        detail.theme_song_url =
+            inherited_theme_song_url_for_item(conn, &item, data_dir, preferred_languages)?;
+    }
     detail.audio_tracks = backing_file
         .as_ref()
         .and_then(|file| audio_tracks_from_metadata_json(file.metadata_json.as_deref()))
         .unwrap_or_default();
 
     Ok(Some(detail))
+}
+
+fn inherited_theme_song_url_for_item(
+    conn: &mut SqliteConnection,
+    item: &MediaItem,
+    data_dir: &str,
+    preferred_languages: &[String],
+) -> Result<Option<String>, diesel::result::Error> {
+    let mut current_id = item.parent_id;
+    let mut visited = HashSet::new();
+
+    while let Some(item_id) = current_id {
+        if !visited.insert(item_id) {
+            break;
+        }
+
+        let Some(parent) = load_media_item_row(conn, item_id)? else {
+            break;
+        };
+
+        if let Some(source_path) = resolve_media_item_source_path(conn, parent.id)? {
+            let assets = discover_item_assets(parent.id, &source_path, data_dir);
+            if assets.theme_song_path.is_some() {
+                return Ok(Some(format!("/api/v1/items/{}/theme", parent.id)));
+            }
+        }
+
+        let metadata_links = prioritized_metadata_links_for_item(
+            conn,
+            parent.id,
+            parent.library_id,
+            preferred_languages,
+        )?;
+        if !metadata_links.is_empty() {
+            if let Some(theme_song_url) =
+                presentation_from_metadata_links(conn, &metadata_links)?.theme_song_url
+            {
+                return Ok(Some(theme_song_url));
+            }
+        }
+
+        current_id = parent.parent_id;
+    }
+
+    Ok(None)
 }
 
 /// Search browser-facing media items by title or relative path.

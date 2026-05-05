@@ -2981,6 +2981,111 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
 }
 
 #[test]
+fn test_item_detail_theme_song_inherits_from_show() {
+    let root = unique_temp_dir("show_theme_song_detail_inheritance");
+    let season_dir = root.join("Mock Show").join("Season 1");
+    fs::create_dir_all(&season_dir).unwrap();
+    fs::write(
+        season_dir.join("Mock Show - S01E01 - Winter Is Coming.mkv"),
+        b"video",
+    )
+    .unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
+        metadata_providers: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::Themerr,
+        ],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("show_theme_song_detail_inheritance_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let show = items.iter().find(|item| item.item_type == "show").unwrap();
+    let season = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        show.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "1399".into(),
+            media_type: Some("tv".into()),
+            title: Some("Mock Show".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2011),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(serde_json::json!({ "name": "Mock Show" }).to_string()),
+        },
+    )
+    .unwrap();
+    upsert_item_metadata_link(
+        &mut connection,
+        show.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Themerr,
+            external_id: "tv:tmdb:1399".into(),
+            media_type: Some("tv".into()),
+            title: None,
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "en-US".into(),
+            provider_locale_key: None,
+            provider_payload_json: None,
+        },
+        &ProviderMetadataDetails {
+            theme_song_url: Some("https://youtu.be/uXZd_W5B7N0".into()),
+            ..ProviderMetadataDetails::default()
+        },
+        "secondary",
+        None,
+    )
+    .unwrap();
+
+    let expected_theme = Some("https://www.youtube.com/watch?v=uXZd_W5B7N0");
+    let show_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected show detail");
+    let season_detail = get_media_item(&mut connection, season.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected season detail");
+    let episode_detail = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected episode detail");
+
+    assert_eq!(show_detail.theme_song_url.as_deref(), expected_theme);
+    assert_eq!(season_detail.theme_song_url.as_deref(), expected_theme);
+    assert_eq!(episode_detail.theme_song_url.as_deref(), expected_theme);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn test_secondary_theme_song_reference_includes_external_id_fallbacks() {
     let root = unique_temp_dir("secondary_theme_song_reference_movie");
     fs::create_dir_all(&root).unwrap();

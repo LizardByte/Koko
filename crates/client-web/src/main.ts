@@ -2312,6 +2312,10 @@ function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: bool
 }
 
 function itemCardSubtitle(item: MediaItemSummary): string | undefined {
+  if (item.display_subtitle) {
+    return item.display_subtitle;
+  }
+
   if (item.item_type === 'episode' && typeof item.episode_number === 'number') {
     return `Episode ${item.episode_number}`;
   }
@@ -2325,7 +2329,11 @@ function itemCardSubtitle(item: MediaItemSummary): string | undefined {
 
 function renderItemCard(item: MediaItemSummary): string {
   const library = state.libraries.find((entry) => entry.id === item.library_id);
-  const artworkUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
+  const artworkItemId = item.artwork_item_id ?? item.id;
+  const artworkUrl = getArtworkUrl(artworkItemId, 'poster', item.artwork_updated_at);
+  const hasAlternateArtwork = typeof item.artwork_item_id === 'number' && item.artwork_item_id !== item.id;
+  const useEpisodeLayout = item.item_type === 'episode' && !hasAlternateArtwork;
+  const artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
   const cardSubtitle = itemCardSubtitle(item);
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
@@ -2343,8 +2351,8 @@ function renderItemCard(item: MediaItemSummary): string {
   const dynamicBadges = `${badgeMarkup}${playbackBadgeMarkup}`;
 
   return `
-    <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
-      <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(item.item_type)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
+    <button class="media-card ${useEpisodeLayout ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+      <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(artworkTypeClass)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
           <span class="media-card-kind">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>
           ${metricMarkup}

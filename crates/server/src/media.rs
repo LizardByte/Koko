@@ -250,6 +250,10 @@ pub struct MediaItemSummary {
     pub item_type: String,
     /// Display title for the item.
     pub display_title: String,
+    /// Optional card subtitle override for shelf-specific presentation.
+    pub display_subtitle: Option<String>,
+    /// Optional item id to use as the poster/backdrop artwork source.
+    pub artwork_item_id: Option<i32>,
     /// Library-relative file path.
     pub relative_path: String,
     /// Classified media kind.
@@ -4291,7 +4295,7 @@ fn get_continue_watching_items(
         .load::<PlaybackProgress>(conn)?;
 
     let mut items = Vec::new();
-    let mut seen_item_ids = HashSet::new();
+    let mut seen_continue_keys = HashSet::new();
     for progress in progress_rows {
         let Some(row) = load_media_item_row(conn, progress.media_item_id)? else {
             continue;
@@ -4311,12 +4315,32 @@ fn get_continue_watching_items(
                 || (show.playback_position_ms.unwrap_or_default() <= 0
                     && show.watch_count == 0
                     && show.last_watched_at.is_none())
-                || !seen_item_ids.insert(show.id)
+                || !seen_continue_keys.insert(show.id)
             {
                 continue;
             }
-            if library_id.is_none() || Some(show.library_id) == library_id {
-                items.push(show.clone());
+            let mut target = if progress.completed {
+                let Some(show_row) = load_media_item_row(conn, show.id)? else {
+                    continue;
+                };
+                let Some(target) =
+                    container_playback_targets(conn, Some(user_id), &show_row)?.primary
+                else {
+                    continue;
+                };
+                let Some(target_item) = visible_items_by_id.get(&target.item_id) else {
+                    continue;
+                };
+                target_item.clone()
+            } else {
+                let mut target = episode.clone();
+                apply_playback_progress_to_summary(&mut target, &progress);
+                target
+            };
+            apply_continue_watching_episode_presentation(&mut target, show, &visible_items_by_id);
+
+            if library_id.is_none() || Some(target.library_id) == library_id {
+                items.push(target);
             }
             continue;
         }
@@ -4330,13 +4354,38 @@ fn get_continue_watching_items(
         };
         apply_playback_progress_to_summary(&mut item, &progress);
         if (library_id.is_none() || Some(item.library_id) == library_id)
-            && seen_item_ids.insert(item.id)
+            && seen_continue_keys.insert(item.id)
         {
             items.push(item);
         }
     }
 
     Ok(items)
+}
+
+fn apply_continue_watching_episode_presentation(
+    target: &mut MediaItemSummary,
+    show: &MediaItemSummary,
+    items_by_id: &HashMap<i32, MediaItemSummary>,
+) {
+    if target.item_type != "episode" {
+        return;
+    }
+
+    target.display_title = show.display_title.clone();
+
+    let season = target
+        .parent_id
+        .and_then(|season_id| items_by_id.get(&season_id));
+    let season_number = target
+        .season_number
+        .or_else(|| season.and_then(|item| item.season_number));
+    target.display_subtitle = episode_number_label(season_number, target.episode_number);
+
+    if let Some(season) = season {
+        target.artwork_item_id = Some(season.id);
+        target.artwork_updated_at = season.artwork_updated_at.or(target.artwork_updated_at);
+    }
 }
 
 fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
@@ -5153,6 +5202,8 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         parent_id: item.parent_id,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
+        display_subtitle: None,
+        artwork_item_id: None,
         relative_path,
         media_kind: item
             .media_kind
@@ -6210,6 +6261,8 @@ mod tests {
             parent_id,
             item_type: item_type.to_string(),
             display_title: title.to_string(),
+            display_subtitle: None,
+            artwork_item_id: None,
             relative_path: title.to_string(),
             media_kind: "video".to_string(),
             playable: child_count == 0,

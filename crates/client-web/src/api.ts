@@ -135,6 +135,8 @@ export interface MediaItemSummary {
   parent_id?: number | null;
   item_type: string;
   display_title: string;
+  display_subtitle?: string | null;
+  artwork_item_id?: number | null;
   relative_path: string;
   media_kind: string;
   playable: boolean;

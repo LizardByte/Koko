@@ -3965,6 +3965,10 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
         .iter()
         .find(|item| item.item_type == "show")
         .expect("Expected show");
+    let season_item = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .expect("Expected season");
     let episode_one = items
         .iter()
         .find(|item| item.item_type == "episode" && item.episode_number == Some(1))
@@ -3986,10 +3990,31 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
     let alice_between_episodes_home =
         get_media_home(&mut connection, Some(1), Some(persisted[0].id)).unwrap();
     assert_eq!(alice_between_episodes_home.shelves[0].items.len(), 1);
-    assert_eq!(alice_between_episodes_home.shelves[0].items[0].id, show.id);
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0].id,
+        episode_two.id
+    );
     assert_eq!(
         alice_between_episodes_home.shelves[0].items[0].item_type,
-        "show"
+        "episode"
+    );
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0].display_title,
+        show.display_title
+    );
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0]
+            .display_subtitle
+            .as_deref(),
+        Some("S01E02")
+    );
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0].artwork_item_id,
+        Some(season_item.id)
+    );
+    assert_eq!(
+        alice_between_episodes_home.shelves[0].items[0].playback_position_ms,
+        None
     );
 
     upsert_playback_progress(
@@ -4004,7 +4029,28 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
     let alice_in_progress_home =
         get_media_home(&mut connection, Some(1), Some(persisted[0].id)).unwrap();
     assert_eq!(alice_in_progress_home.shelves[0].items.len(), 1);
-    assert_eq!(alice_in_progress_home.shelves[0].items[0].id, show.id);
+    assert_eq!(
+        alice_in_progress_home.shelves[0].items[0].id,
+        episode_two.id
+    );
+    assert_eq!(
+        alice_in_progress_home.shelves[0].items[0].playback_position_ms,
+        Some(90_000)
+    );
+    assert_eq!(
+        alice_in_progress_home.shelves[0].items[0].display_title,
+        show.display_title
+    );
+    assert_eq!(
+        alice_in_progress_home.shelves[0].items[0]
+            .display_subtitle
+            .as_deref(),
+        Some("S01E02")
+    );
+    assert_eq!(
+        alice_in_progress_home.shelves[0].items[0].artwork_item_id,
+        Some(season_item.id)
+    );
 
     let mut alice_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
         .unwrap()

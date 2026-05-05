@@ -258,6 +258,8 @@ pub struct MediaItemSummary {
     pub playable: bool,
     /// Number of direct child items.
     pub child_count: i32,
+    /// Number of show seasons that currently have at least one available episode.
+    pub available_season_count: Option<i32>,
     /// Season number when the item is a season or episode.
     pub season_number: Option<i32>,
     /// Episode number when the item is an episode.
@@ -319,6 +321,8 @@ pub struct MediaItemDetail {
     pub playable: bool,
     /// Number of direct child items.
     pub child_count: i32,
+    /// Number of show seasons that currently have at least one available episode.
+    pub available_season_count: Option<i32>,
     /// Season number when the item is a season or episode.
     pub season_number: Option<i32>,
     /// Episode number when the item is an episode.
@@ -2652,6 +2656,7 @@ pub fn list_media_items_with_preferred_languages(
         apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
         items.push(summary);
     }
+    apply_available_season_counts_from_summaries(&mut items);
 
     Ok(items)
 }
@@ -2840,6 +2845,9 @@ pub fn get_media_item_with_preferred_languages(
 
     let backing_file = load_backing_media_file(conn, item_id)?;
     let mut detail = to_media_item_detail(item.clone(), backing_file.as_ref());
+    if detail.item_type == "show" {
+        detail.available_season_count = Some(available_season_count_for_show(conn, detail.id)?);
+    }
     detail.hierarchy = load_media_item_hierarchy(conn, &item, preferred_languages)?;
     detail.children =
         list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?;
@@ -4476,6 +4484,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
             .unwrap_or_else(|| default_media_kind_for_item_type(&item.item_type).to_string()),
         playable: item.playable,
         child_count: item.child_count,
+        available_season_count: None,
         season_number: item.season_number,
         episode_number: item.episode_number,
         duration_ms: item.duration_ms,
@@ -4496,6 +4505,96 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
     }
 }
 
+fn apply_available_season_counts_from_summaries(items: &mut [MediaItemSummary]) {
+    let show_ids = items
+        .iter()
+        .filter(|item| item.item_type == "show")
+        .map(|item| item.id)
+        .collect::<HashSet<_>>();
+    if show_ids.is_empty() {
+        return;
+    }
+
+    let season_show_ids = items
+        .iter()
+        .filter(|item| item.item_type == "season" && item.missing_since.is_none())
+        .filter_map(|season| {
+            let show_id = season.parent_id?;
+            show_ids.contains(&show_id).then_some((season.id, show_id))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut available_seasons_by_show = HashMap::<i32, HashSet<i32>>::new();
+    for episode in items
+        .iter()
+        .filter(|item| item.item_type == "episode" && item.playable && item.missing_since.is_none())
+    {
+        let Some(season_id) = episode.parent_id else {
+            continue;
+        };
+        let Some(show_id) = season_show_ids.get(&season_id).copied() else {
+            continue;
+        };
+        available_seasons_by_show
+            .entry(show_id)
+            .or_default()
+            .insert(season_id);
+    }
+
+    for item in items.iter_mut().filter(|item| item.item_type == "show") {
+        item.available_season_count = Some(
+            available_seasons_by_show
+                .get(&item.id)
+                .map(HashSet::len)
+                .and_then(|count| i32::try_from(count).ok())
+                .unwrap_or(i32::MAX),
+        );
+    }
+}
+
+fn apply_available_season_count(
+    conn: &mut SqliteConnection,
+    summary: &mut MediaItemSummary,
+) -> Result<(), diesel::result::Error> {
+    if summary.item_type == "show" {
+        summary.available_season_count = Some(available_season_count_for_show(conn, summary.id)?);
+    }
+
+    Ok(())
+}
+
+fn available_season_count_for_show(
+    conn: &mut SqliteConnection,
+    show_id: i32,
+) -> Result<i32, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    let season_ids = media_items_dsl::media_items
+        .filter(media_items_dsl::parent_id.eq(show_id))
+        .filter(media_items_dsl::item_type.eq("season"))
+        .filter(media_items_dsl::deleted_at.is_null())
+        .filter(media_items_dsl::missing_since.is_null())
+        .select(media_items_dsl::id)
+        .load::<i32>(conn)?;
+
+    let mut count = 0_i32;
+    for season_id in season_ids {
+        let available_episode_count = media_items_dsl::media_items
+            .filter(media_items_dsl::parent_id.eq(season_id))
+            .filter(media_items_dsl::item_type.eq("episode"))
+            .filter(media_items_dsl::playable.eq(true))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .filter(media_items_dsl::missing_since.is_null())
+            .count()
+            .get_result::<i64>(conn)?;
+        if available_episode_count > 0 {
+            count = count.saturating_add(1);
+        }
+    }
+
+    Ok(count)
+}
+
 fn load_media_item_row(
     conn: &mut SqliteConnection,
     item_id: i32,
@@ -4514,7 +4613,13 @@ fn get_media_item_summary_without_metadata(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
-    Ok(load_media_item_row(conn, item_id)?.map(to_media_item_summary))
+    let Some(row) = load_media_item_row(conn, item_id)? else {
+        return Ok(None);
+    };
+
+    let mut summary = to_media_item_summary(row);
+    apply_available_season_count(conn, &mut summary)?;
+    Ok(Some(summary))
 }
 
 fn media_item_summary_with_preferred_title(
@@ -4530,6 +4635,7 @@ fn media_item_summary_with_preferred_languages(
     preferred_languages: &[String],
 ) -> Result<MediaItemSummary, diesel::result::Error> {
     let mut summary = to_media_item_summary(row);
+    apply_available_season_count(conn, &mut summary)?;
     let link = prioritized_primary_metadata_links_for_item(conn, &summary, preferred_languages)?
         .into_iter()
         .next();
@@ -5001,6 +5107,7 @@ fn to_media_item_detail(
             .unwrap_or_else(|| default_media_kind_for_item_type(&item.item_type).to_string()),
         playable: item.playable,
         child_count: item.child_count,
+        available_season_count: None,
         season_number: item.season_number,
         episode_number: item.episode_number,
         container: backing_file.and_then(|file| file.container.clone()),
@@ -5424,6 +5531,7 @@ mod tests {
             media_kind: "video".to_string(),
             playable: child_count == 0,
             child_count,
+            available_season_count: None,
             season_number: None,
             episode_number: None,
             duration_ms,

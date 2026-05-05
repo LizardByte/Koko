@@ -1719,7 +1719,8 @@ function formatChildCount(item: MediaItemSummary): string {
   }
 
   if (item.item_type === 'show') {
-    return `${item.child_count} season${item.child_count === 1 ? '' : 's'}`;
+    const seasonCount = item.available_season_count ?? item.child_count;
+    return `${seasonCount} season${seasonCount === 1 ? '' : 's'}`;
   }
 
   if (item.item_type === 'season') {

@@ -1053,6 +1053,7 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
 
     assert_eq!(show.parent_id, None);
     assert_eq!(show.child_count, 1);
+    assert_eq!(show.available_season_count, Some(1));
     assert_eq!(season.parent_id, Some(show.id));
     assert_eq!(season.child_count, 1);
     assert_eq!(episode.parent_id, Some(season.id));
@@ -1063,6 +1064,7 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
     let show_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
         .unwrap()
         .expect("Expected show detail to exist");
+    assert_eq!(show_detail.available_season_count, Some(1));
     assert_eq!(show_detail.children.len(), 1);
     assert_eq!(show_detail.children[0].id, season.id);
 
@@ -1165,6 +1167,21 @@ fn test_show_metadata_placeholders_materialize_missing_descendants() {
 
     let show_children = list_media_item_children(&mut connection, show.id).unwrap();
     assert_eq!(show_children.len(), 2);
+    let show_after_descendants = get_media_item(&mut connection, show.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected show detail after descendant materialization");
+    assert_eq!(show_after_descendants.child_count, 2);
+    assert_eq!(show_after_descendants.available_season_count, Some(1));
+    let listed_show_after_descendants = list_media_items(&mut connection, Some(library.id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == show.id)
+        .expect("Expected show summary after descendant materialization");
+    assert_eq!(listed_show_after_descendants.child_count, 2);
+    assert_eq!(
+        listed_show_after_descendants.available_season_count,
+        Some(1)
+    );
     let season_one_item = show_children
         .iter()
         .find(|item| item.season_number == Some(1))

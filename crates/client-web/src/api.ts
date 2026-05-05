@@ -139,6 +139,7 @@ export interface MediaItemSummary {
   media_kind: string;
   playable: boolean;
   child_count: number;
+  available_season_count?: number | null;
   season_number?: number;
   episode_number?: number;
   duration_ms?: number;

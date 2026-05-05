@@ -648,6 +648,13 @@ fn enrich_tmdb_people_payload(
                 .filter_map(|entry| entry.get("id").and_then(Value::as_i64)),
         );
     }
+    for guest_stars in tmdb_guest_star_collections(payload) {
+        person_ids.extend(
+            guest_stars
+                .iter()
+                .filter_map(|entry| entry.get("id").and_then(Value::as_i64)),
+        );
+    }
     if let Some(crew) = payload
         .get("credits")
         .and_then(|credits| credits.get("crew"))
@@ -678,7 +685,7 @@ fn enrich_tmdb_people_payload(
     }
 
     if let Some(credits) = payload.get_mut("credits") {
-        for collection_key in ["cast", "crew"] {
+        for collection_key in ["cast", "crew", "guest_stars"] {
             if let Some(entries) = credits
                 .get_mut(collection_key)
                 .and_then(Value::as_array_mut)
@@ -695,6 +702,19 @@ fn enrich_tmdb_people_payload(
                         map.insert("koko_person".into(), person.clone());
                     }
                 }
+            }
+        }
+    }
+    if let Some(entries) = payload.get_mut("guest_stars").and_then(Value::as_array_mut) {
+        for entry in entries {
+            let Some(id) = entry.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some((_, person)) = people.iter().find(|(person_id, _)| *person_id == id) else {
+                continue;
+            };
+            if let Some(map) = entry.as_object_mut() {
+                map.insert("koko_person".into(), person.clone());
             }
         }
     }
@@ -1177,62 +1197,71 @@ async fn cache_tmdb_people_payload_images(
     snapshot: &StoredMetadataSnapshot,
     data_dir: &str,
 ) -> Result<(), String> {
-    let Some(credits) = payload.get_mut("credits") else {
-        return Ok(());
-    };
-    for collection_key in ["cast", "crew"] {
-        let Some(entries) = credits
-            .get_mut(collection_key)
-            .and_then(Value::as_array_mut)
-        else {
-            continue;
-        };
-        for entry in entries {
-            let Some(external_id) = person_external_id(entry) else {
-                continue;
-            };
-            let image_url = entry
-                .get("koko_person")
-                .and_then(|person| person.get("profile_path"))
-                .or_else(|| entry.get("profile_path"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .map(|path| {
-                    if path.starts_with("http://") || path.starts_with("https://") {
-                        path.to_string()
-                    } else {
-                        tmdb_image_url(path, "w185")
-                    }
-                });
-            let Some(image_url) = image_url else {
-                continue;
-            };
-            let person_dir = managed_metadata_asset_dir(
-                data_dir,
-                snapshot.provider_id.clone(),
-                &external_id,
-                Some("person"),
-                &snapshot.locale_key,
-            );
-            let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
-            let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await
+    if let Some(credits) = payload.get_mut("credits") {
+        for collection_key in ["cast", "crew", "guest_stars"] {
+            let Some(entries) = credits
+                .get_mut(collection_key)
+                .and_then(Value::as_array_mut)
             else {
                 continue;
             };
-            let cached_path = metadata_asset_db_path(data_dir, &path);
-            if let Some(map) = entry.as_object_mut() {
-                map.insert(
-                    "koko_cached_image_path".into(),
-                    Value::String(cached_path.clone()),
-                );
-                if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
-                    person.insert("koko_cached_image_path".into(), Value::String(cached_path));
+            cache_tmdb_people_entries_images(entries, snapshot, data_dir).await;
+        }
+    }
+    if let Some(entries) = payload.get_mut("guest_stars").and_then(Value::as_array_mut) {
+        cache_tmdb_people_entries_images(entries, snapshot, data_dir).await;
+    }
+    Ok(())
+}
+
+async fn cache_tmdb_people_entries_images(
+    entries: &mut [Value],
+    snapshot: &StoredMetadataSnapshot,
+    data_dir: &str,
+) {
+    for entry in entries {
+        let Some(external_id) = person_external_id(entry) else {
+            continue;
+        };
+        let image_url = entry
+            .get("koko_person")
+            .and_then(|person| person.get("profile_path"))
+            .or_else(|| entry.get("profile_path"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                if path.starts_with("http://") || path.starts_with("https://") {
+                    path.to_string()
+                } else {
+                    tmdb_image_url(path, "w185")
                 }
+            });
+        let Some(image_url) = image_url else {
+            continue;
+        };
+        let person_dir = managed_metadata_asset_dir(
+            data_dir,
+            snapshot.provider_id.clone(),
+            &external_id,
+            Some("person"),
+            &snapshot.locale_key,
+        );
+        let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
+        let Some(path) = try_cache_item_artwork(&image_url, &person_dir, &cache_key).await else {
+            continue;
+        };
+        let cached_path = metadata_asset_db_path(data_dir, &path);
+        if let Some(map) = entry.as_object_mut() {
+            map.insert(
+                "koko_cached_image_path".into(),
+                Value::String(cached_path.clone()),
+            );
+            if let Some(person) = map.get_mut("koko_person").and_then(Value::as_object_mut) {
+                person.insert("koko_cached_image_path".into(), Value::String(cached_path));
             }
         }
     }
-    Ok(())
 }
 
 fn tmdb_trailer_entry(payload: &Value) -> Option<&Value> {
@@ -1382,9 +1411,26 @@ fn tmdb_collections(payload: &Value) -> Vec<ProviderMetadataCollection> {
     }]
 }
 
+fn tmdb_guest_star_collections(payload: &Value) -> Vec<&Vec<Value>> {
+    let mut collections = Vec::new();
+    if let Some(guest_stars) = payload.get("guest_stars").and_then(Value::as_array) {
+        collections.push(guest_stars);
+    }
+    if let Some(guest_stars) = payload
+        .get("credits")
+        .and_then(|credits| credits.get("guest_stars"))
+        .and_then(Value::as_array)
+    {
+        collections.push(guest_stars);
+    }
+    collections
+}
+
 fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
     let Some(credits) = payload.get("credits") else {
-        return Vec::new();
+        let mut people = Vec::new();
+        extend_tmdb_guest_stars(&mut people, payload);
+        return sort_and_dedupe_people(people);
     };
 
     let mut people = Vec::new();
@@ -1420,6 +1466,8 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
             })
         }));
     }
+
+    extend_tmdb_guest_stars(&mut people, payload);
 
     if let Some(crew) = credits.get("crew").and_then(Value::as_array) {
         let mut crew_order = 10_000;
@@ -1458,6 +1506,51 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
     }
 
     sort_and_dedupe_people(people)
+}
+
+fn extend_tmdb_guest_stars(
+    people: &mut Vec<ProviderMetadataPerson>,
+    payload: &Value,
+) {
+    let mut guest_order = 5_000;
+    for guest_stars in tmdb_guest_star_collections(payload) {
+        people.extend(guest_stars.iter().filter_map(|entry| {
+            let name = person_name(entry)?;
+            let sort_order = entry
+                .get("order")
+                .and_then(Value::as_i64)
+                .and_then(|order| i32::try_from(order).ok())
+                .map(|order| 5_000 + order)
+                .unwrap_or_else(|| {
+                    let sort_order = guest_order;
+                    guest_order += 1;
+                    sort_order
+                });
+            Some(ProviderMetadataPerson {
+                external_id: person_external_id(entry),
+                name,
+                known_for: tmdb_person_known_for(entry),
+                biography: tmdb_person_detail(entry, "biography"),
+                gender: tmdb_person_gender(entry),
+                birthday: tmdb_person_detail(entry, "birthday"),
+                deathday: tmdb_person_detail(entry, "deathday"),
+                birth_place: tmdb_person_detail(entry, "place_of_birth"),
+                role: Some("Guest Star".into()),
+                department: Some("Cast".into()),
+                character_name: text_field(entry, &["character"]),
+                profile_url: person_external_id(entry)
+                    .map(|id| format!("https://www.themoviedb.org/person/{id}")),
+                image_url: entry
+                    .get("profile_path")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|path| tmdb_image_url(path, "w185")),
+                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                sort_order,
+            })
+        }));
+    }
 }
 
 fn tmdb_person_from_detail(
@@ -1702,5 +1795,66 @@ mod tests {
         assert_eq!(details.people[0].biography, None);
         assert_eq!(details.people[0].external_id.as_deref(), Some("6384"));
         assert_eq!(details.people[0].character_name.as_deref(), Some("Neo"));
+    }
+
+    #[test]
+    fn tmdb_metadata_details_include_episode_guest_stars_as_shallow_people() {
+        let snapshot = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "tv:1396:season:1:episode:1".into(),
+            media_type: Some("tv_episode".into()),
+            title: Some("Pilot".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2008),
+            locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(
+                json!({
+                    "guest_stars": [
+                        {
+                            "id": 1111,
+                            "name": "Guest One",
+                            "character": "Episode Character",
+                            "order": 2,
+                            "profile_path": "/guest-one.jpg"
+                        }
+                    ],
+                    "credits": {
+                        "cast": [],
+                        "crew": [],
+                        "guest_stars": [
+                            {
+                                "id": 2222,
+                                "name": "Guest Two",
+                                "character": "Another Character",
+                                "order": 1,
+                                "profile_path": "/guest-two.jpg"
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        let details = metadata_details(&snapshot);
+
+        assert_eq!(details.people.len(), 2);
+        assert_eq!(details.people[0].name, "Guest Two");
+        assert_eq!(details.people[0].role.as_deref(), Some("Guest Star"));
+        assert_eq!(details.people[0].department.as_deref(), Some("Cast"));
+        assert_eq!(
+            details.people[0].character_name.as_deref(),
+            Some("Another Character")
+        );
+        assert_eq!(details.people[0].biography, None);
+        assert_eq!(
+            details.people[0].image_url.as_deref(),
+            Some("https://image.tmdb.org/t/p/w185/guest-two.jpg")
+        );
+        assert_eq!(details.people[1].name, "Guest One");
+        assert_eq!(details.people[1].role.as_deref(), Some("Guest Star"));
     }
 }

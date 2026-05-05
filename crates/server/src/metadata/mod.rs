@@ -19,7 +19,9 @@ use std::time::Duration;
 
 // lib imports
 use diesel::{
+    BoolExpressionMethods,
     ExpressionMethods,
+    JoinOnDsl,
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
@@ -280,6 +282,21 @@ pub struct MetadataPersonSummary {
     pub updated_at: Option<i64>,
 }
 
+/// Provider person row that can be enriched after item metadata has been refreshed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataPersonEnrichmentTarget {
+    /// Stable person row identifier.
+    pub id: i32,
+    /// Provider identifier.
+    pub provider_id: MetadataProviderId,
+    /// Provider-side person identifier.
+    pub external_id: String,
+    /// Koko locale key for this localized person row.
+    pub locale_key: String,
+    /// Current display name.
+    pub name: String,
+}
+
 /// One credit connecting a normalized person to an item metadata link.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct MetadataPersonCreditSummary {
@@ -411,6 +428,34 @@ pub struct StoredMetadataSnapshot {
     pub provider_locale_key: Option<String>,
     /// Raw provider payload.
     pub provider_payload_json: Option<String>,
+}
+
+/// Options for fetching provider metadata snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetadataSnapshotFetchOptions {
+    /// Whether provider fetches should make extra calls for full person records.
+    pub include_person_details: bool,
+}
+
+impl MetadataSnapshotFetchOptions {
+    /// Fetch the full snapshot, including person-detail enrichment.
+    pub const FULL: Self = Self {
+        include_person_details: true,
+    };
+    /// Fetch item presentation metadata without expensive person-detail enrichment.
+    pub const WITHOUT_PERSON_DETAILS: Self = Self {
+        include_person_details: false,
+    };
+
+    fn cache_key_fragment(self) -> &'static str {
+        if self.include_person_details { "person-details:1" } else { "person-details:0" }
+    }
+}
+
+impl Default for MetadataSnapshotFetchOptions {
+    fn default() -> Self {
+        Self::FULL
+    }
 }
 
 /// Provider-normalized metadata fields that are persisted into Koko tables.
@@ -956,6 +1001,85 @@ pub fn get_metadata_person_for_languages(
     Ok(preferred_person_row(rows, preferred_languages).map(to_metadata_person_summary))
 }
 
+/// Return library-scoped person rows that are candidates for provider detail enrichment.
+pub fn list_metadata_people_for_library(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+) -> Result<Vec<MetadataPersonEnrichmentTarget>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as link_dsl;
+    use crate::db::schema::media_items::dsl as items_dsl;
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+    use crate::db::schema::metadata_person_credits::dsl as credit_dsl;
+
+    let rows = people_dsl::metadata_people
+        .inner_join(
+            credit_dsl::metadata_person_credits.on(credit_dsl::person_id.eq(people_dsl::id)),
+        )
+        .inner_join(link_dsl::item_metadata_links.on(link_dsl::id.eq(credit_dsl::metadata_link_id)))
+        .inner_join(items_dsl::media_items.on(items_dsl::id.eq(link_dsl::media_item_id)))
+        .filter(items_dsl::library_id.eq(library_id))
+        .filter(people_dsl::external_id.is_not_null())
+        .filter(
+            people_dsl::biography
+                .is_null()
+                .or(people_dsl::gender.is_null())
+                .or(people_dsl::birthday.is_null())
+                .or(people_dsl::birth_place.is_null()),
+        )
+        .select(MetadataPerson::as_select())
+        .load::<MetadataPerson>(conn)?;
+
+    let mut seen = HashSet::new();
+    Ok(rows
+        .into_iter()
+        .filter_map(|person| {
+            let provider_id = MetadataProviderId::from_storage_value(&person.provider_id)?;
+            let external_id = person.external_id?;
+            let key = (
+                provider_id.as_storage_value().to_string(),
+                external_id.clone(),
+                normalize_locale_key(&person.locale_key),
+            );
+            seen.insert(key).then_some(MetadataPersonEnrichmentTarget {
+                id: person.id,
+                provider_id,
+                external_id,
+                locale_key: person.locale_key,
+                name: person.name,
+            })
+        })
+        .collect())
+}
+
+/// Merge provider-fetched person details into an existing normalized person row.
+pub fn update_metadata_person_details(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+    details: &ProviderMetadataPerson,
+) -> Result<Option<MetadataPersonSummary>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    let Some(existing) = people_dsl::metadata_people
+        .filter(people_dsl::id.eq(person_id))
+        .select(MetadataPerson::as_select())
+        .first(conn)
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let payload = merged_metadata_person_payload(&existing, details);
+    diesel::update(people_dsl::metadata_people.filter(people_dsl::id.eq(person_id)))
+        .set(&payload)
+        .execute(conn)?;
+
+    people_dsl::metadata_people
+        .filter(people_dsl::id.eq(person_id))
+        .select(MetadataPerson::as_select())
+        .first(conn)
+        .optional()
+        .map(|person| person.map(to_metadata_person_summary))
+}
+
 /// Search normalized metadata people and return one preferred locale row per provider identity.
 pub fn search_metadata_people_with_preferred_languages(
     conn: &mut SqliteConnection,
@@ -1182,12 +1306,13 @@ pub async fn fetch_provider_metadata_snapshot(
     external_id: &str,
     media_type: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
-    fetch_provider_metadata_snapshot_for_locale(
+    fetch_provider_metadata_snapshot_for_locale_with_options(
         settings,
         provider_id,
         external_id,
         media_type,
         DEFAULT_METADATA_LOCALE,
+        MetadataSnapshotFetchOptions::FULL,
     )
     .await
 }
@@ -1200,7 +1325,28 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
     media_type: &str,
     locale_key: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_metadata_snapshot_for_locale_with_options(
+        settings,
+        provider_id,
+        external_id,
+        media_type,
+        locale_key,
+        MetadataSnapshotFetchOptions::FULL,
+    )
+    .await
+}
+
+/// Fetch and normalize one provider metadata snapshot for a specific Koko locale with options.
+pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: &str,
+    locale_key: &str,
+    options: MetadataSnapshotFetchOptions,
+) -> Result<StoredMetadataSnapshot, String> {
     let locale_key = normalize_locale_key(locale_key);
+    let options_key = options.cache_key_fragment();
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "item",
@@ -1208,6 +1354,7 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
             external_id,
             media_type,
             &locale_key,
+            options_key,
         ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
@@ -1223,7 +1370,12 @@ pub async fn fetch_provider_metadata_snapshot_for_locale(
         let result = match registry.provider(&provider_id) {
             Some(provider) => {
                 provider
-                    .fetch_snapshot(&localized_settings, external_id, media_type)
+                    .fetch_snapshot(
+                        &localized_settings,
+                        external_id,
+                        media_type,
+                        options.include_person_details,
+                    )
                     .await
             }
             None => Err(format!(
@@ -1315,9 +1467,30 @@ pub async fn fetch_provider_season_metadata_snapshot(
     season_number: i32,
     season_external_id: Option<&str>,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_season_metadata_snapshot_with_options(
+        settings,
+        provider_id,
+        show_external_id,
+        season_number,
+        season_external_id,
+        MetadataSnapshotFetchOptions::FULL,
+    )
+    .await
+}
+
+/// Fetch one provider season snapshot for a linked show descendant with explicit options.
+pub async fn fetch_provider_season_metadata_snapshot_with_options(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    season_external_id: Option<&str>,
+    options: MetadataSnapshotFetchOptions,
+) -> Result<StoredMetadataSnapshot, String> {
     let provider_language = configured_provider_language(settings, &provider_id);
     let season_external_key = season_external_id.unwrap_or_default();
     let season_number_key = season_number.to_string();
+    let options_key = options.cache_key_fragment();
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "season",
@@ -1326,6 +1499,7 @@ pub async fn fetch_provider_season_metadata_snapshot(
             &season_number_key,
             season_external_key,
             &provider_language,
+            options_key,
         ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
@@ -1345,6 +1519,7 @@ pub async fn fetch_provider_season_metadata_snapshot(
             show_external_id,
             season_number,
             season_external_id,
+            options.include_person_details,
         )
         .await?;
     write_metadata_snapshot_cache(&cache_key, &snapshot);
@@ -1360,9 +1535,32 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale(
     season_external_id: Option<&str>,
     locale_key: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_season_metadata_snapshot_for_locale_with_options(
+        settings,
+        provider_id,
+        show_external_id,
+        season_number,
+        season_external_id,
+        locale_key,
+        MetadataSnapshotFetchOptions::FULL,
+    )
+    .await
+}
+
+/// Fetch and normalize one provider season snapshot for a specific Koko locale with options.
+pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    season_external_id: Option<&str>,
+    locale_key: &str,
+    options: MetadataSnapshotFetchOptions,
+) -> Result<StoredMetadataSnapshot, String> {
     let locale_key = normalize_locale_key(locale_key);
     let season_external_key = season_external_id.unwrap_or_default();
     let season_number_key = season_number.to_string();
+    let options_key = options.cache_key_fragment();
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "season",
@@ -1371,6 +1569,7 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale(
             &season_number_key,
             season_external_key,
             &locale_key,
+            options_key,
         ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
@@ -1391,6 +1590,7 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale(
                         show_external_id,
                         season_number,
                         season_external_id,
+                        options.include_person_details,
                     )
                     .await
             }
@@ -1434,10 +1634,33 @@ pub async fn fetch_provider_episode_metadata_snapshot(
     episode_number: i32,
     episode_external_id: Option<&str>,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_episode_metadata_snapshot_with_options(
+        settings,
+        provider_id,
+        show_external_id,
+        season_number,
+        episode_number,
+        episode_external_id,
+        MetadataSnapshotFetchOptions::FULL,
+    )
+    .await
+}
+
+/// Fetch one provider episode snapshot for a linked show descendant with explicit options.
+pub async fn fetch_provider_episode_metadata_snapshot_with_options(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    episode_external_id: Option<&str>,
+    options: MetadataSnapshotFetchOptions,
+) -> Result<StoredMetadataSnapshot, String> {
     let provider_language = configured_provider_language(settings, &provider_id);
     let episode_external_key = episode_external_id.unwrap_or_default();
     let season_number_key = season_number.to_string();
     let episode_number_key = episode_number.to_string();
+    let options_key = options.cache_key_fragment();
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "episode",
@@ -1447,6 +1670,7 @@ pub async fn fetch_provider_episode_metadata_snapshot(
             &episode_number_key,
             episode_external_key,
             &provider_language,
+            options_key,
         ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
@@ -1467,6 +1691,7 @@ pub async fn fetch_provider_episode_metadata_snapshot(
             season_number,
             episode_number,
             episode_external_id,
+            options.include_person_details,
         )
         .await?;
     write_metadata_snapshot_cache(&cache_key, &snapshot);
@@ -1483,10 +1708,35 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
     episode_external_id: Option<&str>,
     locale_key: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
+    fetch_provider_episode_metadata_snapshot_for_locale_with_options(
+        settings,
+        provider_id,
+        show_external_id,
+        season_number,
+        episode_number,
+        episode_external_id,
+        locale_key,
+        MetadataSnapshotFetchOptions::FULL,
+    )
+    .await
+}
+
+/// Fetch and normalize one provider episode snapshot for a specific Koko locale with options.
+pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+    season_number: i32,
+    episode_number: i32,
+    episode_external_id: Option<&str>,
+    locale_key: &str,
+    options: MetadataSnapshotFetchOptions,
+) -> Result<StoredMetadataSnapshot, String> {
     let locale_key = normalize_locale_key(locale_key);
     let episode_external_key = episode_external_id.unwrap_or_default();
     let season_number_key = season_number.to_string();
     let episode_number_key = episode_number.to_string();
+    let options_key = options.cache_key_fragment();
     let cache_key = metadata_response_cache_key(
         &provider_id,
         "episode",
@@ -1496,6 +1746,7 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
             &episode_number_key,
             episode_external_key,
             &locale_key,
+            options_key,
         ],
     );
     if let Some(snapshot) = read_metadata_snapshot_cache(&cache_key) {
@@ -1517,6 +1768,7 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
                         season_number,
                         episode_number,
                         episode_external_id,
+                        options.include_person_details,
                     )
                     .await
             }
@@ -1638,6 +1890,25 @@ pub async fn fetch_provider_secondary_collection_metadata(
     })?;
     provider
         .fetch_secondary_collection_metadata(media_type, database_id, external_id, locale_key)
+        .await
+}
+
+/// Fetch provider-side person metadata for one localized person row.
+pub async fn fetch_provider_person_metadata_for_locale(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    locale_key: &str,
+) -> Result<Option<ProviderMetadataPerson>, String> {
+    let (localized_settings, _) =
+        localized_provider_settings(settings, provider_id.clone(), locale_key);
+    let registry = MetadataRegistry::new();
+    let Some(provider) = registry.provider(&provider_id) else {
+        return Ok(None);
+    };
+
+    provider
+        .fetch_person_metadata(&localized_settings, external_id)
         .await
 }
 
@@ -3919,23 +4190,6 @@ fn sync_item_metadata_people(
     for person in people {
         let identity_key = person_identity_key(&person);
         let provider_id = snapshot.provider_id.as_storage_value().to_string();
-        let payload = NewMetadataPerson {
-            provider_id: provider_id.clone(),
-            external_id: person.external_id.clone(),
-            identity_key: identity_key.clone(),
-            locale_key: snapshot.locale_key.clone(),
-            name: person.name.clone(),
-            known_for_json: serde_json::to_string(&person.known_for).ok(),
-            biography: person.biography.clone(),
-            gender: person.gender.clone(),
-            birthday: person.birthday.clone(),
-            deathday: person.deathday.clone(),
-            birth_place: person.birth_place.clone(),
-            profile_url: person.profile_url.clone(),
-            image_url: person.image_url.clone(),
-            cached_image_path: person.cached_image_path.clone(),
-            updated_at: Some(current_timestamp()),
-        };
         let existing_person = normalized_people_dsl::metadata_people
             .filter(normalized_people_dsl::provider_id.eq(&provider_id))
             .filter(normalized_people_dsl::identity_key.eq(&identity_key))
@@ -3944,6 +4198,7 @@ fn sync_item_metadata_people(
             .first(conn)
             .optional()?;
         let normalized_person = if let Some(existing_person) = existing_person {
+            let payload = merged_metadata_person_payload(&existing_person, &person);
             diesel::update(
                 normalized_people_dsl::metadata_people
                     .filter(normalized_people_dsl::id.eq(existing_person.id)),
@@ -3955,6 +4210,13 @@ fn sync_item_metadata_people(
                 .select(MetadataPerson::as_select())
                 .first(conn)?
         } else {
+            let payload = new_metadata_person_payload(
+                provider_id.clone(),
+                person.external_id.clone(),
+                identity_key.clone(),
+                snapshot.locale_key.clone(),
+                &person,
+            );
             diesel::insert_into(normalized_people_dsl::metadata_people)
                 .values(&payload)
                 .on_conflict((
@@ -3997,6 +4259,90 @@ fn sync_item_metadata_people(
     }
 
     Ok(())
+}
+
+fn new_metadata_person_payload(
+    provider_id: String,
+    external_id: Option<String>,
+    identity_key: String,
+    locale_key: String,
+    person: &ProviderMetadataPerson,
+) -> NewMetadataPerson {
+    NewMetadataPerson {
+        provider_id,
+        external_id,
+        identity_key,
+        locale_key,
+        name: person.name.clone(),
+        known_for_json: known_for_json(&person.known_for),
+        biography: person.biography.clone(),
+        gender: person.gender.clone(),
+        birthday: person.birthday.clone(),
+        deathday: person.deathday.clone(),
+        birth_place: person.birth_place.clone(),
+        profile_url: person.profile_url.clone(),
+        image_url: person.image_url.clone(),
+        cached_image_path: person.cached_image_path.clone(),
+        updated_at: Some(current_timestamp()),
+    }
+}
+
+fn merged_metadata_person_payload(
+    existing: &MetadataPerson,
+    person: &ProviderMetadataPerson,
+) -> NewMetadataPerson {
+    NewMetadataPerson {
+        provider_id: existing.provider_id.clone(),
+        external_id: person
+            .external_id
+            .clone()
+            .or_else(|| existing.external_id.clone()),
+        identity_key: existing.identity_key.clone(),
+        locale_key: existing.locale_key.clone(),
+        name: if person.name.trim().is_empty() {
+            existing.name.clone()
+        } else {
+            person.name.clone()
+        },
+        known_for_json: known_for_json(&person.known_for)
+            .or_else(|| existing.known_for_json.clone()),
+        biography: person
+            .biography
+            .clone()
+            .or_else(|| existing.biography.clone()),
+        gender: person.gender.clone().or_else(|| existing.gender.clone()),
+        birthday: person
+            .birthday
+            .clone()
+            .or_else(|| existing.birthday.clone()),
+        deathday: person
+            .deathday
+            .clone()
+            .or_else(|| existing.deathday.clone()),
+        birth_place: person
+            .birth_place
+            .clone()
+            .or_else(|| existing.birth_place.clone()),
+        profile_url: person
+            .profile_url
+            .clone()
+            .or_else(|| existing.profile_url.clone()),
+        image_url: person
+            .image_url
+            .clone()
+            .or_else(|| existing.image_url.clone()),
+        cached_image_path: person
+            .cached_image_path
+            .clone()
+            .or_else(|| existing.cached_image_path.clone()),
+        updated_at: Some(current_timestamp()),
+    }
+}
+
+fn known_for_json(values: &[String]) -> Option<String> {
+    (!values.is_empty())
+        .then(|| serde_json::to_string(values).ok())
+        .flatten()
 }
 
 fn person_identity_key(person: &ProviderMetadataPerson) -> String {

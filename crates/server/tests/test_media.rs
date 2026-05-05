@@ -1903,6 +1903,98 @@ fn test_item_detail_includes_linked_metadata_presentation() {
 }
 
 #[test]
+fn test_metadata_snapshot_upsert_keeps_shallow_people_without_enrichment() {
+    let root = unique_temp_dir("metadata_shallow_people_sync");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("metadata_shallow_people_sync_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let library = &persisted[0];
+    let items = list_media_items(&mut connection, Some(library.id)).unwrap();
+    let movie = items.first().unwrap();
+
+    let snapshot = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: "603".into(),
+        media_type: Some("movie".into()),
+        title: Some("The Matrix".into()),
+        overview: None,
+        artwork_url: None,
+        backdrop_url: None,
+        release_year: Some(1999),
+        locale_key: "en-US".into(),
+        provider_locale_key: Some("en-US".into()),
+        provider_payload_json: Some(
+            serde_json::json!({
+                "credits": {
+                    "cast": [
+                        {
+                            "id": 6384,
+                            "name": "Keanu Reeves",
+                            "character": "Neo",
+                            "order": 0,
+                            "profile_path": "/keanu.jpg"
+                        }
+                    ],
+                    "crew": []
+                }
+            })
+            .to_string(),
+        ),
+    };
+
+    let summary = upsert_item_metadata_snapshot(&mut connection, movie.id, &snapshot).unwrap();
+    assert_eq!(summary.people.len(), 1);
+    assert_eq!(summary.people[0].name, "Keanu Reeves");
+    assert_eq!(summary.people[0].role.as_deref(), Some("Actor"));
+    assert_eq!(summary.people[0].character_name.as_deref(), Some("Neo"));
+    assert_eq!(
+        summary.people[0].image_url.as_deref(),
+        Some("https://image.tmdb.org/t/p/w185/keanu.jpg")
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM item_metadata_people"
+        ),
+        1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_person_credits"
+        ),
+        1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_people WHERE biography IS NULL"
+        ),
+        1
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
 fn test_metadata_links_can_store_multiple_locales_for_same_provider() {
     let root = unique_temp_dir("metadata_link_locales");
     fs::create_dir_all(&root).unwrap();

@@ -727,6 +727,10 @@ function metadataRefreshActivityProgressForLibrary(libraryId: number): {
   };
 }
 
+function libraryHasActiveMetadataRefresh(libraryId: number): boolean {
+  return activeMetadataRefreshActivities().some((activity) => activity.library_id === libraryId);
+}
+
 function currentLogFilterRequest(): { level?: string; module?: string; search?: string; since?: string; until?: string; limit: number } {
   return {
     level: state.logFilters.level || undefined,
@@ -2593,7 +2597,7 @@ function renderHomeTabs(): string {
 
 export function renderLibraryOverview(): string {
   const library = activeLibrary();
-  const refreshProgress = library ? libraryRefreshProgress(library) : undefined;
+  const activeRefreshProgress = library ? metadataRefreshActivityProgressForLibrary(library.id) : undefined;
   const stalePending = library ? Math.max(0, library.metadata_refresh_pending - activeLibraryPendingRefreshCount(library.id)) : 0;
   const scanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
 
@@ -2627,8 +2631,10 @@ export function renderLibraryOverview(): string {
         </div>
         <div class="library-overview-actions">
           ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
-          ${refreshProgress
-            ? `<span class="tag warning">Refreshing metadata ${refreshProgress.completed}/${refreshProgress.total}</span>`
+          ${activeRefreshProgress
+            ? `<span class="tag warning">Refreshing metadata ${activeRefreshProgress.completed}/${activeRefreshProgress.total}</span>`
+            : stalePending > 0
+              ? `<span class="tag warning">Pending metadata ${library.metadata_refresh_completed}/${library.metadata_refresh_total}</span>`
             : ''}
           <div class="library-status-tags">
           <span class="tag ${library.status === 'available' ? 'success' : library.status === 'never_scanned' ? 'warning' : ''}">${escapeHtml(libraryStatusLabel(library.status))}</span>
@@ -2656,11 +2662,11 @@ export function renderLibraryOverview(): string {
       </div>
       ${library.error ? `<p class="muted library-overview-note">${escapeHtml(library.error)}</p>` : ''}
       ${library.status === 'never_scanned' ? '<p class="muted library-overview-note">This library has not been scanned yet. It will populate after the next catalog scan starts.</p>' : ''}
-      ${refreshProgress
-        ? `<p class="muted library-overview-note">Metadata refresh progress: ${refreshProgress.completed}/${refreshProgress.total}${refreshProgress.failed ? ` (${refreshProgress.failed} failed)` : ''}. Artwork and item cards update automatically as each item completes.</p>`
+      ${activeRefreshProgress
+        ? `<p class="muted library-overview-note">Metadata refresh progress: ${activeRefreshProgress.completed}/${activeRefreshProgress.total}${activeRefreshProgress.failed ? ` (${activeRefreshProgress.failed} failed)` : ''}. Artwork and item cards update automatically as each item completes.</p>`
         : ''}
       ${stalePending > 0
-        ? `<p class="muted library-overview-note">${stalePending} item${stalePending === 1 ? ' is' : 's are'} still marked pending without an active refresh worker. Open Settings → Metadata dashboard to inspect the affected items and errors.</p>`
+        ? `<p class="muted library-overview-note">${stalePending} item${stalePending === 1 ? ' is' : 's are'} still marked pending without an active refresh worker. Use refresh metadata to resume the library refresh.</p>`
         : ''}
     </section>
   `;
@@ -2993,7 +2999,7 @@ function renderSearchPopover(): string {
 
 function renderHomeNavbar(): string {
   const library = activeLibrary();
-  const libraryRefreshPending = library ? Boolean(libraryRefreshProgress(library)) : false;
+  const libraryRefreshPending = library ? libraryHasActiveMetadataRefresh(library.id) : false;
   const libraryScanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
   const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
   const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
@@ -3033,8 +3039,11 @@ function renderLinkedMetadataSummary(): string {
   }
 
   const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
-  const refreshStateLabel = metadataRefreshPending || linkedMatch.refresh_state === 'pending'
+  const metadataRefreshActive = itemHasActiveMetadataRefresh(state.selectedItem);
+  const refreshStateLabel = metadataRefreshActive
     ? 'Refreshing'
+    : metadataRefreshPending || linkedMatch.refresh_state === 'pending'
+      ? 'Pending without worker'
     : linkedMatch.refresh_state === 'error'
       ? 'Refresh failed'
       : 'Up to date';
@@ -3814,7 +3823,7 @@ function renderItemPage(): string {
   const children = state.selectedItem.children;
   const backTarget = backNavigationTarget();
   const supportsManualLinking = canManuallyLinkMetadata(state.selectedItem);
-  const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
+  const metadataRefreshActive = itemHasActiveMetadataRefresh(state.selectedItem);
   const resumeMs = resumablePlaybackPositionMs(state.selectedItem);
   const childSectionTitle = state.selectedItem.item_type === 'show'
     ? 'Seasons'
@@ -3926,7 +3935,7 @@ function renderItemPage(): string {
           <div class="section-heading section-heading-actions">
             <h3>${supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3>
             ${supportsManualLinking
-              ? `<button type="button" class="secondary-button" id="refresh-item-metadata" ${linkedMatch && !metadataRefreshPending ? '' : 'disabled'}>${renderButtonContent(metadataRefreshPending ? 'Refreshing metadata' : 'Force refresh metadata', 'refresh-cw')}</button>`
+              ? `<button type="button" class="secondary-button" id="refresh-item-metadata" ${linkedMatch && !metadataRefreshActive ? '' : 'disabled'}>${renderButtonContent(metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata', 'refresh-cw')}</button>`
               : ''}
           </div>
           ${renderLinkedMetadataSummary()}
@@ -6711,7 +6720,7 @@ function bindRenderEvents(): void {
   document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata')?.addEventListener('click', async () => {
     const button = document.querySelector<HTMLButtonElement>('#refresh-active-library-metadata');
     const library = activeLibrary();
-    if (!library || libraryRefreshProgress(library)) {
+    if (!library || libraryHasActiveMetadataRefresh(library.id)) {
       return;
     }
 

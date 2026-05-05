@@ -136,6 +136,7 @@ pub(crate) async fn fetch_snapshot(
     settings: &MetadataSettings,
     external_id: &str,
     media_type: &str,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
     let api_key = tmdb_api_key_from_provider(&provider)?;
@@ -165,8 +166,13 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            let payload_json =
-                enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let payload_json = enriched_tmdb_payload_json(
+                &client,
+                &details,
+                &language,
+                &image_languages,
+                include_person_details,
+            );
             let mut snapshot = movie_snapshot_from_details(&external_id_string, &details);
             snapshot.provider_payload_json = payload_json;
             Ok(snapshot)
@@ -187,8 +193,13 @@ pub(crate) async fn fetch_snapshot(
                         external_id_string, error
                     )
                 })?;
-            let payload_json =
-                enriched_tmdb_payload_json(&client, &details, &language, &image_languages);
+            let payload_json = enriched_tmdb_payload_json(
+                &client,
+                &details,
+                &language,
+                &image_languages,
+                include_person_details,
+            );
             let mut snapshot = tv_snapshot_from_details(&external_id_string, &details);
             snapshot.provider_payload_json = payload_json;
             Ok(snapshot)
@@ -224,7 +235,7 @@ pub(crate) async fn guess_movie_match(
     }
 
     if let Some(tmdb_id) = parsed.provider_id("tmdb").map(str::to_string) {
-        let snapshot = fetch_snapshot(settings, &tmdb_id, "movie").await?;
+        let snapshot = fetch_snapshot(settings, &tmdb_id, "movie", false).await?;
         return Ok(Some(MetadataSearchResult {
             provider_id: MetadataProviderId::Tmdb,
             external_id: tmdb_id,
@@ -390,6 +401,7 @@ pub(crate) async fn fetch_season_snapshot(
     settings: &MetadataSettings,
     show_external_id: &str,
     season_number: i32,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
     let api_key = tmdb_api_key_from_provider(&provider)?;
@@ -413,7 +425,13 @@ pub(crate) async fn fetch_season_snapshot(
                     show_external_id, season_number, error
                 )
             })?;
-        let payload_json = enriched_tmdb_payload_json(&client, &details, &language, "null");
+        let payload_json = enriched_tmdb_payload_json(
+            &client,
+            &details,
+            &language,
+            "null",
+            include_person_details,
+        );
         let mut snapshot = season_snapshot_from_details(&show_external_id, season_number, &details);
         snapshot.provider_payload_json = payload_json;
         Ok(snapshot)
@@ -426,6 +444,7 @@ pub(crate) async fn fetch_episode_snapshot(
     show_external_id: &str,
     season_number: i32,
     episode_number: i32,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = tmdb_provider_settings(settings)?;
     let api_key = tmdb_api_key_from_provider(&provider)?;
@@ -450,7 +469,13 @@ pub(crate) async fn fetch_episode_snapshot(
                     show_external_id, season_number, episode_number, error
                 )
             })?;
-        let payload_json = enriched_tmdb_payload_json(&client, &details, &language, "null");
+        let payload_json = enriched_tmdb_payload_json(
+            &client,
+            &details,
+            &language,
+            "null",
+            include_person_details,
+        );
         let mut snapshot = episode_snapshot_from_details(
             &show_external_id,
             season_number,
@@ -459,6 +484,31 @@ pub(crate) async fn fetch_episode_snapshot(
         );
         snapshot.provider_payload_json = payload_json;
         Ok(snapshot)
+    })
+    .await
+}
+
+pub(crate) async fn fetch_person_metadata(
+    settings: &MetadataSettings,
+    external_id: &str,
+) -> Result<Option<ProviderMetadataPerson>, String> {
+    let provider = tmdb_provider_settings(settings)?;
+    let api_key = tmdb_api_key_from_provider(&provider)?;
+    let language = provider.language.clone();
+    let image_languages = tmdb_include_image_languages(&language);
+    let person_id = external_id.trim().parse::<i32>().map_err(|_| {
+        format!(
+            "TMDB person external id must be numeric, got {}",
+            external_id
+        )
+    })?;
+
+    run_tmdb_blocking(move || {
+        let client = TmdbApiClient::new_with_api_key(api_key);
+        Ok(
+            tmdb_cached_person_detail(&client, person_id, &language, &image_languages)
+                .and_then(|person| tmdb_person_from_detail(&person, person_id)),
+        )
     })
     .await
 }
@@ -533,10 +583,13 @@ fn enriched_tmdb_payload_json<T: serde::Serialize>(
     details: &T,
     language: &str,
     image_languages: &str,
+    include_person_details: bool,
 ) -> Option<String> {
     let mut payload = serde_json::to_value(details).ok()?;
     enrich_tmdb_collection_payload(client, &mut payload, language);
-    enrich_tmdb_people_payload(client, &mut payload, language, image_languages);
+    if include_person_details {
+        enrich_tmdb_people_payload(client, &mut payload, language, image_languages);
+    }
     serde_json::to_string(&payload).ok()
 }
 
@@ -1407,6 +1460,49 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
     sort_and_dedupe_people(people)
 }
 
+fn tmdb_person_from_detail(
+    person: &Value,
+    fallback_id: i32,
+) -> Option<ProviderMetadataPerson> {
+    let name = person_name(person)?;
+    Some(ProviderMetadataPerson {
+        external_id: person_external_id(person).or_else(|| Some(fallback_id.to_string())),
+        name,
+        known_for: person
+            .get("koko_known_for")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        biography: text_field(person, &["biography"]),
+        gender: tmdb_person_gender_from_value(person),
+        birthday: text_field(person, &["birthday"]),
+        deathday: text_field(person, &["deathday"]),
+        birth_place: text_field(person, &["place_of_birth"]),
+        role: None,
+        department: None,
+        character_name: None,
+        profile_url: person_external_id(person)
+            .or_else(|| Some(fallback_id.to_string()))
+            .map(|id| format!("https://www.themoviedb.org/person/{id}")),
+        image_url: person
+            .get("profile_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|path| tmdb_image_url(path, "w185")),
+        cached_image_path: text_field(person, &["koko_cached_image_path"]),
+        sort_order: 0,
+    })
+}
+
 fn tmdb_person_detail(
     credit: &Value,
     key: &str,
@@ -1425,6 +1521,15 @@ fn tmdb_person_gender(credit: &Value) -> Option<String> {
         .get("koko_person")
         .and_then(|person| person.get("gender"))
         .and_then(Value::as_i64)?;
+    tmdb_gender_label(gender)
+}
+
+fn tmdb_person_gender_from_value(person: &Value) -> Option<String> {
+    let gender = person.get("gender").and_then(Value::as_i64)?;
+    tmdb_gender_label(gender)
+}
+
+fn tmdb_gender_label(gender: i64) -> Option<String> {
     match gender {
         1 => Some("Female".into()),
         2 => Some("Male".into()),
@@ -1516,7 +1621,12 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
 
 #[cfg(test)]
 mod tests {
-    use super::tmdb_logo_url;
+    use super::{
+        metadata_details,
+        tmdb_logo_url,
+    };
+    use crate::config::MetadataProviderId;
+    use crate::metadata::StoredMetadataSnapshot;
     use serde_json::json;
 
     #[test]
@@ -1551,5 +1661,46 @@ mod tests {
             tmdb_logo_url(&payload).as_deref(),
             Some("https://image.tmdb.org/t/p/w500/logo.png")
         );
+    }
+
+    #[test]
+    fn tmdb_metadata_details_use_shallow_credit_people_without_person_detail_payload() {
+        let snapshot = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(
+                json!({
+                    "credits": {
+                        "cast": [
+                            {
+                                "id": 6384,
+                                "name": "Keanu Reeves",
+                                "character": "Neo",
+                                "order": 0,
+                                "profile_path": "/keanu.jpg"
+                            }
+                        ],
+                        "crew": []
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        let details = metadata_details(&snapshot);
+
+        assert_eq!(details.people.len(), 1);
+        assert_eq!(details.people[0].name, "Keanu Reeves");
+        assert_eq!(details.people[0].biography, None);
+        assert_eq!(details.people[0].external_id.as_deref(), Some("6384"));
+        assert_eq!(details.people[0].character_name.as_deref(), Some("Neo"));
     }
 }

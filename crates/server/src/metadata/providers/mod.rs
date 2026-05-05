@@ -19,6 +19,7 @@ use crate::metadata::{
     ProviderDescendantTarget,
     ProviderMetadataCollection,
     ProviderMetadataDetails,
+    ProviderMetadataPerson,
     StoredMetadataSnapshot,
     normalize_locale_key,
 };
@@ -69,6 +70,7 @@ pub trait MetadataProvider {
         _settings: &'a MetadataSettings,
         _external_id: &'a str,
         _media_type: &'a str,
+        _include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         unsupported_provider_operation(self.descriptor().display_name, "metadata fetch")
     }
@@ -80,6 +82,7 @@ pub trait MetadataProvider {
         _show_external_id: &'a str,
         _season_number: i32,
         _season_external_id: Option<&'a str>,
+        _include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         unsupported_provider_operation(self.descriptor().display_name, "season metadata fetch")
     }
@@ -92,8 +95,18 @@ pub trait MetadataProvider {
         _season_number: i32,
         _episode_number: i32,
         _episode_external_id: Option<&'a str>,
+        _include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         unsupported_provider_operation(self.descriptor().display_name, "episode metadata fetch")
+    }
+
+    /// Fetch provider-side metadata for one person, when the provider supports it.
+    fn fetch_person_metadata<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        _external_id: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataPerson>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Guess the best provider movie match for one library item.
@@ -210,8 +223,14 @@ impl MetadataProvider for TmdbMetadataProvider {
         settings: &'a MetadataSettings,
         external_id: &'a str,
         media_type: &'a str,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
-        Box::pin(tmdb::fetch_snapshot(settings, external_id, media_type))
+        Box::pin(tmdb::fetch_snapshot(
+            settings,
+            external_id,
+            media_type,
+            include_person_details,
+        ))
     }
 
     fn fetch_season_snapshot<'a>(
@@ -220,11 +239,13 @@ impl MetadataProvider for TmdbMetadataProvider {
         show_external_id: &'a str,
         season_number: i32,
         _season_external_id: Option<&'a str>,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(tmdb::fetch_season_snapshot(
             settings,
             show_external_id,
             season_number,
+            include_person_details,
         ))
     }
 
@@ -235,13 +256,23 @@ impl MetadataProvider for TmdbMetadataProvider {
         season_number: i32,
         episode_number: i32,
         _episode_external_id: Option<&'a str>,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(tmdb::fetch_episode_snapshot(
             settings,
             show_external_id,
             season_number,
             episode_number,
+            include_person_details,
         ))
+    }
+
+    fn fetch_person_metadata<'a>(
+        &'a self,
+        settings: &'a MetadataSettings,
+        external_id: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataPerson>> {
+        Box::pin(tmdb::fetch_person_metadata(settings, external_id))
     }
 
     fn guess_movie_match<'a>(
@@ -344,8 +375,14 @@ impl MetadataProvider for TvdbMetadataProvider {
         settings: &'a MetadataSettings,
         external_id: &'a str,
         media_type: &'a str,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
-        Box::pin(tvdb::fetch_snapshot(settings, external_id, media_type))
+        Box::pin(tvdb::fetch_snapshot(
+            settings,
+            external_id,
+            media_type,
+            include_person_details,
+        ))
     }
 
     fn fetch_season_snapshot<'a>(
@@ -354,6 +391,7 @@ impl MetadataProvider for TvdbMetadataProvider {
         show_external_id: &'a str,
         season_number: i32,
         season_external_id: Option<&'a str>,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(async move {
             let season_external_id = season_external_id.ok_or_else(|| {
@@ -364,6 +402,7 @@ impl MetadataProvider for TvdbMetadataProvider {
                 show_external_id,
                 season_number,
                 season_external_id,
+                include_person_details,
             )
             .await
         })
@@ -376,6 +415,7 @@ impl MetadataProvider for TvdbMetadataProvider {
         season_number: i32,
         episode_number: i32,
         episode_external_id: Option<&'a str>,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(async move {
             let episode_external_id = episode_external_id.ok_or_else(|| {
@@ -387,9 +427,18 @@ impl MetadataProvider for TvdbMetadataProvider {
                 season_number,
                 episode_number,
                 episode_external_id,
+                include_person_details,
             )
             .await
         })
+    }
+
+    fn fetch_person_metadata<'a>(
+        &'a self,
+        settings: &'a MetadataSettings,
+        external_id: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataPerson>> {
+        Box::pin(tvdb::fetch_person_metadata(settings, external_id))
     }
 
     fn guess_movie_match<'a>(

@@ -147,12 +147,14 @@ pub(crate) async fn fetch_snapshot(
     settings: &MetadataSettings,
     external_id: &str,
     media_type: &str,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     match media_type {
         "movie" => {
             let provider = provider_settings(settings, MetadataProviderId::Tvdb)
                 .map_err(|error| format!("TheTVDB {}", error))?;
-            let payload = fetch_movie_payload(settings, external_id).await?;
+            let payload =
+                fetch_movie_payload(settings, external_id, include_person_details).await?;
             let translation =
                 fetch_translation_payload(&provider, "movies", external_id, &provider.language)
                     .await;
@@ -166,7 +168,8 @@ pub(crate) async fn fetch_snapshot(
         "series" | "tv" => {
             let provider = provider_settings(settings, MetadataProviderId::Tvdb)
                 .map_err(|error| format!("TheTVDB {}", error))?;
-            let payload = fetch_series_payload(settings, external_id).await?;
+            let payload =
+                fetch_series_payload(settings, external_id, include_person_details).await?;
             let translation =
                 fetch_translation_payload(&provider, "series", external_id, &provider.language)
                     .await;
@@ -177,8 +180,27 @@ pub(crate) async fn fetch_snapshot(
                 &provider.language,
             ))
         }
-        "season" => fetch_season_snapshot(settings, external_id, 0, external_id).await,
-        "episode" => fetch_episode_snapshot(settings, external_id, 0, 0, external_id).await,
+        "season" => {
+            fetch_season_snapshot(
+                settings,
+                external_id,
+                0,
+                external_id,
+                include_person_details,
+            )
+            .await
+        }
+        "episode" => {
+            fetch_episode_snapshot(
+                settings,
+                external_id,
+                0,
+                0,
+                external_id,
+                include_person_details,
+            )
+            .await
+        }
         other => Err(format!("Unsupported TheTVDB media type: {}", other)),
     }
 }
@@ -194,7 +216,7 @@ pub(crate) async fn guess_movie_match(
     }
 
     if let Some(tvdb_id) = parsed.provider_id("tvdb").map(str::to_string) {
-        let snapshot = fetch_snapshot(settings, &tvdb_id, "movie").await?;
+        let snapshot = fetch_snapshot(settings, &tvdb_id, "movie", false).await?;
         return Ok(Some(MetadataSearchResult {
             provider_id: MetadataProviderId::Tvdb,
             external_id: tvdb_id,
@@ -260,6 +282,7 @@ pub(crate) async fn fetch_season_snapshot(
     show_external_id: &str,
     season_number: i32,
     season_external_id: &str,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
@@ -271,7 +294,9 @@ pub(crate) async fn fetch_season_snapshot(
         &format!("season lookup for series:{show_external_id}:season:{season_external_id}"),
     )
     .await?;
-    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    if include_person_details {
+        enrich_tvdb_people_payload(&provider, &mut payload).await;
+    }
     let translation =
         fetch_translation_payload(&provider, "seasons", season_external_id, &provider.language)
             .await;
@@ -291,6 +316,7 @@ pub(crate) async fn fetch_episode_snapshot(
     season_number: i32,
     episode_number: i32,
     episode_external_id: &str,
+    include_person_details: bool,
 ) -> Result<StoredMetadataSnapshot, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
@@ -305,7 +331,9 @@ pub(crate) async fn fetch_episode_snapshot(
         ),
     )
     .await?;
-    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    if include_person_details {
+        enrich_tvdb_people_payload(&provider, &mut payload).await;
+    }
     let translation = fetch_translation_payload(
         &provider,
         "episodes",
@@ -677,6 +705,7 @@ fn parse_retry_after_seconds(value: &str) -> Option<u64> {
 async fn fetch_movie_payload(
     settings: &MetadataSettings,
     external_id: &str,
+    include_person_details: bool,
 ) -> Result<Value, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
@@ -688,13 +717,16 @@ async fn fetch_movie_payload(
         &format!("movie details lookup for {external_id}"),
     )
     .await?;
-    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    if include_person_details {
+        enrich_tvdb_people_payload(&provider, &mut payload).await;
+    }
     Ok(payload)
 }
 
 async fn fetch_series_payload(
     settings: &MetadataSettings,
     external_id: &str,
+    include_person_details: bool,
 ) -> Result<Value, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)
         .map_err(|error| format!("TheTVDB {}", error))?;
@@ -706,8 +738,28 @@ async fn fetch_series_payload(
         &format!("series details lookup for {external_id}"),
     )
     .await?;
-    enrich_tvdb_people_payload(&provider, &mut payload).await;
+    if include_person_details {
+        enrich_tvdb_people_payload(&provider, &mut payload).await;
+    }
     Ok(payload)
+}
+
+pub(crate) async fn fetch_person_metadata(
+    settings: &MetadataSettings,
+    external_id: &str,
+) -> Result<Option<ProviderMetadataPerson>, String> {
+    let provider = provider_settings(settings, MetadataProviderId::Tvdb)
+        .map_err(|error| format!("TheTVDB {}", error))?;
+    let person_id = parse_tvdb_external_id(external_id, "people")?;
+    let payload = get_json(
+        &provider,
+        &format!("people/{person_id}/extended"),
+        vec![("meta", "translations".to_string())],
+        &format!("people lookup for {person_id}"),
+    )
+    .await?;
+    let person = payload.get("data").unwrap_or(&payload);
+    Ok(tvdb_person_from_detail(person, &provider.language))
 }
 
 async fn fetch_translation_payload(
@@ -1322,6 +1374,31 @@ fn tvdb_people_with_language(
             })
             .collect(),
     )
+}
+
+fn tvdb_person_from_detail(
+    person: &Value,
+    provider_language: &str,
+) -> Option<ProviderMetadataPerson> {
+    let name = person_name(person)?;
+    let external_id = person_external_id(person);
+    Some(ProviderMetadataPerson {
+        external_id: external_id.clone(),
+        name,
+        known_for: Vec::new(),
+        biography: tvdb_person_biography(person, provider_language),
+        gender: text_field(person, &["gender"]),
+        birthday: text_field(person, &["birth"]),
+        deathday: text_field(person, &["death"]),
+        birth_place: text_field(person, &["birthPlace"]),
+        role: None,
+        department: None,
+        character_name: None,
+        profile_url: external_id.map(|id| format!("https://thetvdb.com/people/{id}")),
+        image_url: tvdb_person_image_url(&Value::Null, Some(person)),
+        cached_image_path: text_field(person, &["koko_cached_image_path"]),
+        sort_order: 0,
+    })
 }
 
 fn tvdb_person_biography(
@@ -2115,7 +2192,7 @@ mod tests {
                     "type": 25,
                     "image": "https://example.test/logo.png",
                     "language": "eng",
-                    "score": 99.0.
+                    "score": 99.0,
                 },
                 {
                     "type": 25,
@@ -2146,7 +2223,7 @@ mod tests {
                     "type": 25,
                     "image": "https://example.test/logo.png",
                     "language": "eng",
-                    "score": 1.0.
+                    "score": 1.0,
                 }
             ]
         });
@@ -2224,6 +2301,37 @@ mod tests {
         assert_eq!(
             people[0].image_url.as_deref(),
             Some("https://example.test/person-tom-cruise.jpg")
+        );
+    }
+
+    #[test]
+    fn tvdb_people_use_shallow_character_people_without_extended_person_payload() {
+        let payload = json!({
+            "data": {
+                "characters": [
+                    {
+                        "id": 12242840,
+                        "name": "Brian Flanagan",
+                        "image": "https://example.test/character-brian-flanagan.jpg",
+                        "peopleId": 254032,
+                        "peopleType": "Actor",
+                        "personName": "Tom Cruise",
+                        "personImgURL": "https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg"
+                    }
+                ]
+            }
+        });
+
+        let people = tvdb_people_with_language(&payload, "eng");
+
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].name, "Tom Cruise");
+        assert_eq!(people[0].biography, None);
+        assert_eq!(people[0].character_name.as_deref(), Some("Brian Flanagan"));
+        assert_eq!(people[0].external_id.as_deref(), Some("254032"));
+        assert_eq!(
+            people[0].image_url.as_deref(),
+            Some("https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg")
         );
     }
 

@@ -124,6 +124,25 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                         );
                     }
                 }
+
+                let metadata_recovery_db = DbConn::get_one(rocket).await;
+                match metadata_recovery_db {
+                    Some(metadata_recovery_db) => {
+                        rocket::tokio::spawn(async move {
+                            let settings = crate::config::current_settings();
+                            crate::web::routes::media::recover_pending_metadata_refreshes(
+                                &metadata_recovery_db,
+                                &settings,
+                            )
+                            .await;
+                        });
+                    }
+                    None => {
+                        log::error!(
+                            "Failed to acquire database connection for metadata refresh recovery"
+                        );
+                    }
+                }
             })
         }))
         .mount("/", routes::api_routes())

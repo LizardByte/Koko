@@ -109,16 +109,20 @@ use crate::metadata::{
     ItemMetadataSummary,
     MetadataCollectionSummary,
     MetadataPersonCreditSummary,
+    MetadataPersonEnrichmentTarget,
     MetadataPersonSummary,
     MetadataProviderRole,
     MetadataProviderStatus,
     MetadataSearchResult,
+    MetadataSnapshotFetchOptions,
     ProviderDescendantTarget,
+    ProviderMetadataPerson,
     StoredMetadataSnapshot,
     expected_artwork_cache_path,
-    fetch_provider_episode_metadata_snapshot_for_locale,
-    fetch_provider_metadata_snapshot_for_locale,
-    fetch_provider_season_metadata_snapshot_for_locale,
+    fetch_provider_episode_metadata_snapshot_for_locale_with_options,
+    fetch_provider_metadata_snapshot_for_locale_with_options,
+    fetch_provider_person_metadata_for_locale,
+    fetch_provider_season_metadata_snapshot_for_locale_with_options,
     fetch_provider_secondary_collection_metadata,
     fetch_provider_secondary_metadata,
     get_item_metadata_summaries,
@@ -129,6 +133,7 @@ use crate::metadata::{
     guess_provider_show_match,
     list_due_item_metadata_links,
     list_metadata_collection_summaries_with_preferred_languages,
+    list_metadata_people_for_library,
     list_metadata_person_credit_summaries_for_person_ids,
     list_pending_item_metadata_links,
     list_provider_statuses,
@@ -147,6 +152,7 @@ use crate::metadata::{
     sort_item_metadata_summaries_for_languages,
     try_cache_item_artwork,
     update_cached_artwork_path,
+    update_metadata_person_details,
     upsert_item_metadata_link,
     upsert_item_metadata_snapshot_with_refresh_interval,
     upsert_secondary_collection_theme_song_url,
@@ -804,17 +810,22 @@ async fn persist_snapshot_for_item(
     item_id: i32,
     snapshot: &StoredMetadataSnapshot,
     settings: &Settings,
+    options: PersistSnapshotOptions,
 ) -> Result<ItemMetadataSummary, Status> {
-    let snapshot = persist_metadata_people_assets(snapshot, &settings.general.data_dir)
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to persist metadata people assets for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::BadGateway
-        })?;
+    let snapshot = if options.cache_person_assets {
+        persist_metadata_people_assets(snapshot, &settings.general.data_dir)
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to persist metadata people assets for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::BadGateway
+            })?
+    } else {
+        snapshot.clone()
+    };
     let (poster_path, backdrop_path, logo_path) =
         persist_item_metadata_assets(&snapshot, item_id, &settings.general.data_dir)
             .await
@@ -1045,6 +1056,18 @@ enum MetadataRefreshFetchKind {
     },
 }
 
+impl MetadataRefreshFetchKind {
+    fn snapshot_fetch_options(&self) -> MetadataSnapshotFetchOptions {
+        match self {
+            Self::Direct => MetadataSnapshotFetchOptions::WITHOUT_PERSON_DETAILS,
+            Self::TmdbShowSeason { .. }
+            | Self::TmdbShowEpisode { .. }
+            | Self::TvdbSeason { .. }
+            | Self::TvdbEpisode { .. } => MetadataSnapshotFetchOptions::WITHOUT_PERSON_DETAILS,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MetadataRefreshTarget {
     item_id: i32,
@@ -1062,6 +1085,21 @@ struct MetadataRefreshTarget {
 struct MetadataRefreshJob {
     root: MetadataRefreshTarget,
     descendants: Vec<MetadataRefreshTarget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PersistSnapshotOptions {
+    cache_person_assets: bool,
+}
+
+impl PersistSnapshotOptions {
+    const WITHOUT_PERSON_ASSETS: Self = Self {
+        cache_person_assets: false,
+    };
+
+    fn for_target(_target: &MetadataRefreshTarget) -> Self {
+        Self::WITHOUT_PERSON_ASSETS
+    }
 }
 
 fn describe_metadata_refresh_target(target: &MetadataRefreshTarget) -> String {
@@ -1717,14 +1755,16 @@ async fn fetch_metadata_refresh_snapshots_for_language(
     target: &MetadataRefreshTarget,
     language: &str,
 ) -> Result<StoredMetadataSnapshot, String> {
+    let fetch_options = target.fetch_kind.snapshot_fetch_options();
     match &target.fetch_kind {
         MetadataRefreshFetchKind::Direct => {
-            fetch_provider_metadata_snapshot_for_locale(
+            fetch_provider_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
                 &target.external_id,
                 &target.media_type,
                 language,
+                fetch_options,
             )
             .await
         }
@@ -1732,13 +1772,14 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             show_external_id,
             season_number,
         } => {
-            fetch_provider_season_metadata_snapshot_for_locale(
+            fetch_provider_season_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
                 show_external_id,
                 *season_number,
                 None,
                 language,
+                fetch_options,
             )
             .await
         }
@@ -1747,7 +1788,7 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             season_number,
             episode_number,
         } => {
-            fetch_provider_episode_metadata_snapshot_for_locale(
+            fetch_provider_episode_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
                 show_external_id,
@@ -1755,6 +1796,7 @@ async fn fetch_metadata_refresh_snapshots_for_language(
                 *episode_number,
                 None,
                 language,
+                fetch_options,
             )
             .await
         }
@@ -1763,13 +1805,14 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             season_number,
             season_external_id,
         } => {
-            fetch_provider_season_metadata_snapshot_for_locale(
+            fetch_provider_season_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
                 show_external_id,
                 *season_number,
                 Some(season_external_id),
                 language,
+                fetch_options,
             )
             .await
         }
@@ -1779,7 +1822,7 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             episode_number,
             episode_external_id,
         } => {
-            fetch_provider_episode_metadata_snapshot_for_locale(
+            fetch_provider_episode_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
                 show_external_id,
@@ -1787,6 +1830,7 @@ async fn fetch_metadata_refresh_snapshots_for_language(
                 *episode_number,
                 Some(episode_external_id),
                 language,
+                fetch_options,
             )
             .await
         }
@@ -1846,8 +1890,14 @@ async fn execute_metadata_refresh_target_inner(
     match snapshot_result {
         Ok(snapshots) => {
             for snapshot in snapshots {
-                if let Err(status) =
-                    persist_snapshot_for_item(db, target.item_id, &snapshot, settings).await
+                if let Err(status) = persist_snapshot_for_item(
+                    db,
+                    target.item_id,
+                    &snapshot,
+                    settings,
+                    PersistSnapshotOptions::for_target(target),
+                )
+                .await
                 {
                     let status_message = format!("{status:?}");
                     log::warn!(
@@ -2012,7 +2062,7 @@ fn pending_metadata_refresh_target(
     })
 }
 
-async fn recover_pending_metadata_refreshes(
+pub(crate) async fn recover_pending_metadata_refreshes(
     db: &DbConn,
     settings: &crate::config::Settings,
 ) {
@@ -2242,6 +2292,7 @@ async fn fetch_snapshots_for_item_metadata_languages(
     provider_id: MetadataProviderId,
     external_id: &str,
     media_type: &str,
+    fetch_options: MetadataSnapshotFetchOptions,
 ) -> Result<Vec<StoredMetadataSnapshot>, Status> {
     let languages = load_refresh_target_metadata_languages(db, settings, item_id)
         .await
@@ -2257,12 +2308,13 @@ async fn fetch_snapshots_for_item_metadata_languages(
     let mut snapshots = Vec::new();
     for language in languages {
         snapshots.push(
-            fetch_provider_metadata_snapshot_for_locale(
+            fetch_provider_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 provider_id.clone(),
                 external_id,
                 media_type,
                 &language,
+                fetch_options,
             )
             .await
             .map_err(|error| {
@@ -2285,6 +2337,7 @@ async fn persist_snapshot_tree_for_languages(
     item_id: i32,
     snapshots: &[StoredMetadataSnapshot],
     settings: &crate::config::Settings,
+    persist_options: PersistSnapshotOptions,
 ) -> Result<ItemMetadataSummary, Status> {
     let descendants = match snapshots.first() {
         Some(snapshot) => {
@@ -2298,12 +2351,138 @@ async fn persist_snapshot_tree_for_languages(
 
     let mut summary = None;
     for snapshot in snapshots {
-        summary = Some(persist_snapshot_for_item(db, item_id, snapshot, settings).await?);
+        summary = Some(
+            persist_snapshot_for_item(db, item_id, snapshot, settings, persist_options).await?,
+        );
     }
     if !descendants.is_empty() {
         execute_metadata_refresh_targets(db, &descendants, settings).await;
     }
     summary.ok_or(Status::ServiceUnavailable)
+}
+
+async fn run_library_metadata_people_refresh(
+    db: DbConn,
+    settings: Settings,
+    library_id: i32,
+    library_name: String,
+) {
+    let targets = match db
+        .run(move |conn| list_metadata_people_for_library(conn, library_id))
+        .await
+    {
+        Ok(targets) => targets,
+        Err(error) => {
+            log::warn!(
+                "Failed to load people for library {} metadata enrichment: {}",
+                library_id,
+                error
+            );
+            return;
+        }
+    };
+    if targets.is_empty() {
+        return;
+    }
+
+    log::info!(
+        "Starting deferred people metadata refresh for library {} ({}) with {} person row(s)",
+        library_id,
+        library_name,
+        targets.len()
+    );
+
+    let mut failed = 0usize;
+    for target in targets {
+        if !refresh_metadata_person_details(&db, &settings, &target).await {
+            failed += 1;
+        }
+    }
+
+    if failed == 0 {
+        log::info!(
+            "Completed deferred people metadata refresh for library {} ({})",
+            library_id,
+            library_name
+        );
+    } else {
+        log::warn!(
+            "Completed deferred people metadata refresh for library {} ({}) with {} failure(s)",
+            library_id,
+            library_name,
+            failed
+        );
+    }
+}
+
+async fn refresh_metadata_person_details(
+    db: &DbConn,
+    settings: &Settings,
+    target: &MetadataPersonEnrichmentTarget,
+) -> bool {
+    let mut details = match fetch_provider_person_metadata_for_locale(
+        &settings.metadata,
+        target.provider_id.clone(),
+        &target.external_id,
+        &target.locale_key,
+    )
+    .await
+    {
+        Ok(Some(details)) => details,
+        Ok(None) => return true,
+        Err(error) => {
+            log::warn!(
+                "Failed to fetch {} person metadata for {} ({}): {}",
+                target.provider_id.as_storage_value(),
+                target.name,
+                target.external_id,
+                error
+            );
+            return false;
+        }
+    };
+
+    cache_deferred_person_image(settings, target, &mut details).await;
+
+    let person_id = target.id;
+    match db
+        .run(move |conn| update_metadata_person_details(conn, person_id, &details))
+        .await
+    {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!(
+                "Failed to store {} person metadata for {} ({}): {}",
+                target.provider_id.as_storage_value(),
+                target.name,
+                target.external_id,
+                error
+            );
+            false
+        }
+    }
+}
+
+async fn cache_deferred_person_image(
+    settings: &Settings,
+    target: &MetadataPersonEnrichmentTarget,
+    details: &mut ProviderMetadataPerson,
+) {
+    let Some(image_url) = details.image_url.as_deref() else {
+        return;
+    };
+    let person_dir = managed_metadata_asset_dir(
+        &settings.general.data_dir,
+        target.provider_id.clone(),
+        &target.external_id,
+        Some("person"),
+        &target.locale_key,
+    );
+    let cache_key = format!("{}_profile", target.provider_id.as_storage_value());
+    let Some(path) = try_cache_item_artwork(image_url, &person_dir, &cache_key).await else {
+        return;
+    };
+    details.cached_image_path = Some(metadata_asset_db_path(&settings.general.data_dir, &path));
 }
 
 fn linked_shows_needing_descendant_backfill(
@@ -2509,6 +2688,7 @@ async fn run_automatic_movie_metadata_linking(
                 provider_id.clone(),
                 &result.external_id,
                 &result.media_type,
+                MetadataSnapshotFetchOptions::WITHOUT_PERSON_DETAILS,
             )
             .await
             {
@@ -2518,6 +2698,7 @@ async fn run_automatic_movie_metadata_linking(
                         candidate.item_id,
                         &snapshots,
                         settings,
+                        PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
                     )
                     .await
                     {
@@ -4092,7 +4273,7 @@ async fn run_manual_library_metadata_refresh(
     settings: Settings,
     library_id: i32,
     library_name: String,
-) {
+) -> (DbConn, Settings, String) {
     let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
     let refresh_jobs = match load_library_refresh_jobs(&db, &settings, library_id).await {
         Ok(refresh_jobs) => refresh_jobs,
@@ -4105,7 +4286,7 @@ async fn run_manual_library_metadata_refresh(
             if let Some((automatch_activity_id, _)) = &automatch_activity {
                 cancel_metadata_refresh_activity(automatch_activity_id).await;
             }
-            return;
+            return (db, settings, library_name);
         }
     };
     let refresh_targets = refresh_jobs
@@ -4131,7 +4312,7 @@ async fn run_manual_library_metadata_refresh(
             automatch_activity,
         )
         .await;
-        return;
+        return (db, settings, library_name);
     };
 
     if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
@@ -4144,7 +4325,7 @@ async fn run_manual_library_metadata_refresh(
             library_id,
             status
         );
-        return;
+        return (db, settings, library_name);
     }
 
     mark_metadata_refresh_activity_running(&activity_id).await;
@@ -4161,6 +4342,7 @@ async fn run_manual_library_metadata_refresh(
         automatch_activity,
     )
     .await;
+    (db, settings, library_name)
 }
 
 /// Force-refresh every linked metadata item within one library.
@@ -4182,8 +4364,32 @@ pub async fn refresh_library_metadata(
     }
 
     tokio::spawn(async move {
-        run_manual_library_metadata_refresh(db, settings, library_id, library_name).await;
+        let refresh_task = tokio::spawn(run_manual_library_metadata_refresh(
+            db,
+            settings,
+            library_id,
+            library_name,
+        ));
+        let people_refresh = match refresh_task.await {
+            Ok(resources) => Some(resources),
+            Err(error) => {
+                log::error!(
+                    "Library {} metadata refresh worker stopped unexpectedly: {}",
+                    library_id,
+                    error
+                );
+                None
+            }
+        };
         finish_library_metadata_refresh(library_id).await;
+        if let Some((people_db, people_settings, people_library_name)) = people_refresh {
+            tokio::spawn(run_library_metadata_people_refresh(
+                people_db,
+                people_settings,
+                library_id,
+                people_library_name,
+            ));
+        }
     });
 
     Ok(Json(library_summary))

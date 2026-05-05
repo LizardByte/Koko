@@ -214,6 +214,24 @@ const items: MediaItemDetail[] = [
     extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
+    playback_target: {
+      item_id: 203,
+      start_ms: 74_000,
+      label: 'Resume S01E01',
+      display_title: 'Mock Episode',
+      season_number: 1,
+      episode_number: 1,
+      resume: true,
+    },
+    restart_playback_target: {
+      item_id: 203,
+      start_ms: 0,
+      label: 'Start show',
+      display_title: 'Mock Episode',
+      season_number: 1,
+      episode_number: 1,
+      resume: false,
+    },
     hierarchy: [],
     children: [
       {
@@ -253,6 +271,24 @@ const items: MediaItemDetail[] = [
     extras: [],
     audio_tracks: [],
     subtitle_tracks: [],
+    playback_target: {
+      item_id: 203,
+      start_ms: 74_000,
+      label: 'Resume S01E01',
+      display_title: 'Mock Episode',
+      season_number: 1,
+      episode_number: 1,
+      resume: true,
+    },
+    restart_playback_target: {
+      item_id: 203,
+      start_ms: 0,
+      label: 'Start season',
+      display_title: 'Mock Episode',
+      season_number: 1,
+      episode_number: 1,
+      resume: false,
+    },
     hierarchy: [
       {
         id: 201,
@@ -585,14 +621,19 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
   },
 };
 
-const playbackProgress = new Map<string, PlaybackProgressRequest>();
-playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false });
-playbackProgress.set('1:103', { position_ms: 74_000, duration_ms: 215_000, completed: false });
+interface MockPlaybackProgress extends PlaybackProgressRequest {
+  watch_count: number;
+  last_watched_at?: number;
+}
+
+const playbackProgress = new Map<string, MockPlaybackProgress>();
+playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false, watch_count: 0 });
+playbackProgress.set('1:103', { position_ms: 74_000, duration_ms: 215_000, completed: false, watch_count: 0 });
 
 function applyMockPlaybackProgress<T extends { id: number }>(item: T): T {
   const userId = activeMockUserId();
   const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
-  if (!progress || progress.completed) {
+  if (!progress) {
     return item;
   }
 
@@ -600,6 +641,9 @@ function applyMockPlaybackProgress<T extends { id: number }>(item: T): T {
     ...item,
     playback_position_ms: progress.position_ms,
     playback_duration_ms: progress.duration_ms,
+    playback_completed: progress.completed,
+    watch_count: progress.watch_count,
+    last_watched_at: progress.last_watched_at,
   };
 }
 
@@ -1222,7 +1266,16 @@ export function deleteMockMissingItems(libraryId: number): MissingItemsCleanupRe
 export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProgressRequest): void {
   const userId = activeMockUserId();
   if (userId !== undefined) {
-    playbackProgress.set(`${userId}:${itemId}`, payload);
+    const key = `${userId}:${itemId}`;
+    const existing = playbackProgress.get(key);
+    const completedTransition = payload.completed && !existing?.completed;
+    playbackProgress.set(key, {
+      ...payload,
+      watch_count: (existing?.watch_count ?? 0) + (completedTransition ? 1 : 0),
+      last_watched_at: completedTransition
+        ? Math.floor(Date.now() / 1000)
+        : existing?.last_watched_at,
+    });
   }
 }
 

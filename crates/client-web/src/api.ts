@@ -156,8 +156,21 @@ export interface MediaItemSummary {
   modified_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
+  playback_completed?: boolean;
+  watch_count?: number;
+  last_watched_at?: number | null;
   missing_since?: number | null;
   hierarchy?: MediaItemSummary[];
+}
+
+export interface MediaPlaybackTarget {
+  item_id: number;
+  start_ms: number;
+  label: string;
+  display_title: string;
+  season_number?: number | null;
+  episode_number?: number | null;
+  resume: boolean;
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
@@ -185,6 +198,11 @@ export interface MediaItemDetail extends MediaItemSummary {
   artwork_updated_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
+  playback_completed?: boolean;
+  watch_count?: number;
+  last_watched_at?: number | null;
+  playback_target?: MediaPlaybackTarget | null;
+  restart_playback_target?: MediaPlaybackTarget | null;
   audio_tracks: MediaAudioTrack[];
   subtitle_tracks: MediaSubtitleTrack[];
   hierarchy: MediaItemSummary[];

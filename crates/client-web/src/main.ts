@@ -51,6 +51,7 @@ import {
   type LoginRequest,
   type MediaHome,
   type MediaItemExtra,
+  type MediaPlaybackTarget,
   type MediaShelf,
   type MediaItemDetail,
   type MediaItemSummary,
@@ -181,6 +182,7 @@ interface AppState {
   browseFilter?: BrowseFilter;
   isLoading: boolean;
   isPlayerOpen: boolean;
+  activePlaybackItem?: MediaItemDetail;
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
   activeAudioStreamIndex?: number;
@@ -211,6 +213,7 @@ type AppIconName =
   | 'book'
   | 'chevron-left'
   | 'chevron-right'
+  | 'circle-check'
   | 'clapperboard'
   | 'database-zap'
   | 'film'
@@ -267,6 +270,7 @@ const state: AppState = {
   isLoading: true,
   hasDeferredAutoRefreshRender: false,
   isPlayerOpen: false,
+  activePlaybackItem: undefined,
   activePlaybackStartMs: 0,
   activeAudioStreamIndex: undefined,
   isAudioTrackMenuOpen: false,
@@ -1010,6 +1014,9 @@ function formatMediaTime(seconds: number): string {
 }
 
 function resumablePlaybackPositionMs(item: MediaItemDetail): number {
+  if (item.playback_completed) {
+    return 0;
+  }
   const positionMs = item.playback_position_ms ?? 0;
   const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
   if (positionMs < 30_000) {
@@ -1020,6 +1027,19 @@ function resumablePlaybackPositionMs(item: MediaItemDetail): number {
   }
 
   return positionMs;
+}
+
+function playbackProgressPercent(item: MediaItemSummary): number | undefined {
+  if (item.playback_completed) {
+    return undefined;
+  }
+  const positionMs = item.playback_position_ms ?? 0;
+  const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
+  if (positionMs < 30_000 || durationMs <= 0 || durationMs - positionMs < 30_000) {
+    return undefined;
+  }
+
+  return Math.min(99, Math.max(1, Math.round((positionMs / durationMs) * 100)));
 }
 
 function formatFileSize(fileSize?: number): string {
@@ -2245,6 +2265,54 @@ function missingItemDetailBadgeMarkup(item: MediaItemSummary): string {
   `;
 }
 
+function playbackStatusBadgeMarkup(item: MediaItemSummary): string {
+  const badges: string[] = [];
+  const progressPercent = playbackProgressPercent(item);
+  if (progressPercent !== undefined) {
+    const label = `${progressPercent}% watched`;
+    badges.push(`
+      <span class="media-card-progress" style="--watch-progress: ${progressPercent}%;" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+        <span>${progressPercent}</span>
+      </span>
+    `);
+  }
+
+  const watchCount = item.watch_count ?? 0;
+  if (watchCount > 0) {
+    const countLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount} times`;
+    badges.push(`
+      <span class="media-card-status is-watched icon-only" title="${escapeHtml(countLabel)}" aria-label="${escapeHtml(countLabel)}">
+        ${renderIcon('circle-check', 'status-icon')}
+      </span>
+    `);
+  }
+
+  return badges.join('');
+}
+
+function playbackDetailBadgeMarkup(item: MediaItemSummary): string {
+  const watchCount = item.watch_count ?? 0;
+  const progressPercent = playbackProgressPercent(item);
+  const badges: string[] = [];
+  if (watchCount > 0) {
+    const watchedLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount}x`;
+    badges.push(`<span class="tag success status-tag" title="${escapeHtml(item.last_watched_at ? `Last watched ${formatTimestamp(item.last_watched_at)}` : watchedLabel)}">${renderIcon('circle-check', 'status-icon')}<span>${escapeHtml(watchedLabel)}</span></span>`);
+  }
+  if (progressPercent !== undefined) {
+    badges.push(`<span class="tag status-tag">${escapeHtml(`${progressPercent}% watched`)}</span>`);
+  }
+
+  return badges.join('');
+}
+
+function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: boolean): string {
+  return `
+    <button type="button" class="${secondary ? 'secondary-button' : ''}" data-playback-target-item-id="${target.item_id}" data-playback-target-start-ms="${target.start_ms}" title="${escapeHtml(target.display_title)}">
+      ${renderButtonContent(target.label, 'play')}
+    </button>
+  `;
+}
+
 function itemCardSubtitle(item: MediaItemSummary): string | undefined {
   if (item.item_type === 'episode' && typeof item.episode_number === 'number') {
     return `Episode ${item.episode_number}`;
@@ -2273,6 +2341,8 @@ function renderItemCard(item: MediaItemSummary): string {
     ? missingItemBadgeMarkup(item)
     : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
   const badgeMarkup = metadataBadgeMarkup(item);
+  const playbackBadgeMarkup = playbackStatusBadgeMarkup(item);
+  const dynamicBadges = `${badgeMarkup}${playbackBadgeMarkup}`;
 
   return `
     <button class="media-card ${item.item_type === 'episode' ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
@@ -2281,7 +2351,7 @@ function renderItemCard(item: MediaItemSummary): string {
           <span class="media-card-kind">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>
           ${metricMarkup}
         </span>
-        ${badgeMarkup ? `<span class="media-card-dynamic-badges">${badgeMarkup}</span>` : ''}
+        ${dynamicBadges ? `<span class="media-card-dynamic-badges">${dynamicBadges}</span>` : ''}
       </span>
       <span class="media-card-title">${escapeHtml(item.display_title)}</span>
       ${cardSubtitle ? `<span class="media-card-subtitle">${escapeHtml(cardSubtitle)}</span>` : ''}
@@ -3826,6 +3896,8 @@ function renderItemPage(): string {
   const supportsManualLinking = canManuallyLinkMetadata(state.selectedItem);
   const metadataRefreshActive = itemHasActiveMetadataRefresh(state.selectedItem);
   const resumeMs = resumablePlaybackPositionMs(state.selectedItem);
+  const playbackTarget = !state.selectedItem.playable ? state.selectedItem.playback_target : undefined;
+  const restartPlaybackTarget = !state.selectedItem.playable ? state.selectedItem.restart_playback_target : undefined;
   const childSectionTitle = state.selectedItem.item_type === 'show'
     ? 'Seasons'
     : state.selectedItem.item_type === 'season'
@@ -3853,6 +3925,7 @@ function renderItemPage(): string {
           ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
           <div class="hero-meta-row">
             ${missingItemDetailBadgeMarkup(state.selectedItem)}
+            ${playbackDetailBadgeMarkup(state.selectedItem)}
             ${state.selectedItem.release_year ? `<span class="tag">${state.selectedItem.release_year}</span>` : ''}
             ${state.selectedItem.content_rating ? `<span class="tag">${escapeHtml(state.selectedItem.content_rating)}</span>` : ''}
             ${typeof state.selectedItem.rating === 'number' ? `<span class="tag">${escapeHtml(state.selectedItem.rating.toFixed(1))}</span>` : ''}
@@ -3862,6 +3935,8 @@ function renderItemPage(): string {
           <div class="detail-actions">
             ${state.selectedItem.playable && resumeMs > 0 ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>` : ''}
             ${state.selectedItem.playable ? `<button type="button" class="${resumeMs > 0 ? 'secondary-button' : ''}" data-play-selected-item-start-ms="0">${renderButtonContent(resumeMs > 0 ? 'Start over' : 'Play now', 'play')}</button>` : ''}
+            ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false) : ''}
+            ${restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true) : ''}
             ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
             ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
@@ -4595,25 +4670,26 @@ function renderPlayerOverlay(): string {
     `;
   }
 
-  if (!state.isPlayerOpen || !state.selectedItem || !state.activePlaybackSession) {
+  const playbackItem = state.activePlaybackItem ?? state.selectedItem;
+  if (!state.isPlayerOpen || !playbackItem || !state.activePlaybackSession) {
     return '';
   }
 
-  const isAudio = state.selectedItem.media_kind === 'audio';
+  const isAudio = playbackItem.media_kind === 'audio';
   const tag = isAudio ? 'audio' : 'video';
   const isExplicitAudioTrackSelection = state.activeAudioStreamIndex !== undefined;
   const selectedAudioStreamIndex = isExplicitAudioTrackSelection
     ? state.activeAudioStreamIndex
     : state.activePlaybackSession.audio_stream_index;
-  const posterUrl = state.selectedItem.poster_url
-    ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
+  const posterUrl = playbackItem.poster_url
+    ? getArtworkUrl(playbackItem.id, 'poster', playbackItem.artwork_updated_at)
     : undefined;
-  const backdropUrl = state.selectedItem.backdrop_url
-    ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
+  const backdropUrl = playbackItem.backdrop_url
+    ? getArtworkUrl(playbackItem.id, 'backdrop', playbackItem.artwork_updated_at)
     : posterUrl;
-  const logoUrl = state.selectedItem.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
+  const logoUrl = playbackItem.logo_url ? resolveApiUrl(playbackItem.logo_url) : undefined;
   const trackMarkup = tag === 'video'
-    ? state.selectedItem.subtitle_tracks
+    ? playbackItem.subtitle_tracks
         .map((track) => `<track kind="subtitles" label="${escapeHtml(track.label)}" srclang="${escapeHtml(subtitleLanguage(track.label))}" src="${escapeHtml(resolveApiUrl(track.url))}" />`)
         .join('')
     : '';
@@ -4627,7 +4703,7 @@ function renderPlayerOverlay(): string {
   const transcodeBadge = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
     ? `<span class="player-badge is-transcoding" title="${escapeHtml(isRemuxingForAudio ? 'Using a non-default audio track requires a remuxed stream.' : state.activePlaybackSession.decision.reason)}">Transcoding</span>`
     : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
-  const audioTracks = state.selectedItem.audio_tracks ?? [];
+  const audioTracks = playbackItem.audio_tracks ?? [];
   const activeAudioTrack = audioTracks.find((track) => track.index === selectedAudioStreamIndex)
     ?? audioTracks.find((track) => track.default)
     ?? audioTracks[0];
@@ -4659,8 +4735,8 @@ function renderPlayerOverlay(): string {
           <div class="player-title-block">
             <span class="eyebrow">Now playing</span>
             ${logoUrl
-              ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
-              : `<h2>${escapeHtml(state.selectedItem.display_title)}</h2>`}
+              ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(playbackItem.display_title)}" />`
+              : `<h2>${escapeHtml(playbackItem.display_title)}</h2>`}
           </div>
           <div class="player-top-actions">
             ${transcodeBadge}
@@ -4671,7 +4747,7 @@ function renderPlayerOverlay(): string {
           <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
           <div class="player-control-row">
             <div class="player-control-cluster player-time-cluster">
-              <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(state.selectedItem.duration_ms))}</span></span>
+              <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(playbackItem.duration_ms))}</span></span>
             </div>
             <div class="player-control-cluster player-transport-cluster">
               <button class="player-icon-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
@@ -4891,6 +4967,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
+      state.activePlaybackItem = undefined;
       state.activePlaybackSession = undefined;
       state.activePlaybackStartMs = 0;
       state.activeAudioStreamIndex = undefined;
@@ -4946,6 +5023,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
+      state.activePlaybackItem = undefined;
       state.activePlaybackSession = undefined;
       state.activePlaybackStartMs = 0;
       state.activeAudioStreamIndex = undefined;
@@ -4971,6 +5049,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.metadataSearchLanguage = '';
       state.metadataSearchProviders = [];
       state.isPlayerOpen = false;
+      state.activePlaybackItem = undefined;
       state.activePlaybackSession = undefined;
       state.activePlaybackStartMs = 0;
       state.activeAudioStreamIndex = undefined;
@@ -5572,16 +5651,53 @@ function closeActivePlaybackSession(): void {
   state.isPlayerOpen = false;
   document.body.style.cursor = '';
   const sessionToClose = state.activePlaybackSession;
+  state.activePlaybackItem = undefined;
   state.activePlaybackSession = undefined;
   state.activePlaybackStartMs = 0;
   state.activeAudioStreamIndex = undefined;
   state.isAudioTrackMenuOpen = false;
   render();
   if (sessionToClose) {
-    deletePlaybackSession(sessionToClose.session_id).catch((error) => {
-      console.error('Failed to close playback session', error);
+    deletePlaybackSession(sessionToClose.session_id)
+      .catch((error) => {
+        console.error('Failed to close playback session', error);
+      })
+      .finally(() => {
+        void refreshData(false);
+      });
+  } else {
+    void refreshData(false);
+  }
+}
+
+async function startPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
+  const previousSession = state.activePlaybackSession;
+  state.activePlaybackSession = undefined;
+  state.activePlaybackItem = item;
+  state.activePlaybackStartMs = Math.max(0, startMs);
+  state.isPlayerOpen = true;
+  state.activeAudioStreamIndex = undefined;
+  state.isAudioTrackMenuOpen = false;
+  render();
+
+  if (previousSession) {
+    deletePlaybackSession(previousSession.session_id).catch((error) => {
+      console.error('Failed to replace playback session', error);
     });
   }
+
+  state.activePlaybackSession = await createPlaybackSession({
+    item_id: item.id,
+    client_profile: getWebClientProfile(),
+  });
+  render();
+}
+
+async function startPlaybackForItemId(itemId: number, startMs: number): Promise<void> {
+  const item = state.selectedItem?.id === itemId
+    ? state.selectedItem
+    : await getItem(itemId);
+  await startPlayback(item, startMs);
 }
 
 function ensureTrailerYouTubePlayer(videoId: string): Promise<YouTubePlayer> {
@@ -5941,7 +6057,8 @@ function bindTrailerPlayer(): void {
 
 function bindPlayerProgress(): void {
   const player = document.querySelector<HTMLMediaElement>('#media-player');
-  if (!player || !state.selectedItem) {
+  const playbackItem = state.activePlaybackItem ?? state.selectedItem;
+  if (!player || !playbackItem) {
     return;
   }
 
@@ -5960,7 +6077,7 @@ function bindPlayerProgress(): void {
   const currentAudioTrackIndex = selectedAudioStreamIndex ?? 0;
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
   const isTranscoding = (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
-  const sourceDurationSeconds = (state.selectedItem.duration_ms ?? 0) / 1000;
+  const sourceDurationSeconds = (playbackItem.duration_ms ?? 0) / 1000;
   const requestedPlaybackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
   const playbackBaseOffsetSeconds = isTranscoding ? requestedPlaybackStartSeconds : 0;
   const initialDirectSeekSeconds = isTranscoding ? 0 : requestedPlaybackStartSeconds;
@@ -6313,9 +6430,9 @@ function bindPlayerProgress(): void {
     }
 
     lastSentSeconds = currentSeconds;
-    void updatePlaybackProgress(state.selectedItem!.id, {
+    void updatePlaybackProgress(playbackItem.id, {
       position_ms: Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000),
-      duration_ms: state.selectedItem?.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
+      duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: false,
     });
   });
@@ -6323,9 +6440,9 @@ function bindPlayerProgress(): void {
   player.addEventListener('ended', () => {
     updatePlayButtons();
     showControls();
-    void updatePlaybackProgress(state.selectedItem!.id, {
-      position_ms: state.selectedItem?.duration_ms ?? Math.floor((playbackBaseOffsetSeconds + (Number.isFinite(player.duration) ? player.duration : 0)) * 1000),
-      duration_ms: state.selectedItem?.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
+    void updatePlaybackProgress(playbackItem.id, {
+      position_ms: playbackItem.duration_ms ?? Math.floor((playbackBaseOffsetSeconds + (Number.isFinite(player.duration) ? player.duration : 0)) * 1000),
+      duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: true,
     });
   });
@@ -7049,19 +7166,28 @@ function bindRenderEvents(): void {
 
     try {
       const startMs = Number(button.dataset.playSelectedItemStartMs);
-      state.activePlaybackStartMs = Number.isFinite(startMs) ? Math.max(0, startMs) : 0;
-      state.isPlayerOpen = true;
-      state.activeAudioStreamIndex = undefined;
-      state.isAudioTrackMenuOpen = false;
-      render();
-      state.activePlaybackSession = await createPlaybackSession({
-        item_id: state.selectedItem.id,
-        client_profile: getWebClientProfile(),
-      });
-      render();
+      await startPlayback(state.selectedItem, Number.isFinite(startMs) ? startMs : 0);
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
       state.isPlayerOpen = false;
+      state.activePlaybackItem = undefined;
+      render();
+    }
+  }));
+
+  document.querySelectorAll<HTMLButtonElement>('[data-playback-target-item-id]').forEach((button) => button.addEventListener('click', async () => {
+    const itemId = Number(button.dataset.playbackTargetItemId);
+    const startMs = Number(button.dataset.playbackTargetStartMs);
+    if (!Number.isFinite(itemId)) {
+      return;
+    }
+
+    try {
+      await startPlaybackForItemId(itemId, Number.isFinite(startMs) ? startMs : 0);
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+      state.isPlayerOpen = false;
+      state.activePlaybackItem = undefined;
       render();
     }
   }));

@@ -244,6 +244,8 @@ table! {
         position_ms -> BigInt,
         duration_ms -> Nullable<BigInt>,
         completed -> Bool,
+        watch_count -> Integer,
+        last_watched_at -> Nullable<BigInt>,
         updated_at -> Nullable<BigInt>,
     }
 }

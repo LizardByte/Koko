@@ -30,6 +30,7 @@ use koko::media::{
     ShowMetadataDescendantPlan,
     ShowMetadataEpisodePlan,
     ShowMetadataSeasonPlan,
+    apply_user_playback_context_to_detail,
     delete_missing_media_items,
     get_item_youtube_theme_collection_references,
     get_item_youtube_theme_provider_references,
@@ -40,6 +41,7 @@ use koko::media::{
     get_media_item_with_preferred_languages,
     get_persisted_library_summaries,
     get_preferred_item_metadata_link,
+    get_user_playback_progress,
     infer_episode_number,
     infer_season_number,
     inspect_libraries,
@@ -3840,6 +3842,182 @@ fn test_playback_progress_is_scoped_per_user() {
     assert!(anonymous_home.shelves[0].items.is_empty());
     assert_eq!(alice_home.shelves[0].items[0].id, item.id);
     assert_eq!(bob_home.shelves[0].items[0].id, item.id);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_playback_progress_tracks_watch_count_and_last_watched() {
+    let root = unique_temp_dir("playback_progress_watch_count");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("playback_progress_watch_count_db");
+    diesel::sql_query(
+        "INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1)",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let item = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        item.id,
+        120_000,
+        item.duration_ms,
+        false,
+    )
+    .unwrap();
+    let progress = get_user_playback_progress(&mut connection, Some(1), item.id)
+        .unwrap()
+        .expect("Expected progress");
+    assert!(!progress.completed);
+    assert_eq!(progress.watch_count, 0);
+    assert_eq!(progress.last_watched_at, None);
+
+    upsert_playback_progress(&mut connection, 1, item.id, 600_000, item.duration_ms, true).unwrap();
+    let completed = get_user_playback_progress(&mut connection, Some(1), item.id)
+        .unwrap()
+        .expect("Expected completed progress");
+    assert!(completed.completed);
+    assert_eq!(completed.watch_count, 1);
+    assert!(completed.last_watched_at.is_some());
+
+    upsert_playback_progress(&mut connection, 1, item.id, 600_000, item.duration_ms, true).unwrap();
+    let duplicate_completed = get_user_playback_progress(&mut connection, Some(1), item.id)
+        .unwrap()
+        .expect("Expected duplicate completed progress");
+    assert_eq!(duplicate_completed.watch_count, 1);
+
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        item.id,
+        120_000,
+        item.duration_ms,
+        false,
+    )
+    .unwrap();
+    upsert_playback_progress(&mut connection, 1, item.id, 600_000, item.duration_ms, true).unwrap();
+    let replay_completed = get_user_playback_progress(&mut connection, Some(1), item.id)
+        .unwrap()
+        .expect("Expected replay completed progress");
+    assert_eq!(replay_completed.watch_count, 2);
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_show_playback_target_resumes_in_progress_episode_per_user() {
+    let root = unique_temp_dir("show_playback_target");
+    let season = root.join("Mock Show").join("Season 1");
+    fs::create_dir_all(&season).unwrap();
+    fs::write(season.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
+    fs::write(season.join("Mock Show - S01E02 - Followup.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
+        metadata_providers: vec![MetadataProviderId::Tmdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("show_playback_target_db");
+    diesel::sql_query(
+        "INSERT INTO users (username, password, pin, admin) VALUES ('alice', 'hash', NULL, 1), \
+         ('bob', 'hash', NULL, 0)",
+    )
+    .execute(&mut connection)
+    .unwrap();
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let items = list_media_items(&mut connection, Some(persisted[0].id)).unwrap();
+    let show = items
+        .iter()
+        .find(|item| item.item_type == "show")
+        .expect("Expected show");
+    let episode_one = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.episode_number == Some(1))
+        .expect("Expected episode one");
+    let episode_two = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.episode_number == Some(2))
+        .expect("Expected episode two");
+
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        episode_one.id,
+        episode_one.duration_ms.unwrap_or(0),
+        episode_one.duration_ms,
+        true,
+    )
+    .unwrap();
+    upsert_playback_progress(
+        &mut connection,
+        1,
+        episode_two.id,
+        90_000,
+        episode_two.duration_ms,
+        false,
+    )
+    .unwrap();
+
+    let mut alice_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected show detail");
+    apply_user_playback_context_to_detail(&mut connection, Some(1), &mut alice_detail).unwrap();
+    let alice_target = alice_detail
+        .playback_target
+        .as_ref()
+        .expect("Expected Alice playback target");
+    assert_eq!(alice_target.item_id, episode_two.id);
+    assert_eq!(alice_target.start_ms, 90_000);
+    assert_eq!(alice_target.label, "Resume S01E02");
+    assert!(alice_detail.restart_playback_target.is_some());
+
+    let mut bob_detail = get_media_item(&mut connection, show.id, &root.to_string_lossy())
+        .unwrap()
+        .expect("Expected show detail");
+    apply_user_playback_context_to_detail(&mut connection, Some(2), &mut bob_detail).unwrap();
+    let bob_target = bob_detail
+        .playback_target
+        .as_ref()
+        .expect("Expected Bob playback target");
+    assert_eq!(bob_target.item_id, episode_one.id);
+    assert_eq!(bob_target.start_ms, 0);
+    assert_eq!(bob_target.label, "Play S01E01");
+    assert!(bob_detail.restart_playback_target.is_none());
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();

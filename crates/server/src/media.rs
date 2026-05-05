@@ -292,8 +292,33 @@ pub struct MediaItemSummary {
     pub playback_position_ms: Option<i64>,
     /// Last saved playback duration for the current user.
     pub playback_duration_ms: Option<i64>,
+    /// Whether the current user's saved playback row is complete.
+    pub playback_completed: bool,
+    /// Number of times the current user has completed this item.
+    pub watch_count: i32,
+    /// Last time the current user completed this item as Unix seconds.
+    pub last_watched_at: Option<i64>,
     /// When this item was first observed as missing from disk.
     pub missing_since: Option<i64>,
+}
+
+/// Episode target selected for container-level playback actions.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct MediaPlaybackTarget {
+    /// Playable episode item identifier.
+    pub item_id: i32,
+    /// Start position in milliseconds.
+    pub start_ms: i64,
+    /// Human-friendly action label for the button.
+    pub label: String,
+    /// Episode title for display and accessibility.
+    pub display_title: String,
+    /// Season number when known.
+    pub season_number: Option<i32>,
+    /// Episode number when known.
+    pub episode_number: Option<i32>,
+    /// Whether the target resumes an unfinished episode.
+    pub resume: bool,
 }
 
 /// Detailed browser-facing media item response.
@@ -389,10 +414,20 @@ pub struct MediaItemDetail {
     pub hierarchy: Vec<MediaItemSummary>,
     /// Direct child items for hierarchical browsing.
     pub children: Vec<MediaItemSummary>,
+    /// Playable target for non-playable containers such as shows or seasons.
+    pub playback_target: Option<MediaPlaybackTarget>,
+    /// Optional target for restarting a container from its first episode.
+    pub restart_playback_target: Option<MediaPlaybackTarget>,
     /// Last saved playback position for the current user.
     pub playback_position_ms: Option<i64>,
     /// Last saved playback duration for the current user.
     pub playback_duration_ms: Option<i64>,
+    /// Whether the current user's saved playback row is complete.
+    pub playback_completed: bool,
+    /// Number of times the current user has completed this item.
+    pub watch_count: i32,
+    /// Last time the current user completed this item as Unix seconds.
+    pub last_watched_at: Option<i64>,
     /// When this item was first observed as missing from disk.
     pub missing_since: Option<i64>,
 }
@@ -2661,6 +2696,19 @@ pub fn list_media_items_with_preferred_languages(
     Ok(items)
 }
 
+/// List browser-facing media items with current-user playback state applied.
+pub fn list_media_items_for_user_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    let mut items =
+        list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
+    apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
+    Ok(items)
+}
+
 /// Return unmatched movie-like items that are eligible for automatic metadata linking.
 pub fn list_automatic_metadata_candidates(
     conn: &mut SqliteConnection,
@@ -3014,6 +3062,20 @@ pub fn search_media_items_with_preferred_languages(
         .collect())
 }
 
+/// Search browser-facing media items with current-user playback state applied.
+pub fn search_media_items_for_user_with_preferred_languages(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    query: &str,
+    library_id: Option<i32>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    let mut items =
+        search_media_items_with_preferred_languages(conn, query, library_id, preferred_languages)?;
+    apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
+    Ok(items)
+}
+
 /// Return Kodi/Plex-style media shelves for the browser home screen.
 pub fn get_media_home(
     conn: &mut SqliteConnection,
@@ -3030,7 +3092,12 @@ pub fn get_media_home_with_preferred_languages(
     library_id: Option<i32>,
     preferred_languages: &[String],
 ) -> Result<MediaHome, diesel::result::Error> {
-    let items = list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
+    let items = list_media_items_for_user_with_preferred_languages(
+        conn,
+        user_id,
+        library_id,
+        preferred_languages,
+    )?;
 
     let continue_watching =
         get_continue_watching_items(conn, user_id, library_id, preferred_languages)?;
@@ -3625,13 +3692,27 @@ pub fn upsert_playback_progress(
         .first(conn)
         .optional()?;
 
+    let now = current_timestamp();
+    let completed_transition = completed && existing.as_ref().is_none_or(|row| !row.completed);
+    let watch_count = existing
+        .as_ref()
+        .map(|row| row.watch_count)
+        .unwrap_or_default()
+        .saturating_add(if completed_transition { 1 } else { 0 });
+    let last_watched_at = if completed_transition {
+        Some(now)
+    } else {
+        existing.as_ref().and_then(|row| row.last_watched_at)
+    };
     let progress = NewPlaybackProgress {
         user_id,
         media_item_id: item_id,
         position_ms,
         duration_ms,
         completed,
-        updated_at: Some(current_timestamp()),
+        watch_count,
+        last_watched_at,
+        updated_at: Some(now),
     };
 
     if let Some(existing) = existing {
@@ -3665,7 +3746,6 @@ pub fn get_user_playback_progress(
     playback_progress_dsl::playback_progress
         .filter(playback_progress_dsl::user_id.eq(user_id))
         .filter(playback_progress_dsl::media_item_id.eq(item_id))
-        .filter(playback_progress_dsl::completed.eq(false))
         .select(PlaybackProgress::as_select())
         .first(conn)
         .optional()
@@ -3675,8 +3755,517 @@ fn apply_playback_progress_to_summary(
     summary: &mut MediaItemSummary,
     progress: &PlaybackProgress,
 ) {
-    summary.playback_position_ms = Some(progress.position_ms);
-    summary.playback_duration_ms = progress.duration_ms;
+    apply_playback_values_to_summary(
+        summary,
+        progress.position_ms,
+        progress.duration_ms,
+        progress.completed,
+        progress.watch_count,
+        progress.last_watched_at,
+    );
+}
+
+fn apply_playback_progress_to_detail(
+    detail: &mut MediaItemDetail,
+    progress: &PlaybackProgress,
+) {
+    apply_playback_values_to_detail(
+        detail,
+        progress.position_ms,
+        progress.duration_ms,
+        progress.completed,
+        progress.watch_count,
+        progress.last_watched_at,
+    );
+}
+
+fn apply_playback_values_to_summary(
+    summary: &mut MediaItemSummary,
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    completed: bool,
+    watch_count: i32,
+    last_watched_at: Option<i64>,
+) {
+    summary.playback_position_ms = Some(position_ms);
+    summary.playback_duration_ms = duration_ms;
+    summary.playback_completed = completed;
+    summary.watch_count = watch_count;
+    summary.last_watched_at = last_watched_at;
+}
+
+fn apply_playback_values_to_detail(
+    detail: &mut MediaItemDetail,
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    completed: bool,
+    watch_count: i32,
+    last_watched_at: Option<i64>,
+) {
+    detail.playback_position_ms = Some(position_ms);
+    detail.playback_duration_ms = duration_ms;
+    detail.playback_completed = completed;
+    detail.watch_count = watch_count;
+    detail.last_watched_at = last_watched_at;
+}
+
+fn playback_progress_by_item_id(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    item_ids: &[i32],
+) -> Result<HashMap<i32, PlaybackProgress>, diesel::result::Error> {
+    use crate::db::schema::playback_progress::dsl as playback_progress_dsl;
+
+    let Some(user_id) = user_id else {
+        return Ok(HashMap::new());
+    };
+    if item_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    Ok(playback_progress_dsl::playback_progress
+        .filter(playback_progress_dsl::user_id.eq(user_id))
+        .filter(playback_progress_dsl::media_item_id.eq_any(item_ids))
+        .select(PlaybackProgress::as_select())
+        .load::<PlaybackProgress>(conn)?
+        .into_iter()
+        .map(|progress| (progress.media_item_id, progress))
+        .collect())
+}
+
+fn apply_user_playback_progress_to_summaries(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    items: &mut [MediaItemSummary],
+) -> Result<(), diesel::result::Error> {
+    let item_ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
+    let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &item_ids)?;
+
+    for item in items {
+        if let Some(progress) = progress_by_item_id.get(&item.id) {
+            apply_playback_progress_to_summary(item, progress);
+        } else if let Some(progress) = container_playback_progress(conn, user_id, item.id)? {
+            apply_playback_values_to_summary(
+                item,
+                progress.position_ms,
+                progress.duration_ms,
+                progress.completed,
+                progress.watch_count,
+                progress.last_watched_at,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply current-user playback state and container playback targets to an item detail response.
+pub fn apply_user_playback_context_to_detail(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    detail: &mut MediaItemDetail,
+) -> Result<(), diesel::result::Error> {
+    let mut item_ids = vec![detail.id];
+    item_ids.extend(detail.hierarchy.iter().map(|item| item.id));
+    item_ids.extend(detail.children.iter().map(|item| item.id));
+    let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &item_ids)?;
+
+    if let Some(progress) = progress_by_item_id.get(&detail.id) {
+        apply_playback_progress_to_detail(detail, progress);
+    } else if let Some(progress) = container_playback_progress(conn, user_id, detail.id)? {
+        apply_playback_values_to_detail(
+            detail,
+            progress.position_ms,
+            progress.duration_ms,
+            progress.completed,
+            progress.watch_count,
+            progress.last_watched_at,
+        );
+    }
+    for item in &mut detail.hierarchy {
+        if let Some(progress) = progress_by_item_id.get(&item.id) {
+            apply_playback_progress_to_summary(item, progress);
+        }
+    }
+    for item in &mut detail.children {
+        if let Some(progress) = progress_by_item_id.get(&item.id) {
+            apply_playback_progress_to_summary(item, progress);
+        } else if let Some(progress) = container_playback_progress(conn, user_id, item.id)? {
+            apply_playback_values_to_summary(
+                item,
+                progress.position_ms,
+                progress.duration_ms,
+                progress.completed,
+                progress.watch_count,
+                progress.last_watched_at,
+            );
+        }
+    }
+
+    let Some(item) = load_media_item_row(conn, detail.id)? else {
+        return Ok(());
+    };
+    let targets = container_playback_targets(conn, user_id, &item)?;
+    detail.playback_target = targets.primary;
+    detail.restart_playback_target = targets.restart;
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PlaybackProgressValues {
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    completed: bool,
+    watch_count: i32,
+    last_watched_at: Option<i64>,
+}
+
+fn container_playback_progress(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    item_id: i32,
+) -> Result<Option<PlaybackProgressValues>, diesel::result::Error> {
+    let Some(item) = load_media_item_row(conn, item_id)? else {
+        return Ok(None);
+    };
+    if !matches!(item.item_type.as_str(), "show" | "season") {
+        return Ok(None);
+    }
+
+    let episodes = playable_episode_targets(conn, &item)?;
+    if episodes.is_empty() {
+        return Ok(None);
+    }
+
+    let episode_ids = episodes
+        .iter()
+        .map(|episode| episode.item.id)
+        .collect::<Vec<_>>();
+    let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &episode_ids)?;
+    if progress_by_item_id.is_empty() {
+        return Ok(None);
+    }
+
+    let mut aggregate_position_ms = 0_i64;
+    let mut aggregate_duration_ms = 0_i64;
+    let mut fallback_position_units = 0_i64;
+    let mut fallback_duration_units = 0_i64;
+    let mut complete_watch_counts = Vec::new();
+    let mut last_watched_at = None;
+
+    for episode in &episodes {
+        fallback_duration_units += 1_000;
+        let progress = progress_by_item_id.get(&episode.item.id);
+        let duration_ms = progress
+            .and_then(|progress| progress.duration_ms)
+            .or(episode.item.duration_ms)
+            .filter(|duration| *duration > 0);
+
+        if let Some(duration_ms) = duration_ms {
+            aggregate_duration_ms = aggregate_duration_ms.saturating_add(duration_ms);
+            if let Some(progress) = progress {
+                let episode_position = if progress.watch_count > 0 || progress.completed {
+                    duration_ms
+                } else {
+                    progress.position_ms.clamp(0, duration_ms)
+                };
+                aggregate_position_ms = aggregate_position_ms.saturating_add(episode_position);
+            }
+        }
+
+        let Some(progress) = progress else {
+            complete_watch_counts.push(0);
+            continue;
+        };
+
+        if progress.watch_count > 0 || progress.completed {
+            fallback_position_units += 1_000;
+        } else if progress.position_ms > 0 {
+            fallback_position_units += 500;
+        }
+        complete_watch_counts.push(progress.watch_count);
+        last_watched_at = last_watched_at.max(progress.last_watched_at);
+    }
+
+    let watch_count = complete_watch_counts.into_iter().min().unwrap_or_default();
+    let completed = watch_count > 0;
+    let (position_ms, duration_ms) = if aggregate_duration_ms > 0 {
+        (aggregate_position_ms, Some(aggregate_duration_ms))
+    } else {
+        (fallback_position_units, Some(fallback_duration_units))
+    };
+
+    if position_ms <= 0 && watch_count == 0 && last_watched_at.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(PlaybackProgressValues {
+        position_ms,
+        duration_ms,
+        completed,
+        watch_count,
+        last_watched_at,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct ContainerPlaybackTargets {
+    primary: Option<MediaPlaybackTarget>,
+    restart: Option<MediaPlaybackTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct PlayableEpisodeTarget {
+    item: MediaItem,
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+}
+
+fn container_playback_targets(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+    item: &MediaItem,
+) -> Result<ContainerPlaybackTargets, diesel::result::Error> {
+    if !matches!(item.item_type.as_str(), "show" | "season") {
+        return Ok(ContainerPlaybackTargets::default());
+    }
+
+    let episodes = playable_episode_targets(conn, item)?;
+    let Some(first_episode) = episodes.first() else {
+        return Ok(ContainerPlaybackTargets::default());
+    };
+
+    let episode_ids = episodes
+        .iter()
+        .map(|episode| episode.item.id)
+        .collect::<Vec<_>>();
+    let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &episode_ids)?;
+
+    let mut show_has_started = false;
+    let mut latest_resume: Option<(&PlayableEpisodeTarget, &PlaybackProgress, i64)> = None;
+    for episode in &episodes {
+        let Some(progress) = progress_by_item_id.get(&episode.item.id) else {
+            continue;
+        };
+
+        if progress.watch_count > 0
+            || progress.position_ms > 0
+            || progress.last_watched_at.is_some()
+        {
+            show_has_started = true;
+        }
+        let resume_ms = resumable_playback_position_ms(
+            progress.position_ms,
+            progress.duration_ms.or(episode.item.duration_ms),
+            progress.completed,
+        );
+        if resume_ms <= 0 {
+            continue;
+        }
+
+        let updated_at = progress.updated_at.unwrap_or_default();
+        if latest_resume
+            .as_ref()
+            .is_none_or(|(_, _, existing_updated_at)| updated_at > *existing_updated_at)
+        {
+            latest_resume = Some((episode, progress, updated_at));
+        }
+    }
+
+    if let Some((episode, progress, _)) = latest_resume {
+        let primary = playback_target_from_episode(
+            item,
+            episode,
+            progress.position_ms,
+            true,
+            show_has_started,
+        );
+        let restart = restart_playback_target(item, first_episode, &primary, show_has_started);
+        return Ok(ContainerPlaybackTargets {
+            primary: Some(primary),
+            restart,
+        });
+    }
+
+    let next_episode = episodes
+        .iter()
+        .find(|episode| {
+            progress_by_item_id
+                .get(&episode.item.id)
+                .is_none_or(|progress| progress.watch_count == 0)
+        })
+        .unwrap_or(first_episode);
+    let primary = playback_target_from_episode(item, next_episode, 0, false, show_has_started);
+    let restart = restart_playback_target(item, first_episode, &primary, show_has_started);
+
+    Ok(ContainerPlaybackTargets {
+        primary: Some(primary),
+        restart,
+    })
+}
+
+fn restart_playback_target(
+    container: &MediaItem,
+    first_episode: &PlayableEpisodeTarget,
+    primary: &MediaPlaybackTarget,
+    show_has_started: bool,
+) -> Option<MediaPlaybackTarget> {
+    if !show_has_started || (primary.item_id == first_episode.item.id && primary.start_ms == 0) {
+        return None;
+    }
+
+    Some(playback_target_from_episode(
+        container,
+        first_episode,
+        0,
+        false,
+        false,
+    ))
+    .map(|mut target| {
+        target.label = if container.item_type == "season" {
+            "Start season".into()
+        } else {
+            "Start show".into()
+        };
+        target
+    })
+}
+
+fn playback_target_from_episode(
+    container: &MediaItem,
+    episode: &PlayableEpisodeTarget,
+    start_ms: i64,
+    resume: bool,
+    show_has_started: bool,
+) -> MediaPlaybackTarget {
+    let episode_label = episode_number_label(episode.season_number, episode.episode_number)
+        .unwrap_or_else(|| episode.item.display_title.clone());
+    let label = if resume {
+        format!("Resume {episode_label}")
+    } else if show_has_started {
+        format!("Play next {episode_label}")
+    } else if container.item_type == "season" {
+        format!("Play {episode_label}")
+    } else {
+        format!("Play {episode_label}")
+    };
+
+    MediaPlaybackTarget {
+        item_id: episode.item.id,
+        start_ms,
+        label,
+        display_title: episode.item.display_title.clone(),
+        season_number: episode.season_number,
+        episode_number: episode.episode_number,
+        resume,
+    }
+}
+
+fn episode_number_label(
+    season_number: Option<i32>,
+    episode_number: Option<i32>,
+) -> Option<String> {
+    match (season_number, episode_number) {
+        (Some(season), Some(episode)) => Some(format!("S{season:02}E{episode:02}")),
+        (None, Some(episode)) => Some(format!("E{episode:02}")),
+        _ => None,
+    }
+}
+
+fn resumable_playback_position_ms(
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    completed: bool,
+) -> i64 {
+    if completed || position_ms < 30_000 {
+        return 0;
+    }
+    if let Some(duration_ms) = duration_ms {
+        if duration_ms > 0 && duration_ms - position_ms < 30_000 {
+            return 0;
+        }
+    }
+
+    position_ms
+}
+
+fn playable_episode_targets(
+    conn: &mut SqliteConnection,
+    item: &MediaItem,
+) -> Result<Vec<PlayableEpisodeTarget>, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as media_items_dsl;
+
+    let mut targets = match item.item_type.as_str() {
+        "show" => {
+            let seasons = media_items_dsl::media_items
+                .filter(media_items_dsl::parent_id.eq(item.id))
+                .filter(media_items_dsl::item_type.eq("season"))
+                .filter(media_items_dsl::deleted_at.is_null())
+                .filter(media_items_dsl::missing_since.is_null())
+                .select(MediaItem::as_select())
+                .load::<MediaItem>(conn)?;
+            let season_numbers = seasons
+                .iter()
+                .map(|season| (season.id, season.season_number))
+                .collect::<HashMap<_, _>>();
+            let season_ids = seasons.iter().map(|season| season.id).collect::<Vec<_>>();
+            if season_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            media_items_dsl::media_items
+                .filter(media_items_dsl::parent_id.eq_any(&season_ids))
+                .filter(media_items_dsl::item_type.eq("episode"))
+                .filter(media_items_dsl::playable.eq(true))
+                .filter(media_items_dsl::deleted_at.is_null())
+                .filter(media_items_dsl::missing_since.is_null())
+                .select(MediaItem::as_select())
+                .load::<MediaItem>(conn)?
+                .into_iter()
+                .map(|episode| PlayableEpisodeTarget {
+                    season_number: episode.season_number.or_else(|| {
+                        episode
+                            .parent_id
+                            .and_then(|id| season_numbers.get(&id).copied().flatten())
+                    }),
+                    episode_number: episode.episode_number,
+                    item: episode,
+                })
+                .collect::<Vec<_>>()
+        }
+        "season" => media_items_dsl::media_items
+            .filter(media_items_dsl::parent_id.eq(item.id))
+            .filter(media_items_dsl::item_type.eq("episode"))
+            .filter(media_items_dsl::playable.eq(true))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .filter(media_items_dsl::missing_since.is_null())
+            .select(MediaItem::as_select())
+            .load::<MediaItem>(conn)?
+            .into_iter()
+            .map(|episode| PlayableEpisodeTarget {
+                season_number: episode.season_number.or(item.season_number),
+                episode_number: episode.episode_number,
+                item: episode,
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    targets.sort_by(|left, right| {
+        left.season_number
+            .unwrap_or(i32::MAX)
+            .cmp(&right.season_number.unwrap_or(i32::MAX))
+            .then_with(|| {
+                left.episode_number
+                    .unwrap_or(i32::MAX)
+                    .cmp(&right.episode_number.unwrap_or(i32::MAX))
+            })
+            .then_with(|| left.item.display_title.cmp(&right.item.display_title))
+            .then_with(|| left.item.id.cmp(&right.item.id))
+    });
+
+    Ok(targets)
 }
 
 fn get_continue_watching_items(
@@ -4550,6 +5139,9 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         modified_at: item.modified_at,
         playback_position_ms: None,
         playback_duration_ms: None,
+        playback_completed: false,
+        watch_count: 0,
+        last_watched_at: None,
         missing_since: item.missing_since,
     }
 }
@@ -5190,8 +5782,13 @@ fn to_media_item_detail(
         subtitle_tracks: Vec::new(),
         hierarchy: Vec::new(),
         children: Vec::new(),
+        playback_target: None,
+        restart_playback_target: None,
         playback_position_ms: None,
         playback_duration_ms: None,
+        playback_completed: false,
+        watch_count: 0,
+        last_watched_at: None,
         missing_since: item.missing_since,
     }
 }
@@ -5597,6 +6194,9 @@ mod tests {
             modified_at,
             playback_position_ms: None,
             playback_duration_ms: None,
+            playback_completed: false,
+            watch_count: 0,
+            last_watched_at: None,
             missing_since: None,
         }
     }

@@ -510,6 +510,8 @@ pub struct PlaybackProgress {
     pub position_ms: i64,
     pub duration_ms: Option<i64>,
     pub completed: bool,
+    pub watch_count: i32,
+    pub last_watched_at: Option<i64>,
     pub updated_at: Option<i64>,
 }
 
@@ -522,6 +524,8 @@ pub struct NewPlaybackProgress {
     pub position_ms: i64,
     pub duration_ms: Option<i64>,
     pub completed: bool,
+    pub watch_count: i32,
+    pub last_watched_at: Option<i64>,
     pub updated_at: Option<i64>,
 }
 

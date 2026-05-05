@@ -68,6 +68,7 @@ use crate::media::{
     ShowMetadataEpisodePlan,
     ShowMetadataSeasonPlan,
     TranscodingCapability,
+    apply_user_playback_context_to_detail,
     delete_missing_media_items,
     get_item_secondary_provider_references,
     get_item_youtube_theme_collection_references,
@@ -82,7 +83,6 @@ use crate::media::{
     get_playback_decision,
     get_preferred_item_artwork_metadata_link_for_languages,
     get_preferred_item_metadata_link,
-    get_user_playback_progress,
     inspect_transcoding_capability,
     library_exists,
     list_automatic_metadata_candidates,
@@ -90,14 +90,14 @@ use crate::media::{
     list_library_settings,
     list_media_item_children,
     list_media_items,
-    list_media_items_with_preferred_languages,
+    list_media_items_for_user_with_preferred_languages,
     mark_metadata_match_attempted,
     preferred_audio_stream_index,
     resolve_item_subtitle_path,
     resolve_item_theme_song_path,
     resolve_local_item_artwork_path,
     resolve_media_item_source_path,
-    search_media_items_with_preferred_languages,
+    search_media_items_for_user_with_preferred_languages,
     sync_persisted_library_catalog_for_library,
     upsert_playback_progress,
     upsert_show_metadata_descendant_items,
@@ -3397,7 +3397,9 @@ pub async fn get_items(
     let items = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
-            list_media_items_with_preferred_languages(conn, library_id, &languages)
+            list_media_items_for_user_with_preferred_languages(
+                conn, user_id, library_id, &languages,
+            )
         })
         .await
         .map_err(|error| {
@@ -3449,21 +3451,20 @@ pub async fn get_item(
     if !can_access {
         return Err(Status::NotFound);
     }
-    if let Some(progress) = db
-        .run(move |conn| get_user_playback_progress(conn, user_id, item_id))
+    let item = db
+        .run(move |conn| {
+            apply_user_playback_context_to_detail(conn, user_id, &mut item)?;
+            Ok::<_, diesel::result::Error>(item)
+        })
         .await
         .map_err(|error| {
             log::error!(
-                "Failed to load playback progress for media item {}: {}",
+                "Failed to load playback context for media item {}: {}",
                 item_id,
                 error
             );
             Status::InternalServerError
-        })?
-    {
-        item.playback_position_ms = Some(progress.position_ms);
-        item.playback_duration_ms = progress.duration_ms;
-    }
+        })?;
 
     Ok(Json(item))
 }
@@ -4614,11 +4615,12 @@ pub async fn search_items(
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
             let normalized_query = query.trim().to_ascii_lowercase();
-            let mut results =
-                search_media_items_with_preferred_languages(conn, &query, None, &languages)?
-                    .into_iter()
-                    .map(|item| MediaSearchResult::Item { item })
-                    .collect::<Vec<_>>();
+            let mut results = search_media_items_for_user_with_preferred_languages(
+                conn, user_id, &query, None, &languages,
+            )?
+            .into_iter()
+            .map(|item| MediaSearchResult::Item { item })
+            .collect::<Vec<_>>();
             if !normalized_query.is_empty() {
                 results.extend(
                     list_metadata_collection_summaries_with_preferred_languages(

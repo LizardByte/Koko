@@ -259,6 +259,31 @@ fn reconcile_legacy_migration_records(
     {
         repair_metadata_collection_schema(conn)?;
     }
+    if sqlite_migration_record_exists(conn, "0000031")?
+        && sqlite_table_exists(conn, "playback_progress")?
+    {
+        ensure_sqlite_column(
+            conn,
+            "playback_progress",
+            Some("completed"),
+            "watch_count",
+            "ALTER TABLE playback_progress ADD COLUMN watch_count INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_sqlite_column(
+            conn,
+            "playback_progress",
+            Some("completed"),
+            "last_watched_at",
+            "ALTER TABLE playback_progress ADD COLUMN last_watched_at BIGINT DEFAULT NULL",
+        )?;
+        conn.batch_execute(
+            "UPDATE playback_progress
+             SET watch_count = CASE WHEN completed THEN 1 ELSE 0 END,
+                 last_watched_at = CASE WHEN completed THEN updated_at ELSE NULL END
+             WHERE watch_count = 0
+               AND last_watched_at IS NULL",
+        )?;
+    }
 
     Ok(())
 }

@@ -1059,6 +1059,39 @@ legend {
   white-space: nowrap;
 }
 
+.media-card-status.is-watched {
+  background: rgba(10, 14, 24, 0.58);
+  color: #8bf3ca;
+}
+
+.media-card-progress {
+  --watch-progress: 0%;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 1.96rem;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  border-radius: 999px;
+  background: conic-gradient(#8bf3ca var(--watch-progress), rgba(255, 255, 255, 0.18) 0);
+  color: #f4f7fb;
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.media-card-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0.25rem;
+  border-radius: inherit;
+  background: rgba(10, 14, 24, 0.82);
+}
+
+.media-card-progress span {
+  position: relative;
+  z-index: 1;
+}
+
 .media-card-status .status-warning-icon {
   display: inline-flex;
   color: #ffe5b5;

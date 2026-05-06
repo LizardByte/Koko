@@ -15,6 +15,7 @@ pub mod media;
 pub mod metadata;
 pub mod scanner;
 pub mod scheduled_tasks;
+mod secrets;
 pub mod signal_handler;
 pub mod transcode;
 pub mod tray;

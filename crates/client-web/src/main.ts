@@ -4414,6 +4414,7 @@ function renderProviderSettingsCard(provider: MetadataProviderSettings): string 
   const status = state.metadataProviders.find((entry) => entry.id === provider.id);
   const logoUrl = status?.logo_dark_url ?? status?.logo_light_url;
   const showApiKey = Boolean(status?.requires_api_key);
+  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
   const showRequestSettings = provider.id !== 'local_nfo';
   return `
     <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
@@ -4430,7 +4431,8 @@ function renderProviderSettingsCard(provider: MetadataProviderSettings): string 
       ${status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : ''}
       ${status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : ''}
       ${showApiKey || showRequestSettings ? `<div class="form-row">
-        ${showApiKey ? `<label>API key<input name="${provider.id}_api_key" value="${escapeHtml(provider.api_key ?? '')}" autocomplete="off" /></label>` : ''}
+        ${showApiKey ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyConfigured ? 'Saved' : ''}" autocomplete="new-password" /></label>` : ''}
+        ${showApiKey && apiKeyConfigured ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>` : ''}
         ${showRequestSettings ? `
         <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
         <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
@@ -5314,6 +5316,7 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
         const prefix = provider.id;
         if (
           !formData.has(`${prefix}_api_key`)
+          && !formData.has(`${prefix}_clear_api_key`)
           && !formData.has(`${prefix}_rate_limit_per_second`)
           && !formData.has(`${prefix}_retry_attempts`)
           && !formData.has(`${prefix}_retry_backoff_ms`)
@@ -5321,11 +5324,15 @@ function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined
           return provider;
         }
 
+        const submittedApiKey = formData.has(`${prefix}_api_key`)
+          ? String(formData.get(`${prefix}_api_key`) ?? '').trim()
+          : undefined;
+        const clearApiKey = formData.get(`${prefix}_clear_api_key`) === 'on';
+
         return {
           ...provider,
-          api_key: formData.has(`${prefix}_api_key`)
-            ? String(formData.get(`${prefix}_api_key`) ?? '')
-            : provider.api_key,
+          api_key: submittedApiKey && !clearApiKey ? submittedApiKey : null,
+          clear_api_key: clearApiKey,
           rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
           retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
           retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),

@@ -712,7 +712,8 @@ let settings: SettingsSnapshot = {
       {
         id: 'tmdb',
         enabled: true,
-        api_key: 'mock-key',
+        api_key: null,
+        api_key_configured: true,
         language: 'en-US',
         rate_limit_per_second: 4,
         retry_attempts: 3,
@@ -721,7 +722,8 @@ let settings: SettingsSnapshot = {
       {
         id: 'tvdb',
         enabled: false,
-        api_key: '',
+        api_key: null,
+        api_key_configured: false,
         language: 'en-US',
         rate_limit_per_second: 4,
         retry_attempts: 3,
@@ -730,7 +732,8 @@ let settings: SettingsSnapshot = {
       {
         id: 'themerr',
         enabled: true,
-        api_key: '',
+        api_key: null,
+        api_key_configured: false,
         language: 'en-US',
         rate_limit_per_second: 4,
         retry_attempts: 3,

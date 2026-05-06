@@ -545,6 +545,9 @@ export interface MetadataProviderSettings {
   id: string;
   enabled: boolean;
   api_key?: string | null;
+  api_key_secret_ref?: string | null;
+  api_key_configured?: boolean;
+  clear_api_key?: boolean;
   language: string;
   rate_limit_per_second: number;
   retry_attempts: number;

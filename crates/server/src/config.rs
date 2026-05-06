@@ -1,6 +1,7 @@
 //! Configuration module for the application.
 
 // standard imports
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -169,6 +170,10 @@ fn default_provider_retry_backoff_ms() -> u32 {
     1_000
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn default_metadata_refresh_interval_days() -> Option<u32> {
     Some(30)
 }
@@ -220,6 +225,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::Tvdb,
             enabled: false,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -229,6 +237,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::MusicBrainz,
             enabled: false,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -238,6 +249,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::OpenLibrary,
             enabled: false,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -247,6 +261,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::LocalNfo,
             enabled: true,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -256,6 +273,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::Themerr,
             enabled: true,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -265,6 +285,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             id: MetadataProviderId::TrailerDb,
             enabled: true,
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -458,6 +481,28 @@ impl MetadataProviderId {
     }
 }
 
+fn metadata_provider_api_key_secret_ref(provider_id: &MetadataProviderId) -> String {
+    format!(
+        "metadata-provider:{}:api-key",
+        provider_id.as_storage_value()
+    )
+}
+
+fn normalized_secret_value(value: Option<&String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn metadata_provider_has_api_key_value(provider: &MetadataProviderSettings) -> bool {
+    normalized_secret_value(provider.api_key.as_ref()).is_some()
+        || normalized_secret_value(provider.api_key_secret_ref.as_ref()).is_some()
+}
+
+pub(crate) fn metadata_provider_api_key_configured(provider: &MetadataProviderSettings) -> bool {
+    metadata_provider_has_api_key_value(provider) || provider.api_key_configured
+}
+
 /// Configuration for one metadata provider.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct MetadataProviderSettings {
@@ -467,9 +512,18 @@ pub struct MetadataProviderSettings {
     /// Whether this provider is enabled.
     #[serde(default = "default_provider_enabled")]
     pub enabled: bool,
-    /// Provider-specific API key or token, when required.
-    #[serde(default)]
+    /// Provider-specific API key or token, when a new value is submitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Stable secret-store reference for this provider's API key or token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_secret_ref: Option<String>,
+    /// Whether this provider has a saved API key or token.
+    #[serde(default, skip_deserializing, skip_serializing_if = "is_false")]
+    pub api_key_configured: bool,
+    /// Whether the saved API key or token should be removed.
+    #[serde(default, skip_serializing)]
+    pub clear_api_key: bool,
     /// Preferred language for metadata results.
     #[serde(default = "default_metadata_language")]
     pub language: String,
@@ -682,6 +736,9 @@ impl Default for MetadataProviderSettings {
             id: MetadataProviderId::Tmdb,
             enabled: default_provider_enabled(),
             api_key: None,
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: default_metadata_language(),
             rate_limit_per_second: default_provider_rate_limit_per_second(),
             retry_attempts: default_provider_retry_attempts(),
@@ -826,12 +883,13 @@ pub fn normalize_settings(settings: &mut Settings) {
         };
         provider.rate_limit_per_second = provider.rate_limit_per_second.max(1);
         provider.retry_backoff_ms = provider.retry_backoff_ms.max(1);
-        provider.api_key = provider
-            .api_key
-            .as_ref()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        if provider.id == MetadataProviderId::Tvdb && provider.api_key.is_some() {
+        provider.api_key = normalized_secret_value(provider.api_key.as_ref());
+        provider.api_key_secret_ref = normalized_secret_value(provider.api_key_secret_ref.as_ref());
+        provider.api_key_configured = metadata_provider_has_api_key_value(provider);
+        if provider.clear_api_key {
+            provider.api_key_configured = false;
+        }
+        if provider.id == MetadataProviderId::Tvdb && provider.api_key_configured {
             // Older settings snapshots can retain TVDB as disabled even after an API key
             // is saved, which leaves TVDB-only libraries unusable.
             provider.enabled = true;
@@ -859,6 +917,112 @@ pub fn normalize_settings(settings: &mut Settings) {
                 .push(default_metadata_provider_settings(provider_id));
         }
     }
+}
+
+pub(crate) fn merge_metadata_provider_secret_state(
+    settings: &mut Settings,
+    existing: &Settings,
+) {
+    let existing_providers = existing
+        .metadata
+        .providers
+        .iter()
+        .map(|provider| (provider.id.clone(), provider.clone()))
+        .collect::<HashMap<_, _>>();
+
+    for provider in &mut settings.metadata.providers {
+        let existing_provider = existing_providers.get(&provider.id);
+        let submitted_api_key = normalized_secret_value(provider.api_key.as_ref());
+        provider.api_key = submitted_api_key;
+
+        if provider.clear_api_key {
+            if provider.api_key_secret_ref.is_none() {
+                provider.api_key_secret_ref =
+                    existing_provider.and_then(|provider| provider.api_key_secret_ref.clone());
+            }
+            continue;
+        }
+
+        if provider.api_key.is_none() {
+            if let Some(existing_provider) = existing_provider {
+                provider.api_key_secret_ref = existing_provider.api_key_secret_ref.clone();
+                if provider.api_key_secret_ref.is_none() {
+                    provider.api_key = normalized_secret_value(existing_provider.api_key.as_ref());
+                }
+                provider.api_key_configured =
+                    metadata_provider_api_key_configured(existing_provider);
+            }
+        }
+    }
+}
+
+fn persist_metadata_provider_secret(provider: &mut MetadataProviderSettings) -> Result<(), String> {
+    if provider.clear_api_key {
+        if let Some(secret_ref) = provider.api_key_secret_ref.take() {
+            crate::secrets::delete_secret(&secret_ref)?;
+        }
+        provider.api_key = None;
+        provider.api_key_configured = false;
+        provider.clear_api_key = false;
+        return Ok(());
+    }
+
+    if let Some(api_key) = provider.api_key.take() {
+        let secret_ref = provider
+            .api_key_secret_ref
+            .clone()
+            .unwrap_or_else(|| metadata_provider_api_key_secret_ref(&provider.id));
+        crate::secrets::store_secret(&secret_ref, &api_key)?;
+        provider.api_key_secret_ref = Some(secret_ref);
+        provider.api_key_configured = true;
+    } else {
+        provider.api_key_configured = provider.api_key_secret_ref.is_some();
+    }
+    provider.clear_api_key = false;
+
+    Ok(())
+}
+
+pub(crate) fn settings_with_persisted_secrets(settings: &Settings) -> Result<Settings, String> {
+    let mut normalized = settings.clone();
+    normalize_settings(&mut normalized);
+
+    for provider in &mut normalized.metadata.providers {
+        persist_metadata_provider_secret(provider)?;
+    }
+    normalize_settings(&mut normalized);
+    Ok(normalized)
+}
+
+pub(crate) fn settings_for_api_response(settings: &Settings) -> Settings {
+    let mut redacted = settings.clone();
+    normalize_settings(&mut redacted);
+    for provider in &mut redacted.metadata.providers {
+        provider.api_key = None;
+        provider.api_key_configured = metadata_provider_api_key_configured(provider);
+        provider.api_key_secret_ref = None;
+        provider.clear_api_key = false;
+    }
+    redacted
+}
+
+pub(crate) fn resolve_metadata_provider_api_key(
+    provider: &mut MetadataProviderSettings
+) -> Result<(), String> {
+    if normalized_secret_value(provider.api_key.as_ref()).is_some() {
+        provider.api_key = normalized_secret_value(provider.api_key.as_ref());
+        return Ok(());
+    }
+
+    let Some(secret_ref) = normalized_secret_value(provider.api_key_secret_ref.as_ref()) else {
+        provider.api_key = None;
+        provider.api_key_configured = false;
+        return Ok(());
+    };
+
+    provider.api_key = crate::secrets::load_secret(&secret_ref)?;
+    provider.api_key_configured = provider.api_key.is_some();
+    Ok(())
 }
 
 fn normalize_scheduled_time(
@@ -927,6 +1091,11 @@ pub fn settings_for_persistence(settings: &Settings) -> Settings {
     let mut normalized = settings.clone();
     normalize_settings(&mut normalized);
     normalized.media.libraries.clear();
+    for provider in &mut normalized.metadata.providers {
+        provider.api_key = None;
+        provider.api_key_configured = metadata_provider_api_key_configured(provider);
+        provider.clear_api_key = false;
+    }
     normalized
 }
 
@@ -1012,8 +1181,7 @@ pub fn save_database_settings(
     conn: &mut diesel::SqliteConnection,
     settings: &Settings,
 ) -> Result<(), String> {
-    let mut normalized = settings.clone();
-    normalize_settings(&mut normalized);
+    let normalized = settings_with_persisted_secrets(settings)?;
 
     upsert_runtime_setting(
         conn,
@@ -1048,8 +1216,7 @@ pub fn seed_database_settings(
     conn: &mut diesel::SqliteConnection,
     settings: &Settings,
 ) -> Result<(), String> {
-    let mut normalized = settings.clone();
-    normalize_settings(&mut normalized);
+    let normalized = settings_with_persisted_secrets(settings)?;
 
     insert_runtime_setting_if_missing(
         conn,
@@ -1120,7 +1287,16 @@ pub fn load_database_settings(
             _ => {}
         }
     }
+    let has_plaintext_provider_secrets = settings
+        .metadata
+        .providers
+        .iter()
+        .any(|provider| normalized_secret_value(provider.api_key.as_ref()).is_some());
     normalize_settings(&mut settings);
+    if has_plaintext_provider_secrets {
+        settings = settings_with_persisted_secrets(&settings)?;
+        save_database_settings(conn, &settings)?;
+    }
     Ok(settings)
 }
 

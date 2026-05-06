@@ -53,6 +53,8 @@ use crate::config::{
     MetadataProviderId,
     MetadataProviderSettings,
     MetadataSettings,
+    metadata_provider_api_key_configured,
+    resolve_metadata_provider_api_key,
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
@@ -884,8 +886,8 @@ pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProvid
                 .unwrap_or_else(|| "en-US".into());
             let configured = if descriptor.requires_api_key {
                 setting
-                    .and_then(|provider| provider.api_key)
-                    .map(|value| !value.trim().is_empty())
+                    .as_ref()
+                    .map(metadata_provider_api_key_configured)
                     .unwrap_or(false)
             } else {
                 true
@@ -3407,7 +3409,7 @@ fn provider_settings(
     settings: &MetadataSettings,
     provider_id: MetadataProviderId,
 ) -> Result<MetadataProviderSettings, String> {
-    let provider = settings
+    let mut provider = settings
         .providers
         .iter()
         .find(|provider| provider.id == provider_id)
@@ -3418,6 +3420,9 @@ fn provider_settings(
         .provider(&provider_id)
         .map(|provider| provider.descriptor().requires_api_key)
         .unwrap_or(true);
+    if requires_api_key {
+        resolve_metadata_provider_api_key(&mut provider)?;
+    }
     let api_key_missing = provider
         .api_key
         .as_deref()

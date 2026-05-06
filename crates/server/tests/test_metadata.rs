@@ -1,6 +1,8 @@
 // local imports
 use diesel::Connection;
+use diesel::RunQueryDsl;
 use diesel::connection::SimpleConnection;
+use diesel::sql_types::Text;
 use koko::config::{
     DatabaseMaintenanceTaskSettings,
     FfmpegSettings,
@@ -30,6 +32,16 @@ use koko::metadata::{
     persist_item_metadata_assets,
 };
 use std::fs;
+
+#[derive(diesel::QueryableByName)]
+struct SettingValue {
+    #[diesel(sql_type = Text)]
+    value: String,
+}
+
+fn use_sample_secret_store() {
+    std::env::set_var("KOKO_SECRET_STORE", "sample");
+}
 
 #[test]
 fn test_metadata_provider_statuses_include_tmdb() {
@@ -100,6 +112,9 @@ fn test_metadata_provider_statuses_respect_api_key_configuration() {
             id: MetadataProviderId::Tmdb,
             enabled: true,
             api_key: Some("test-key".into()),
+            api_key_secret_ref: None,
+            api_key_configured: false,
+            clear_api_key: false,
             language: "en-US".into(),
             rate_limit_per_second: 4,
             retry_attempts: 3,
@@ -186,12 +201,15 @@ fn test_settings_persistence_clears_library_definitions() {
 }
 
 #[test]
-fn test_settings_persistence_includes_tvdb_provider_and_preserves_api_key() {
+fn test_settings_persistence_includes_tvdb_provider_and_redacts_api_key() {
     let mut settings = Settings::default();
     settings.metadata.providers = vec![MetadataProviderSettings {
         id: MetadataProviderId::Tmdb,
         enabled: true,
         api_key: Some("tmdb-key".into()),
+        api_key_secret_ref: None,
+        api_key_configured: false,
+        clear_api_key: false,
         language: "en-US".into(),
         rate_limit_per_second: 4,
         retry_attempts: 3,
@@ -214,11 +232,14 @@ fn test_settings_persistence_includes_tvdb_provider_and_preserves_api_key() {
         .iter()
         .find(|provider| provider.id == MetadataProviderId::Tmdb)
         .expect("Expected settings persistence to keep the TMDB provider entry");
-    assert_eq!(tmdb.api_key.as_deref(), Some("tmdb-key"));
+    assert_eq!(tmdb.api_key, None);
+    assert!(tmdb.api_key_configured);
 }
 
 #[test]
 fn test_database_settings_round_trip_runtime_sections() {
+    use_sample_secret_store();
+
     let mut conn =
         diesel::SqliteConnection::establish(":memory:").expect("Expected in-memory SQLite");
     conn.batch_execute(
@@ -260,6 +281,9 @@ fn test_database_settings_round_trip_runtime_sections() {
         id: MetadataProviderId::Tmdb,
         enabled: true,
         api_key: Some("tmdb-key".into()),
+        api_key_secret_ref: None,
+        api_key_configured: false,
+        clear_api_key: false,
         language: "en-US".into(),
         rate_limit_per_second: 4,
         retry_attempts: 3,
@@ -290,10 +314,18 @@ fn test_database_settings_round_trip_runtime_sections() {
     );
     assert_eq!(loaded.scheduled_tasks.trash_cleanup.interval_days, 2);
     assert_eq!(loaded.scheduled_tasks.database_maintenance.interval_days, 3);
-    assert_eq!(
-        loaded.metadata.providers[0].api_key.as_deref(),
-        Some("tmdb-key")
+    assert_eq!(loaded.metadata.providers[0].api_key, None);
+    assert!(loaded.metadata.providers[0].api_key_configured);
+    assert!(loaded.metadata.providers[0].api_key_secret_ref.is_some());
+    assert!(
+        list_provider_statuses(&loaded.metadata)
+            .iter()
+            .any(|provider| provider.id == MetadataProviderId::Tmdb && provider.configured)
     );
+    let metadata_row = diesel::sql_query("SELECT value FROM app_settings WHERE key = 'metadata'")
+        .get_result::<SettingValue>(&mut conn)
+        .unwrap();
+    assert!(!metadata_row.value.contains("tmdb-key"));
 
     let mut updated = loaded.clone();
     updated.server.port = 8282;

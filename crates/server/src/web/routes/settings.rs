@@ -29,10 +29,13 @@ use crate::config::{
     MediaLibrarySettings,
     Settings,
     current_settings,
+    merge_metadata_provider_secret_state,
     replace_current_settings,
     save_database_settings,
     save_settings,
     settings_file_path,
+    settings_for_api_response,
+    settings_with_persisted_secrets,
 };
 use crate::db::DbConn;
 use crate::globals;
@@ -117,7 +120,7 @@ fn merged_settings_response(
     settings: Settings,
     libraries: Vec<MediaLibrarySettings>,
 ) -> SettingsResponse {
-    let mut merged = settings;
+    let mut merged = settings_for_api_response(&settings);
     merged.media.libraries = libraries;
     SettingsResponse {
         settings: merged,
@@ -359,9 +362,15 @@ pub async fn update_settings(
     db: DbConn,
     settings: Json<Settings>,
 ) -> Result<Json<SettingsResponse>, Status> {
-    let settings = settings.into_inner();
-    let libraries = settings.media.libraries.clone();
-    let settings_for_database = settings.clone();
+    let mut settings = settings.into_inner();
+    let existing_settings = current_settings();
+    merge_metadata_provider_secret_state(&mut settings, &existing_settings);
+    let settings_for_database = settings_with_persisted_secrets(&settings).map_err(|error| {
+        log::error!("Failed to persist provider credentials: {}", error);
+        Status::InternalServerError
+    })?;
+    let libraries = settings_for_database.media.libraries.clone();
+    let settings_for_database_for_db = settings_for_database.clone();
     let persisted_libraries = db
         .run(move |conn| {
             let existing_count =
@@ -383,7 +392,7 @@ pub async fn update_settings(
             } else {
                 replace_library_settings(conn, &libraries).map_err(|error| error.to_string())?
             };
-            save_database_settings(conn, &settings_for_database)?;
+            save_database_settings(conn, &settings_for_database_for_db)?;
             Ok::<_, String>(persisted_libraries)
         })
         .await
@@ -392,13 +401,13 @@ pub async fn update_settings(
             Status::InternalServerError
         })?;
 
-    persist_bootstrap_settings(&settings)?;
-    let mut runtime_settings = settings.clone();
+    persist_bootstrap_settings(&settings_for_database)?;
+    let mut runtime_settings = settings_for_database.clone();
     runtime_settings.media.libraries.clear();
     replace_current_settings(runtime_settings);
 
     Ok(Json(merged_settings_response(
-        settings,
+        settings_for_database,
         persisted_libraries,
     )))
 }

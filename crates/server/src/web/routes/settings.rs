@@ -52,8 +52,11 @@ use crate::media::{
 };
 
 static STRUCTURED_LOG_LINE_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?P<timestamp>\S+) \[(?P<level>[^]]+)\] \[(?P<module>[^]]+)\] \[(?P<source>[^]]+)\] (?P<message>.*)$")
-        .expect("Failed to compile structured log regex")
+    Regex::new(concat!(
+        r"^(?P<timestamp>\S+) \[(?P<level>[^]]+)\] \[(?P<module>[^]]+)\] ",
+        r"\[(?P<source>[^]]+)\] (?P<message>.*)$",
+    ))
+    .expect("Failed to compile structured log regex")
 });
 
 /// Settings response payload.

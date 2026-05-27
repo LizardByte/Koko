@@ -27,7 +27,10 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         requires_api_key: false,
         implemented: true,
         role: MetadataProviderRole::Secondary,
-        extends_provider_ids: vec![MetadataProviderId::Tmdb],
+        extends_provider_ids: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::Tvdb,
+        ],
         attribution_text: "Theme metadata provided by ThemerrDB.".into(),
         attribution_url: "https://app.lizardbyte.dev/ThemerrDB".into(),
         logo_light_url: Some(
@@ -104,6 +107,27 @@ pub(crate) async fn fetch_youtube_theme_metadata(
     }))
 }
 
+pub(crate) fn item_lookup_reference_priority(
+    source_provider_id: &MetadataProviderId,
+    media_type: &str,
+    database_id: &str,
+) -> Option<usize> {
+    let normalized_database_id = normalize_database_id(media_type, database_id)?;
+    match source_provider_id {
+        MetadataProviderId::Tmdb | MetadataProviderId::Tvdb => {
+            if !themerr_supports_item_media_type(media_type) {
+                return None;
+            }
+            match normalized_database_id {
+                "themoviedb" => Some(0),
+                "imdb" => Some(1),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 struct YoutubeOEmbedMetadata {
     title: Option<String>,
@@ -138,6 +162,13 @@ fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
         "collection" | "movie_collection" => Some("movie_collections"),
         _ => None,
     }
+}
+
+fn themerr_supports_item_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type.trim().to_ascii_lowercase().as_str(),
+        "movie" | "tv" | "series" | "show"
+    )
 }
 
 fn normalize_database_id(
@@ -180,9 +211,11 @@ fn text_field(
 mod tests {
     use super::{
         database_path_for_media_type,
+        item_lookup_reference_priority,
         normalize_database_id,
         parse_youtube_theme_url,
     };
+    use crate::config::MetadataProviderId;
 
     #[test]
     fn parse_youtube_theme_url_extracts_watch_url() {
@@ -221,5 +254,52 @@ mod tests {
             Some("themoviedb")
         );
         assert_eq!(normalize_database_id("collection", "imdb"), None);
+    }
+
+    #[test]
+    fn imdb_theme_lookup_is_movie_only() {
+        assert_eq!(database_path_for_media_type("movie"), Some("movies"));
+        assert_eq!(database_path_for_media_type("series"), Some("tv_shows"));
+        assert_eq!(
+            database_path_for_media_type("collection"),
+            Some("movie_collections")
+        );
+        assert_eq!(normalize_database_id("movie", "imdb"), Some("imdb"));
+        assert_eq!(normalize_database_id("series", "imdb"), None);
+        assert_eq!(normalize_database_id("tv", "imdb"), None);
+        assert_eq!(normalize_database_id("collection", "imdb"), None);
+    }
+
+    #[test]
+    fn item_lookup_reference_support_follows_source_provider_and_media_type() {
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "movie", "tmdb").is_some()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "series", "tmdb").is_some()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "movie", "imdb").is_some()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "imdb").is_some()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "series", "tmdb").is_some()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "series", "imdb").is_none()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "thetvdb").is_none()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "collection", "tmdb")
+                .is_none()
+        );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "tmdb")
+                < item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "imdb")
+        );
     }
 }

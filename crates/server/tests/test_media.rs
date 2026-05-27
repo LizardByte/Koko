@@ -1963,6 +1963,8 @@ fn test_metadata_snapshot_upsert_keeps_shallow_people_without_enrichment() {
                 "credits": {
                     "cast": [
                         {
+                            "cast_id": 7,
+                            "credit_id": "52fe425bc3a36847f80181c7",
                             "id": 6384,
                             "name": "Keanu Reeves",
                             "character": "Neo",
@@ -2006,6 +2008,122 @@ fn test_metadata_snapshot_upsert_keeps_shallow_people_without_enrichment() {
             "SELECT COUNT(*) AS count FROM metadata_people WHERE biography IS NULL"
         ),
         1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_person_external_ids WHERE source IN ('cast', \
+             'credit')"
+        ),
+        0
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_metadata_snapshot_upsert_stores_person_external_ids() {
+    let root = unique_temp_dir("metadata_person_external_ids");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("movie.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) = create_test_connection("metadata_person_external_ids_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let movie = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "credits": {
+                        "cast": [
+                            {
+                                "id": 6384,
+                                "name": "Keanu Reeves",
+                                "character": "Neo",
+                                "order": 0,
+                                "koko_person": {
+                                    "id": 6384,
+                                    "name": "Keanu Reeves",
+                                    "external_ids": {
+                                        "imdb_id": "nm0000206",
+                                        "wikidata_id": "Q43416"
+                                    }
+                                }
+                            }
+                        ],
+                        "crew": []
+                    }
+                })
+                .to_string(),
+            ),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_person_external_ids WHERE source = 'tmdb' AND \
+             external_id = '6384'"
+        ),
+        1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_person_external_ids WHERE source = 'imdb' AND \
+             external_id = 'nm0000206'"
+        ),
+        1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM metadata_person_external_ids WHERE source = 'wikidata' \
+             AND external_id = 'Q43416'"
+        ),
+        1
+    );
+    assert_eq!(
+        sql_count(
+            &mut connection,
+            "SELECT COUNT(*) AS count FROM pragma_table_info('metadata_people') WHERE name = \
+             'identity_key'"
+        ),
+        0
     );
 
     drop(connection);
@@ -3150,6 +3268,168 @@ fn test_secondary_theme_song_reference_includes_external_id_fallbacks() {
             ("movie".into(), "tmdb".into(), "603".into()),
             ("movie".into(), "imdb".into(), "tt0133093".into()),
         ]
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_themerr_movie_references_prefer_tvdb_tmdb_before_imdb_external_id() {
+    let root = unique_temp_dir("secondary_theme_song_reference_tvdb_movie");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("Top Gun Maverick (2022).mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Movies".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Movies,
+        scanner: Default::default(),
+        metadata_providers: vec![MetadataProviderId::Tvdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("secondary_theme_song_reference_tvdb_movie_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let movie = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "movie")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        movie.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tvdb,
+            external_id: "901".into(),
+            media_type: Some("movie".into()),
+            title: Some("Top Gun: Maverick".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2022),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "data": {
+                        "id": 901,
+                        "name": "Top Gun: Maverick",
+                        "remoteIds": [
+                            {
+                                "type": 2,
+                                "id": "tt1745960"
+                            },
+                            {
+                                "type": 12,
+                                "id": "361743"
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            movie.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
+        vec![
+            ("movie".into(), "tmdb".into(), "361743".into()),
+            ("movie".into(), "imdb".into(), "tt1745960".into()),
+        ]
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_themerr_references_include_tvdb_show_tmdb_fallback() {
+    let root = unique_temp_dir("secondary_theme_song_reference_tvdb");
+    let season_dir = root.join("Mock Show").join("Season 1");
+    fs::create_dir_all(&season_dir).unwrap();
+    fs::write(season_dir.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
+
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
+        metadata_providers: vec![MetadataProviderId::Tvdb],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+
+    let (mut connection, db_path) =
+        create_test_connection("secondary_theme_song_reference_tvdb_tmdb_db");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let show = list_media_items(&mut connection, Some(persisted[0].id))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.item_type == "show")
+        .unwrap();
+
+    upsert_item_metadata_snapshot(
+        &mut connection,
+        show.id,
+        &StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tvdb,
+            external_id: "121361".into(),
+            media_type: Some("series".into()),
+            title: Some("Game of Thrones".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2011),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            provider_payload_json: Some(
+                serde_json::json!({
+                    "data": {
+                        "id": 121361,
+                        "name": "Game of Thrones",
+                        "remoteIds": [
+                            {
+                                "type": 12,
+                                "id": 1399
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        get_item_youtube_theme_provider_references(
+            &mut connection,
+            show.id,
+            MetadataProviderId::Themerr
+        )
+        .unwrap(),
+        vec![("series".into(), "tmdb".into(), "1399".into())]
     );
 
     drop(connection);

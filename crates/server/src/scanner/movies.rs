@@ -54,15 +54,21 @@ fn display_title_from_name(value: &str) -> String {
     static PARENTHETICAL_YEAR_REGEX: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"[\(\[]\s*(19\d{2}|20\d{2}|21\d{2})\s*[\)\]]").unwrap());
     static DASH_FORMAT_SUFFIX_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)\s+[-–]\s+(?:bluray|blu-ray|brrip|web[- ]?dl|webrip|remux|dvdrip|hdtv|uhd|dvd|proper|repack|extended|unrated|director'?s cut|theatrical|final cut)?(?:[\s._-]*(?:2160p|1080p|720p|480p|4k|uhd|hdr|dv|x264|x265|h264|h265|hevc|av1|aac|dts|truehd|atmos|remux|bluray|blu-ray|web[- ]?dl|webrip|brrip|dvdrip))*\s*$",
-        )
+        Regex::new(concat!(
+            r"(?i)\s+[-–]\s+(?:bluray|blu-ray|brrip|web[- ]?dl|webrip|remux",
+            r"|dvdrip|hdtv|uhd|dvd|proper|repack|extended|unrated|director'?s cut",
+            r"|theatrical|final cut)?(?:[\s._-]*(?:2160p|1080p|720p|480p|4k",
+            r"|uhd|hdr|dv|x264|x265|h264|h265|hevc|av1|aac|dts|truehd|atmos",
+            r"|remux|bluray|blu-ray|web[- ]?dl|webrip|brrip|dvdrip))*\s*$",
+        ))
         .unwrap()
     });
     static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(
-            r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|x264|x265|h264|h265|hevc|av1|hdr|dv|webrip|web[- ]?dl|bluray|blu-ray|brrip|dvdrip|remux|aac|dts|truehd|atmos)\b",
-        )
+        Regex::new(concat!(
+            r"(?i)\b(2160p|1080p|720p|480p|4k|uhd|x264|x265|h264|h265",
+            r"|hevc|av1|hdr|dv|webrip|web[- ]?dl|bluray|blu-ray|brrip",
+            r"|dvdrip|remux|aac|dts|truehd|atmos)\b",
+        ))
         .unwrap()
     });
     static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+").unwrap());

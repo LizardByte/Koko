@@ -133,7 +133,6 @@ table! {
         id -> Integer,
         provider_id -> Text,
         external_id -> Nullable<Text>,
-        identity_key -> Text,
         locale_key -> Text,
         name -> Text,
         known_for_json -> Nullable<Text>,
@@ -145,6 +144,16 @@ table! {
         profile_url -> Nullable<Text>,
         image_url -> Nullable<Text>,
         cached_image_path -> Nullable<Text>,
+        updated_at -> Nullable<BigInt>,
+    }
+}
+
+table! {
+    metadata_person_external_ids (id) {
+        id -> Integer,
+        person_id -> Integer,
+        source -> Text,
+        external_id -> Text,
         updated_at -> Nullable<BigInt>,
     }
 }
@@ -276,6 +285,7 @@ joinable!(item_metadata_links -> media_items (media_item_id));
 joinable!(item_metadata_people -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> metadata_people (person_id));
+joinable!(metadata_person_external_ids -> metadata_people (person_id));
 joinable!(media_file_libraries -> media_files (media_file_id));
 joinable!(media_file_libraries -> media_libraries (library_id));
 joinable!(media_file_libraries -> media_items (media_item_id));
@@ -295,6 +305,7 @@ allow_tables_to_appear_in_same_query!(
     metadata_extras,
     metadata_people,
     metadata_person_credits,
+    metadata_person_external_ids,
     media_file_libraries,
     media_files,
     media_items,

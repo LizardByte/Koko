@@ -155,6 +155,27 @@ pub trait MetadataProvider {
         Box::pin(async move { Ok(snapshot.clone()) })
     }
 
+    /// Return whether this secondary provider should attempt a source metadata lookup candidate.
+    fn supports_secondary_metadata_reference(
+        &self,
+        source_provider_id: &MetadataProviderId,
+        media_type: &str,
+        database_id: &str,
+    ) -> bool {
+        self.secondary_metadata_reference_priority(source_provider_id, media_type, database_id)
+            .is_some()
+    }
+
+    /// Sort priority for supported source metadata lookup candidates.
+    fn secondary_metadata_reference_priority(
+        &self,
+        _source_provider_id: &MetadataProviderId,
+        _media_type: &str,
+        _database_id: &str,
+    ) -> Option<usize> {
+        Some(0)
+    }
+
     /// Resolve item-level metadata fields contributed by a secondary provider.
     fn fetch_secondary_metadata<'a>(
         &'a self,
@@ -497,6 +518,15 @@ impl MetadataProvider for TvdbMetadataProvider {
 impl MetadataProvider for ThemerrMetadataProvider {
     fn descriptor(&self) -> MetadataProviderDescriptor {
         themerr::descriptor()
+    }
+
+    fn secondary_metadata_reference_priority(
+        &self,
+        source_provider_id: &MetadataProviderId,
+        media_type: &str,
+        database_id: &str,
+    ) -> Option<usize> {
+        themerr::item_lookup_reference_priority(source_provider_id, media_type, database_id)
     }
 
     fn fetch_secondary_metadata<'a>(

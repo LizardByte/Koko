@@ -75,6 +75,7 @@ use crate::db::models::{
     NewMetadataExtra,
     NewMetadataPerson,
     NewMetadataPersonCredit,
+    NewMetadataPersonExternalId,
 };
 use crate::utils::current_timestamp;
 
@@ -547,6 +548,41 @@ pub struct ProviderExternalId {
     pub external_id: String,
 }
 
+pub(crate) fn normalize_external_id_source(source: &str) -> Option<String> {
+    let source = source.trim().to_ascii_lowercase();
+    let source = source
+        .strip_prefix("https://")
+        .or_else(|| source.strip_prefix("http://"))
+        .unwrap_or(&source);
+    let source = source.strip_prefix("www.").unwrap_or(source);
+    let source = source.trim_end_matches('/');
+    let source = match source {
+        "imdb.com" | "imdb_id" => "imdb",
+        "themoviedb.org" | "themoviedb.com" | "themoviedb" | "tmdb.com" | "tmdb_id" => "tmdb",
+        "thetvdb.com" | "tvdb.com" | "tvdb" | "tvdb_id" => "thetvdb",
+        "facebook.com" | "facebook_id" => "facebook",
+        "instagram.com" | "instagram_id" => "instagram",
+        "twitter.com" | "x.com" | "twitter_id" => "twitter",
+        "wikidata.org" | "wikidata_id" => "wikidata",
+        "youtube.com" | "youtube_id" => "youtube",
+        other => other,
+    };
+
+    let mut normalized = String::new();
+    let mut previous_was_separator = false;
+    for character in source.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            normalized.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let normalized = normalized.trim_matches('_').to_string();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 /// Provider-normalized collection metadata ready for persistence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderMetadataCollection {
@@ -569,6 +605,8 @@ pub struct ProviderMetadataCollection {
 pub struct ProviderMetadataPerson {
     /// Provider-side person identifier.
     pub external_id: Option<String>,
+    /// External identifiers normalized into Koko's database for cross-provider person matching.
+    pub external_ids: Vec<ProviderExternalId>,
     /// Display name.
     pub name: String,
     /// Titles this person is known for.
@@ -680,9 +718,11 @@ static TITLE_COLON_DASH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*-\s+")
 static YOUTUBE_VIDEO_ID_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[A-Za-z0-9_-]{11}$").unwrap());
 static NOISE_TOKEN_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"(?i)\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|hdr|dv|webrip|web[- ]dl|bluray|brrip|dvdrip|remux|proper|repack|extended|unrated|criterion|aac|dts|truehd|atmos)\b",
-    )
+    Regex::new(concat!(
+        r"(?i)\b(2160p|1080p|720p|480p|x264|x265|h264|h265|hevc|hdr|dv",
+        r"|webrip|web[- ]dl|bluray|brrip|dvdrip|remux|proper|repack|extended",
+        r"|unrated|criterion|aac|dts|truehd|atmos)\b",
+    ))
     .unwrap()
 });
 
@@ -995,11 +1035,7 @@ pub fn get_metadata_person_for_languages(
         return Ok(None);
     };
 
-    let rows = people_dsl::metadata_people
-        .filter(people_dsl::provider_id.eq(&source_person.provider_id))
-        .filter(people_dsl::identity_key.eq(&source_person.identity_key))
-        .select(MetadataPerson::as_select())
-        .load::<MetadataPerson>(conn)?;
+    let rows = load_metadata_people_for_row_identity(conn, &source_person)?;
     Ok(preferred_person_row(rows, preferred_languages).map(to_metadata_person_summary))
 }
 
@@ -1101,8 +1137,9 @@ pub fn search_metadata_people_with_preferred_languages(
         .load::<MetadataPerson>(conn)?;
     let mut grouped = HashMap::<(String, String), Vec<MetadataPerson>>::new();
     for row in rows {
+        let identity_key = metadata_person_identity_key(&row);
         grouped
-            .entry((row.provider_id.clone(), row.identity_key.clone()))
+            .entry((row.provider_id.clone(), identity_key))
             .or_default()
             .push(row);
     }
@@ -1137,6 +1174,32 @@ fn metadata_person_matches_query(
     query: &str,
 ) -> bool {
     person.name.to_ascii_lowercase().contains(query)
+}
+
+fn load_metadata_people_for_row_identity(
+    conn: &mut SqliteConnection,
+    person: &MetadataPerson,
+) -> Result<Vec<MetadataPerson>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    if let Some(external_id) = normalized_external_id(person.external_id.as_deref()) {
+        return people_dsl::metadata_people
+            .filter(people_dsl::provider_id.eq(&person.provider_id))
+            .filter(people_dsl::external_id.eq(external_id))
+            .select(MetadataPerson::as_select())
+            .load::<MetadataPerson>(conn);
+    }
+
+    let identity_key = metadata_person_identity_key(person);
+    let rows = people_dsl::metadata_people
+        .filter(people_dsl::provider_id.eq(&person.provider_id))
+        .filter(people_dsl::external_id.is_null())
+        .select(MetadataPerson::as_select())
+        .load::<MetadataPerson>(conn)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| metadata_person_identity_key(row) == identity_key)
+        .collect())
 }
 
 fn metadata_person_credit_character_person_ids(
@@ -1177,11 +1240,8 @@ pub fn get_metadata_person_locale_peer_ids(
         return Ok(Vec::new());
     };
 
-    people_dsl::metadata_people
-        .filter(people_dsl::provider_id.eq(&source_person.provider_id))
-        .filter(people_dsl::identity_key.eq(&source_person.identity_key))
-        .select(people_dsl::id)
-        .load::<i32>(conn)
+    load_metadata_people_for_row_identity(conn, &source_person)
+        .map(|rows| rows.into_iter().map(|person| person.id).collect())
 }
 
 /// Return all item credits for one normalized metadata person.
@@ -4117,7 +4177,9 @@ fn sync_item_metadata_external_ids(
         .iter()
         .chain(std::iter::once(&primary_external_id))
     {
-        let source = external_id.source.trim().to_ascii_lowercase();
+        let Some(source) = normalize_external_id_source(&external_id.source) else {
+            continue;
+        };
         let external_id = external_id.external_id.trim().to_string();
         if source.is_empty() || external_id.is_empty() || !seen.insert(source.clone()) {
             continue;
@@ -4193,15 +4255,13 @@ fn sync_item_metadata_people(
         .execute(conn)?;
 
     for person in people {
-        let identity_key = person_identity_key(&person);
         let provider_id = snapshot.provider_id.as_storage_value().to_string();
-        let existing_person = normalized_people_dsl::metadata_people
-            .filter(normalized_people_dsl::provider_id.eq(&provider_id))
-            .filter(normalized_people_dsl::identity_key.eq(&identity_key))
-            .filter(normalized_people_dsl::locale_key.eq(&snapshot.locale_key))
-            .select(MetadataPerson::as_select())
-            .first(conn)
-            .optional()?;
+        let existing_person = find_metadata_person_for_provider_person(
+            conn,
+            &provider_id,
+            &snapshot.locale_key,
+            &person,
+        )?;
         let normalized_person = if let Some(existing_person) = existing_person {
             let payload = merged_metadata_person_payload(&existing_person, &person);
             diesel::update(
@@ -4217,28 +4277,23 @@ fn sync_item_metadata_people(
         } else {
             let payload = new_metadata_person_payload(
                 provider_id.clone(),
-                person.external_id.clone(),
-                identity_key.clone(),
                 snapshot.locale_key.clone(),
                 &person,
             );
             diesel::insert_into(normalized_people_dsl::metadata_people)
                 .values(&payload)
-                .on_conflict((
-                    normalized_people_dsl::provider_id,
-                    normalized_people_dsl::identity_key,
-                    normalized_people_dsl::locale_key,
-                ))
-                .do_update()
-                .set(&payload)
+                .on_conflict_do_nothing()
                 .execute(conn)?;
-            normalized_people_dsl::metadata_people
-                .filter(normalized_people_dsl::provider_id.eq(&provider_id))
-                .filter(normalized_people_dsl::identity_key.eq(&identity_key))
-                .filter(normalized_people_dsl::locale_key.eq(&snapshot.locale_key))
-                .select(MetadataPerson::as_select())
-                .first(conn)?
+            find_metadata_person_for_provider_person(
+                conn,
+                &provider_id,
+                &snapshot.locale_key,
+                &person,
+            )?
+            .ok_or(diesel::result::Error::NotFound)?
         };
+
+        sync_metadata_person_external_ids(conn, normalized_person.id, &provider_id, &person)?;
 
         diesel::insert_into(credit_dsl::metadata_person_credits)
             .values(&NewMetadataPersonCredit {
@@ -4266,17 +4321,66 @@ fn sync_item_metadata_people(
     Ok(())
 }
 
+fn sync_metadata_person_external_ids(
+    conn: &mut SqliteConnection,
+    person_id: i32,
+    provider_id: &str,
+    person: &ProviderMetadataPerson,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_person_external_ids::dsl as external_ids_dsl;
+
+    let now = current_timestamp();
+    let primary_external_id = person
+        .external_id
+        .as_ref()
+        .map(|external_id| ProviderExternalId {
+            source: provider_id.to_string(),
+            external_id: external_id.clone(),
+        });
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+
+    for external_id in person.external_ids.iter().chain(primary_external_id.iter()) {
+        let Some(source) = normalize_external_id_source(&external_id.source) else {
+            continue;
+        };
+        let external_id = external_id.external_id.trim().to_string();
+        if external_id.is_empty() || !seen.insert(source.clone()) {
+            continue;
+        }
+        rows.push(NewMetadataPersonExternalId {
+            person_id,
+            source,
+            external_id,
+            updated_at: Some(now),
+        });
+    }
+
+    for row in rows {
+        diesel::insert_into(external_ids_dsl::metadata_person_external_ids)
+            .values(&row)
+            .on_conflict((external_ids_dsl::person_id, external_ids_dsl::source))
+            .do_update()
+            .set((
+                external_ids_dsl::external_id
+                    .eq(diesel::upsert::excluded(external_ids_dsl::external_id)),
+                external_ids_dsl::updated_at
+                    .eq(diesel::upsert::excluded(external_ids_dsl::updated_at)),
+            ))
+            .execute(conn)?;
+    }
+
+    Ok(())
+}
+
 fn new_metadata_person_payload(
     provider_id: String,
-    external_id: Option<String>,
-    identity_key: String,
     locale_key: String,
     person: &ProviderMetadataPerson,
 ) -> NewMetadataPerson {
     NewMetadataPerson {
         provider_id,
-        external_id,
-        identity_key,
+        external_id: normalized_external_id(person.external_id.as_deref()),
         locale_key,
         name: person.name.clone(),
         known_for_json: known_for_json(&person.known_for),
@@ -4300,9 +4404,9 @@ fn merged_metadata_person_payload(
         provider_id: existing.provider_id.clone(),
         external_id: person
             .external_id
-            .clone()
+            .as_deref()
+            .and_then(|external_id| normalized_external_id(Some(external_id)))
             .or_else(|| existing.external_id.clone()),
-        identity_key: existing.identity_key.clone(),
         locale_key: existing.locale_key.clone(),
         name: if person.name.trim().is_empty() {
             existing.name.clone()
@@ -4350,14 +4454,55 @@ fn known_for_json(values: &[String]) -> Option<String> {
         .flatten()
 }
 
-fn person_identity_key(person: &ProviderMetadataPerson) -> String {
-    person
-        .external_id
-        .as_deref()
+fn find_metadata_person_for_provider_person(
+    conn: &mut SqliteConnection,
+    provider_id: &str,
+    locale_key: &str,
+    person: &ProviderMetadataPerson,
+) -> Result<Option<MetadataPerson>, diesel::result::Error> {
+    use crate::db::schema::metadata_people::dsl as people_dsl;
+
+    if let Some(external_id) = normalized_external_id(person.external_id.as_deref()) {
+        return people_dsl::metadata_people
+            .filter(people_dsl::provider_id.eq(provider_id))
+            .filter(people_dsl::external_id.eq(external_id))
+            .filter(people_dsl::locale_key.eq(locale_key))
+            .select(MetadataPerson::as_select())
+            .first(conn)
+            .optional();
+    }
+
+    let identity_key = provider_metadata_person_identity_key(person);
+    let rows = people_dsl::metadata_people
+        .filter(people_dsl::provider_id.eq(provider_id))
+        .filter(people_dsl::external_id.is_null())
+        .filter(people_dsl::locale_key.eq(locale_key))
+        .select(MetadataPerson::as_select())
+        .load::<MetadataPerson>(conn)?;
+    Ok(rows
+        .into_iter()
+        .find(|row| metadata_person_identity_key(row) == identity_key))
+}
+
+fn metadata_person_identity_key(person: &MetadataPerson) -> String {
+    normalized_external_id(person.external_id.as_deref())
+        .unwrap_or_else(|| format!("name:{}", normalized_person_name_key(&person.name)))
+}
+
+fn provider_metadata_person_identity_key(person: &ProviderMetadataPerson) -> String {
+    normalized_external_id(person.external_id.as_deref())
+        .unwrap_or_else(|| format!("name:{}", normalized_person_name_key(&person.name)))
+}
+
+fn normalized_external_id(value: Option<&str>) -> Option<String> {
+    value
         .map(str::trim)
         .filter(|external_id| !external_id.is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("name:{}", person.name.trim().to_ascii_lowercase()))
+}
+
+fn normalized_person_name_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
@@ -4467,7 +4612,6 @@ mod tests {
             id: 1,
             provider_id: "tmdb".into(),
             external_id: Some("tom-cruise-external-id".into()),
-            identity_key: "tmdb:1".into(),
             locale_key: "en-US".into(),
             name: "Tom Cruise".into(),
             known_for_json: Some(serde_json::json!(["Mission: Impossible"]).to_string()),

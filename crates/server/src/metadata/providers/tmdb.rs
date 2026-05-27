@@ -39,6 +39,7 @@ use crate::metadata::{
     metadata_asset_db_path,
     metadata_response_cache_key,
     movie_match_score,
+    normalize_external_id_source,
     parse_movie_name,
     preferred_image_url_by_format,
     provider_settings,
@@ -49,6 +50,11 @@ use crate::metadata::{
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
+const TMDB_LOGO_URL: &str = concat!(
+    "https://www.themoviedb.org/assets/2/v4/logos/v2/",
+    "blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6b",
+    "ffa71d7f5c4.svg",
+);
 
 static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -70,8 +76,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         extends_provider_ids: Vec::new(),
         attribution_text: "Metadata and artwork provided by The Movie Database (TMDB).".into(),
         attribution_url: "https://www.themoviedb.org/".into(),
-        logo_light_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
-        logo_dark_url: Some("https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg".into()),
+        logo_light_url: Some(TMDB_LOGO_URL.into()),
+        logo_dark_url: Some(TMDB_LOGO_URL.into()),
     }
 }
 
@@ -1133,27 +1139,47 @@ fn tmdb_external_ids(
 ) -> Vec<ProviderExternalId> {
     let mut external_ids = Vec::new();
     push_external_id(&mut external_ids, "tmdb", Some(&snapshot.external_id));
-    push_external_id(
-        &mut external_ids,
-        "imdb",
-        text_field(payload, &["imdb_id"]).as_deref(),
-    );
+    extend_tmdb_external_ids_from_value(&mut external_ids, payload);
     if let Some(ids) = payload.get("external_ids") {
-        push_external_id(
-            &mut external_ids,
-            "imdb",
-            text_field(ids, &["imdb_id"]).as_deref(),
-        );
-        push_external_id(
-            &mut external_ids,
-            "thetvdb",
-            ids.get("tvdb_id")
-                .and_then(Value::as_i64)
-                .map(|id| id.to_string())
-                .as_deref(),
-        );
+        extend_tmdb_external_ids_from_value(&mut external_ids, ids);
     }
     external_ids
+}
+
+fn extend_tmdb_external_ids_from_value(
+    external_ids: &mut Vec<ProviderExternalId>,
+    value: &Value,
+) {
+    let Some(map) = value.as_object() else {
+        return;
+    };
+    for (key, value) in map {
+        let Some(source) = tmdb_external_id_source_from_key(key) else {
+            continue;
+        };
+        push_external_id_value(external_ids, &source, value);
+    }
+}
+
+fn tmdb_external_id_source_from_key(key: &str) -> Option<String> {
+    let key = key.trim();
+    if key.ends_with("_mid") {
+        return normalize_external_id_source(key);
+    }
+    normalize_external_id_source(key.strip_suffix("_id")?)
+}
+
+fn push_external_id_value(
+    external_ids: &mut Vec<ProviderExternalId>,
+    source: &str,
+    value: &Value,
+) {
+    let external_id = value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_i64().map(|id| id.to_string()))
+        .or_else(|| value.as_u64().map(|id| id.to_string()));
+    push_external_id(external_ids, source, external_id.as_deref());
 }
 
 fn push_external_id(
@@ -1164,6 +1190,9 @@ fn push_external_id(
     let Some(external_id) = external_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
+    let Some(source) = normalize_external_id_source(source) else {
+        return;
+    };
     if external_ids
         .iter()
         .any(|existing| existing.source == source && existing.external_id == external_id)
@@ -1171,7 +1200,7 @@ fn push_external_id(
         return;
     }
     external_ids.push(ProviderExternalId {
-        source: source.to_string(),
+        source,
         external_id: external_id.to_string(),
     });
 }
@@ -1439,6 +1468,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
             let name = person_name(entry)?;
             Some(ProviderMetadataPerson {
                 external_id: person_external_id(entry),
+                external_ids: tmdb_person_external_ids(entry, None),
                 name,
                 known_for: tmdb_person_known_for(entry),
                 biography: tmdb_person_detail(entry, "biography"),
@@ -1481,6 +1511,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
             crew_order += 1;
             Some(ProviderMetadataPerson {
                 external_id: person_external_id(entry),
+                external_ids: tmdb_person_external_ids(entry, None),
                 name,
                 known_for: tmdb_person_known_for(entry),
                 biography: tmdb_person_detail(entry, "biography"),
@@ -1528,6 +1559,7 @@ fn extend_tmdb_guest_stars(
                 });
             Some(ProviderMetadataPerson {
                 external_id: person_external_id(entry),
+                external_ids: tmdb_person_external_ids(entry, None),
                 name,
                 known_for: tmdb_person_known_for(entry),
                 biography: tmdb_person_detail(entry, "biography"),
@@ -1558,8 +1590,10 @@ fn tmdb_person_from_detail(
     fallback_id: i32,
 ) -> Option<ProviderMetadataPerson> {
     let name = person_name(person)?;
+    let fallback_id_string = fallback_id.to_string();
     Some(ProviderMetadataPerson {
-        external_id: person_external_id(person).or_else(|| Some(fallback_id.to_string())),
+        external_id: person_external_id(person).or_else(|| Some(fallback_id_string.clone())),
+        external_ids: tmdb_person_external_ids(person, Some(&fallback_id_string)),
         name,
         known_for: person
             .get("koko_known_for")
@@ -1594,6 +1628,32 @@ fn tmdb_person_from_detail(
         cached_image_path: text_field(person, &["koko_cached_image_path"]),
         sort_order: 0,
     })
+}
+
+fn tmdb_person_external_ids(
+    value: &Value,
+    fallback_external_id: Option<&str>,
+) -> Vec<ProviderExternalId> {
+    let details = value.get("koko_person");
+    let mut external_ids = Vec::new();
+    let primary_external_id = person_external_id(value)
+        .or_else(|| details.and_then(person_external_id))
+        .or_else(|| fallback_external_id.map(ToOwned::to_owned));
+    push_external_id(&mut external_ids, "tmdb", primary_external_id.as_deref());
+
+    if fallback_external_id.is_some() {
+        extend_tmdb_external_ids_from_value(&mut external_ids, value);
+    }
+    if let Some(ids) = value.get("external_ids") {
+        extend_tmdb_external_ids_from_value(&mut external_ids, ids);
+    }
+    if let Some(details) = details {
+        extend_tmdb_external_ids_from_value(&mut external_ids, details);
+        if let Some(ids) = details.get("external_ids") {
+            extend_tmdb_external_ids_from_value(&mut external_ids, ids);
+        }
+    }
+    external_ids
 }
 
 fn tmdb_person_detail(
@@ -1757,6 +1817,66 @@ mod tests {
     }
 
     #[test]
+    fn tmdb_metadata_details_collects_known_external_ids() {
+        let snapshot = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(
+                json!({
+                    "imdb_id": "tt0133093",
+                    "external_ids": {
+                        "wikidata_id": "Q83495",
+                        "facebook_id": "thematrixmovie",
+                        "freebase_mid": "/m/0f2y0"
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        let details = metadata_details(&snapshot);
+
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "tmdb" && id.external_id == "603" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "imdb" && id.external_id == "tt0133093" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "wikidata" && id.external_id == "Q83495" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "facebook" && id.external_id == "thematrixmovie" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "freebase_mid" && id.external_id == "/m/0f2y0" })
+        );
+    }
+
+    #[test]
     fn tmdb_metadata_details_use_shallow_credit_people_without_person_detail_payload() {
         let snapshot = StoredMetadataSnapshot {
             provider_id: MetadataProviderId::Tmdb,
@@ -1774,6 +1894,8 @@ mod tests {
                     "credits": {
                         "cast": [
                             {
+                                "cast_id": 7,
+                                "credit_id": "52fe425bc3a36847f80181c7",
                                 "id": 6384,
                                 "name": "Keanu Reeves",
                                 "character": "Neo",
@@ -1795,6 +1917,81 @@ mod tests {
         assert_eq!(details.people[0].biography, None);
         assert_eq!(details.people[0].external_id.as_deref(), Some("6384"));
         assert_eq!(details.people[0].character_name.as_deref(), Some("Neo"));
+    }
+
+    #[test]
+    fn tmdb_people_include_external_ids_from_person_detail_payload() {
+        let snapshot = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603".into(),
+            media_type: Some("movie".into()),
+            title: Some("The Matrix".into()),
+            overview: None,
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(1999),
+            locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+            provider_locale_key: Some("en-US".into()),
+            provider_payload_json: Some(
+                json!({
+                    "credits": {
+                        "cast": [
+                            {
+                                "id": 6384,
+                                "name": "Keanu Reeves",
+                                "character": "Neo",
+                                "order": 0,
+                                "koko_person": {
+                                    "id": 6384,
+                                    "name": "Keanu Reeves",
+                                    "external_ids": {
+                                        "imdb_id": "nm0000206",
+                                        "wikidata_id": "Q43416",
+                                        "freebase_mid": "/m/01vvycq"
+                                    }
+                                }
+                            }
+                        ],
+                        "crew": []
+                    }
+                })
+                .to_string(),
+            ),
+        };
+
+        let details = metadata_details(&snapshot);
+
+        assert_eq!(details.people.len(), 1);
+        assert!(
+            details.people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "tmdb" && id.external_id == "6384" })
+        );
+        assert!(
+            details.people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "imdb" && id.external_id == "nm0000206" })
+        );
+        assert!(
+            details.people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "wikidata" && id.external_id == "Q43416" })
+        );
+        assert!(
+            details.people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "freebase_mid" && id.external_id == "/m/01vvycq" })
+        );
+        assert!(
+            !details.people[0]
+                .external_ids
+                .iter()
+                .any(|id| id.source == "cast" || id.source == "credit")
+        );
     }
 
     #[test]

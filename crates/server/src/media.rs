@@ -60,6 +60,7 @@ use crate::metadata::{
     DEFAULT_METADATA_LOCALE,
     LinkedMetadataExtra,
     MetadataCollectionSummary,
+    MetadataProvider,
     MetadataRegistry,
     list_metadata_collection_summaries_with_preferred_languages,
     metadata_extras_from_metadata_links,
@@ -84,6 +85,15 @@ pub use crate::scanner::{
     LibraryScanSummary,
 };
 use crate::utils::current_timestamp;
+
+#[derive(Debug)]
+struct SecondaryMetadataReferenceCandidate {
+    media_type: String,
+    database_id: String,
+    external_id: String,
+    priority: usize,
+    order: usize,
+}
 
 #[derive(Debug, Clone)]
 struct SummaryMetadataLink {
@@ -3372,7 +3382,7 @@ pub fn get_item_secondary_provider_references(
         return Ok(Vec::new());
     }
 
-    get_item_theme_song_source_references(conn, item_id, &source_provider_ids)
+    get_item_theme_song_source_references(conn, item_id, &source_provider_ids, provider)
 }
 
 /// Return ordered YouTube trailer lookup candidates for a secondary metadata provider.
@@ -3517,6 +3527,7 @@ fn get_item_theme_song_source_references(
     conn: &mut SqliteConnection,
     item_id: i32,
     source_provider_ids: &[MetadataProviderId],
+    secondary_provider: &(dyn MetadataProvider + Send + Sync),
 ) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
@@ -3534,7 +3545,13 @@ fn get_item_theme_song_source_references(
             let mut references = Vec::new();
             let mut seen = HashSet::new();
             for link in links {
-                append_theme_song_source_references(conn, &link, &mut references, &mut seen)?;
+                append_theme_song_source_references(
+                    conn,
+                    secondary_provider,
+                    &link,
+                    &mut references,
+                    &mut seen,
+                )?;
             }
             return Ok(references);
         }
@@ -3553,34 +3570,85 @@ fn get_item_theme_song_source_references(
 
 fn append_theme_song_source_references(
     conn: &mut SqliteConnection,
+    secondary_provider: &(dyn MetadataProvider + Send + Sync),
     link: &ItemMetadataLink,
     references: &mut Vec<(String, String, String)>,
     seen: &mut HashSet<(String, String, String)>,
 ) -> Result<(), diesel::result::Error> {
+    let Some(source_provider_id) = MetadataProviderId::from_storage_value(&link.provider_id) else {
+        return Ok(());
+    };
     if let Some(media_type) = link
         .media_type
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let source_reference = (
-            media_type.to_string(),
+        let mut candidates = Vec::new();
+        let mut order = 0;
+        push_supported_secondary_reference_candidate(
+            secondary_provider,
+            &source_provider_id,
+            media_type,
             link.provider_id.clone(),
             link.external_id.clone(),
+            order,
+            &mut candidates,
         );
-        if seen.insert(source_reference.clone()) {
-            references.push(source_reference);
-        }
 
         for (database_id, external_id) in metadata_external_ids(conn, link.id)? {
-            let external_reference = (media_type.to_string(), database_id, external_id);
-            if seen.insert(external_reference.clone()) {
-                references.push(external_reference);
+            order += 1;
+            push_supported_secondary_reference_candidate(
+                secondary_provider,
+                &source_provider_id,
+                media_type,
+                database_id,
+                external_id,
+                order,
+                &mut candidates,
+            );
+        }
+
+        candidates.sort_by_key(|candidate| (candidate.priority, candidate.order));
+        for candidate in candidates {
+            let reference = (
+                candidate.media_type,
+                candidate.database_id,
+                candidate.external_id,
+            );
+            if seen.insert(reference.clone()) {
+                references.push(reference);
             }
         }
     }
 
     Ok(())
+}
+
+fn push_supported_secondary_reference_candidate(
+    secondary_provider: &(dyn MetadataProvider + Send + Sync),
+    source_provider_id: &MetadataProviderId,
+    media_type: &str,
+    database_id: String,
+    external_id: String,
+    order: usize,
+    candidates: &mut Vec<SecondaryMetadataReferenceCandidate>,
+) {
+    let Some(priority) = secondary_provider.secondary_metadata_reference_priority(
+        source_provider_id,
+        media_type,
+        &database_id,
+    ) else {
+        return;
+    };
+
+    candidates.push(SecondaryMetadataReferenceCandidate {
+        media_type: media_type.to_string(),
+        database_id,
+        external_id,
+        priority,
+        order,
+    });
 }
 
 fn get_item_theme_song_source_metadata_links(

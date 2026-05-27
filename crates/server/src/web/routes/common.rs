@@ -129,7 +129,9 @@ fn web_client_missing_html() -> String {
     <main>
       <h1>{0}</h1>
       <p>The web client bundle is not available yet.</p>
-      <p>Build <code>crates/client-web</code> and make sure the output exists at <code>crates/client-web/dist</code>, or set <code>KOKO_WEB_CLIENT_DIST</code> to a built client directory.</p>
+      <p>Build <code>crates/client-web</code> and make sure the output exists at
+      <code>crates/client-web/dist</code>, or set <code>KOKO_WEB_CLIENT_DIST</code>
+      to a built client directory.</p>
     </main>
   </body>
 </html>"#,

@@ -19,6 +19,7 @@ use crate::db::schema::{
     metadata_extras,
     metadata_people,
     metadata_person_credits,
+    metadata_person_external_ids,
     playback_progress,
     scan_state,
     users,
@@ -379,7 +380,6 @@ pub struct MetadataPerson {
     pub id: i32,
     pub provider_id: String,
     pub external_id: Option<String>,
-    pub identity_key: String,
     pub locale_key: String,
     pub name: String,
     pub known_for_json: Option<String>,
@@ -400,7 +400,6 @@ pub struct MetadataPerson {
 pub struct NewMetadataPerson {
     pub provider_id: String,
     pub external_id: Option<String>,
-    pub identity_key: String,
     pub locale_key: String,
     pub name: String,
     pub known_for_json: Option<String>,
@@ -412,6 +411,27 @@ pub struct NewMetadataPerson {
     pub profile_url: Option<String>,
     pub image_url: Option<String>,
     pub cached_image_path: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Associations, Debug, Clone)]
+#[diesel(belongs_to(MetadataPerson, foreign_key = person_id))]
+#[diesel(table_name = metadata_person_external_ids)]
+pub struct MetadataPersonExternalId {
+    pub id: i32,
+    pub person_id: i32,
+    pub source: String,
+    pub external_id: String,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Insertable, AsChangeset, Debug, Clone)]
+#[diesel(table_name = metadata_person_external_ids)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewMetadataPersonExternalId {
+    pub person_id: i32,
+    pub source: String,
+    pub external_id: String,
     pub updated_at: Option<i64>,
 }
 

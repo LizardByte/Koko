@@ -30,6 +30,7 @@ use crate::metadata::{
     metadata_asset_db_path,
     metadata_response_cache_key,
     movie_match_score,
+    normalize_external_id_source,
     parse_movie_name,
     provider_settings,
     read_metadata_response_cache_text,
@@ -958,42 +959,155 @@ fn tvdb_external_ids(
 ) -> Vec<ProviderExternalId> {
     let mut external_ids = Vec::new();
     push_external_id(&mut external_ids, "thetvdb", Some(&snapshot.external_id));
-    let Some(remote_ids) = data
-        .get("remoteIds")
-        .or_else(|| data.get("remote_ids"))
-        .and_then(Value::as_array)
-    else {
-        return external_ids;
-    };
-
-    for remote_id in remote_ids {
-        let source = remote_id
-            .get("sourceName")
-            .or_else(|| remote_id.get("source"))
-            .or_else(|| remote_id.get("type"))
-            .and_then(Value::as_str)
-            .and_then(normalize_tvdb_external_id_source);
-        let external_id = remote_id
-            .get("id")
-            .or_else(|| remote_id.get("externalId"))
-            .or_else(|| remote_id.get("external_id"))
-            .and_then(Value::as_str);
-        if let Some(source) = source {
-            push_external_id(&mut external_ids, source, external_id);
-        }
-    }
-
+    extend_tvdb_remote_external_ids(&mut external_ids, data);
     external_ids
 }
 
-fn normalize_tvdb_external_id_source(source: &str) -> Option<&'static str> {
-    let source = source.trim().to_ascii_lowercase();
-    match source.as_str() {
-        "imdb" | "imdb.com" => Some("imdb"),
-        "themoviedb" | "themoviedb.com" | "tmdb" | "tmdb.com" => Some("tmdb"),
-        "thetvdb" | "thetvdb.com" | "tvdb" => Some("thetvdb"),
-        _ => None,
+fn extend_tvdb_remote_external_ids(
+    external_ids: &mut Vec<ProviderExternalId>,
+    value: &Value,
+) {
+    let Some(remote_ids) = value
+        .get("remoteIds")
+        .or_else(|| value.get("remote_ids"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    for remote_id in remote_ids {
+        let Some(source) = tvdb_remote_id_source(remote_id) else {
+            continue;
+        };
+        let external_id = remote_id
+            .get("id")
+            .or_else(|| remote_id.get("externalId"))
+            .or_else(|| remote_id.get("external_id"));
+        push_external_id_value(external_ids, &source, external_id);
     }
+}
+
+fn tvdb_remote_id_source(remote_id: &Value) -> Option<String> {
+    remote_id
+        .get("type")
+        .and_then(tvdb_remote_id_type_source)
+        .or_else(|| {
+            remote_id
+                .get("sourceName")
+                .or_else(|| remote_id.get("source"))
+                .and_then(Value::as_str)
+                .and_then(tvdb_remote_id_source_name)
+        })
+}
+
+fn tvdb_remote_id_source_name(source_name: &str) -> Option<String> {
+    let source_name = source_name.trim();
+    TVDB_REMOTE_ID_SOURCE_TYPES
+        .iter()
+        .find(|source_type| source_type.source_name.eq_ignore_ascii_case(source_name))
+        .map(|source_type| source_type.source.to_string())
+}
+
+fn tvdb_remote_id_type_source(value: &Value) -> Option<String> {
+    let source_type = match value.as_i64() {
+        Some(source_type) => source_type,
+        None => {
+            let source = value.as_str()?.trim();
+            match source.parse::<i64>() {
+                Ok(source_type) => source_type,
+                Err(_) => return tvdb_remote_id_source_name(source),
+            }
+        }
+    };
+    TVDB_REMOTE_ID_SOURCE_TYPES
+        .iter()
+        .find(|source| source.id == source_type)
+        .map(|source| source.source.to_string())
+}
+
+struct TvdbRemoteIdSourceType {
+    id: i64,
+    source_name: &'static str,
+    source: &'static str,
+}
+
+// Source type ids come from TheTVDB's `/sources/types` contract.
+const TVDB_REMOTE_ID_SOURCE_TYPES: &[TvdbRemoteIdSourceType] = &[
+    TvdbRemoteIdSourceType {
+        id: 2,
+        source_name: "IMDB",
+        source: "imdb",
+    },
+    TvdbRemoteIdSourceType {
+        id: 3,
+        source_name: "TMS (Zap2It)",
+        source: "zap2it",
+    },
+    TvdbRemoteIdSourceType {
+        id: 4,
+        source_name: "Official Website",
+        source: "official_website",
+    },
+    TvdbRemoteIdSourceType {
+        id: 5,
+        source_name: "Facebook",
+        source: "facebook",
+    },
+    TvdbRemoteIdSourceType {
+        id: 6,
+        source_name: "X",
+        source: "twitter",
+    },
+    TvdbRemoteIdSourceType {
+        id: 7,
+        source_name: "Reddit",
+        source: "reddit",
+    },
+    TvdbRemoteIdSourceType {
+        id: 8,
+        source_name: "Instagram",
+        source: "instagram",
+    },
+    TvdbRemoteIdSourceType {
+        id: 9,
+        source_name: "Wikipedia",
+        source: "wikipedia",
+    },
+    TvdbRemoteIdSourceType {
+        id: 10,
+        source_name: "Wikidata",
+        source: "wikidata",
+    },
+    TvdbRemoteIdSourceType {
+        id: 11,
+        source_name: "YouTube",
+        source: "youtube",
+    },
+    TvdbRemoteIdSourceType {
+        id: 12,
+        source_name: "TheMovieDB.com",
+        source: "tmdb",
+    },
+    TvdbRemoteIdSourceType {
+        id: 13,
+        source_name: "EIDR",
+        source: "eidr",
+    },
+];
+
+fn push_external_id_value(
+    external_ids: &mut Vec<ProviderExternalId>,
+    source: &str,
+    value: Option<&Value>,
+) {
+    let external_id = value.and_then(|value| {
+        value
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| value.as_i64().map(|id| id.to_string()))
+            .or_else(|| value.as_u64().map(|id| id.to_string()))
+    });
+    push_external_id(external_ids, source, external_id.as_deref());
 }
 
 fn push_external_id(
@@ -1004,6 +1118,9 @@ fn push_external_id(
     let Some(external_id) = external_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
+    let Some(source) = normalize_external_id_source(source) else {
+        return;
+    };
     if external_ids
         .iter()
         .any(|existing| existing.source == source && existing.external_id == external_id)
@@ -1011,7 +1128,7 @@ fn push_external_id(
         return;
     }
     external_ids.push(ProviderExternalId {
-        source: source.to_string(),
+        source,
         external_id: external_id.to_string(),
     });
 }
@@ -1347,6 +1464,7 @@ fn tvdb_people_with_language(
                     external_id: person
                         .and_then(person_external_id)
                         .or_else(|| tvdb_person_external_id(entry)),
+                    external_ids: tvdb_person_external_ids(entry, person),
                     name,
                     known_for: Vec::new(),
                     biography: tvdb_person_biography(person_for_details, provider_language),
@@ -1384,6 +1502,7 @@ fn tvdb_person_from_detail(
     let external_id = person_external_id(person);
     Some(ProviderMetadataPerson {
         external_id: external_id.clone(),
+        external_ids: tvdb_person_external_ids(person, None),
         name,
         known_for: Vec::new(),
         biography: tvdb_person_biography(person, provider_language),
@@ -1399,6 +1518,25 @@ fn tvdb_person_from_detail(
         cached_image_path: text_field(person, &["koko_cached_image_path"]),
         sort_order: 0,
     })
+}
+
+fn tvdb_person_external_ids(
+    entry: &Value,
+    person: Option<&Value>,
+) -> Vec<ProviderExternalId> {
+    let person = person
+        .or_else(|| entry.get("koko_person"))
+        .or_else(|| entry.get("person"));
+    let mut external_ids = Vec::new();
+    let primary_external_id = person
+        .and_then(person_external_id)
+        .or_else(|| tvdb_person_external_id(entry));
+    push_external_id(&mut external_ids, "thetvdb", primary_external_id.as_deref());
+    extend_tvdb_remote_external_ids(&mut external_ids, entry);
+    if let Some(person) = person {
+        extend_tvdb_remote_external_ids(&mut external_ids, person);
+    }
+    external_ids
 }
 
 fn tvdb_person_biography(
@@ -2270,6 +2408,77 @@ mod tests {
     }
 
     #[test]
+    fn tvdb_metadata_details_collects_remote_ids() {
+        let payload = json!({
+            "data": {
+                "id": 901,
+                "name": "Example Movie",
+                "remoteIds": [
+                    {
+                        "sourceName": "IMDB",
+                        "id": "tt1745960"
+                    },
+                    {
+                        "sourceName": "TheMovieDB.com",
+                        "id": 361743
+                    },
+                    {
+                        "sourceName": "Wikidata",
+                        "id": "Q105452506"
+                    },
+                    {
+                        "type": 2,
+                        "id": "tt7654321"
+                    },
+                    {
+                        "type": 12,
+                        "id": 7654321
+                    }
+                ]
+            }
+        });
+        let snapshot = movie_snapshot_from_value("901", &payload, None, "eng");
+        let details = metadata_details(&snapshot);
+
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "thetvdb" && id.external_id == "901" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "imdb" && id.external_id == "tt1745960" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "tmdb" && id.external_id == "361743" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "wikidata" && id.external_id == "Q105452506" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "imdb" && id.external_id == "tt7654321" })
+        );
+        assert!(
+            details
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "tmdb" && id.external_id == "7654321" })
+        );
+    }
+
+    #[test]
     fn tvdb_people_use_person_name_not_character_name() {
         let payload = json!({
             "data": {
@@ -2281,11 +2490,17 @@ mod tests {
                         "peopleId": 254032,
                         "peopleType": "Actor",
                         "personName": "Tom Cruise",
-                        "personImgURL": "https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg",
+                        "personImgURL": "https://example.test/person-tom-cruise-fallback.jpg",
                         "koko_person": {
                             "id": 254032,
                             "name": "Tom Cruise",
-                            "image": "https://example.test/person-tom-cruise.jpg"
+                            "image": "https://example.test/person-tom-cruise.jpg",
+                            "remoteIds": [
+                                {
+                                    "sourceName": "IMDB",
+                                    "id": "nm0000129"
+                                }
+                            ]
                         }
                     }
                 ]
@@ -2302,6 +2517,18 @@ mod tests {
             people[0].image_url.as_deref(),
             Some("https://example.test/person-tom-cruise.jpg")
         );
+        assert!(
+            people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "thetvdb" && id.external_id == "254032" })
+        );
+        assert!(
+            people[0]
+                .external_ids
+                .iter()
+                .any(|id| { id.source == "imdb" && id.external_id == "nm0000129" })
+        );
     }
 
     #[test]
@@ -2316,7 +2543,7 @@ mod tests {
                         "peopleId": 254032,
                         "peopleType": "Actor",
                         "personName": "Tom Cruise",
-                        "personImgURL": "https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg"
+                        "personImgURL": "https://example.test/person-tom-cruise-fallback.jpg"
                     }
                 ]
             }
@@ -2331,7 +2558,7 @@ mod tests {
         assert_eq!(people[0].external_id.as_deref(), Some("254032"));
         assert_eq!(
             people[0].image_url.as_deref(),
-            Some("https://artworks.thetvdb.com/banners/person/254032/637b591ac656a.jpg")
+            Some("https://example.test/person-tom-cruise-fallback.jpg")
         );
     }
 

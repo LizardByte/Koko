@@ -1487,4 +1487,3 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
 
   return { ...library };
 }
-

@@ -197,9 +197,3 @@ Stage 1 is complete when:
 - direct play versus transcode decisions are available through stable APIs
 - FFmpeg-backed playback sessions can be started, monitored, and stopped
 - the browser client can browse and play media using supported server APIs
-
-
-
-
-
-

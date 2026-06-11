@@ -54,6 +54,3 @@ Type-check the client:
 ```cmd
 npm run check
 ```
-
-
-

@@ -7736,4 +7736,3 @@ window.addEventListener('popstate', () => {
 
 render();
 void refreshData();
-

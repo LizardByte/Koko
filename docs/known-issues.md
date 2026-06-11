@@ -27,9 +27,9 @@
   - [x] clean/vaccum task, which will clean up the database and vacuum it on a regular basis (optional, but on by default)
 - [ ] scheduled-tasks: add task to get thumbnail images from video files, to be used for seeking in the UI (this needs to be optional, and off by default because the pictures will take up a lot of space... the images should be smaller, and not the full resolution of the frame)
 
-- [ ] database: consolidate all migrations into one migration, since we've never had a release yet and no users... this will probably allow removing quite a bit of stuff which was only done temporarily and then reverted?
-- [ ] database: remove hacks in db.rs which were mostly used to repair migrations that already ran and then were modified after the fact, thus the updated migrations never ran
-- [ ] database: clearly document how the migrations work, and ensure we do not add these kind of hacks again in the future... using the migration system should be the only way to modify the database schema
+- [x] database: consolidate all migrations into one migration, since we've never had a release yet and no users... this will probably allow removing quite a bit of stuff which was only done temporarily and then reverted?
+- [x] database: remove hacks in db.rs which were mostly used to repair migrations that already ran and then were modified after the fact, thus the updated migrations never ran
+- [x] database: clearly document how the migrations work, and ensure we do not add these kind of hacks again in the future... using the migration system should be the only way to modify the database schema
 - [x] database: media files should be a one-to-many relationship as they can be part of multiple libraries
 - [x] database: add a table for external media, such as youtube video urls (but also from other online sources)... the theme songs/trailers would point to the external media table instead of storing the url directly in the metadata tables (allow a lot of deduplication)
 - [x] database: add a type for extras (support all the types from trailerdb.org at a minimum as well as a theme song type)

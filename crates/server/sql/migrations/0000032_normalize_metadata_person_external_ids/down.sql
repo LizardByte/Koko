@@ -1,3 +1,0 @@
-DROP INDEX IF EXISTS idx_metadata_person_external_ids_source_external_id;
-DROP INDEX IF EXISTS idx_metadata_person_external_ids_person_id;
-DROP TABLE IF EXISTS metadata_person_external_ids;

@@ -622,12 +622,12 @@ async fn persist_secondary_metadata_for_item(
                 Status::InternalServerError
             }
         })?;
-    let library_providers = load_item_library_metadata_providers(db, settings, library_id).await?;
+    let library_providers = load_item_library_metadata_providers(db, library_id).await?;
     let secondary_providers = secondary_providers_for_library(settings, &library_providers);
     if secondary_providers.is_empty() {
         return Ok(());
     }
-    let library_languages = load_item_library_metadata_languages(db, settings, library_id).await?;
+    let library_languages = load_item_library_metadata_languages(db, library_id).await?;
 
     for provider_id in secondary_providers {
         let uses_localized_metadata = provider_uses_localized_metadata(provider_id.clone());
@@ -1842,7 +1842,7 @@ async fn fetch_metadata_refresh_snapshots(
     settings: &crate::config::Settings,
     target: &MetadataRefreshTarget,
 ) -> Result<Vec<StoredMetadataSnapshot>, String> {
-    let languages = load_refresh_target_metadata_languages(db, settings, target.item_id).await?;
+    let languages = load_refresh_target_metadata_languages(db, target.item_id).await?;
     let languages = metadata_locales_for_provider(target.provider_id.clone(), &languages);
     let mut snapshots = Vec::new();
     for language in languages {
@@ -2294,7 +2294,7 @@ async fn fetch_snapshots_for_item_metadata_languages(
     media_type: &str,
     fetch_options: MetadataSnapshotFetchOptions,
 ) -> Result<Vec<StoredMetadataSnapshot>, Status> {
-    let languages = load_refresh_target_metadata_languages(db, settings, item_id)
+    let languages = load_refresh_target_metadata_languages(db, item_id)
         .await
         .map_err(|error| {
             log::error!(
@@ -2887,15 +2887,10 @@ fn user_preferred_metadata_languages(
 
 async fn load_item_library_metadata_providers(
     db: &DbConn,
-    settings: &Settings,
     library_id: i32,
 ) -> Result<Vec<MetadataProviderId>, Status> {
-    let legacy_libraries = settings.media.libraries.clone();
     let providers = db
-        .run({
-            let legacy_libraries = legacy_libraries.clone();
-            move |conn| get_library_metadata_providers(conn, library_id, &legacy_libraries)
-        })
+        .run(move |conn| get_library_metadata_providers(conn, library_id))
         .await
         .map_err(|error| {
             log::error!(
@@ -2911,15 +2906,10 @@ async fn load_item_library_metadata_providers(
 
 async fn load_item_library_metadata_languages(
     db: &DbConn,
-    settings: &Settings,
     library_id: i32,
 ) -> Result<Vec<String>, Status> {
-    let legacy_libraries = settings.media.libraries.clone();
     let languages = db
-        .run({
-            let legacy_libraries = legacy_libraries.clone();
-            move |conn| get_library_metadata_languages(conn, library_id, &legacy_libraries)
-        })
+        .run(move |conn| get_library_metadata_languages(conn, library_id))
         .await
         .map_err(|error| {
             log::error!(
@@ -2935,7 +2925,6 @@ async fn load_item_library_metadata_languages(
 
 async fn load_refresh_target_metadata_languages(
     db: &DbConn,
-    settings: &Settings,
     item_id: i32,
 ) -> Result<Vec<String>, String> {
     let item = db
@@ -2943,7 +2932,7 @@ async fn load_refresh_target_metadata_languages(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "media item was not found".to_string())?;
-    load_item_library_metadata_languages(db, settings, item.library_id)
+    load_item_library_metadata_languages(db, item.library_id)
         .await
         .map_err(|status| format!("{status:?}"))
 }
@@ -3009,12 +2998,10 @@ async fn load_library_refresh_jobs(
 
 async fn load_library_summary(
     db: &DbConn,
-    settings: &Settings,
     library_id: i32,
 ) -> Result<PersistedLibrarySummary, Status> {
-    let legacy_libraries = settings.media.libraries.clone();
     let libraries = db
-        .run(move |conn| get_persisted_library_summaries(conn, &legacy_libraries))
+        .run(get_persisted_library_summaries)
         .await
         .map_err(|error| {
             log::error!("Failed to load media library summaries: {}", error);
@@ -3035,11 +3022,8 @@ pub async fn get_server_capabilities(
 ) -> Result<Json<ServerCapabilitiesResponse>, Status> {
     let settings = current_settings();
     let transcoding = inspect_transcoding_capability(&settings.ffmpeg);
-    let legacy_libraries = settings.media.libraries.clone();
     let libraries_configured = db
-        .run(move |conn| {
-            list_library_settings(conn, &legacy_libraries).map(|libraries| libraries.len())
-        })
+        .run(|conn| list_library_settings(conn).map(|libraries| libraries.len()))
         .await
         .map_err(|error| {
             log::error!("Failed to count persisted libraries: {}", error);
@@ -3065,7 +3049,7 @@ pub async fn scan_library(
     library_id: i32,
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
-    let library_summary = load_library_summary(&db, &settings, library_id).await?;
+    let library_summary = load_library_summary(&db, library_id).await?;
     if !begin_catalog_scan_execution() {
         log::info!(
             "Skipping duplicate manual library {} scan request; a catalog scan is already running",
@@ -3074,7 +3058,6 @@ pub async fn scan_library(
         return Ok(Json(library_summary));
     }
 
-    let legacy_libraries = settings.media.libraries.clone();
     let ffmpeg_settings = settings.ffmpeg.clone();
     let library_name = library_summary.name.clone();
     let activity_id = register_library_scan_activity(library_id, &library_name).await;
@@ -3087,12 +3070,7 @@ pub async fn scan_library(
         );
         let sync_result = db
             .run(move |conn| {
-                sync_persisted_library_catalog_for_library(
-                    conn,
-                    &legacy_libraries,
-                    &ffmpeg_settings,
-                    library_id,
-                )
+                sync_persisted_library_catalog_for_library(conn, &ffmpeg_settings, library_id)
             })
             .await;
         let failed = match sync_result {
@@ -3143,7 +3121,6 @@ pub async fn delete_library_missing_items(
     db: DbConn,
     library_id: i32,
 ) -> Result<Json<MissingItemsCleanupResponse>, Status> {
-    let settings = current_settings();
     let exists = db
         .run(move |conn| library_exists(conn, library_id))
         .await
@@ -3170,7 +3147,7 @@ pub async fn delete_library_missing_items(
             );
             Status::InternalServerError
         })?;
-    let library = load_library_summary(&db, &settings, library_id).await?;
+    let library = load_library_summary(&db, library_id).await?;
 
     Ok(Json(MissingItemsCleanupResponse {
         library_id,
@@ -3261,13 +3238,11 @@ pub async fn get_libraries(
     db: DbConn,
     user_guard: Option<UserGuard>,
 ) -> Result<Json<Vec<PersistedLibrarySummary>>, Status> {
-    let settings = current_settings();
-    let legacy_libraries = settings.media.libraries.clone();
     let user_id = current_user_id(user_guard.as_ref())?;
 
     let libraries = db
         .run(move |conn| {
-            let libraries = get_persisted_library_summaries(conn, &legacy_libraries)?;
+            let libraries = get_persisted_library_summaries(conn)?;
             libraries
                 .into_iter()
                 .filter_map(
@@ -3951,8 +3926,7 @@ pub async fn search_item_metadata(
         return Err(Status::BadRequest);
     }
 
-    let library_providers =
-        load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let library_providers = load_item_library_metadata_providers(&db, item.library_id).await?;
     let requested_providers = parse_metadata_provider_selection(providers);
     let providers = if requested_providers.is_empty() {
         library_providers.clone()
@@ -3968,8 +3942,7 @@ pub async fn search_item_metadata(
     let requested_language = language
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let library_languages =
-        load_item_library_metadata_languages(&db, &settings, item.library_id).await?;
+    let library_languages = load_item_library_metadata_languages(&db, item.library_id).await?;
     let search_language = requested_language
         .or_else(|| library_languages.first().cloned())
         .unwrap_or_else(|| crate::metadata::DEFAULT_METADATA_LOCALE.to_string());
@@ -4083,8 +4056,7 @@ pub async fn link_item_metadata(
     if !supports_manual_metadata_linking(&item) {
         return Err(Status::BadRequest);
     }
-    let library_providers =
-        load_item_library_metadata_providers(&db, &settings, item.library_id).await?;
+    let library_providers = load_item_library_metadata_providers(&db, item.library_id).await?;
     let provider_status = list_provider_statuses(&settings.metadata)
         .into_iter()
         .find(|status| status.id == request.provider_id)
@@ -4354,7 +4326,7 @@ pub async fn refresh_library_metadata(
     library_id: i32,
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
-    let library_summary = load_library_summary(&db, &settings, library_id).await?;
+    let library_summary = load_library_summary(&db, library_id).await?;
     let library_name = library_summary.name.clone();
     if !begin_library_metadata_refresh(library_id).await {
         log::info!(

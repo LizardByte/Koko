@@ -800,30 +800,11 @@ pub fn count_persisted_libraries(
         .get_result(conn)
 }
 
-/// Ensure legacy library settings are imported into the database when needed.
-pub fn migrate_legacy_library_settings(
-    conn: &mut SqliteConnection,
-    legacy_libraries: &[MediaLibrarySettings],
-) -> Result<bool, diesel::result::Error> {
-    if count_persisted_libraries(conn)? > 0 || legacy_libraries.is_empty() {
-        return Ok(false);
-    }
-
-    for library in legacy_libraries {
-        insert_media_library(conn, library)?;
-    }
-
-    Ok(true)
-}
-
 /// Return the persisted media-library settings stored in the database.
 pub fn list_library_settings(
-    conn: &mut SqliteConnection,
-    legacy_libraries: &[MediaLibrarySettings],
+    conn: &mut SqliteConnection
 ) -> Result<Vec<MediaLibrarySettings>, diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
-
-    migrate_legacy_library_settings(conn, legacy_libraries)?;
 
     let rows = media_libraries_dsl::media_libraries
         .order(media_libraries_dsl::id.asc())
@@ -840,11 +821,8 @@ pub fn list_library_settings(
 pub fn get_library_metadata_providers(
     conn: &mut SqliteConnection,
     library_id: i32,
-    legacy_libraries: &[MediaLibrarySettings],
 ) -> Result<Option<Vec<MetadataProviderId>>, diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
-
-    migrate_legacy_library_settings(conn, legacy_libraries)?;
 
     let library = media_libraries_dsl::media_libraries
         .filter(media_libraries_dsl::id.eq(library_id))
@@ -859,11 +837,8 @@ pub fn get_library_metadata_providers(
 pub fn get_library_metadata_languages(
     conn: &mut SqliteConnection,
     library_id: i32,
-    legacy_libraries: &[MediaLibrarySettings],
 ) -> Result<Option<Vec<String>>, diesel::result::Error> {
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
-
-    migrate_legacy_library_settings(conn, legacy_libraries)?;
 
     let library = media_libraries_dsl::media_libraries
         .filter(media_libraries_dsl::id.eq(library_id))
@@ -978,7 +953,7 @@ pub fn replace_library_settings(
         .execute(conn)?;
     }
 
-    list_library_settings(conn, &[])
+    list_library_settings(conn)
 }
 
 /// Insert one persisted media library.
@@ -987,7 +962,7 @@ pub fn add_library_setting(
     library: &MediaLibrarySettings,
 ) -> Result<Vec<MediaLibrarySettings>, diesel::result::Error> {
     insert_media_library(conn, library)?;
-    list_library_settings(conn, &[])
+    list_library_settings(conn)
 }
 
 /// Remove one persisted media library by its database identifier.
@@ -1016,37 +991,32 @@ pub fn remove_library_setting(
 /// Sync persisted libraries from the database into the media catalog.
 pub fn sync_persisted_library_catalog(
     conn: &mut SqliteConnection,
-    legacy_libraries: &[MediaLibrarySettings],
     ffmpeg_settings: &FfmpegSettings,
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
-    let libraries = list_library_settings(conn, legacy_libraries)?;
+    let libraries = list_library_settings(conn)?;
     sync_library_catalog(conn, &libraries, ffmpeg_settings)
 }
 
 /// Sync one persisted media library from the database into the media catalog.
 pub fn sync_persisted_library_catalog_for_library(
     conn: &mut SqliteConnection,
-    legacy_libraries: &[MediaLibrarySettings],
     ffmpeg_settings: &FfmpegSettings,
     library_id: i32,
 ) -> Result<Option<PersistedLibrarySummary>, diesel::result::Error> {
-    let libraries = list_library_settings(conn, legacy_libraries)?;
+    let libraries = list_library_settings(conn)?;
     sync_library_catalog_filtered(conn, &libraries, ffmpeg_settings, Some(library_id))
         .map(|mut summaries| summaries.pop())
 }
 
 /// Return persisted media-library summaries without triggering a foreground rescan.
 pub fn get_persisted_library_summaries(
-    conn: &mut SqliteConnection,
-    legacy_libraries: &[MediaLibrarySettings],
+    conn: &mut SqliteConnection
 ) -> Result<Vec<PersistedLibrarySummary>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as item_metadata_links_dsl;
     use crate::db::schema::media_file_libraries::dsl as media_file_libraries_dsl;
     use crate::db::schema::media_items::dsl as media_items_dsl;
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
     use crate::db::schema::scan_state::dsl as scan_state_dsl;
-
-    migrate_legacy_library_settings(conn, legacy_libraries)?;
 
     let libraries = media_libraries_dsl::media_libraries
         .order(media_libraries_dsl::id.asc())

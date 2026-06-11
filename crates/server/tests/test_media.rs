@@ -10,7 +10,6 @@ use std::sync::atomic::{
 use diesel::Connection;
 use diesel::RunQueryDsl;
 use diesel::SqliteConnection;
-use diesel::connection::SimpleConnection;
 use diesel_migrations::MigrationHarness;
 
 // local imports
@@ -21,10 +20,7 @@ use koko::config::{
     MediaLibrarySettings,
     MetadataProviderId,
 };
-use koko::db::{
-    MIGRATIONS,
-    reconcile_legacy_sqlite_schema,
-};
+use koko::db::MIGRATIONS;
 use koko::media::{
     LibraryScanStatus,
     ShowMetadataDescendantPlan,
@@ -652,7 +648,7 @@ fn test_sync_library_catalog_preserves_inventory_when_root_is_missing() {
         items[0].missing_since.is_some(),
         "Expected the item to be marked missing instead of deleted"
     );
-    let summaries = get_persisted_library_summaries(&mut connection, &libraries).unwrap();
+    let summaries = get_persisted_library_summaries(&mut connection).unwrap();
     let summary = summaries
         .iter()
         .find(|summary| summary.id == library_id)
@@ -2965,7 +2961,7 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
     )
     .unwrap();
 
-    let fresh_summary = get_persisted_library_summaries(&mut connection, &libraries).unwrap();
+    let fresh_summary = get_persisted_library_summaries(&mut connection).unwrap();
     assert_eq!(fresh_summary[0].metadata_refresh_total, 1);
     assert_eq!(fresh_summary[0].metadata_refresh_pending, 0);
     assert_eq!(fresh_summary[0].metadata_refresh_completed, 1);
@@ -2981,7 +2977,7 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
         None,
     )
     .unwrap();
-    let pending_summary = get_persisted_library_summaries(&mut connection, &libraries).unwrap();
+    let pending_summary = get_persisted_library_summaries(&mut connection).unwrap();
     assert_eq!(pending_summary[0].metadata_refresh_total, 1);
     assert_eq!(pending_summary[0].metadata_refresh_pending, 1);
     assert_eq!(pending_summary[0].metadata_refresh_completed, 0);
@@ -2997,7 +2993,7 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
         Some("boom"),
     )
     .unwrap();
-    let error_summary = get_persisted_library_summaries(&mut connection, &libraries).unwrap();
+    let error_summary = get_persisted_library_summaries(&mut connection).unwrap();
     assert_eq!(error_summary[0].metadata_refresh_total, 1);
     assert_eq!(error_summary[0].metadata_refresh_pending, 0);
     assert_eq!(error_summary[0].metadata_refresh_completed, 1);
@@ -3444,7 +3440,7 @@ fn test_library_settings_are_persisted_in_database() {
     fs::create_dir_all(&root).unwrap();
     fs::create_dir_all(&updated_root).unwrap();
 
-    let legacy_libraries = vec![MediaLibrarySettings {
+    let initial_libraries = vec![MediaLibrarySettings {
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3458,7 +3454,7 @@ fn test_library_settings_are_persisted_in_database() {
     }];
 
     let (mut connection, db_path) = create_test_connection("persisted_library_settings_db");
-    let bootstrapped = list_library_settings(&mut connection, &legacy_libraries).unwrap();
+    let bootstrapped = replace_library_settings(&mut connection, &initial_libraries).unwrap();
     assert_eq!(bootstrapped.len(), 1);
     assert_eq!(bootstrapped[0].name, "Movies");
 
@@ -3483,11 +3479,7 @@ fn test_library_settings_are_persisted_in_database() {
     assert_eq!(updated[0].kind, MediaLibraryKind::Shows);
 
     assert!(remove_library_setting(&mut connection, 0).unwrap());
-    assert!(
-        list_library_settings(&mut connection, &[])
-            .unwrap()
-            .is_empty()
-    );
+    assert!(list_library_settings(&mut connection).unwrap().is_empty());
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
@@ -3592,7 +3584,7 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
     )
     .expect("Expected sync to process both duplicate-path libraries");
 
-    let summaries = get_persisted_library_summaries(&mut connection, &[])
+    let summaries = get_persisted_library_summaries(&mut connection)
         .expect("Expected persisted library summaries after sync");
     assert_eq!(summaries.len(), 2);
     assert_ne!(summaries[0].id, summaries[1].id);
@@ -3655,7 +3647,7 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
     )
     .expect("Expected duplicate movie libraries with the same path to resync");
 
-    let summaries = get_persisted_library_summaries(&mut connection, &[])
+    let summaries = get_persisted_library_summaries(&mut connection)
         .expect("Expected persisted library summaries after sync");
     assert_eq!(summaries.len(), 2);
 
@@ -3749,7 +3741,7 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
     )
     .expect("Expected duplicate show libraries with the same path to sync");
 
-    let summaries = get_persisted_library_summaries(&mut connection, &[])
+    let summaries = get_persisted_library_summaries(&mut connection)
         .expect("Expected persisted library summaries after sync");
     assert_eq!(summaries.len(), 2);
 
@@ -3808,169 +3800,6 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
 
     drop(connection);
     fs::remove_dir_all(root).unwrap();
-    fs::remove_file(db_path).unwrap();
-}
-
-#[test]
-fn test_latest_metadata_migration_preserves_existing_library_catalog_rows() {
-    let root = unique_temp_dir("latest_metadata_migration_preserves_catalog");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("movie-one.mkv"), b"video").unwrap();
-    fs::write(root.join("movie-two.mkv"), b"video").unwrap();
-
-    let library = MediaLibrarySettings {
-        name: "Movies".into(),
-        path: root.to_string_lossy().to_string(),
-        paths: vec![root.to_string_lossy().to_string()],
-        recursive: true,
-        kind: MediaLibraryKind::Movies,
-        scanner: Default::default(),
-        metadata_providers: vec![MetadataProviderId::Tmdb],
-        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
-        metadata_languages: vec![],
-        allowed_user_ids: vec![],
-    };
-
-    let (mut connection, db_path) = create_test_connection("migration_13_preserves_catalog_db");
-    let persisted = sync_library_catalog(&mut connection, &[library], &FfmpegSettings::default())
-        .expect("Expected populated catalog before re-running latest migration");
-    let library_id = persisted[0].id;
-    let item_count_before = list_media_items(&mut connection, Some(library_id))
-        .unwrap()
-        .len();
-    let file_count_before = get_library_files(&mut connection, library_id)
-        .unwrap()
-        .len();
-    let library_count_before = list_library_settings(&mut connection, &[]).unwrap().len();
-
-    connection
-        .revert_last_migration(MIGRATIONS)
-        .expect("Expected to revert latest metadata migration");
-    connection
-        .run_pending_migrations(MIGRATIONS)
-        .expect("Expected latest metadata migration to re-run successfully");
-
-    let libraries_after = list_library_settings(&mut connection, &[]).unwrap();
-    let library_id_after = get_persisted_library_summaries(&mut connection, &[])
-        .unwrap()
-        .into_iter()
-        .find(|entry| entry.path == root.to_string_lossy())
-        .expect("Expected migrated library summary to exist")
-        .id;
-    let item_count_after = list_media_items(&mut connection, Some(library_id_after))
-        .unwrap()
-        .len();
-    let file_count_after = get_library_files(&mut connection, library_id_after)
-        .unwrap()
-        .len();
-
-    assert_eq!(libraries_after.len(), library_count_before);
-    assert_eq!(item_count_after, item_count_before);
-    assert_eq!(file_count_after, file_count_before);
-
-    drop(connection);
-    fs::remove_dir_all(root).unwrap();
-    fs::remove_file(db_path).unwrap();
-}
-
-#[test]
-fn test_legacy_collection_schema_repair_preserves_locale_dimensions() {
-    let db_path = unique_temp_dir("legacy_collection_schema_repair").with_extension("db");
-    let mut connection = SqliteConnection::establish(&db_path.to_string_lossy())
-        .expect("Failed to establish SQLite test connection");
-
-    connection
-        .batch_execute(
-            "CREATE TABLE __diesel_schema_migrations (version VARCHAR(50) PRIMARY KEY NOT \
-             NULL,run_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);INSERT INTO \
-             __diesel_schema_migrations(version) VALUES ('0000023');CREATE TABLE media_items (id \
-             INTEGER PRIMARY KEY AUTOINCREMENT);CREATE TABLE item_metadata_links (id INTEGER \
-             PRIMARY KEY AUTOINCREMENT,media_item_id INTEGER NOT NULL,provider_id TEXT NOT \
-             NULL,locale_key TEXT NOT NULL,provider_locale_key TEXT DEFAULT NULL);CREATE TABLE \
-             metadata_collections (id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id TEXT NOT \
-             NULL,external_id TEXT NOT NULL,name TEXT NOT NULL,overview TEXT DEFAULT \
-             NULL,artwork_url TEXT DEFAULT NULL,backdrop_url TEXT DEFAULT NULL,theme_song_url \
-             TEXT DEFAULT NULL,updated_at BIGINT DEFAULT NULL,UNIQUE (provider_id, \
-             external_id));CREATE TABLE metadata_collection_items (id INTEGER PRIMARY KEY \
-             AUTOINCREMENT,collection_id INTEGER NOT NULL,media_item_id INTEGER NOT \
-             NULL,updated_at BIGINT DEFAULT NULL,UNIQUE (collection_id, media_item_id));INSERT \
-             INTO media_items(id) VALUES (1);INSERT INTO item_metadata_links(id, media_item_id, \
-             provider_id, locale_key, provider_locale_key)VALUES (10, 1, 'tmdb', 'en-US', \
-             'en-US');INSERT INTO item_metadata_links(id, media_item_id, provider_id, locale_key, \
-             provider_locale_key)VALUES (11, 1, 'tmdb', 'es-ES', 'es-ES');INSERT INTO \
-             metadata_collections(id, provider_id, external_id, name, overview, updated_at)VALUES \
-             (20, 'tmdb', '4242', 'Test Saga', 'English overview', 100);INSERT INTO \
-             metadata_collection_items(collection_id, media_item_id, updated_at)VALUES (20, 1, \
-             100);",
-        )
-        .expect("Expected legacy collection schema fixture to be created");
-
-    reconcile_legacy_sqlite_schema(&mut connection)
-        .expect("Expected legacy collection schema repair to complete");
-
-    #[derive(diesel::QueryableByName)]
-    struct CountRow {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        count: i64,
-    }
-
-    #[derive(diesel::QueryableByName)]
-    struct TextRow {
-        #[diesel(sql_type = diesel::sql_types::Text)]
-        value: String,
-    }
-
-    let source_column_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM pragma_table_info('metadata_collections') WHERE name = \
-         'source_provider_id'",
-    )
-    .get_result::<CountRow>(&mut connection)
-    .unwrap()
-    .count;
-    assert_eq!(source_column_count, 1);
-    let name_not_null = diesel::sql_query(
-        "SELECT CAST(COALESCE(MAX(\"notnull\"), 0) AS BIGINT) AS count FROM \
-         pragma_table_info('metadata_collections') WHERE name = 'name'",
-    )
-    .get_result::<CountRow>(&mut connection)
-    .unwrap()
-    .count;
-    assert_eq!(name_not_null, 0);
-
-    let locales = diesel::sql_query(
-        "SELECT locale_key AS value FROM metadata_collections ORDER BY locale_key",
-    )
-    .load::<TextRow>(&mut connection)
-    .unwrap()
-    .into_iter()
-    .map(|row| row.value)
-    .collect::<Vec<_>>();
-    assert_eq!(
-        locales,
-        vec![
-            "en-US".to_string(),
-            "es-ES".to_string()
-        ]
-    );
-
-    let membership_count = diesel::sql_query(
-        "SELECT COUNT(*) AS count FROM metadata_collection_items WHERE metadata_link_id IS NOT \
-         NULL",
-    )
-    .get_result::<CountRow>(&mut connection)
-    .unwrap()
-    .count;
-    assert_eq!(membership_count, 2);
-
-    diesel::sql_query(
-        "INSERT INTO metadata_collections (provider_id, external_id, source_provider_id, \
-         source_external_id,relation_kind, locale_key, name) VALUES ('tmdb', '4242', 'tmdb', \
-         '4242', 'primary', 'fr-FR', 'Saga FR')",
-    )
-    .execute(&mut connection)
-    .expect("Expected repaired collection uniqueness to include locale");
-
-    drop(connection);
     fs::remove_file(db_path).unwrap();
 }
 

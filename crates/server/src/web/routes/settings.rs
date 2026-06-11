@@ -277,14 +277,10 @@ fn read_structured_log_entries(
 #[get("/api/v1/settings")]
 pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> {
     let settings = current_settings();
-    let legacy_libraries = settings.media.libraries.clone();
-    let libraries = db
-        .run(move |conn| list_library_settings(conn, &legacy_libraries))
-        .await
-        .map_err(|error| {
-            log::error!("Failed to load persisted library settings: {}", error);
-            Status::InternalServerError
-        })?;
+    let libraries = db.run(list_library_settings).await.map_err(|error| {
+        log::error!("Failed to load persisted library settings: {}", error);
+        Status::InternalServerError
+    })?;
 
     persist_bootstrap_settings(&settings)?;
 
@@ -384,8 +380,7 @@ pub async fn update_settings(
                      the library delete route to remove libraries",
                     existing_count - libraries.len()
                 );
-                let mut merged =
-                    list_library_settings(conn, &[]).map_err(|error| error.to_string())?;
+                let mut merged = list_library_settings(conn).map_err(|error| error.to_string())?;
                 for (index, library) in libraries.iter().cloned().enumerate() {
                     if let Some(existing) = merged.get_mut(index) {
                         *existing = library;
@@ -462,16 +457,13 @@ pub async fn remove_library(
     }
 
     let settings = current_settings();
-    let libraries = db
-        .run(|conn| list_library_settings(conn, &[]))
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to reload persisted libraries after removal: {}",
-                error
-            );
-            Status::InternalServerError
-        })?;
+    let libraries = db.run(list_library_settings).await.map_err(|error| {
+        log::error!(
+            "Failed to reload persisted libraries after removal: {}",
+            error
+        );
+        Status::InternalServerError
+    })?;
 
     persist_bootstrap_settings(&settings)?;
 

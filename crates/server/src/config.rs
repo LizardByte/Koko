@@ -1211,7 +1211,7 @@ pub fn save_database_settings(
     Ok(())
 }
 
-/// Seed DB-owned runtime settings from the legacy settings file when no DB value exists yet.
+/// Seed DB-owned runtime settings from bootstrap settings when no DB value exists yet.
 pub fn seed_database_settings(
     conn: &mut diesel::SqliteConnection,
     settings: &Settings,

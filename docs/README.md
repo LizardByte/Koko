@@ -46,6 +46,10 @@ Koko uses a YAML configuration file for core server settings.
 Media libraries are stored in the application database instead of the YAML file. The browser settings UI edits
 server settings in YAML and library definitions in the database.
 
+Database schema changes are managed only through Diesel SQL migrations in `crates/server/sql/migrations`.
+Koko has not had a release yet, so the current database starts from one consolidated initial schema migration.
+Future schema or data changes should be added as new migration files instead of Rust startup repair code.
+
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.

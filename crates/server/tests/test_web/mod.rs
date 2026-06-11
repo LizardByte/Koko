@@ -56,7 +56,7 @@ async fn test_non_existent_route() {
 #[tokio::test]
 async fn test_web_server_rocket_build() {
     // Test that we can build a rocket instance without errors
-    let rocket = web::rocket();
+    let rocket = web::rocket_with_db_path(Some(":memory:".to_string()));
     assert!(
         rocket.ignite().await.is_ok(),
         "Rocket should ignite successfully"

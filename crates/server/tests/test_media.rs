@@ -10,7 +10,6 @@ use std::sync::atomic::{
 use diesel::Connection;
 use diesel::RunQueryDsl;
 use diesel::SqliteConnection;
-use diesel_migrations::MigrationHarness;
 
 // local imports
 use koko::config::{
@@ -20,7 +19,7 @@ use koko::config::{
     MediaLibrarySettings,
     MetadataProviderId,
 };
-use koko::db::MIGRATIONS;
+use koko::db::run_pending_sqlite_migrations;
 use koko::media::{
     LibraryScanStatus,
     ShowMetadataDescendantPlan,
@@ -118,9 +117,7 @@ fn create_test_connection(name: &str) -> (SqliteConnection, PathBuf) {
     let mut connection = SqliteConnection::establish(&db_path.to_string_lossy())
         .expect("Failed to establish SQLite test connection");
 
-    connection
-        .run_pending_migrations(MIGRATIONS)
-        .expect("Failed to run test migrations");
+    run_pending_sqlite_migrations(&mut connection).expect("Failed to run test migrations");
 
     (connection, db_path)
 }

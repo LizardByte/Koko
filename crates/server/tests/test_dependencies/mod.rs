@@ -61,6 +61,7 @@ fn is_license_compatible(license: &str) -> bool {
 fn dependency_exceptions() -> Vec<&'static str> {
     vec![
         "koko",
+        "xtask",
         "dlopen2_derive", // https://github.com/OpenByteDev/dlopen2/issues/20
         "ring",           // https://github.com/briansmith/ring/blob/main/LICENSE
         "webpki-root-certs",

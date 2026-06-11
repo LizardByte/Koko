@@ -92,10 +92,7 @@ pub async fn make_request(
     let client = match client {
         Some(c) => c,
         None => {
-            let rocket = web::rocket();
-            owned_client = Client::tracked(rocket)
-                .await
-                .expect("Failed to launch web server");
+            owned_client = create_test_client(Some("request")).await;
             &owned_client
         }
     };

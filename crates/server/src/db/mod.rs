@@ -4,12 +4,24 @@ pub(crate) mod models;
 pub(crate) mod schema;
 
 // standard imports
+use std::collections::{
+    HashMap,
+    HashSet,
+};
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
 // lib imports
 use diesel::Connection;
 use diesel::connection::SimpleConnection;
+use diesel::migration::{
+    Migration,
+    MigrationSource,
+    MigrationVersion,
+    Result as MigrationResult,
+};
 use diesel_migrations::{
     EmbeddedMigrations,
     MigrationHarness,
@@ -30,7 +42,28 @@ use rocket_sync_db_pools::{
 };
 
 /// Embedded migrations for the SQLite database.
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
+
+/// Ordered SQLite migration revisions.
+///
+/// Diesel stores migration versions as text and normally sorts pending migrations
+/// by that text. Keep the opaque revision IDs here in the exact order they must
+/// be applied.
+const SQLITE_MIGRATION_ORDER: &[&str] = &["a54d52c8da5e"];
+
+#[derive(Debug)]
+struct MigrationOrderError(String);
+
+impl fmt::Display for MigrationOrderError {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for MigrationOrderError {}
 
 /// Apply SQLite pragmas that improve concurrency and reduce lock contention.
 pub fn configure_sqlite_connection(
@@ -40,6 +73,132 @@ pub fn configure_sqlite_connection(
         "PRAGMA foreign_keys = ON;PRAGMA journal_mode = WAL;PRAGMA synchronous = NORMAL;PRAGMA \
          busy_timeout = 5000;",
     )
+}
+
+/// Run pending SQLite migrations in the order declared by `SQLITE_MIGRATION_ORDER`.
+pub fn run_pending_sqlite_migrations(
+    conn: &mut diesel::SqliteConnection
+) -> MigrationResult<Vec<MigrationVersion<'static>>> {
+    let applied_versions = applied_sqlite_migration_versions(conn)?;
+    let mut migrations_by_version = sqlite_migrations_by_version()?;
+    validate_sqlite_migration_order(&migrations_by_version)?;
+
+    let mut applied = Vec::new();
+    for version in SQLITE_MIGRATION_ORDER {
+        if applied_versions.contains(*version) {
+            continue;
+        }
+
+        let Some(migration) = migrations_by_version.remove(*version) else {
+            return migration_order_error(format!(
+                "SQLite migration revision {version} is listed but not embedded"
+            ));
+        };
+        applied.push(conn.run_migration(&*migration)?);
+    }
+
+    Ok(applied)
+}
+
+/// Revert applied SQLite migrations in reverse `SQLITE_MIGRATION_ORDER`.
+pub fn revert_all_sqlite_migrations(
+    conn: &mut diesel::SqliteConnection
+) -> MigrationResult<Vec<MigrationVersion<'static>>> {
+    let applied_versions = applied_sqlite_migration_versions(conn)?;
+    let mut migrations_by_version = sqlite_migrations_by_version()?;
+    validate_sqlite_migration_order(&migrations_by_version)?;
+
+    let mut reverted = Vec::new();
+    for version in SQLITE_MIGRATION_ORDER.iter().rev() {
+        if !applied_versions.contains(*version) {
+            continue;
+        }
+
+        let Some(migration) = migrations_by_version.remove(*version) else {
+            return migration_order_error(format!(
+                "SQLite migration revision {version} is listed but not embedded"
+            ));
+        };
+        reverted.push(conn.revert_migration(&*migration)?);
+    }
+
+    Ok(reverted)
+}
+
+fn sqlite_migrations_by_version()
+-> MigrationResult<HashMap<String, Box<dyn Migration<diesel::sqlite::Sqlite>>>> {
+    let migrations =
+        <EmbeddedMigrations as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)?;
+
+    Ok(migrations
+        .into_iter()
+        .map(|migration| (migration.name().version().to_string(), migration))
+        .collect())
+}
+
+fn applied_sqlite_migration_versions(
+    conn: &mut diesel::SqliteConnection
+) -> MigrationResult<HashSet<String>> {
+    let mut versions = HashSet::new();
+    for version in conn.applied_migrations()? {
+        let version = version.to_string();
+        if SQLITE_MIGRATION_ORDER.contains(&version.as_str()) {
+            versions.insert(version);
+        }
+    }
+
+    Ok(versions)
+}
+
+fn validate_sqlite_migration_order(
+    migrations_by_version: &HashMap<String, Box<dyn Migration<diesel::sqlite::Sqlite>>>
+) -> MigrationResult<()> {
+    let mut listed_versions = HashSet::new();
+    let mut duplicate_versions = Vec::new();
+    for version in SQLITE_MIGRATION_ORDER {
+        if !listed_versions.insert(*version) {
+            duplicate_versions.push((*version).to_owned());
+        }
+    }
+    duplicate_versions.sort();
+    if !duplicate_versions.is_empty() {
+        return migration_order_error(format!(
+            "Duplicate SQLite migration revisions in SQLITE_MIGRATION_ORDER: {}",
+            duplicate_versions.join(", ")
+        ));
+    }
+
+    let mut missing_versions = SQLITE_MIGRATION_ORDER
+        .iter()
+        .copied()
+        .filter(|version| !migrations_by_version.contains_key(*version))
+        .collect::<Vec<_>>();
+    missing_versions.sort_unstable();
+    if !missing_versions.is_empty() {
+        return migration_order_error(format!(
+            "SQLite migration revisions are listed but not embedded: {}",
+            missing_versions.join(", ")
+        ));
+    }
+
+    let mut unlisted_versions = migrations_by_version
+        .keys()
+        .filter(|version| !listed_versions.contains(version.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    unlisted_versions.sort();
+    if !unlisted_versions.is_empty() {
+        return migration_order_error(format!(
+            "SQLite migration revisions are embedded but missing from SQLITE_MIGRATION_ORDER: {}",
+            unlisted_versions.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
+fn migration_order_error<T>(message: String) -> MigrationResult<T> {
+    Err(Box::new(MigrationOrderError(message)))
 }
 
 /// Prepare the SQLite database path before Rocket initializes the pool.
@@ -64,7 +223,7 @@ pub fn initialize_sqlite_database(db_path: &str) -> Result<(), String> {
         .map_err(|error| format!("Failed to open SQLite database {db_path}: {error}"))?;
     configure_sqlite_connection(&mut conn)
         .map_err(|error| format!("Failed to configure SQLite database {db_path}: {error}"))?;
-    conn.run_pending_migrations(MIGRATIONS)
+    run_pending_sqlite_migrations(&mut conn)
         .map_err(|error| format!("Failed to run SQLite migrations {db_path}: {error}"))?;
     Ok(())
 }
@@ -130,8 +289,7 @@ impl Fairing for Migrate {
             let _ = conn
                 .run(|c| {
                     configure_sqlite_connection(c).expect("Failed to configure SQLite connection");
-                    c.run_pending_migrations(MIGRATIONS)
-                        .expect("Failed to run migrations");
+                    run_pending_sqlite_migrations(c).expect("Failed to run migrations");
                 })
                 .await;
         }

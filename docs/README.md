@@ -48,7 +48,18 @@ server settings in YAML and library definitions in the database.
 
 Database schema changes are managed only through Diesel SQL migrations in `crates/server/sql/migrations`.
 Koko has not had a release yet, so the current database starts from one consolidated initial schema migration.
-Future schema or data changes should be added as new migration files instead of Rust startup repair code.
+Migration directories use an opaque hash-like revision prefix, and runtime execution order is defined by
+`SQLITE_MIGRATION_ORDER` in `crates/server/src/db/mod.rs` instead of hash lexicographic order. Future schema or data
+changes should be added as new migration files instead of Rust startup repair code.
+
+Create a new migration from the repository root with:
+
+```console
+cargo new-migration add_media_flags
+```
+
+If the name is omitted, the command prompts for it. The command generates a unique revision, creates `up.sql` and
+`down.sql`, appends the revision to `SQLITE_MIGRATION_ORDER`, and runs `cargo +nightly fmt`.
 
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 

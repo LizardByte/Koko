@@ -288,19 +288,22 @@ jobs:
       #  cargo-bin --install
       - name: Install cargo packages
         run: |
-          cargo install \
-            cargo-edit \
-            cargo-tarpaulin
+          cargo install cargo-edit
+          cargo install --locked cargo-tarpaulin
 
       - name: Update Version
         if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
-        run: cargo set-version ${{ needs.setup_release.outputs.release_version }}
+        run: |
+          cargo set-version ${{ needs.setup_release.outputs.release_version }}
+          cargo update --workspace
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
 
       - name: Test
         id: test
         run: |
           ${{ matrix.cargo_env }}
           cargo tarpaulin \
+            --locked \
             --color always \
             --engine llvm \
             --no-fail-fast \
@@ -326,12 +329,12 @@ jobs:
       - name: Clippy
         run: |
           ${{ matrix.cargo_env }}
-          cargo clippy -- -D warnings
+          cargo clippy --locked -- -D warnings
 
       - name: Build
         run: |
           ${{ matrix.cargo_env }}
-          cargo build --target ${{ matrix.target }} --release
+          cargo build --locked --target ${{ matrix.target }} --release
 
       - name: Strip all debug symbols
         # TODO: is this necessary

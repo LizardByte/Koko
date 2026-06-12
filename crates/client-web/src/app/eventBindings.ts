@@ -516,7 +516,8 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
     button.addEventListener('click', () => {
       const providerId = button.dataset.providerSettings;
-      navigateTo(`/settings/providers${providerId ? `#provider-${providerId}` : ''}`);
+      const providerHash = providerId ? `#provider-${providerId}` : '';
+      navigateTo(`/settings/providers${providerHash}`);
     });
   });
 

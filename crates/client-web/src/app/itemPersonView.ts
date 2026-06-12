@@ -191,7 +191,8 @@ export function renderLinkedMetadataSummary(): string {
     .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
     .map((provider) => {
       const logoUrl = providerAttributionLogo(provider.id);
-      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="" loading="lazy" />` : ''}${escapeHtml(provider.attribution_text)}</a>`;
+      const logoMarkup = logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="" loading="lazy" />` : '';
+      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logoMarkup}${escapeHtml(provider.attribution_text)}</a>`;
     })
     .join('');
 
@@ -519,6 +520,10 @@ export function renderPersonPage(): string {
   const credits = response.credits;
   const creditGroups = personCreditGroups(credits);
   const age = personAgeLabel(response.person.birthday, response.person.deathday);
+  const knownForTags = response.person.known_for
+    .map((title) => `<span class="tag">${escapeHtml(title)}</span>`)
+    .join('');
+  const knownForMarkup = response.person.known_for.length ? `<div class="hero-meta-row">${knownForTags}</div>` : '';
 
   return `
     <section class="item-page person-page">
@@ -536,7 +541,7 @@ export function renderPersonPage(): string {
           </div>
           ${response.person.birth_place ? `<p class="hero-tagline">${escapeHtml(response.person.birth_place)}</p>` : ''}
           ${response.person.biography ? renderCollapsibleText(response.person.biography, `person-biography:${response.person.id}`) : ''}
-          ${response.person.known_for.length ? `<div class="hero-meta-row">${response.person.known_for.map((title) => `<span class="tag">${escapeHtml(title)}</span>`).join('')}</div>` : ''}
+          ${knownForMarkup}
           <div class="detail-actions">
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent('Back', 'arrow-left')}</button>
             ${response.person.profile_url ? `<a class="button-link secondary-button" href="${escapeHtml(response.person.profile_url)}" target="_blank" rel="noreferrer">Provider page</a>` : ''}
@@ -750,8 +755,9 @@ export function renderItemPage(): string {
   const titleMarkup = logoUrl
     ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
     : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`;
+  const resumeButtonLabel = `Resume ${formatDuration(resumeMs)}`;
   const resumeButtonMarkup = state.selectedItem.playable && resumeMs > 0
-    ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>`
+    ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(resumeButtonLabel, 'play')}</button>`
     : '';
   let playButtonMarkup = '';
   if (state.selectedItem.playable) {

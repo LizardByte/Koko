@@ -370,10 +370,12 @@ export function playbackDetailBadgeMarkup(item: MediaItemSummary): string {
   const badges: string[] = [];
   if (watchCount > 0) {
     const watchedLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount}x`;
-    badges.push(`<span class="tag success status-tag" title="${escapeHtml(item.last_watched_at ? `Last watched ${formatTimestamp(item.last_watched_at)}` : watchedLabel)}">${renderIcon('circle-check', 'status-icon')}<span>${escapeHtml(watchedLabel)}</span></span>`);
+    const watchedTitle = item.last_watched_at ? `Last watched ${formatTimestamp(item.last_watched_at)}` : watchedLabel;
+    badges.push(`<span class="tag success status-tag" title="${escapeHtml(watchedTitle)}">${renderIcon('circle-check', 'status-icon')}<span>${escapeHtml(watchedLabel)}</span></span>`);
   }
   if (progressPercent !== undefined) {
-    badges.push(`<span class="tag status-tag">${escapeHtml(`${progressPercent}% watched`)}</span>`);
+    const progressLabel = `${progressPercent}% watched`;
+    badges.push(`<span class="tag status-tag">${escapeHtml(progressLabel)}</span>`);
   }
 
   return badges.join('');
@@ -499,12 +501,16 @@ export function renderSearchResultRow(result: MediaSearchResult, compact: boolea
     const item = result.item;
     const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
     const library = state.libraries.find((entry) => entry.id === item.library_id);
+    const itemResultDetails = [library?.name ?? 'Library', humanizeItemType(item.item_type)];
+    if (!compact) {
+      itemResultDetails.push(formatChildCount(item));
+    }
     return `
       <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
         <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
         <span class="search-result-copy">
           <strong>${escapeHtml(item.display_title)}</strong>
-          <span>${escapeHtml(`${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}${compact ? '' : ` · ${formatChildCount(item)}`}`)}</span>
+          <span>${escapeHtml(itemResultDetails.join(' · '))}</span>
           ${!compact && item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
         </span>
       </button>

@@ -163,8 +163,9 @@ export function renderExistingLibrariesSettings(settings: SettingsSnapshot): str
         const scanPendingTag = scanPending ? '<span class="tag warning">Scanning catalog</span>' : '';
         const missingItemsTagClass = hasMissingItems ? 'warning' : 'success';
         const missingItemsLabel = hasMissingItems ? `${missingItems} missing items` : 'No missing items';
+        const missingFilesLabel = `${missingFiles} missing files`;
         const missingFilesTag = missingFiles > 0
-          ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>`
+          ? `<span class="tag warning">${escapeHtml(missingFilesLabel)}</span>`
           : '';
         const scanButtonDisabled = scanPending ? 'disabled' : '';
         const scanButtonLabel = scanPending ? 'Scanning' : 'Scan now';

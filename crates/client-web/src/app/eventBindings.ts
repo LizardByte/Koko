@@ -5,7 +5,7 @@ import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './acti
 import { readProfileImageUpload } from './auth';
 import { renderLogViewer, renderMetadataDashboard } from './dashboardView';
 import { escapeHtml } from './format';
-import { normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
+import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
 import { currentThemeSongYouTubeTarget, currentTrailerOptions } from './mediaTargets';
 import {
@@ -433,11 +433,11 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     try {
       const formData = new FormData(form);
       const request: CreateUserRequest = {
-        username: String(formData.get('username') ?? '').trim(),
-        password: String(formData.get('password') ?? ''),
-        pin: String(formData.get('pin') ?? '').trim() || undefined,
+        username: formDataString(formData.get('username')).trim(),
+        password: formDataString(formData.get('password')),
+        pin: formDataString(formData.get('pin')).trim() || undefined,
         admin: true,
-        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+        birthday: formDataString(formData.get('birthday')).trim() || undefined,
         profile_image_upload: await readProfileImageUpload(formData),
         preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
       };
@@ -462,8 +462,8 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     const formData = new FormData(form);
     const request: LoginRequest = {
-      username: String(formData.get('username') ?? '').trim(),
-      password: String(formData.get('password') ?? ''),
+      username: formDataString(formData.get('username')).trim(),
+      password: formDataString(formData.get('password')),
     };
 
     try {
@@ -1004,10 +1004,10 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     const formData = new FormData(form);
     state.metadataDashboardFilters = {
-      libraryId: String(formData.get('dashboard_library_id') ?? '').trim(),
-      itemType: String(formData.get('dashboard_item_type') ?? '').trim(),
-      refreshState: String(formData.get('dashboard_refresh_state') ?? '').trim(),
-      search: String(formData.get('dashboard_search') ?? '').trim(),
+      libraryId: formDataString(formData.get('dashboard_library_id')).trim(),
+      itemType: formDataString(formData.get('dashboard_item_type')).trim(),
+      refreshState: formDataString(formData.get('dashboard_refresh_state')).trim(),
+      search: formDataString(formData.get('dashboard_search')).trim(),
     };
     const root = document.querySelector<HTMLElement>('#metadata-dashboard-panel-root');
     if (!root) {
@@ -1045,11 +1045,11 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     const formData = new FormData(form);
     state.logFilters = {
-      level: String(formData.get('log_level') ?? '').trim().toUpperCase(),
-      module: String(formData.get('log_module') ?? '').trim(),
-      search: String(formData.get('log_search') ?? '').trim(),
-      since: String(formData.get('log_since') ?? '').trim(),
-      until: String(formData.get('log_until') ?? '').trim(),
+      level: formDataString(formData.get('log_level')).trim().toUpperCase(),
+      module: formDataString(formData.get('log_module')).trim(),
+      search: formDataString(formData.get('log_search')).trim(),
+      since: formDataString(formData.get('log_since')).trim(),
+      until: formDataString(formData.get('log_until')).trim(),
     };
     await refreshLogsView(context);
   });
@@ -1135,9 +1135,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         const profileImageUpload = await readProfileImageUpload(formData);
         const removeProfileImage = formData.get('remove_profile_image') === 'on';
         const request: UpdateUserRequest = {
-          username: String(formData.get('username') ?? '').trim(),
+          username: formDataString(formData.get('username')).trim(),
           admin: formData.get('admin') === 'on',
-          birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+          birthday: formDataString(formData.get('birthday')).trim() || undefined,
           profile_image_upload: profileImageUpload,
           remove_profile_image: removeProfileImage,
           preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
@@ -1165,11 +1165,11 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     try {
       const formData = new FormData(form);
       const request: CreateUserRequest = {
-        username: String(formData.get('username') ?? '').trim(),
-        password: String(formData.get('password') ?? ''),
-        pin: String(formData.get('pin') ?? '').trim() || undefined,
+        username: formDataString(formData.get('username')).trim(),
+        password: formDataString(formData.get('password')),
+        pin: formDataString(formData.get('pin')).trim() || undefined,
         admin: formData.get('admin') === 'on',
-        birthday: String(formData.get('birthday') ?? '').trim() || undefined,
+        birthday: formDataString(formData.get('birthday')).trim() || undefined,
         profile_image_upload: await readProfileImageUpload(formData),
         preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
       };
@@ -1234,15 +1234,15 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     const formData = new FormData(form);
     const paths = parsePathsInput(formData.get('library_paths'));
     const library: MediaLibrarySettings = {
-      name: String(formData.get('library_name') ?? ''),
+      name: formDataString(formData.get('library_name')),
       path: paths[0] ?? '',
       paths,
       recursive: formData.get('library_recursive') === 'on',
-      kind: String(formData.get('library_kind') ?? 'movies'),
-      scanner: String(formData.get('library_scanner') ?? 'auto'),
-      metadata_providers: formData.getAll('library_metadata_provider').map((value) => String(value)),
-      metadata_language_mode: String(formData.get('library_metadata_language_mode') ?? 'auto') === 'manual' ? 'manual' : 'auto',
-      metadata_languages: normalizedMetadataLanguages(formData.getAll('library_metadata_language').map((value) => String(value))),
+      kind: formDataString(formData.get('library_kind'), 'movies'),
+      scanner: formDataString(formData.get('library_scanner'), 'auto'),
+      metadata_providers: formDataStrings(formData.getAll('library_metadata_provider')),
+      metadata_language_mode: formDataString(formData.get('library_metadata_language_mode'), 'auto') === 'manual' ? 'manual' : 'auto',
+      metadata_languages: normalizedMetadataLanguages(formDataStrings(formData.getAll('library_metadata_language'))),
       allowed_user_ids: formData.getAll('library_allowed_user')
         .map((value) => Number(value))
         .filter((value) => Number.isFinite(value) && value > 0),

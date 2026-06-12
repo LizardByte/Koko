@@ -50,7 +50,7 @@ export async function readProfileImageUpload(formData: FormData): Promise<Profil
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.addEventListener('load', () => resolve(String(reader.result ?? '')));
+    reader.addEventListener('load', () => resolve(typeof reader.result === 'string' ? reader.result : ''));
     reader.addEventListener('error', () => reject(new Error('Failed to read profile image.')));
     reader.readAsDataURL(file);
   });

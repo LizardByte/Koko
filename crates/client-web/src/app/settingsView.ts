@@ -1,7 +1,7 @@
 /** Renders settings sections and converts settings forms into API payloads. */
 import type { MetadataProviderSettings, ScheduledTaskId, SettingsSnapshot } from '../api';
 import { escapeHtml } from './format';
-import { joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
+import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
 import { renderLogViewer, renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
 import { renderUserManagement } from './auth';
@@ -642,17 +642,20 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
   const settingsSection = activeSettingsSection();
   let metadataRefreshIntervalDays = current.metadata.refresh_interval_days;
   if (formData.has('metadata_refresh_interval_days')) {
-    const refreshIntervalValue = String(formData.get('metadata_refresh_interval_days') ?? '');
+    const refreshIntervalValue = formDataString(formData.get('metadata_refresh_interval_days'));
     if (refreshIntervalValue === 'never') {
       metadataRefreshIntervalDays = null;
     } else {
-      metadataRefreshIntervalDays = Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30);
+      metadataRefreshIntervalDays = Number(formDataString(
+        formData.get('metadata_refresh_interval_days'),
+        String(current.metadata.refresh_interval_days ?? 30),
+      ));
     }
   }
 
   return {
     general: {
-      data_dir: String(formData.get('data_dir') ?? current.general.data_dir),
+      data_dir: formDataString(formData.get('data_dir'), current.general.data_dir),
     },
     media: {
       missing_item_auto_delete_days: null,
@@ -665,18 +668,18 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
         const paths = parsePathsInput(formData.get(pathsField));
         const providerField = `existing_library_metadata_provider_${index}`;
         return {
-          name: String(formData.get(`existing_library_name_${index}`) ?? library.name),
+          name: formDataString(formData.get(`existing_library_name_${index}`), library.name),
           path: paths[0] ?? library.path,
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
-          kind: String(formData.get(`existing_library_kind_${index}`) ?? library.kind),
-          scanner: String(formData.get(`existing_library_scanner_${index}`) ?? library.scanner ?? 'auto'),
-          metadata_providers: formData.getAll(providerField).map((value) => String(value)),
-          metadata_language_mode: String(formData.get(`existing_library_metadata_language_mode_${index}`) ?? library.metadata_language_mode ?? 'auto') === 'manual'
+          kind: formDataString(formData.get(`existing_library_kind_${index}`), library.kind),
+          scanner: formDataString(formData.get(`existing_library_scanner_${index}`), library.scanner ?? 'auto'),
+          metadata_providers: formDataStrings(formData.getAll(providerField)),
+          metadata_language_mode: formDataString(formData.get(`existing_library_metadata_language_mode_${index}`), library.metadata_language_mode ?? 'auto') === 'manual'
             ? 'manual'
             : 'auto',
           metadata_languages: formData.has(`existing_library_metadata_language_${index}`)
-            ? normalizedMetadataLanguages(formData.getAll(`existing_library_metadata_language_${index}`).map((value) => String(value)))
+            ? normalizedMetadataLanguages(formDataStrings(formData.getAll(`existing_library_metadata_language_${index}`)))
             : normalizedMetadataLanguages(library.metadata_languages),
           allowed_user_ids: formData.has(`existing_library_allowed_user_${index}`)
             ? formData.getAll(`existing_library_allowed_user_${index}`)
@@ -701,7 +704,7 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
         }
 
         const submittedApiKey = formData.has(`${prefix}_api_key`)
-          ? String(formData.get(`${prefix}_api_key`) ?? '').trim()
+          ? formDataString(formData.get(`${prefix}_api_key`)).trim()
           : undefined;
         const clearApiKey = formData.get(`${prefix}_clear_api_key`) === 'on';
 
@@ -717,17 +720,17 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
     },
     server: {
       use_https: settingsSection === 'general' ? formData.get('use_https') === 'on' : current.server.use_https,
-      address: String(formData.get('address') ?? current.server.address),
+      address: formDataString(formData.get('address'), current.server.address),
       port: Number(formData.get('port') ?? current.server.port),
-      cert_path: String(formData.get('cert_path') ?? current.server.cert_path),
-      key_path: String(formData.get('key_path') ?? current.server.key_path),
+      cert_path: formDataString(formData.get('cert_path'), current.server.cert_path),
+      key_path: formDataString(formData.get('key_path'), current.server.key_path),
       use_custom_certs: settingsSection === 'general'
         ? formData.get('use_custom_certs') === 'on'
         : current.server.use_custom_certs,
     },
     ffmpeg: {
-      ffmpeg_path: String(formData.get('ffmpeg_path') ?? current.ffmpeg.ffmpeg_path),
-      ffprobe_path: String(formData.get('ffprobe_path') ?? current.ffmpeg.ffprobe_path),
+      ffmpeg_path: formDataString(formData.get('ffmpeg_path'), current.ffmpeg.ffmpeg_path),
+      ffprobe_path: formDataString(formData.get('ffprobe_path'), current.ffmpeg.ffprobe_path),
     },
     scheduled_tasks: parseScheduledTasksSettings(formData, current),
   };
@@ -739,7 +742,7 @@ export function parseScheduledTasksSettings(formData: FormData, current: Setting
   }
 
   const weekdays = formData.getAll('scheduled_window_weekday')
-    .map((value) => String(value))
+    .filter((value): value is string => typeof value === 'string')
     .filter((value): value is SettingsSnapshot['scheduled_tasks']['window']['weekdays'][number] => (
       ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].includes(value)
     ));
@@ -747,8 +750,8 @@ export function parseScheduledTasksSettings(formData: FormData, current: Setting
   return {
     enabled: formData.get('scheduled_tasks_enabled') === 'on',
     window: {
-      start_time: String(formData.get('scheduled_window_start_time') ?? current.scheduled_tasks.window.start_time),
-      stop_time: String(formData.get('scheduled_window_stop_time') ?? current.scheduled_tasks.window.stop_time),
+      start_time: formDataString(formData.get('scheduled_window_start_time'), current.scheduled_tasks.window.start_time),
+      stop_time: formDataString(formData.get('scheduled_window_stop_time'), current.scheduled_tasks.window.stop_time),
       weekdays: weekdays.length ? weekdays : current.scheduled_tasks.window.weekdays,
     },
     metadata_refresh: {

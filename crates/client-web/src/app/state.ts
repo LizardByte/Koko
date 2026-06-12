@@ -1,0 +1,51 @@
+import { getApiMode, getStoredApiBase } from '../api';
+import { defaultHomeTab, parseRoute } from './routes';
+import type { AppState } from './types';
+
+/** Shared mutable application state for the browser client. */
+export const state: AppState = {
+  apiBase: getStoredApiBase(),
+  apiMode: getApiMode(),
+  route: parseRoute(),
+  users: [],
+  libraries: [],
+  libraryItems: [],
+  libraryItemsLoading: false,
+  searchResults: [],
+  homePreviewItemId: undefined,
+  homePreviewCollectionId: undefined,
+  metadataProviders: [],
+  systemActivities: [],
+  dashboardItems: [],
+  metadataSearchResults: [],
+  searchQuery: '',
+  metadataSearchQuery: '',
+  metadataSearchYear: '',
+  metadataSearchLanguage: 'en',
+  metadataSearchProviders: [],
+  showFullSearchResults: false,
+  homeTab: defaultHomeTab(parseRoute()),
+  isLoading: true,
+  hasDeferredAutoRefreshRender: false,
+  isPlayerOpen: false,
+  activePlaybackItem: undefined,
+  activePlaybackStartMs: 0,
+  activeAudioStreamIndex: undefined,
+  isAudioTrackMenuOpen: false,
+  isTrailerMenuOpen: false,
+  activeTrailer: undefined,
+  expandedTextKeys: new Set(),
+  metadataDashboardFilters: {
+    libraryId: '',
+    itemType: '',
+    refreshState: '',
+    search: '',
+  },
+  logFilters: {
+    level: '',
+    module: '',
+    search: '',
+    since: '',
+    until: '',
+  },
+};

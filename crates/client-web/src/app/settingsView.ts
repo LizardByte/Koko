@@ -1,0 +1,715 @@
+/** Renders settings sections and converts settings forms into API payloads. */
+import type { MetadataProviderSettings, ScheduledTaskId, SettingsSnapshot } from '../api';
+import { escapeHtml } from './format';
+import { joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
+import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
+import { renderLogViewer, renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
+import { renderUserManagement } from './auth';
+import { providerDisplayName, libraryProviderOptions } from './providers';
+import { persistedLibraryForSettings } from './selectors';
+import { state } from './state';
+import type { SettingsSection } from './types';
+import { renderButtonContent, renderIcon, renderPageNavbar } from './ui';
+
+export function activeSettingsSection(): SettingsSection {
+  return state.route.page === 'settings' ? state.route.section ?? 'general' : 'general';
+}
+
+export function renderSettingsSectionNav(): string {
+  const activeSection = activeSettingsSection();
+  const sections: Array<{ id: SettingsSection; label: string; path: string }> = [
+    { id: 'general', label: 'General', path: '/settings' },
+    { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
+    { id: 'providers', label: 'Providers', path: '/settings/providers' },
+    { id: 'scheduled', label: 'Scheduled', path: '/settings/scheduled' },
+    { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
+    { id: 'logs', label: 'Logs', path: '/settings/logs' },
+  ];
+
+  return `
+    <nav class="settings-section-nav panel page-panel" aria-label="Settings sections">
+      ${sections.map((section) => `
+        <button type="button" class="secondary-button ${activeSection === section.id ? 'active' : ''}" data-settings-section-path="${section.path}">
+          ${escapeHtml(section.label)}
+        </button>
+      `).join('')}
+    </nav>
+  `;
+}
+
+export const metadataLanguageOptions: Array<{ value: string; label: string }> = [
+  { value: 'en-US', label: 'English (United States)' },
+  { value: 'en-GB', label: 'English (United Kingdom)' },
+  { value: 'es-ES', label: 'Spanish (Spain)' },
+  { value: 'fr-FR', label: 'French (France)' },
+  { value: 'de-DE', label: 'German (Germany)' },
+  { value: 'it-IT', label: 'Italian (Italy)' },
+  { value: 'ja-JP', label: 'Japanese (Japan)' },
+  { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+];
+
+export function metadataLanguageSelect(name: string, selectedLanguages?: string[]): string {
+  const selected = normalizedMetadataLanguages(selectedLanguages);
+  return `
+    <select name="${name}" multiple size="${Math.min(5, metadataLanguageOptions.length)}">
+      ${metadataLanguageOptions.map((option) => `
+        <option value="${option.value}" ${selected.includes(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>
+      `).join('')}
+    </select>
+  `;
+}
+
+export function metadataLanguageModeSelect(name: string, selectedMode?: 'auto' | 'manual'): string {
+  const mode = selectedMode ?? 'auto';
+  return `
+    <select name="${name}">
+      <option value="auto" ${mode === 'auto' ? 'selected' : ''}>Auto</option>
+      <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual</option>
+    </select>
+  `;
+}
+
+export function userPermissionSelect(name: string, allowedUserIds?: number[]): string {
+  const selected = new Set(allowedUserIds ?? []);
+  return `
+    <select name="${name}" multiple size="${Math.min(5, Math.max(2, state.users.length))}">
+      ${state.users.map((user) => `
+        <option value="${user.id}" ${selected.has(user.id) ? 'selected' : ''}>${escapeHtml(user.username)}${user.admin ? ' (admin)' : ''}</option>
+      `).join('')}
+    </select>
+  `;
+}
+
+export function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
+  const providers = libraryProviderOptions(libraryKind)
+    .sort((left, right) => {
+      const leftIndex = selectedProviders.indexOf(left.id);
+      const rightIndex = selectedProviders.indexOf(right.id);
+      return (left.role === right.role ? 0 : left.role === 'primary' ? -1 : 1)
+        || (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex)
+        - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex)
+        || left.display_name.localeCompare(right.display_name);
+    });
+  const selected = new Set(selectedProviders);
+  let primaryPriority = 0;
+
+  return `
+    <div class="metadata-provider-list" data-provider-list="${prefix}">
+      ${providers.map((provider) => `
+      ${(() => {
+        const providerId = provider.id;
+        const label = provider.display_name;
+        const isSecondary = provider.role === 'secondary';
+        if (!isSecondary) {
+          primaryPriority += 1;
+        }
+        const secondaryAvailable = !isSecondary
+          || provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId));
+        const checked = selected.has(providerId) && secondaryAvailable;
+        return `
+      <div class="metadata-provider-option" data-provider-option="${providerId}" data-provider-role="${provider.role}" data-extends-provider-ids="${provider.extends_provider_ids.join(',')}">
+        <div class="provider-option-main">
+          <label class="checkbox-inline">
+            <input
+              name="${prefix}"
+              type="checkbox"
+              value="${providerId}"
+              data-provider-kinds="${provider.supported_kinds.join(',')}"
+              ${checked ? 'checked' : ''}
+              ${secondaryAvailable ? '' : 'disabled'}
+            />
+            ${escapeHtml(label)}
+          </label>
+          <span class="muted">${isSecondary ? 'Secondary' : `Priority ${primaryPriority}`}</span>
+        </div>
+        <div class="provider-option-actions">
+          ${isSecondary ? '' : `
+            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
+          `}
+          <button type="button" class="secondary-button" data-provider-settings="${providerId}">${renderButtonContent('Settings', 'settings')}</button>
+        </div>
+      </div>
+        `;
+      })()}
+      `).join('')}
+    </div>
+    `;
+}
+
+export function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
+  if (!settings.media.libraries.length) {
+    return '<div class="empty-state tight">No libraries are configured yet.</div>';
+  }
+
+  return settings.media.libraries
+    .map((library, index) => {
+      const persistedLibrary = persistedLibraryForSettings(library);
+      const refreshPending = persistedLibrary ? Boolean(libraryRefreshProgress(persistedLibrary)) : false;
+      const scanPending = persistedLibrary ? hasActiveLibraryScan(persistedLibrary.id) : hasActiveLibraryScan();
+      const refreshLabel = refreshPending
+        ? 'Refreshing metadata'
+        : 'Refresh metadata';
+      const missingFiles = persistedLibrary?.missing_files ?? 0;
+      const missingItems = persistedLibrary?.missing_items ?? 0;
+      const hasMissingItems = missingFiles > 0 || missingItems > 0;
+
+      return `
+      <section class="settings-library-card">
+        <div class="settings-library-header">
+          <div>
+            <p class="eyebrow">Library ${index + 1}</p>
+            <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
+            ${persistedLibrary
+              ? `<div class="settings-library-tags">
+                ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
+                <span class="tag ${hasMissingItems ? 'warning' : 'success'}">${escapeHtml(hasMissingItems ? `${missingItems} missing items` : 'No missing items')}</span>
+                ${missingFiles > 0 ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>` : ''}
+              </div>`
+              : ''}
+          </div>
+          <div class="settings-library-actions">
+            ${persistedLibrary
+              ? `
+                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}" ${scanPending ? 'disabled' : ''}>${renderButtonContent(scanPending ? 'Scanning' : 'Scan now', 'refresh-cw')}</button>
+                <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
+                <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${hasMissingItems ? '' : 'disabled'}>${renderButtonContent('Delete missing', 'trash-2')}</button>
+              `
+              : ''}
+            <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Name<input name="existing_library_name_${index}" value="${escapeHtml(library.name)}" /></label>
+          <label>Type
+            <select name="existing_library_kind_${index}">
+              ${libraryKindOptions(library.kind)}
+            </select>
+          </label>
+          <label>Scanner
+            <select name="existing_library_scanner_${index}">
+              ${libraryScannerOptions(library.scanner ?? 'auto')}
+            </select>
+          </label>
+        </div>
+        <label>Folders
+          <textarea name="existing_library_paths_${index}" rows="4" placeholder="One folder per line">${escapeHtml(joinPaths(library.paths.length ? library.paths : [library.path].filter(Boolean)))}</textarea>
+        </label>
+        <div class="form-row">
+          <label class="checkbox-inline"><input name="existing_library_recursive_${index}" type="checkbox" ${library.recursive ? 'checked' : ''} /> Recursive scan</label>
+        </div>
+        <div class="form-row">
+          <label>Provider language mode
+            ${metadataLanguageModeSelect(`existing_library_metadata_language_mode_${index}`, library.metadata_language_mode)}
+          </label>
+          <label>Manual languages
+            ${metadataLanguageSelect(`existing_library_metadata_language_${index}`, library.metadata_languages)}
+          </label>
+        </div>
+        <div class="form-row">
+          <label>Library access
+            ${userPermissionSelect(`existing_library_allowed_user_${index}`, library.allowed_user_ids)}
+          </label>
+        </div>
+        <fieldset>
+          <legend>Metadata sources</legend>
+          ${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}
+        </fieldset>
+      </section>
+    `;
+    })
+    .join('');
+}
+
+export function scheduledWeekdayLabel(weekday: string): string {
+  return weekday.slice(0, 3).toUpperCase();
+}
+
+export function renderScheduledTaskRunButton(taskId: ScheduledTaskId): string {
+  return `<button type="button" class="secondary-button" data-run-scheduled-task="${taskId}">${renderButtonContent('Run now', 'play')}</button>`;
+}
+
+export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
+  const scheduled = settings.scheduled_tasks;
+  const selectedWeekdays = new Set(scheduled.window.weekdays);
+  const weekdays: SettingsSnapshot['scheduled_tasks']['window']['weekdays'] = [
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+    'sunday',
+  ];
+  const trashCleanupDays = scheduled.trash_cleanup.missing_item_auto_delete_days ?? 30;
+
+  return `
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <div class="section-heading">
+            <h3>Scheduled tasks</h3>
+          </div>
+          <div class="settings-library-card">
+            <div class="settings-library-header">
+              <div>
+                <p class="eyebrow">Runner</p>
+                <h3>Task window</h3>
+              </div>
+              <span class="tag ${scheduled.enabled ? 'success' : ''}">${scheduled.enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <div class="form-row checkbox-row">
+              <label><input name="scheduled_tasks_enabled" type="checkbox" ${scheduled.enabled ? 'checked' : ''} /> Enable scheduled task runner</label>
+            </div>
+            <div class="form-row">
+              <label>Start time<input name="scheduled_window_start_time" type="time" value="${escapeHtml(scheduled.window.start_time)}" /></label>
+              <label>Stop time<input name="scheduled_window_stop_time" type="time" value="${escapeHtml(scheduled.window.stop_time)}" /></label>
+            </div>
+            <fieldset>
+              <legend>Run days</legend>
+              <div class="weekday-toggle-row">
+                ${weekdays.map((weekday) => `
+                  <label class="checkbox-inline">
+                    <input name="scheduled_window_weekday" type="checkbox" value="${weekday}" ${selectedWeekdays.has(weekday) ? 'checked' : ''} />
+                    ${scheduledWeekdayLabel(weekday)}
+                  </label>
+                `).join('')}
+              </div>
+            </fieldset>
+          </div>
+
+          <div class="settings-library-list">
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Metadata refresh</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.metadata_refresh.enabled ? 'success' : ''}">${scheduled.metadata_refresh.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('metadata_refresh')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_metadata_refresh_enabled" type="checkbox" ${scheduled.metadata_refresh.enabled ? 'checked' : ''} /> Run stale metadata refreshes automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Refresh interval
+                  <select name="metadata_refresh_interval_days">
+                    <option value="30" ${settings.metadata.refresh_interval_days === 30 ? 'selected' : ''}>Every 30 days</option>
+                    <option value="60" ${settings.metadata.refresh_interval_days === 60 ? 'selected' : ''}>Every 60 days</option>
+                    <option value="90" ${settings.metadata.refresh_interval_days === 90 ? 'selected' : ''}>Every 90 days</option>
+                    <option value="never" ${settings.metadata.refresh_interval_days == null ? 'selected' : ''}>Never</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Trash cleanup</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.trash_cleanup.enabled ? 'warning' : ''}">${scheduled.trash_cleanup.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('trash_cleanup')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_trash_cleanup_enabled" type="checkbox" ${scheduled.trash_cleanup.enabled ? 'checked' : ''} /> Delete missing items automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Days missing
+                  <input name="scheduled_trash_cleanup_days" type="number" min="1" max="3650" value="${trashCleanupDays}" />
+                </label>
+                <label>Run interval
+                  <input name="scheduled_trash_cleanup_interval_days" type="number" min="1" max="365" value="${scheduled.trash_cleanup.interval_days}" />
+                </label>
+              </div>
+            </section>
+
+            <section class="settings-library-card">
+              <div class="settings-library-header">
+                <div>
+                  <p class="eyebrow">Task</p>
+                  <h3>Database maintenance</h3>
+                </div>
+                <div class="settings-library-actions">
+                  <span class="tag ${scheduled.database_maintenance.enabled ? 'success' : ''}">${scheduled.database_maintenance.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledTaskRunButton('database_maintenance')}
+                </div>
+              </div>
+              <div class="form-row checkbox-row">
+                <label><input name="scheduled_database_maintenance_enabled" type="checkbox" ${scheduled.database_maintenance.enabled ? 'checked' : ''} /> Checkpoint, vacuum, and optimize automatically</label>
+              </div>
+              <div class="form-row">
+                <label>Run interval
+                  <input name="scheduled_database_maintenance_interval_days" type="number" min="1" max="365" value="${scheduled.database_maintenance.interval_days}" />
+                </label>
+              </div>
+            </section>
+          </div>
+        </section>
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save scheduled tasks', 'save')}</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+export function libraryKindOptions(selectedKind: string): string {
+  return [
+    ['movies', 'Movies'],
+    ['shows', 'Shows'],
+    ['music', 'Music'],
+    ['photos', 'Photos'],
+    ['books', 'Books'],
+    ['home_videos', 'Home videos'],
+  ]
+    .map(([value, label]) => `<option value="${value}" ${selectedKind === value ? 'selected' : ''}>${label}</option>`)
+    .join('');
+}
+
+export function libraryScannerOptions(selectedScanner: string): string {
+  return [
+    ['auto', 'Auto'],
+    ['directory', 'Directory'],
+    ['movies', 'Movies'],
+    ['shows', 'Shows'],
+    ['music', 'Music'],
+    ['photos', 'Photos'],
+    ['books', 'Books'],
+  ]
+    .map(([value, label]) => `<option value="${value}" ${selectedScanner === value ? 'selected' : ''}>${label}</option>`)
+    .join('');
+}
+
+export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
+  const label = providerDisplayName(provider.id);
+  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
+  const logoUrl = status?.logo_dark_url ?? status?.logo_light_url;
+  const showApiKey = Boolean(status?.requires_api_key);
+  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
+  const showRequestSettings = provider.id !== 'local_nfo';
+  return `
+    <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
+      <div class="settings-library-header">
+        <div class="provider-settings-title">
+          ${logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : ''}
+          <div>
+          <p class="eyebrow">Provider</p>
+          <h3>${escapeHtml(label)}</h3>
+          </div>
+        </div>
+        ${status?.role ? `<span class="tag">${escapeHtml(status.role === 'secondary' ? 'Secondary' : 'Primary')}</span>` : ''}
+      </div>
+      ${status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : ''}
+      ${status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : ''}
+      ${showApiKey || showRequestSettings ? `<div class="form-row">
+        ${showApiKey ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyConfigured ? 'Saved' : ''}" autocomplete="new-password" /></label>` : ''}
+        ${showApiKey && apiKeyConfigured ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>` : ''}
+        ${showRequestSettings ? `
+        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
+        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
+        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
+        ` : ''}
+      </div>` : '<p class="muted">This provider does not require provider-specific settings.</p>'}
+    </section>
+  `;
+}
+
+export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
+  return `
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <div class="section-heading">
+            <h3>Metadata providers</h3>
+          </div>
+          <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
+          <div class="settings-library-list">
+            ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
+          </div>
+          <div class="form-row">
+            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
+            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
+          </div>
+        </section>
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save provider settings', 'save')}</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+export function renderSettingsPage(): string {
+  const settings = state.settingsResponse?.settings;
+  if (!settings) {
+    return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
+  }
+
+  const section = activeSettingsSection();
+
+  return `
+    ${renderPageNavbar(
+      'Settings',
+      'Program configuration',
+      `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
+    )}
+    ${renderSettingsSectionNav()}
+    ${section === 'general' ? `
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <h3>Server</h3>
+          <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+          <div class="form-row">
+            <label>Address<input name="address" value="${escapeHtml(settings.server.address)}" /></label>
+            <label>Port<input name="port" type="number" min="1" value="${settings.server.port}" /></label>
+          </div>
+          <div class="form-row checkbox-row">
+            <label><input name="use_https" type="checkbox" ${settings.server.use_https ? 'checked' : ''} /> Use HTTPS</label>
+            <label><input name="use_custom_certs" type="checkbox" ${settings.server.use_custom_certs ? 'checked' : ''} /> Use custom certificates</label>
+          </div>
+          <div class="form-row">
+            <label>Certificate path<input name="cert_path" value="${escapeHtml(settings.server.cert_path)}" /></label>
+            <label>Key path<input name="key_path" value="${escapeHtml(settings.server.key_path)}" /></label>
+          </div>
+        </section>
+
+        <section>
+          <h3>FFmpeg</h3>
+          <div class="form-row">
+            <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
+            <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
+          </div>
+        </section>
+
+        <section>
+          <h3>Metadata providers</h3>
+          <p class="muted">Provider credentials and refresh behavior are configured on their own settings page.</p>
+          <button type="button" class="secondary-button" data-settings-section-path="/settings/providers">${renderButtonContent('Open provider settings', 'settings')}</button>
+        </section>
+
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save settings', 'save')}</button>
+          <button type="button" class="secondary-button" id="go-home-from-settings">${renderButtonContent('Back home', 'house')}</button>
+        </div>
+      </form>
+
+      ${renderUserManagement()}
+    </section>
+    ` : ''}
+    ${section === 'providers' ? renderProviderSettingsPage(settings) : ''}
+    ${section === 'scheduled' ? renderScheduledTasksPage(settings) : ''}
+    ${section === 'libraries' ? `
+      <section class="panel page-panel settings-page-panel">
+        <form id="settings-form" class="settings-form">
+          <section>
+            <div class="section-heading">
+              <h3>Libraries</h3>
+            </div>
+            <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+            <div class="settings-library-list">
+              ${renderExistingLibrariesSettings(settings)}
+            </div>
+          </section>
+          <div class="page-actions">
+            <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
+          </div>
+        </form>
+
+        <form id="add-library-form" class="settings-form add-library-form">
+          <section>
+            <h3>Add library</h3>
+            <label>Name<input name="library_name" placeholder="Movies" required /></label>
+            <label>Folders
+              <textarea name="library_paths" rows="4" placeholder="C:/Media/Movies&#10;D:/Overflow/Movies" required></textarea>
+            </label>
+            <div class="form-row">
+              <label>Type
+                <select name="library_kind">
+                  ${libraryKindOptions('movies')}
+                </select>
+              </label>
+              <label>Scanner
+                <select name="library_scanner">
+                  ${libraryScannerOptions('auto')}
+                </select>
+              </label>
+              <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
+            </div>
+            <div class="form-row">
+              <label>Provider language mode
+                ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
+              </label>
+              <label>Manual languages
+                ${metadataLanguageSelect('library_metadata_language', ['en-US'])}
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Library access
+                ${userPermissionSelect('library_allowed_user', [])}
+              </label>
+            </div>
+            <fieldset>
+              <legend>Metadata sources</legend>
+              <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
+            </fieldset>
+          </section>
+          <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
+        </form>
+      </section>
+    ` : ''}
+    ${section === 'dashboard' ? `
+      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
+      <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
+    ` : ''}
+    ${section === 'logs' ? `<div id="log-viewer-panel-root">${renderLogViewer()}</div>` : ''}
+  `;
+}
+
+export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined {
+  const current = state.settingsResponse?.settings;
+  if (!current) {
+    return undefined;
+  }
+  const settingsSection = activeSettingsSection();
+
+  return {
+    general: {
+      data_dir: String(formData.get('data_dir') ?? current.general.data_dir),
+    },
+    media: {
+      missing_item_auto_delete_days: null,
+      libraries: current.media.libraries.map((library, index) => {
+        const pathsField = `existing_library_paths_${index}`;
+        if (!formData.has(pathsField)) {
+          return library;
+        }
+
+        const paths = parsePathsInput(formData.get(pathsField));
+        const providerField = `existing_library_metadata_provider_${index}`;
+        return {
+          name: String(formData.get(`existing_library_name_${index}`) ?? library.name),
+          path: paths[0] ?? library.path,
+          paths,
+          recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
+          kind: String(formData.get(`existing_library_kind_${index}`) ?? library.kind),
+          scanner: String(formData.get(`existing_library_scanner_${index}`) ?? library.scanner ?? 'auto'),
+          metadata_providers: formData.getAll(providerField).map((value) => String(value)),
+          metadata_language_mode: String(formData.get(`existing_library_metadata_language_mode_${index}`) ?? library.metadata_language_mode ?? 'auto') === 'manual'
+            ? 'manual'
+            : 'auto',
+          metadata_languages: formData.has(`existing_library_metadata_language_${index}`)
+            ? normalizedMetadataLanguages(formData.getAll(`existing_library_metadata_language_${index}`).map((value) => String(value)))
+            : normalizedMetadataLanguages(library.metadata_languages),
+          allowed_user_ids: formData.has(`existing_library_allowed_user_${index}`)
+            ? formData.getAll(`existing_library_allowed_user_${index}`)
+                .map((value) => Number(value))
+                .filter((value) => Number.isFinite(value) && value > 0)
+            : library.allowed_user_ids,
+        };
+      }),
+    },
+    metadata: {
+      refresh_interval_days: formData.has('metadata_refresh_interval_days')
+        ? String(formData.get('metadata_refresh_interval_days') ?? '') === 'never'
+          ? null
+          : Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30)
+        : current.metadata.refresh_interval_days,
+      providers: current.metadata.providers.map((provider) => {
+        const prefix = provider.id;
+        if (
+          !formData.has(`${prefix}_api_key`)
+          && !formData.has(`${prefix}_clear_api_key`)
+          && !formData.has(`${prefix}_rate_limit_per_second`)
+          && !formData.has(`${prefix}_retry_attempts`)
+          && !formData.has(`${prefix}_retry_backoff_ms`)
+        ) {
+          return provider;
+        }
+
+        const submittedApiKey = formData.has(`${prefix}_api_key`)
+          ? String(formData.get(`${prefix}_api_key`) ?? '').trim()
+          : undefined;
+        const clearApiKey = formData.get(`${prefix}_clear_api_key`) === 'on';
+
+        return {
+          ...provider,
+          api_key: submittedApiKey && !clearApiKey ? submittedApiKey : null,
+          clear_api_key: clearApiKey,
+          rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
+          retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
+          retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),
+        };
+      }),
+    },
+    server: {
+      use_https: settingsSection === 'general' ? formData.get('use_https') === 'on' : current.server.use_https,
+      address: String(formData.get('address') ?? current.server.address),
+      port: Number(formData.get('port') ?? current.server.port),
+      cert_path: String(formData.get('cert_path') ?? current.server.cert_path),
+      key_path: String(formData.get('key_path') ?? current.server.key_path),
+      use_custom_certs: settingsSection === 'general'
+        ? formData.get('use_custom_certs') === 'on'
+        : current.server.use_custom_certs,
+    },
+    ffmpeg: {
+      ffmpeg_path: String(formData.get('ffmpeg_path') ?? current.ffmpeg.ffmpeg_path),
+      ffprobe_path: String(formData.get('ffprobe_path') ?? current.ffmpeg.ffprobe_path),
+    },
+    scheduled_tasks: parseScheduledTasksSettings(formData, current),
+  };
+}
+
+export function parseScheduledTasksSettings(formData: FormData, current: SettingsSnapshot): SettingsSnapshot['scheduled_tasks'] {
+  if (!formData.has('scheduled_window_start_time')) {
+    return current.scheduled_tasks;
+  }
+
+  const weekdays = formData.getAll('scheduled_window_weekday')
+    .map((value) => String(value))
+    .filter((value): value is SettingsSnapshot['scheduled_tasks']['window']['weekdays'][number] => (
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].includes(value)
+    ));
+
+  return {
+    enabled: formData.get('scheduled_tasks_enabled') === 'on',
+    window: {
+      start_time: String(formData.get('scheduled_window_start_time') ?? current.scheduled_tasks.window.start_time),
+      stop_time: String(formData.get('scheduled_window_stop_time') ?? current.scheduled_tasks.window.stop_time),
+      weekdays: weekdays.length ? weekdays : current.scheduled_tasks.window.weekdays,
+    },
+    metadata_refresh: {
+      enabled: formData.get('scheduled_metadata_refresh_enabled') === 'on',
+    },
+    trash_cleanup: {
+      enabled: formData.get('scheduled_trash_cleanup_enabled') === 'on',
+      missing_item_auto_delete_days: parseBoundedInteger(
+        formData.get('scheduled_trash_cleanup_days'),
+        current.scheduled_tasks.trash_cleanup.missing_item_auto_delete_days ?? 30,
+        1,
+        3650,
+      ),
+      interval_days: parseBoundedInteger(
+        formData.get('scheduled_trash_cleanup_interval_days'),
+        current.scheduled_tasks.trash_cleanup.interval_days,
+        1,
+        365,
+      ),
+    },
+    database_maintenance: {
+      enabled: formData.get('scheduled_database_maintenance_enabled') === 'on',
+      interval_days: parseBoundedInteger(
+        formData.get('scheduled_database_maintenance_interval_days'),
+        current.scheduled_tasks.database_maintenance.interval_days,
+        1,
+        365,
+      ),
+    },
+  };
+}

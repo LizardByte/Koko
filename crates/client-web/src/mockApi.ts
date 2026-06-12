@@ -3,6 +3,7 @@ import type {
   BootstrapUser,
   CreateUserRequest,
   ItemMetadataMatch,
+  ItemMetadataPerson,
   ItemMetadataResponse,
   LoginRequest,
   LinkMetadataRequest,
@@ -15,6 +16,7 @@ import type {
   MediaSearchResult,
   MissingItemsCleanupResponse,
   MetadataProviderStatus,
+  MetadataPersonItemCredit,
   MetadataPersonResponse,
   MetadataSearchResult,
   LogEntriesResponse,
@@ -1323,32 +1325,50 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
   return linkedMatch;
 }
 
+function getMockPersonCreditsForMatch(
+  itemId: number,
+  item: MediaItemSummary,
+  match: ItemMetadataMatch,
+  personId: number,
+): MetadataPersonItemCredit[] {
+  return match.people
+    .filter((person) => person.person_id === personId)
+    .map((person) => mockPersonCredit(itemId, item, match, person));
+}
+
+function mockPersonCredit(
+  itemId: number,
+  item: MediaItemSummary,
+  match: ItemMetadataMatch,
+  person: ItemMetadataPerson,
+): MetadataPersonItemCredit {
+  return {
+    credit: {
+      id: person.id,
+      metadata_link_id: match.id,
+      media_item_id: itemId,
+      role: person.role,
+      department: person.department,
+      character_name: person.character_name,
+      sort_order: person.sort_order,
+    },
+    item,
+    hierarchy: item.hierarchy ?? [],
+  };
+}
+
+function getMockPersonCreditsForResponse(response: ItemMetadataResponse, personId: number): MetadataPersonItemCredit[] {
+  const item = items.find((candidate) => candidate.id === response.item_id);
+  if (!item) {
+    return [];
+  }
+
+  return response.matches.flatMap((match) => getMockPersonCreditsForMatch(response.item_id, item, match, personId));
+}
+
 export function getMockPerson(personId: number): MetadataPersonResponse {
   const credits = Object.values(itemMetadata)
-    .flatMap((response) => response.matches.flatMap((match) => {
-      return match.people
-        .filter((person) => person.person_id === personId)
-        .flatMap((person) => {
-          const item = items.find((candidate) => candidate.id === response.item_id);
-          if (!item) {
-            return [];
-          }
-
-          return [{
-            credit: {
-              id: person.id,
-              metadata_link_id: match.id,
-              media_item_id: response.item_id,
-              role: person.role,
-              department: person.department,
-              character_name: person.character_name,
-              sort_order: person.sort_order,
-            },
-            item,
-            hierarchy: item.hierarchy ?? [],
-          }];
-        });
-    }));
+    .flatMap((response) => getMockPersonCreditsForResponse(response, personId));
   const firstCredit = credits[0];
   const personCredit = Object.values(itemMetadata)
     .flatMap((response) => response.matches)

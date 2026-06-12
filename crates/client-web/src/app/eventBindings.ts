@@ -150,13 +150,13 @@ async function refreshLogsView(context: AppEventBindingContext): Promise<void> {
     state.error = error instanceof Error ? error.message : 'Failed to load logs.';
   } finally {
     const root = document.querySelector<HTMLElement>('#log-viewer-panel-root');
-    if (!root) {
+    if (root) {
+      setElementHtml(root, renderLogViewer());
+      createIcons({ icons });
+      bindEvents(context);
+    } else {
       render();
-      return;
     }
-    setElementHtml(root, renderLogViewer());
-    createIcons({ icons });
-    bindEvents(context);
   }
 }
 
@@ -168,7 +168,8 @@ function updatePageBackdrop(backdropUrl: string | undefined): void {
   if (backdropUrl) {
     appShell?.classList.add('has-page-backdrop');
     if (pageBackdrop) {
-      pageBackdrop.style.setProperty('--page-backdrop-image', `url('${backdropUrl.replace(/'/g, "\\'")}')`);
+      const escapedBackdropUrl = backdropUrl.replace(/'/g, String.raw`\'`);
+      pageBackdrop.style.setProperty('--page-backdrop-image', `url('${escapedBackdropUrl}')`);
     } else {
       appShell?.insertAdjacentHTML('afterbegin', `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(backdropUrl)}');"></div>`);
     }
@@ -389,6 +390,21 @@ function refreshShelfScrollControls(): void {
 
 
 
+function eventListenerOptionsWithSignal(
+  options: boolean | AddEventListenerOptions | undefined,
+  signal: AbortSignal,
+): boolean | AddEventListenerOptions {
+  if (typeof options === 'boolean') {
+    return { capture: options, signal };
+  }
+
+  if (options === undefined) {
+    return { signal };
+  }
+
+  return { ...options, signal };
+}
+
 /** Binds all event handlers for the current rendered DOM tree. */
 export function bindEvents(context: AppEventBindingContext): void {
   activeBindingContext = context;
@@ -406,11 +422,9 @@ export function bindEvents(context: AppEventBindingContext): void {
       originalAddEventListener.call(this, type, listener, options);
       return;
     }
-    const optionsWithSignal = typeof options === 'boolean'
-      ? { capture: options, signal }
-      : { ...(options ?? {}), signal };
+    const optionsWithSignal = eventListenerOptionsWithSignal(options, signal);
     originalAddEventListener.call(this, type, listener, optionsWithSignal);
-  } as typeof EventTarget.prototype.addEventListener;
+  };
 
   try {
     bindRenderEvents(context);
@@ -1245,7 +1259,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       metadata_language_mode: formDataString(formData.get('library_metadata_language_mode'), 'auto') === 'manual' ? 'manual' : 'auto',
       metadata_languages: normalizedMetadataLanguages(formDataStrings(formData.getAll('library_metadata_language'))),
       allowed_user_ids: formData.getAll('library_allowed_user')
-        .map((value) => Number(value))
+        .map(Number)
         .filter((value) => Number.isFinite(value) && value > 0),
     };
 

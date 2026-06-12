@@ -350,7 +350,7 @@ export function renderItemExtrasRail(): string {
       <div class="shelf-row-shell">
         <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
         <div class="shelf-row extras-row" data-shelf-row="item-extras">
-          ${extras.map(renderMediaExtraCard).join('')}
+          ${extras.map((extra, index) => renderMediaExtraCard(extra, index)).join('')}
         </div>
         <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:1" title="Scroll right">${renderIcon('chevron-right')}</button>
       </div>
@@ -441,17 +441,26 @@ export function personCreditGroups(credits: MetadataPersonItemCredit[]): PersonC
     }
   });
 
-  return [...groupsByRootId.values()]
+  const groups = [...groupsByRootId.values()]
     .map((group) => ({
       ...group,
-      seasons: group.seasons
-        .map((seasonGroup) => ({
-          ...seasonGroup,
-          episodes: seasonGroup.episodes.sort(compareMediaItems),
-        }))
-        .sort((left, right) => compareMediaItems(left.season, right.season)),
-    }))
-    .sort((left, right) => left.root.display_title.localeCompare(right.root.display_title));
+      seasons: sortedPersonCreditSeasons(group),
+    }));
+  groups.sort((left, right) => left.root.display_title.localeCompare(right.root.display_title));
+  return groups;
+}
+
+function sortedPersonCreditSeasons(group: PersonCreditGroup): PersonCreditGroup['seasons'] {
+  const seasons = group.seasons.map((seasonGroup) => {
+    const episodes = [...seasonGroup.episodes];
+    episodes.sort(compareMediaItems);
+    return {
+      ...seasonGroup,
+      episodes,
+    };
+  });
+  seasons.sort((left, right) => compareMediaItems(left.season, right.season));
+  return seasons;
 }
 
 function countLabel(count: number, singular: string): string {
@@ -586,7 +595,7 @@ export function directGridChildByData(grid: HTMLElement, selector: string, key: 
 
 export function rowIndexForElement(element: HTMLElement, rowTops: number[]): number {
   const rowIndex = rowTops.findIndex((top) => Math.abs(top - element.offsetTop) < 8);
-  return rowIndex >= 0 ? rowIndex : 0;
+  return Math.max(rowIndex, 0);
 }
 
 export function activatePersonCreditTray(
@@ -645,7 +654,7 @@ export function bindPersonCreditTrays(): void {
 
   const activateRootTray = (target: EventTarget | null): void => {
     const card = target instanceof Element ? target.closest<HTMLElement>('.person-credit-card') : null;
-    if (!card || card.parentElement !== grid) {
+    if (card?.parentElement !== grid) {
       return;
     }
 
@@ -776,7 +785,8 @@ function renderResumeButton(item: MediaItemDetail, resumeMs: number): string {
     return '';
   }
 
-  return `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>`;
+  const resumeLabel = `Resume ${formatDuration(resumeMs)}`;
+  return `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(resumeLabel, 'play')}</button>`;
 }
 
 function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number): string {
@@ -801,16 +811,29 @@ function renderThemeSongButton(themeSongOption: ReturnType<typeof currentThemeSo
     : '';
 }
 
-function renderSelectedItemActions(
-  item: MediaItemDetail,
-  resumeMs: number,
-  playbackTarget: MediaPlaybackTarget | undefined,
-  restartPlaybackTarget: MediaPlaybackTarget | undefined,
-  preferredTrailer: TrailerOption | undefined,
-  themeSongOption: ReturnType<typeof currentThemeSongYouTubeTarget>,
-  trailerButtonTitle: string,
-  backTarget: ReturnType<typeof backNavigationTarget>,
-): string {
+interface SelectedItemActionsOptions {
+  item: MediaItemDetail;
+  resumeMs: number;
+  playbackTarget?: MediaPlaybackTarget;
+  restartPlaybackTarget?: MediaPlaybackTarget;
+  preferredTrailer?: TrailerOption;
+  themeSongOption?: ReturnType<typeof currentThemeSongYouTubeTarget>;
+  trailerButtonTitle: string;
+  backTarget: ReturnType<typeof backNavigationTarget>;
+}
+
+function renderSelectedItemActions(options: SelectedItemActionsOptions): string {
+  const {
+    item,
+    resumeMs,
+    playbackTarget,
+    restartPlaybackTarget,
+    preferredTrailer,
+    themeSongOption,
+    trailerButtonTitle,
+    backTarget,
+  } = options;
+
   return `
           <div class="detail-actions">
             ${renderResumeButton(item, resumeMs)}
@@ -822,6 +845,14 @@ function renderSelectedItemActions(
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
           </div>
   `;
+}
+
+function playableTarget(item: MediaItemDetail): MediaPlaybackTarget | undefined {
+  return item.playable ? undefined : item.playback_target ?? undefined;
+}
+
+function restartPlayableTarget(item: MediaItemDetail): MediaPlaybackTarget | undefined {
+  return item.playable ? undefined : item.restart_playback_target ?? undefined;
 }
 
 function renderTrailerPicker(trailerOptions: TrailerOption[], hasMultipleTrailers: boolean): string {
@@ -1011,16 +1042,16 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const trailerButtonTitle = hasMultipleTrailers
     ? 'Click to play the first trailer. Right-click or press and hold to choose another trailer.'
     : 'Play Trailer';
-  const actionsMarkup = renderSelectedItemActions(
+  const actionsMarkup = renderSelectedItemActions({
     item,
     resumeMs,
-    !item.playable ? item.playback_target ?? undefined : undefined,
-    !item.playable ? item.restart_playback_target ?? undefined : undefined,
-    trailerOptions[0],
-    currentThemeSongYouTubeTarget(),
+    playbackTarget: playableTarget(item),
+    restartPlaybackTarget: restartPlayableTarget(item),
+    preferredTrailer: trailerOptions[0],
+    themeSongOption: currentThemeSongYouTubeTarget(),
     trailerButtonTitle,
-    backNavigationTarget(),
-  );
+    backTarget: backNavigationTarget(),
+  });
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `

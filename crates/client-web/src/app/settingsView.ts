@@ -59,12 +59,11 @@ export function metadataLanguageSelect(name: string, selectedLanguages?: string[
   `;
 }
 
-export function metadataLanguageModeSelect(name: string, selectedMode?: 'auto' | 'manual'): string {
-  const mode = selectedMode ?? 'auto';
+export function metadataLanguageModeSelect(name: string, selectedMode: 'auto' | 'manual' = 'auto'): string {
   return `
     <select name="${name}">
-      <option value="auto" ${mode === 'auto' ? 'selected' : ''}>Auto</option>
-      <option value="manual" ${mode === 'manual' ? 'selected' : ''}>Manual</option>
+      <option value="auto" ${selectedMode === 'auto' ? 'selected' : ''}>Auto</option>
+      <option value="manual" ${selectedMode === 'manual' ? 'selected' : ''}>Manual</option>
     </select>
   `;
 }
@@ -269,7 +268,7 @@ export function renderExistingLibrariesSettings(settings: SettingsSnapshot): str
   }
 
   return settings.media.libraries
-    .map(renderExistingLibrarySettingsCard)
+    .map((library, index) => renderExistingLibrarySettingsCard(library, index))
     .join('');
 }
 
@@ -281,18 +280,36 @@ export function renderScheduledTaskRunButton(taskId: ScheduledTaskId): string {
   return `<button type="button" class="secondary-button" data-run-scheduled-task="${taskId}">${renderButtonContent('Run now', 'play')}</button>`;
 }
 
+const SCHEDULED_TASK_WEEKDAYS: SettingsSnapshot['scheduled_tasks']['window']['weekdays'] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+function renderScheduledStatusTag(enabled: boolean, enabledLabel: string, disabledLabel: string, enabledClass = 'success'): string {
+  return `<span class="tag ${enabled ? enabledClass : ''}">${enabled ? enabledLabel : disabledLabel}</span>`;
+}
+
+function renderScheduledWeekdayToggles(selectedWeekdays: Set<string>): string {
+  return `
+              <div class="weekday-toggle-row">
+                ${SCHEDULED_TASK_WEEKDAYS.map((weekday) => `
+                  <label class="checkbox-inline">
+                    <input name="scheduled_window_weekday" type="checkbox" value="${weekday}" ${selectedWeekdays.has(weekday) ? 'checked' : ''} />
+                    ${scheduledWeekdayLabel(weekday)}
+                  </label>
+                `).join('')}
+              </div>
+  `;
+}
+
 export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
   const scheduled = settings.scheduled_tasks;
   const selectedWeekdays = new Set(scheduled.window.weekdays);
-  const weekdays: SettingsSnapshot['scheduled_tasks']['window']['weekdays'] = [
-    'monday',
-    'tuesday',
-    'wednesday',
-    'thursday',
-    'friday',
-    'saturday',
-    'sunday',
-  ];
   const trashCleanupDays = scheduled.trash_cleanup.missing_item_auto_delete_days ?? 30;
 
   return `
@@ -308,7 +325,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                 <p class="eyebrow">Runner</p>
                 <h3>Task window</h3>
               </div>
-              <span class="tag ${scheduled.enabled ? 'success' : ''}">${scheduled.enabled ? 'Enabled' : 'Disabled'}</span>
+              ${renderScheduledStatusTag(scheduled.enabled, 'Enabled', 'Disabled')}
             </div>
             <div class="form-row checkbox-row">
               <label><input name="scheduled_tasks_enabled" type="checkbox" ${scheduled.enabled ? 'checked' : ''} /> Enable scheduled task runner</label>
@@ -319,14 +336,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
             </div>
             <fieldset>
               <legend>Run days</legend>
-              <div class="weekday-toggle-row">
-                ${weekdays.map((weekday) => `
-                  <label class="checkbox-inline">
-                    <input name="scheduled_window_weekday" type="checkbox" value="${weekday}" ${selectedWeekdays.has(weekday) ? 'checked' : ''} />
-                    ${scheduledWeekdayLabel(weekday)}
-                  </label>
-                `).join('')}
-              </div>
+              ${renderScheduledWeekdayToggles(selectedWeekdays)}
             </fieldset>
           </div>
 
@@ -338,7 +348,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                   <h3>Metadata refresh</h3>
                 </div>
                 <div class="settings-library-actions">
-                  <span class="tag ${scheduled.metadata_refresh.enabled ? 'success' : ''}">${scheduled.metadata_refresh.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledStatusTag(scheduled.metadata_refresh.enabled, 'Scheduled', 'Manual')}
                   ${renderScheduledTaskRunButton('metadata_refresh')}
                 </div>
               </div>
@@ -364,7 +374,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                   <h3>Trash cleanup</h3>
                 </div>
                 <div class="settings-library-actions">
-                  <span class="tag ${scheduled.trash_cleanup.enabled ? 'warning' : ''}">${scheduled.trash_cleanup.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledStatusTag(scheduled.trash_cleanup.enabled, 'Scheduled', 'Manual', 'warning')}
                   ${renderScheduledTaskRunButton('trash_cleanup')}
                 </div>
               </div>
@@ -388,7 +398,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                   <h3>Database maintenance</h3>
                 </div>
                 <div class="settings-library-actions">
-                  <span class="tag ${scheduled.database_maintenance.enabled ? 'success' : ''}">${scheduled.database_maintenance.enabled ? 'Scheduled' : 'Manual'}</span>
+                  ${renderScheduledStatusTag(scheduled.database_maintenance.enabled, 'Scheduled', 'Manual')}
                   ${renderScheduledTaskRunButton('database_maintenance')}
                 </div>
               </div>
@@ -719,7 +729,7 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
             : normalizedMetadataLanguages(library.metadata_languages),
           allowed_user_ids: formData.has(`existing_library_allowed_user_${index}`)
             ? formData.getAll(`existing_library_allowed_user_${index}`)
-                .map((value) => Number(value))
+                .map(Number)
                 .filter((value) => Number.isFinite(value) && value > 0)
             : library.allowed_user_ids,
         };

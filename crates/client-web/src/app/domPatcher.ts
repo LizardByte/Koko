@@ -261,13 +261,13 @@ function patchChildren(parent: Node, nextParent: ParentNode): void {
 
     const keyedCandidate = findKeyedPatchCandidate(parent, index + 1, nextChild);
     if (keyedCandidate) {
-      parent.insertBefore(keyedCandidate, currentChild);
+      currentChild.before(keyedCandidate);
       patchNode(keyedCandidate, nextChild);
       index += 1;
       continue;
     }
 
-    parent.replaceChild(nextChild, currentChild);
+    currentChild.replaceWith(nextChild);
     index += 1;
   }
 }

@@ -45,7 +45,7 @@ function isYouTubeHost(host: string): boolean {
 function extractVideoIdFromParsedUrl(parsed: URL): string | undefined {
   const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
   if (host === 'youtu.be') {
-    return validYouTubeVideoId(parsed.pathname.split('/').filter(Boolean)[0]);
+    return validYouTubeVideoId(parsed.pathname.split('/').find((segment) => segment.length > 0));
   }
 
   if (!isYouTubeHost(host)) {

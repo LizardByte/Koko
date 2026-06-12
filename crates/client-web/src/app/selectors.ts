@@ -40,12 +40,12 @@ export function activeLibrarySettings(): MediaLibrarySettings | undefined {
 }
 
 export function persistedLibraryForSettings(library: MediaLibrarySettings): MediaLibrary | undefined {
-  const configuredPaths = [library.path, ...library.paths]
+  const configuredPaths = new Set([library.path, ...library.paths]
     .map((path) => path.trim())
-    .filter(Boolean);
+    .filter(Boolean));
   return state.libraries.find((candidate) => {
-    return configuredPaths.includes(candidate.path)
-      || candidate.paths.some((path) => configuredPaths.includes(path));
+    return configuredPaths.has(candidate.path)
+      || candidate.paths.some((path) => configuredPaths.has(path));
   });
 }
 

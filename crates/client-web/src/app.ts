@@ -494,7 +494,7 @@ async function refreshData(showLoading = true): Promise<void> {
   try {
     state.bootstrap = await getAppBootstrap().catch(async (error) => {
       if (!getStoredAuthToken()) {
-        return Promise.reject(error);
+        throw error;
       }
 
       clearStoredAuthToken();

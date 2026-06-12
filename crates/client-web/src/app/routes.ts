@@ -20,22 +20,22 @@ function browseKindFromSegment(segment: string): Extract<AppRoute, { page: 'brow
 export function parseRoute(): AppRoute {
   const normalizedPath = globalThis.location.pathname.replace(/\/+$/, '') || '/';
 
-  const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/);
+  const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/.exec(normalizedPath);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }
 
-  const itemMatch = normalizedPath.match(/^\/items\/(\d+)$/);
+  const itemMatch = /^\/items\/(\d+)$/.exec(normalizedPath);
   if (itemMatch) {
     return { page: 'item', itemId: Number(itemMatch[1]) };
   }
 
-  const personMatch = normalizedPath.match(/^\/people\/(\d+)$/);
+  const personMatch = /^\/people\/(\d+)$/.exec(normalizedPath);
   if (personMatch) {
     return { page: 'person', personId: Number(personMatch[1]) };
   }
 
-  const libraryBrowseMatch = normalizedPath.match(/^\/libraries\/(\d+)\/items\/(collections|categories|playlists)\/(.+)$/);
+  const libraryBrowseMatch = /^\/libraries\/(\d+)\/items\/(collections|categories|playlists)\/(.+)$/.exec(normalizedPath);
   if (libraryBrowseMatch) {
     return {
       page: 'browse-detail',
@@ -45,7 +45,7 @@ export function parseRoute(): AppRoute {
     };
   }
 
-  const browseMatch = normalizedPath.match(/^\/items\/(collections|categories|playlists)\/(.+)$/);
+  const browseMatch = /^\/items\/(collections|categories|playlists)\/(.+)$/.exec(normalizedPath);
   if (browseMatch) {
     return {
       page: 'browse-detail',
@@ -54,7 +54,7 @@ export function parseRoute(): AppRoute {
     };
   }
 
-  const libraryMatch = normalizedPath.match(/^\/libraries\/(\d+)$/);
+  const libraryMatch = /^\/libraries\/(\d+)$/.exec(normalizedPath);
   if (libraryMatch) {
     return { page: 'home', libraryId: Number(libraryMatch[1]) };
   }

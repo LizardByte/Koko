@@ -787,7 +787,7 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
         return searchMockItems(query) as T;
       }
       default: {
-        const itemMetadataSearchMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/search$/);
+        const itemMetadataSearchMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/search$/.exec(url.pathname);
         if (itemMetadataSearchMatch) {
           return searchMockItemMetadata(
             Number(itemMetadataSearchMatch[1]),
@@ -795,7 +795,7 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
           ) as T;
         }
 
-        const itemMetadataMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata$/);
+        const itemMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
         if (itemMetadataMatch) {
           const itemMetadata = getMockItemMetadata(Number(itemMetadataMatch[1]));
           if (!itemMetadata) {
@@ -805,17 +805,17 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
           return itemMetadata as T;
         }
 
-        const itemPlaybackMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/playback$/);
+        const itemPlaybackMatch = /^\/api\/v1\/items\/(\d+)\/playback$/.exec(url.pathname);
         if (itemPlaybackMatch) {
           return getMockPlayback(Number(itemPlaybackMatch[1])) as T;
         }
 
-        const personMatch = url.pathname.match(/^\/api\/v1\/people\/(\d+)$/);
+        const personMatch = /^\/api\/v1\/people\/(\d+)$/.exec(url.pathname);
         if (personMatch) {
           return getMockPerson(Number(personMatch[1])) as T;
         }
 
-        const itemMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)$/);
+        const itemMatch = /^\/api\/v1\/items\/(\d+)$/.exec(url.pathname);
         if (itemMatch) {
           const item = getMockItem(Number(itemMatch[1]));
           if (!item) {
@@ -825,7 +825,7 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
           return item as T;
         }
 
-        const sessionStreamMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/stream$/);
+        const sessionStreamMatch = /^\/api\/v1\/sessions\/([^/]+)\/stream$/.exec(url.pathname);
         if (sessionStreamMatch) {
           throw new Error('501 Not Implemented (mock streaming not fully supported)');
         }
@@ -839,7 +839,7 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
     return updateMockSettings(body as SettingsSnapshot) as T;
   }
 
-  const updateUserMatch = url.pathname.match(/^\/api\/v1\/users\/(\d+)$/);
+  const updateUserMatch = /^\/api\/v1\/users\/(\d+)$/.exec(url.pathname);
   if (method === 'PUT' && updateUserMatch) {
     return updateMockUser(Number(updateUserMatch[1]), body as UpdateUserRequest) as T;
   }
@@ -860,48 +860,48 @@ function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T
     return clearMockMetadataCache() as T;
   }
 
-  const scheduledTaskRunMatch = url.pathname.match(/^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/);
+  const scheduledTaskRunMatch = /^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/.exec(url.pathname);
   if (method === 'POST' && scheduledTaskRunMatch) {
     return runMockScheduledTask(scheduledTaskRunMatch[1] as ScheduledTaskId) as T;
   }
 
-  const removeLibraryMatch = url.pathname.match(/^\/api\/v1\/settings\/libraries\/(\d+)$/);
+  const removeLibraryMatch = /^\/api\/v1\/settings\/libraries\/(\d+)$/.exec(url.pathname);
   if (method === 'DELETE' && removeLibraryMatch) {
     return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
   }
 
-  const missingItemsMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/missing$/);
+  const missingItemsMatch = /^\/api\/v1\/libraries\/(\d+)\/missing$/.exec(url.pathname);
   if (method === 'DELETE' && missingItemsMatch) {
     return deleteMockMissingItems(Number(missingItemsMatch[1])) as T;
   }
 
-  const deleteSessionMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)$/);
+  const deleteSessionMatch = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
   if (method === 'DELETE' && deleteSessionMatch) {
     return undefined as T;
   }
 
-  const itemProgressMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/progress$/);
+  const itemProgressMatch = /^\/api\/v1\/items\/(\d+)\/progress$/.exec(url.pathname);
   if (method === 'POST' && itemProgressMatch) {
     updateMockPlaybackProgress(Number(itemProgressMatch[1]), body as PlaybackProgressRequest);
     return undefined as T;
   }
 
-  const itemLinkMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/link$/);
+  const itemLinkMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/link$/.exec(url.pathname);
   if (method === 'POST' && itemLinkMatch) {
     return linkMockItemMetadata(Number(itemLinkMatch[1]), body as LinkMetadataRequest) as T;
   }
 
-  const itemRefreshMatch = url.pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/);
+  const itemRefreshMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
   if (method === 'POST' && itemRefreshMatch) {
     return refreshMockItemMetadata(Number(itemRefreshMatch[1])) as T;
   }
 
-  const libraryRefreshMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/);
+  const libraryRefreshMatch = /^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
   if (method === 'POST' && libraryRefreshMatch) {
     return refreshMockLibraryMetadata(Number(libraryRefreshMatch[1])) as T;
   }
 
-  const libraryScanMatch = url.pathname.match(/^\/api\/v1\/libraries\/(\d+)\/scan$/);
+  const libraryScanMatch = /^\/api\/v1\/libraries\/(\d+)\/scan$/.exec(url.pathname);
   if (method === 'POST' && libraryScanMatch) {
     return refreshMockLibraryMetadata(Number(libraryScanMatch[1])) as T;
   }

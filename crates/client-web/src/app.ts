@@ -368,6 +368,19 @@ function renderCurrentPage(): string {
 function renderRail(): string {
   const activeLibraryIdValue = activeLibraryId();
   const collapsed = isRailCollapsed();
+  const user = currentUser();
+  const userRoleLabel = user?.admin ? 'Administrator' : 'Signed in';
+  const userCardMarkup = user
+    ? `
+          <div class="rail-user-card">
+            ${renderUserAvatar(user, 'rail-avatar')}
+            <span class="rail-user-copy">
+              <strong>${escapeHtml(user.username)}</strong>
+              <span>${userRoleLabel}</span>
+            </span>
+          </div>
+        `
+    : '';
 
   return `
     <aside class="library-rail${collapsed ? ' collapsed' : ''}">
@@ -398,15 +411,7 @@ function renderRail(): string {
         </nav>
       </div>
       <div class="library-rail-bottom">
-        ${currentUser() ? `
-          <div class="rail-user-card">
-            ${renderUserAvatar(currentUser()!, 'rail-avatar')}
-            <span class="rail-user-copy">
-              <strong>${escapeHtml(currentUser()!.username)}</strong>
-              <span>${currentUser()!.admin ? 'Administrator' : 'Signed in'}</span>
-            </span>
-          </div>
-        ` : ''}
+        ${userCardMarkup}
         <button class="rail-button rail-settings ${state.route.page === 'settings' ? 'active' : ''}" type="button" data-nav-settings title="Settings">
           ${renderIcon('settings')}
           <span class="rail-label">Settings</span>

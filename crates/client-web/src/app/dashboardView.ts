@@ -111,6 +111,53 @@ export function renderMetadataDashboard(): string {
   const filteredItems = filteredMetadataDashboardItems();
   const summary = metadataDashboardSummary(state.dashboardItems);
   const itemTypes = [...new Set(state.dashboardItems.map((item) => item.item_type))].sort((left, right) => left.localeCompare(right));
+  let dashboardContent = '<div class="empty-state tight">No items matched the current dashboard filters.</div>';
+  if (filteredItems.length) {
+    dashboardContent = `<div class="table-shell metadata-dashboard-table-shell">
+            <table class="data-table metadata-dashboard-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Library</th>
+                  <th>Refresh state</th>
+                  <th>Artwork updated</th>
+                  <th>Children</th>
+                  <th></th>
+                </tr>
+              </thead>
+          <tbody>${filteredItems.map((item) => {
+            const library = state.libraries.find((entry) => entry.id === item.library_id);
+            const refreshState = metadataDashboardRefreshState(item);
+            let refreshStateTagClass = '';
+            if (refreshState === 'error') {
+              refreshStateTagClass = 'danger-tag';
+            } else if (refreshState === 'pending' || refreshState === 'stalled') {
+              refreshStateTagClass = 'warning';
+            } else if (refreshState === 'fresh') {
+              refreshStateTagClass = 'success';
+            }
+            return `
+              <tr>
+                <td>
+                  <div class="table-title-cell">
+                    <strong>${escapeHtml(item.display_title)}</strong>
+                    <p class="muted metadata-dashboard-path">${escapeHtml(item.relative_path)}</p>
+                    ${item.metadata_refresh_error ? `<p class="metadata-dashboard-error">${escapeHtml(item.metadata_refresh_error)}</p>` : ''}
+                  </div>
+                </td>
+                <td>${escapeHtml(humanizeItemType(item.item_type))}</td>
+                <td>${escapeHtml(library?.name ?? `Library ${item.library_id}`)}</td>
+                <td><span class="tag ${refreshStateTagClass}">${escapeHtml(metadataDashboardRefreshLabel(item))}</span></td>
+                <td>${escapeHtml(formatTimestamp(item.artwork_updated_at))}</td>
+                <td>${escapeHtml(formatChildCount(item))}</td>
+                <td><button type="button" class="secondary-button" data-item-id="${item.id}">${renderButtonContent('Open item', 'arrow-left', 'end')}</button></td>
+              </tr>
+            `;
+          }).join('')}</tbody>
+            </table>
+          </div>`;
+  }
 
   return `
     <section class="panel page-panel metadata-dashboard-panel">
@@ -162,61 +209,16 @@ export function renderMetadataDashboard(): string {
           <button type="button" class="secondary-button" id="clear-metadata-dashboard-filters">${renderButtonContent('Clear filters', 'x')}</button>
         </div>
       </form>
-      ${filteredItems.length
-        ? `<div class="table-shell metadata-dashboard-table-shell">
-            <table class="data-table metadata-dashboard-table">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Type</th>
-                  <th>Library</th>
-                  <th>Refresh state</th>
-                  <th>Artwork updated</th>
-                  <th>Children</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>${filteredItems.map((item) => {
-            const library = state.libraries.find((entry) => entry.id === item.library_id);
-            const refreshState = metadataDashboardRefreshState(item);
-            return `
-              <tr>
-                <td>
-                  <div class="table-title-cell">
-                    <strong>${escapeHtml(item.display_title)}</strong>
-                    <p class="muted metadata-dashboard-path">${escapeHtml(item.relative_path)}</p>
-                    ${item.metadata_refresh_error ? `<p class="metadata-dashboard-error">${escapeHtml(item.metadata_refresh_error)}</p>` : ''}
-                  </div>
-                </td>
-                <td>${escapeHtml(humanizeItemType(item.item_type))}</td>
-                <td>${escapeHtml(library?.name ?? `Library ${item.library_id}`)}</td>
-                <td><span class="tag ${refreshState === 'error' ? 'danger-tag' : refreshState === 'pending' || refreshState === 'stalled' ? 'warning' : refreshState === 'fresh' ? 'success' : ''}">${escapeHtml(metadataDashboardRefreshLabel(item))}</span></td>
-                <td>${escapeHtml(formatTimestamp(item.artwork_updated_at))}</td>
-                <td>${escapeHtml(formatChildCount(item))}</td>
-                <td><button type="button" class="secondary-button" data-item-id="${item.id}">${renderButtonContent('Open item', 'arrow-left', 'end')}</button></td>
-              </tr>
-            `;
-          }).join('')}</tbody>
-            </table>
-          </div>`
-        : '<div class="empty-state tight">No items matched the current dashboard filters.</div>'}
+      ${dashboardContent}
     </section>
   `;
 }
 
 export function renderSystemActivitiesPanel(): string {
   const activities = state.systemActivities.filter((activity) => activity.state !== 'completed' && activity.state !== 'failed');
-  return `
-    <section class="panel page-panel settings-activity-panel">
-      <div class="section-heading section-heading-actions">
-        <div>
-          <h3>Backend activities</h3>
-          <p class="muted">Active background work that the browser is polling.</p>
-        </div>
-        <span class="tag">${activities.length} active</span>
-      </div>
-      ${activities.length
-        ? `<div class="settings-system-activity-list">${activities.map((activity) => {
+  let activitiesContent = '<div class="empty-state tight">No background activities are running right now.</div>';
+  if (activities.length) {
+    activitiesContent = `<div class="settings-system-activity-list">${activities.map((activity) => {
             const progress = activityProgress(activity);
             return `
               <article class="settings-system-activity">
@@ -238,14 +240,58 @@ export function renderSystemActivitiesPanel(): string {
                 </div>
               </article>
             `;
-          }).join('')}</div>`
-        : '<div class="empty-state tight">No background activities are running right now.</div>'}
+          }).join('')}</div>`;
+  }
+
+  return `
+    <section class="panel page-panel settings-activity-panel">
+      <div class="section-heading section-heading-actions">
+        <div>
+          <h3>Backend activities</h3>
+          <p class="muted">Active background work that the browser is polling.</p>
+        </div>
+        <span class="tag">${activities.length} active</span>
+      </div>
+      ${activitiesContent}
     </section>
   `;
 }
 
 export function renderLogViewer(): string {
   const logEntries = state.logsResponse?.entries ?? [];
+  let logEntriesContent = '<div class="empty-state tight">No log entries matched the current filters.</div>';
+  if (logEntries.length) {
+    logEntriesContent = `<div class="table-shell">
+            <table class="data-table log-entries-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Level</th>
+                  <th>Module</th>
+                  <th>Source</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>${logEntries.map((entry) => {
+                let levelTagClass = '';
+                if (entry.level === 'ERROR') {
+                  levelTagClass = 'danger-tag';
+                } else if (entry.level === 'WARN') {
+                  levelTagClass = 'warning';
+                }
+                return `
+                <tr>
+                  <td>${escapeHtml(entry.timestamp)}</td>
+                  <td><span class="tag ${levelTagClass}">${escapeHtml(entry.level)}</span></td>
+                  <td>${escapeHtml(entry.module)}</td>
+                  <td class="muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</td>
+                  <td><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
+                </tr>
+              `;
+              }).join('')}</tbody>
+            </table>
+          </div>`;
+  }
 
   return `
     <section class="panel page-panel settings-log-panel">
@@ -280,30 +326,7 @@ export function renderLogViewer(): string {
           <button type="button" class="secondary-button" id="clear-log-filters">${renderButtonContent('Clear filters', 'x')}</button>
         </div>
       </form>
-      ${logEntries.length
-        ? `<div class="table-shell">
-            <table class="data-table log-entries-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Level</th>
-                  <th>Module</th>
-                  <th>Source</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>${logEntries.map((entry) => `
-                <tr>
-                  <td>${escapeHtml(entry.timestamp)}</td>
-                  <td><span class="tag ${entry.level === 'ERROR' ? 'danger-tag' : entry.level === 'WARN' ? 'warning' : ''}">${escapeHtml(entry.level)}</span></td>
-                  <td>${escapeHtml(entry.module)}</td>
-                  <td class="muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</td>
-                  <td><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
-                </tr>
-              `).join('')}</tbody>
-            </table>
-          </div>`
-        : '<div class="empty-state tight">No log entries matched the current filters.</div>'}
+      ${logEntriesContent}
     </section>
   `;
 }

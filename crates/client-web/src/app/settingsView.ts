@@ -85,7 +85,11 @@ export function metadataProviderCheckboxes(prefix: string, selectedProviders: st
     .sort((left, right) => {
       const leftIndex = selectedProviders.indexOf(left.id);
       const rightIndex = selectedProviders.indexOf(right.id);
-      return (left.role === right.role ? 0 : left.role === 'primary' ? -1 : 1)
+      let roleOrder = 0;
+      if (left.role !== right.role) {
+        roleOrder = left.role === 'primary' ? -1 : 1;
+      }
+      return roleOrder
         || (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex)
         - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex)
         || left.display_name.localeCompare(right.display_name);
@@ -153,6 +157,30 @@ export function renderExistingLibrariesSettings(settings: SettingsSnapshot): str
       const missingFiles = persistedLibrary?.missing_files ?? 0;
       const missingItems = persistedLibrary?.missing_items ?? 0;
       const hasMissingItems = missingFiles > 0 || missingItems > 0;
+      let persistedLibraryTags = '';
+      let persistedLibraryActions = '';
+      if (persistedLibrary) {
+        const scanPendingTag = scanPending ? '<span class="tag warning">Scanning catalog</span>' : '';
+        const missingItemsTagClass = hasMissingItems ? 'warning' : 'success';
+        const missingItemsLabel = hasMissingItems ? `${missingItems} missing items` : 'No missing items';
+        const missingFilesTag = missingFiles > 0
+          ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>`
+          : '';
+        const scanButtonDisabled = scanPending ? 'disabled' : '';
+        const scanButtonLabel = scanPending ? 'Scanning' : 'Scan now';
+        const refreshButtonDisabled = refreshPending ? 'disabled' : '';
+        const deleteMissingDisabled = hasMissingItems ? '' : 'disabled';
+        persistedLibraryTags = `<div class="settings-library-tags">
+                ${scanPendingTag}
+                <span class="tag ${missingItemsTagClass}">${escapeHtml(missingItemsLabel)}</span>
+                ${missingFilesTag}
+              </div>`;
+        persistedLibraryActions = `
+                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}" ${scanButtonDisabled}>${renderButtonContent(scanButtonLabel, 'refresh-cw')}</button>
+                <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshButtonDisabled}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
+                <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${deleteMissingDisabled}>${renderButtonContent('Delete missing', 'trash-2')}</button>
+              `;
+      }
 
       return `
       <section class="settings-library-card">
@@ -160,22 +188,10 @@ export function renderExistingLibrariesSettings(settings: SettingsSnapshot): str
           <div>
             <p class="eyebrow">Library ${index + 1}</p>
             <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
-            ${persistedLibrary
-              ? `<div class="settings-library-tags">
-                ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
-                <span class="tag ${hasMissingItems ? 'warning' : 'success'}">${escapeHtml(hasMissingItems ? `${missingItems} missing items` : 'No missing items')}</span>
-                ${missingFiles > 0 ? `<span class="tag warning">${escapeHtml(`${missingFiles} missing files`)}</span>` : ''}
-              </div>`
-              : ''}
+            ${persistedLibraryTags}
           </div>
           <div class="settings-library-actions">
-            ${persistedLibrary
-              ? `
-                <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}" ${scanPending ? 'disabled' : ''}>${renderButtonContent(scanPending ? 'Scanning' : 'Scan now', 'refresh-cw')}</button>
-                <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshPending ? 'disabled' : ''}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
-                <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${hasMissingItems ? '' : 'disabled'}>${renderButtonContent('Delete missing', 'trash-2')}</button>
-              `
-              : ''}
+            ${persistedLibraryActions}
             <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
           </div>
         </div>
@@ -393,29 +409,47 @@ export function renderProviderSettingsCard(provider: MetadataProviderSettings): 
   const showApiKey = Boolean(status?.requires_api_key);
   const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
   const showRequestSettings = provider.id !== 'local_nfo';
+  const logoMarkup = logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : '';
+  const providerRoleLabel = status?.role === 'secondary' ? 'Secondary' : 'Primary';
+  const providerRoleTag = status?.role ? `<span class="tag">${escapeHtml(providerRoleLabel)}</span>` : '';
+  const providerDescription = status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : '';
+  const providerAttribution = status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : '';
+  const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
+  const apiKeyField = showApiKey
+    ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>`
+    : '';
+  const clearApiKeyField = showApiKey && apiKeyConfigured
+    ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>`
+    : '';
+  const requestSettingsFields = showRequestSettings
+    ? `
+        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
+        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
+        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
+        `
+    : '';
+  const providerSettingsFields = showApiKey || showRequestSettings
+    ? `<div class="form-row">
+        ${apiKeyField}
+        ${clearApiKeyField}
+        ${requestSettingsFields}
+      </div>`
+    : '<p class="muted">This provider does not require provider-specific settings.</p>';
   return `
     <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
       <div class="settings-library-header">
         <div class="provider-settings-title">
-          ${logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : ''}
+          ${logoMarkup}
           <div>
           <p class="eyebrow">Provider</p>
           <h3>${escapeHtml(label)}</h3>
           </div>
         </div>
-        ${status?.role ? `<span class="tag">${escapeHtml(status.role === 'secondary' ? 'Secondary' : 'Primary')}</span>` : ''}
+        ${providerRoleTag}
       </div>
-      ${status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : ''}
-      ${status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : ''}
-      ${showApiKey || showRequestSettings ? `<div class="form-row">
-        ${showApiKey ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyConfigured ? 'Saved' : ''}" autocomplete="new-password" /></label>` : ''}
-        ${showApiKey && apiKeyConfigured ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>` : ''}
-        ${showRequestSettings ? `
-        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
-        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
-        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
-        ` : ''}
-      </div>` : '<p class="muted">This provider does not require provider-specific settings.</p>'}
+      ${providerDescription}
+      ${providerAttribution}
+      ${providerSettingsFields}
     </section>
   `;
 }
@@ -445,22 +479,10 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
   `;
 }
 
-export function renderSettingsPage(): string {
-  const settings = state.settingsResponse?.settings;
-  if (!settings) {
-    return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
-  }
-
-  const section = activeSettingsSection();
-
+function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
+  const useHttpsChecked = settings.server.use_https ? 'checked' : '';
+  const useCustomCertsChecked = settings.server.use_custom_certs ? 'checked' : '';
   return `
-    ${renderPageNavbar(
-      'Settings',
-      'Program configuration',
-      `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
-    )}
-    ${renderSettingsSectionNav()}
-    ${section === 'general' ? `
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
@@ -471,8 +493,8 @@ export function renderSettingsPage(): string {
             <label>Port<input name="port" type="number" min="1" value="${settings.server.port}" /></label>
           </div>
           <div class="form-row checkbox-row">
-            <label><input name="use_https" type="checkbox" ${settings.server.use_https ? 'checked' : ''} /> Use HTTPS</label>
-            <label><input name="use_custom_certs" type="checkbox" ${settings.server.use_custom_certs ? 'checked' : ''} /> Use custom certificates</label>
+            <label><input name="use_https" type="checkbox" ${useHttpsChecked} /> Use HTTPS</label>
+            <label><input name="use_custom_certs" type="checkbox" ${useCustomCertsChecked} /> Use custom certificates</label>
           </div>
           <div class="form-row">
             <label>Certificate path<input name="cert_path" value="${escapeHtml(settings.server.cert_path)}" /></label>
@@ -502,73 +524,113 @@ export function renderSettingsPage(): string {
 
       ${renderUserManagement()}
     </section>
-    ` : ''}
-    ${section === 'providers' ? renderProviderSettingsPage(settings) : ''}
-    ${section === 'scheduled' ? renderScheduledTasksPage(settings) : ''}
-    ${section === 'libraries' ? `
-      <section class="panel page-panel settings-page-panel">
-        <form id="settings-form" class="settings-form">
-          <section>
-            <div class="section-heading">
-              <h3>Libraries</h3>
-            </div>
-            <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
-            <div class="settings-library-list">
-              ${renderExistingLibrariesSettings(settings)}
-            </div>
-          </section>
-          <div class="page-actions">
-            <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
-          </div>
-        </form>
+  `;
+}
 
-        <form id="add-library-form" class="settings-form add-library-form">
-          <section>
-            <h3>Add library</h3>
-            <label>Name<input name="library_name" placeholder="Movies" required /></label>
-            <label>Folders
-              <textarea name="library_paths" rows="4" placeholder="C:/Media/Movies&#10;D:/Overflow/Movies" required></textarea>
+function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
+  return `
+    <section class="panel page-panel settings-page-panel">
+      <form id="settings-form" class="settings-form">
+        <section>
+          <div class="section-heading">
+            <h3>Libraries</h3>
+          </div>
+          <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+          <div class="settings-library-list">
+            ${renderExistingLibrariesSettings(settings)}
+          </div>
+        </section>
+        <div class="page-actions">
+          <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
+        </div>
+      </form>
+
+      <form id="add-library-form" class="settings-form add-library-form">
+        <section>
+          <h3>Add library</h3>
+          <label>Name<input name="library_name" placeholder="Movies" required /></label>
+          <label>Folders
+            <textarea name="library_paths" rows="4" placeholder="C:/Media/Movies&#10;D:/Overflow/Movies" required></textarea>
+          </label>
+          <div class="form-row">
+            <label>Type
+              <select name="library_kind">
+                ${libraryKindOptions('movies')}
+              </select>
             </label>
-            <div class="form-row">
-              <label>Type
-                <select name="library_kind">
-                  ${libraryKindOptions('movies')}
-                </select>
-              </label>
-              <label>Scanner
-                <select name="library_scanner">
-                  ${libraryScannerOptions('auto')}
-                </select>
-              </label>
-              <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
-            </div>
-            <div class="form-row">
-              <label>Provider language mode
-                ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
-              </label>
-              <label>Manual languages
-                ${metadataLanguageSelect('library_metadata_language', ['en-US'])}
-              </label>
-            </div>
-            <div class="form-row">
-              <label>Library access
-                ${userPermissionSelect('library_allowed_user', [])}
-              </label>
-            </div>
-            <fieldset>
-              <legend>Metadata sources</legend>
-              <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
-            </fieldset>
-          </section>
-          <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
-        </form>
-      </section>
-    ` : ''}
-    ${section === 'dashboard' ? `
+            <label>Scanner
+              <select name="library_scanner">
+                ${libraryScannerOptions('auto')}
+              </select>
+            </label>
+            <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
+          </div>
+          <div class="form-row">
+            <label>Provider language mode
+              ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
+            </label>
+            <label>Manual languages
+              ${metadataLanguageSelect('library_metadata_language', ['en-US'])}
+            </label>
+          </div>
+          <div class="form-row">
+            <label>Library access
+              ${userPermissionSelect('library_allowed_user', [])}
+            </label>
+          </div>
+          <fieldset>
+            <legend>Metadata sources</legend>
+            <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
+          </fieldset>
+        </section>
+        <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
+      </form>
+    </section>
+  `;
+}
+
+function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot): string {
+  if (section === 'general') {
+    return renderGeneralSettingsPage(settings);
+  }
+  if (section === 'providers') {
+    return renderProviderSettingsPage(settings);
+  }
+  if (section === 'scheduled') {
+    return renderScheduledTasksPage(settings);
+  }
+  if (section === 'libraries') {
+    return renderLibrarySettingsPage(settings);
+  }
+  if (section === 'dashboard') {
+    return `
       <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
       <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
-    ` : ''}
-    ${section === 'logs' ? `<div id="log-viewer-panel-root">${renderLogViewer()}</div>` : ''}
+    `;
+  }
+  if (section === 'logs') {
+    return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
+  }
+  return '';
+}
+
+export function renderSettingsPage(): string {
+  const settings = state.settingsResponse?.settings;
+  if (!settings) {
+    return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
+  }
+
+  const section = activeSettingsSection();
+  const settingsContent = renderSettingsSectionContent(section, settings);
+
+  return `
+    ${renderPageNavbar(
+      'Settings',
+      'Program configuration',
+      `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
+    )}
+    ${renderSettingsSectionNav()}
+    ${settingsContent}
   `;
 }
 
@@ -578,6 +640,15 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
     return undefined;
   }
   const settingsSection = activeSettingsSection();
+  let metadataRefreshIntervalDays = current.metadata.refresh_interval_days;
+  if (formData.has('metadata_refresh_interval_days')) {
+    const refreshIntervalValue = String(formData.get('metadata_refresh_interval_days') ?? '');
+    if (refreshIntervalValue === 'never') {
+      metadataRefreshIntervalDays = null;
+    } else {
+      metadataRefreshIntervalDays = Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30);
+    }
+  }
 
   return {
     general: {
@@ -616,11 +687,7 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
       }),
     },
     metadata: {
-      refresh_interval_days: formData.has('metadata_refresh_interval_days')
-        ? String(formData.get('metadata_refresh_interval_days') ?? '') === 'never'
-          ? null
-          : Number(formData.get('metadata_refresh_interval_days') ?? current.metadata.refresh_interval_days ?? 30)
-        : current.metadata.refresh_interval_days,
+      refresh_interval_days: metadataRefreshIntervalDays,
       providers: current.metadata.providers.map((provider) => {
         const prefix = provider.id;
         if (

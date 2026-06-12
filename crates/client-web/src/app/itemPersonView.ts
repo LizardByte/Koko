@@ -63,12 +63,21 @@ export function renderMetadataSearchResults(): string {
 
 export function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
-  const libraryKind = activeLibrary()?.kind
-    ?? (itemType === 'show' ? 'shows' : itemType === 'movie' ? 'movies' : undefined);
+  const libraryKind = activeLibrary()?.kind ?? libraryKindForItemType(itemType);
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .filter((provider) => provider.role !== 'secondary')
     .filter((provider) => provider.configured && provider.implemented)
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
+}
+
+function libraryKindForItemType(itemType: string | undefined): string | undefined {
+  if (itemType === 'show') {
+    return 'shows';
+  }
+  if (itemType === 'movie') {
+    return 'movies';
+  }
+  return undefined;
 }
 
 export function defaultMetadataSearchProviderIds(): string[] {
@@ -150,13 +159,20 @@ export function renderLinkedMetadataSummary(): string {
 
   const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
   const metadataRefreshActive = itemHasActiveMetadataRefresh(state.selectedItem);
-  const refreshStateLabel = metadataRefreshActive
-    ? 'Refreshing'
-    : metadataRefreshPending || linkedMatch.refresh_state === 'pending'
-      ? 'Pending without worker'
-    : linkedMatch.refresh_state === 'error'
-      ? 'Refresh failed'
-      : 'Up to date';
+  let refreshStateLabel = 'Up to date';
+  if (metadataRefreshActive) {
+    refreshStateLabel = 'Refreshing';
+  } else if (metadataRefreshPending || linkedMatch.refresh_state === 'pending') {
+    refreshStateLabel = 'Pending without worker';
+  } else if (linkedMatch.refresh_state === 'error') {
+    refreshStateLabel = 'Refresh failed';
+  }
+  let refreshStateClass = '';
+  if (metadataRefreshPending || linkedMatch.refresh_state === 'pending') {
+    refreshStateClass = 'warning';
+  } else if (linkedMatch.refresh_state === 'error') {
+    refreshStateClass = 'danger-tag';
+  }
   const providersById = new Map(
     (state.selectedItemMetadata?.providers ?? state.metadataProviders).map((provider) => [provider.id, provider]),
   );
@@ -183,7 +199,7 @@ export function renderLinkedMetadataSummary(): string {
     <div class="metadata-current-link">
       ${providerTags}
       <span class="tag">${escapeHtml(linkedMatch.media_type ?? 'linked')}</span>
-      <span class="tag ${metadataRefreshPending || linkedMatch.refresh_state === 'pending' ? 'warning' : linkedMatch.refresh_state === 'error' ? 'danger-tag' : ''}">${escapeHtml(refreshStateLabel)}</span>
+      <span class="tag ${refreshStateClass}">${escapeHtml(refreshStateLabel)}</span>
       ${linkedMatch.release_year ? `<span class="tag">${linkedMatch.release_year}</span>` : ''}
       ${linkedMatch.locale_key ? `<span class="tag">${escapeHtml(linkedMatch.locale_key)}</span>` : ''}
       <span class="metadata-current-copy">
@@ -231,9 +247,12 @@ export function personAgeLabel(birthday?: string, deathday?: string): string | u
 }
 
 export function renderPersonCredit(person: ItemMetadataPerson): string {
-  const imageUrl = person.cached_image_path
-    ? getPersonImageUrl(person.person_id)
-    : person.image_url ? resolveApiUrl(person.image_url) : undefined;
+  let imageUrl: string | undefined;
+  if (person.cached_image_path) {
+    imageUrl = getPersonImageUrl(person.person_id);
+  } else if (person.image_url) {
+    imageUrl = resolveApiUrl(person.image_url);
+  }
   const subtitle = person.character_name || person.role || person.department || '';
   return `
     <button class="person-card" type="button" data-person-id="${person.person_id}">
@@ -287,10 +306,14 @@ export function renderMediaExtraCard(extra: MediaItemExtra, index: number): stri
   const typeLabel = mediaExtraTypeLabel(extra.extra_type);
   const durationLabel = mediaExtraDurationLabel(extra);
   const thumbnailUrl = mediaExtraThumbnailUrl(extra);
+  const placeholderIcon = extra.extra_type === 'theme_song' ? 'music' : 'play';
+  const thumbnailMarkup = thumbnailUrl
+    ? `<img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(title)} thumbnail" loading="lazy" />`
+    : renderIcon(placeholderIcon, 'media-extra-placeholder-icon');
   return `
     <button type="button" class="media-extra-card" data-play-extra-index="${index}" title="${escapeHtml(title)}">
       <span class="media-extra-thumbnail ${thumbnailUrl ? 'has-image' : ''}">
-        ${thumbnailUrl ? `<img src="${escapeHtml(thumbnailUrl)}" alt="${escapeHtml(title)} thumbnail" loading="lazy" />` : renderIcon(extra.extra_type === 'theme_song' ? 'music' : 'play', 'media-extra-placeholder-icon')}
+        ${thumbnailMarkup}
         <span class="media-extra-play-icon">${renderIcon('play', 'button-icon')}</span>
       </span>
       <span class="media-extra-title">${escapeHtml(title)}</span>
@@ -421,44 +444,63 @@ export function personCreditGroups(credits: MetadataPersonItemCredit[]): PersonC
     .sort((left, right) => left.root.display_title.localeCompare(right.root.display_title));
 }
 
+function countLabel(count: number, singular: string): string {
+  if (count <= 0) {
+    return '';
+  }
+  return `${count} ${singular}${count === 1 ? '' : 's'}`;
+}
+
 export function renderPersonCreditGroup(group: PersonCreditGroup): string {
   const seasonCount = group.seasons.length;
   const episodeCount = group.seasons.reduce((total, season) => total + season.episodes.length, 0);
   const traySummary = [
-    seasonCount ? `${seasonCount} season${seasonCount === 1 ? '' : 's'}` : '',
-    episodeCount ? `${episodeCount} episode${episodeCount === 1 ? '' : 's'}` : '',
+    countLabel(seasonCount, 'season'),
+    countLabel(episodeCount, 'episode'),
   ].filter(Boolean).join(' · ');
+  const seasonTrayMarkup = group.seasons.length ? renderPersonSeasonCreditTray(group, traySummary) : '';
 
   return `
     <article class="person-credit-card" data-person-credit-card data-person-credit-id="${group.root.id}">
       ${renderItemCard(group.root)}
     </article>
-    ${group.seasons.length ? `
-      <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}">
-        <div class="person-credit-tray-heading">
-          <span>${escapeHtml(traySummary || 'Credits')}</span>
-          <button class="person-credit-tray-close" type="button" data-close-person-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
-        </div>
-        <div class="person-season-credit-grid">
-          ${group.seasons.map((seasonGroup) => `
+    ${seasonTrayMarkup}
+  `;
+}
+
+function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: string): string {
+  return `
+    <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}">
+      <div class="person-credit-tray-heading">
+        <span>${escapeHtml(traySummary || 'Credits')}</span>
+        <button class="person-credit-tray-close" type="button" data-close-person-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
+      </div>
+      <div class="person-season-credit-grid">
+        ${group.seasons.map((seasonGroup) => {
+          const episodeTrayMarkup = seasonGroup.episodes.length ? renderPersonEpisodeCreditTray(seasonGroup) : '';
+          return `
             <article class="person-season-credit-card" data-person-season-credit-card data-person-season-credit-id="${seasonGroup.season.id}">
               ${renderItemCard(seasonGroup.season)}
             </article>
-            ${seasonGroup.episodes.length ? `
-              <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}">
-                <div class="person-credit-tray-heading">
-                  <span>${seasonGroup.episodes.length} episode${seasonGroup.episodes.length === 1 ? '' : 's'}</span>
-                  <button class="person-credit-tray-close" type="button" data-close-person-season-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
-                </div>
-                <div class="person-episode-credit-grid">
-                  ${seasonGroup.episodes.map(renderItemCard).join('')}
-                </div>
-              </div>
-            ` : ''}
-          `).join('')}
-        </div>
+            ${episodeTrayMarkup}
+          `;
+        }).join('')}
       </div>
-    ` : ''}
+    </div>
+  `;
+}
+
+function renderPersonEpisodeCreditTray(seasonGroup: PersonCreditGroup['seasons'][number]): string {
+  return `
+    <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}">
+      <div class="person-credit-tray-heading">
+        <span>${escapeHtml(countLabel(seasonGroup.episodes.length, 'episode'))}</span>
+        <button class="person-credit-tray-close" type="button" data-close-person-season-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
+      </div>
+      <div class="person-episode-credit-grid">
+        ${seasonGroup.episodes.map(renderItemCard).join('')}
+      </div>
+    </div>
   `;
 }
 
@@ -468,9 +510,12 @@ export function renderPersonPage(): string {
     return '<section class="panel page-panel"><div class="empty-state">Loading person details…</div></section>';
   }
 
-  const personImageUrl = response.person.cached_image_path
-    ? getPersonImageUrl(response.person.id)
-    : response.person.image_url ? resolveApiUrl(response.person.image_url) : undefined;
+  let personImageUrl: string | undefined;
+  if (response.person.cached_image_path) {
+    personImageUrl = getPersonImageUrl(response.person.id);
+  } else if (response.person.image_url) {
+    personImageUrl = resolveApiUrl(response.person.image_url);
+  }
   const credits = response.credits;
   const creditGroups = personCreditGroups(credits);
   const age = personAgeLabel(response.person.birthday, response.person.deathday);
@@ -691,11 +736,60 @@ export function renderItemPage(): string {
   const resumeMs = resumablePlaybackPositionMs(state.selectedItem);
   const playbackTarget = !state.selectedItem.playable ? state.selectedItem.playback_target : undefined;
   const restartPlaybackTarget = !state.selectedItem.playable ? state.selectedItem.restart_playback_target : undefined;
-  const childSectionTitle = state.selectedItem.item_type === 'show'
-    ? 'Seasons'
-    : state.selectedItem.item_type === 'season'
-      ? 'Episodes'
-      : 'Contained items';
+  let childSectionTitle = 'Contained items';
+  if (state.selectedItem.item_type === 'show') {
+    childSectionTitle = 'Seasons';
+  } else if (state.selectedItem.item_type === 'season') {
+    childSectionTitle = 'Episodes';
+  }
+  const itemHeroClass = state.selectedItem.item_type === 'episode' ? 'episode-hero' : '';
+  const itemPosterClass = state.selectedItem.item_type === 'episode' ? 'item-thumbnail' : '';
+  const posterMarkup = posterUrl
+    ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(state.selectedItem.display_title)} poster" />`
+    : `<span>${escapeHtml(state.selectedItem.display_title.slice(0, 1).toUpperCase())}</span>`;
+  const titleMarkup = logoUrl
+    ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
+    : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`;
+  const resumeButtonMarkup = state.selectedItem.playable && resumeMs > 0
+    ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>`
+    : '';
+  let playButtonMarkup = '';
+  if (state.selectedItem.playable) {
+    const playButtonClass = resumeMs > 0 ? 'secondary-button' : '';
+    const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play now';
+    playButtonMarkup = `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, 'play')}</button>`;
+  }
+  const childCountLabel = countLabel(children.length, 'item');
+  const childGridClass = state.selectedItem.item_type === 'season' ? 'season-episodes-grid' : '';
+  const childrenSectionMarkup = children.length
+    ? `
+        <section class="panel page-panel item-section">
+          <div class="section-heading section-heading-actions">
+            <h3>${escapeHtml(childSectionTitle)}</h3>
+            <span class="muted">${childCountLabel}</span>
+          </div>
+          <div class="item-grid hierarchy-item-grid ${childGridClass}">${children.map(renderItemCard).join('')}</div>
+        </section>
+      `
+    : '';
+  let metadataRefreshButtonMarkup = '';
+  if (supportsManualLinking) {
+    const refreshButtonDisabled = linkedMatch && !metadataRefreshActive ? '' : 'disabled';
+    const refreshButtonLabel = metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata';
+    metadataRefreshButtonMarkup = `<button type="button" class="secondary-button" id="refresh-item-metadata" ${refreshButtonDisabled}>${renderButtonContent(refreshButtonLabel, 'refresh-cw')}</button>`;
+  }
+  const metadataSearchPanel = supportsManualLinking
+    ? `
+              <form id="metadata-search-form" class="metadata-search-form">
+                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
+                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
+                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
+                ${renderMetadataSearchProviderControls()}
+                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
+              </form>
+              <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
+            `
+    : '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
   return `
     <section class="item-page">
       ${hierarchy.length ? `
@@ -707,14 +801,12 @@ export function renderItemPage(): string {
           <span class="breadcrumb-current">${escapeHtml(state.selectedItem.display_title)}</span>
         </nav>
       ` : ''}
-      <section class="item-hero ${state.selectedItem.item_type === 'episode' ? 'episode-hero' : ''}">
-        <div class="detail-art item-poster ${state.selectedItem.item_type === 'episode' ? 'item-thumbnail' : ''} ${posterUrl ? 'has-image' : ''}">
-          ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(state.selectedItem.display_title)} poster" />` : `<span>${escapeHtml(state.selectedItem.display_title.slice(0, 1).toUpperCase())}</span>`}
+      <section class="item-hero ${itemHeroClass}">
+        <div class="detail-art item-poster ${itemPosterClass} ${posterUrl ? 'has-image' : ''}">
+          ${posterMarkup}
         </div>
         <div class="detail-summary item-summary">
-          ${logoUrl
-            ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
-            : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`}
+          ${titleMarkup}
           ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
           <div class="hero-meta-row">
             ${missingItemDetailBadgeMarkup(state.selectedItem)}
@@ -726,8 +818,8 @@ export function renderItemPage(): string {
           </div>
           ${renderCollapsibleText(overview, `item-overview:${state.selectedItem.id}`)}
           <div class="detail-actions">
-            ${state.selectedItem.playable && resumeMs > 0 ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>` : ''}
-            ${state.selectedItem.playable ? `<button type="button" class="${resumeMs > 0 ? 'secondary-button' : ''}" data-play-selected-item-start-ms="0">${renderButtonContent(resumeMs > 0 ? 'Start over' : 'Play now', 'play')}</button>` : ''}
+            ${resumeButtonMarkup}
+            ${playButtonMarkup}
             ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false) : ''}
             ${restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true) : ''}
             ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
@@ -763,15 +855,7 @@ export function renderItemPage(): string {
 
       ${renderItemExtrasRail()}
 
-      ${children.length ? `
-        <section class="panel page-panel item-section">
-          <div class="section-heading section-heading-actions">
-            <h3>${escapeHtml(childSectionTitle)}</h3>
-            <span class="muted">${children.length} item${children.length === 1 ? '' : 's'}</span>
-          </div>
-          <div class="item-grid hierarchy-item-grid ${state.selectedItem.item_type === 'season' ? 'season-episodes-grid' : ''}">${children.map(renderItemCard).join('')}</div>
-        </section>
-      ` : ''}
+      ${childrenSectionMarkup}
 
       ${renderSelectedItemCollectionRails()}
 
@@ -803,23 +887,10 @@ export function renderItemPage(): string {
         <section class="panel page-panel item-section item-link-panel">
           <div class="section-heading section-heading-actions">
             <h3>${supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3>
-            ${supportsManualLinking
-              ? `<button type="button" class="secondary-button" id="refresh-item-metadata" ${linkedMatch && !metadataRefreshActive ? '' : 'disabled'}>${renderButtonContent(metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata', 'refresh-cw')}</button>`
-              : ''}
+            ${metadataRefreshButtonMarkup}
           </div>
           ${renderLinkedMetadataSummary()}
-          ${supportsManualLinking
-            ? `
-              <form id="metadata-search-form" class="metadata-search-form">
-                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
-                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
-                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
-                ${renderMetadataSearchProviderControls()}
-                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
-              </form>
-              <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
-            `
-            : '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>'}
+          ${metadataSearchPanel}
         </section>
       </section>
     </section>

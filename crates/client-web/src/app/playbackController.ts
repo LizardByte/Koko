@@ -71,6 +71,29 @@ export function renderPlayerOverlay(): string {
     const trailerTitle = itemLogoUrl || !itemTitle
       ? state.activeTrailer.title
       : `${itemTitle} | ${state.activeTrailer.title}`;
+    const trailerVolumeValue = trailerMuted ? '0' : String(trailerVolume);
+    const trailerControlsMarkup = videoId
+      ? `
+            <div class="player-bottom-controls player-controls">
+              <input id="trailer-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Trailer position" />
+              <div class="player-control-row">
+                <div class="player-control-cluster player-time-cluster">
+                  <span class="player-time"><span id="trailer-current-time">0:00</span><span>/</span><span id="trailer-duration">0:00</span></span>
+                </div>
+                <div class="player-control-cluster player-transport-cluster">
+                  <button class="player-icon-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
+                  <button id="trailer-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
+                  <button class="player-icon-button" type="button" data-trailer-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
+                </div>
+                <div class="player-control-cluster player-tool-cluster">
+                  <button id="trailer-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
+                  <input id="trailer-volume" class="player-volume" type="range" min="0" max="1" value="${trailerVolumeValue}" step="0.01" aria-label="Trailer volume" />
+                  <button id="trailer-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
+                </div>
+              </div>
+            </div>
+          `
+      : '';
     return `
       <div class="player-overlay trailer-overlay">
         <div class="player-shell trailer-shell is-controls-visible" tabindex="-1" ${videoId ? `data-trailer-video-id="${escapeHtml(videoId)}"` : ''}>
@@ -103,26 +126,7 @@ export function renderPlayerOverlay(): string {
               <button id="close-trailer" class="player-icon-button" type="button" title="Close trailer" aria-label="Close trailer">${renderIcon('x', 'player-control-icon')}</button>
             </div>
           </div>
-          ${videoId ? `
-            <div class="player-bottom-controls player-controls">
-              <input id="trailer-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Trailer position" />
-              <div class="player-control-row">
-                <div class="player-control-cluster player-time-cluster">
-                  <span class="player-time"><span id="trailer-current-time">0:00</span><span>/</span><span id="trailer-duration">0:00</span></span>
-                </div>
-                <div class="player-control-cluster player-transport-cluster">
-                  <button class="player-icon-button" type="button" data-trailer-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
-                  <button id="trailer-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-                  <button class="player-icon-button" type="button" data-trailer-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
-                </div>
-                <div class="player-control-cluster player-tool-cluster">
-                  <button id="trailer-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
-                  <input id="trailer-volume" class="player-volume" type="range" min="0" max="1" value="${trailerMuted ? '0' : String(trailerVolume)}" step="0.01" aria-label="Trailer volume" />
-                  <button id="trailer-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
-                </div>
-              </div>
-            </div>
-          ` : ''}
+          ${trailerControlsMarkup}
         </div>
       </div>
     `;
@@ -158,8 +162,11 @@ export function renderPlayerOverlay(): string {
     ? state.activePlaybackStartMs
     : 0;
   const source = getSessionStreamUrl(state.activePlaybackSession.session_id, streamStartMs, selectedAudioStreamIndex);
+  const transcodeReason = isRemuxingForAudio
+    ? 'Using a non-default audio track requires a remuxed stream.'
+    : state.activePlaybackSession.decision.reason;
   const transcodeBadge = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
-    ? `<span class="player-badge is-transcoding" title="${escapeHtml(isRemuxingForAudio ? 'Using a non-default audio track requires a remuxed stream.' : state.activePlaybackSession.decision.reason)}">Transcoding</span>`
+    ? `<span class="player-badge is-transcoding" title="${escapeHtml(transcodeReason)}">Transcoding</span>`
     : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
   const audioTracks = playbackItem.audio_tracks ?? [];
   const activeAudioTrack = audioTracks.find((track) => track.index === selectedAudioStreamIndex)
@@ -168,19 +175,53 @@ export function renderPlayerOverlay(): string {
   const audioTrackMenuTitle = activeAudioTrack
     ? `Audio track: ${activeAudioTrack.label}`
     : 'Audio track changes may require remuxing';
+  const audioArtMarkup = posterUrl
+    ? `<img src="${escapeHtml(posterUrl)}" alt="" />`
+    : renderIcon('music', 'audio-player-art-icon');
+  const audioArtClass = posterUrl ? 'has-image' : '';
+  const mediaElementMarkup = isAudio
+    ? `
+          <div class="audio-player-backdrop" aria-hidden="true"></div>
+          <div class="audio-player-art ${audioArtClass}">
+            ${audioArtMarkup}
+          </div>
+          <audio id="media-player" autoplay preload="metadata" src="${escapeHtml(source)}"></audio>
+        `
+    : `
+          <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
+        `;
+  let audioTrackMenuMarkup = '';
+  if (!isAudio && audioTracks.length > 1) {
+    const audioTrackMenuExpanded = state.isAudioTrackMenuOpen ? 'true' : 'false';
+    const audioTrackMenuClass = state.isAudioTrackMenuOpen ? '' : 'is-hidden';
+    const audioTrackMenuHidden = state.isAudioTrackMenuOpen ? '' : 'hidden';
+    const audioTrackOptions = audioTracks.map((track) => {
+      const isActiveTrack = track.index === activeAudioTrack?.index;
+      const activeTrackClass = isActiveTrack ? 'active' : '';
+      const activeTrackChecked = isActiveTrack ? 'true' : 'false';
+      const trackDetail = [track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ')
+        || (track.default ? 'Default' : 'Audio');
+      return `
+        <button class="player-track-option ${activeTrackClass}" type="button" role="menuitemradio" aria-checked="${activeTrackChecked}" data-player-audio-track-index="${track.index}">
+          <span>${escapeHtml(track.label)}</span>
+          <small>${escapeHtml(trackDetail)}</small>
+        </button>
+      `;
+    }).join('');
+    audioTrackMenuMarkup = `
+      <div class="player-menu-shell">
+        <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track" aria-expanded="${audioTrackMenuExpanded}" aria-haspopup="menu">${renderIcon('languages', 'player-control-icon')}</button>
+        <div id="player-audio-track-menu" class="player-track-menu ${audioTrackMenuClass}" role="menu" aria-label="Audio tracks" ${audioTrackMenuHidden}>
+          ${audioTrackOptions}
+        </div>
+      </div>
+    `;
+  }
 
   return `
     <div class="player-overlay media-player-overlay">
       <div class="player-shell media-player-shell ${isAudio ? 'audio-player-shell' : 'video-player-shell'} is-controls-visible" tabindex="-1" ${backdropUrl ? `style="--player-backdrop-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
-        ${isAudio ? `
-          <div class="audio-player-backdrop" aria-hidden="true"></div>
-          <div class="audio-player-art ${posterUrl ? 'has-image' : ''}">
-            ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="" />` : renderIcon('music', 'audio-player-art-icon')}
-          </div>
-          <audio id="media-player" autoplay preload="metadata" src="${escapeHtml(source)}"></audio>
-        ` : `
-          <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
-        `}
+        ${mediaElementMarkup}
         <div class="player-loading-indicator" aria-live="polite">
           <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
         </div>
@@ -215,19 +256,7 @@ export function renderPlayerOverlay(): string {
             <div class="player-control-cluster player-tool-cluster">
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
-              ${!isAudio && audioTracks.length > 1 ? `
-                <div class="player-menu-shell">
-                  <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track" aria-expanded="${state.isAudioTrackMenuOpen ? 'true' : 'false'}" aria-haspopup="menu">${renderIcon('languages', 'player-control-icon')}</button>
-                  <div id="player-audio-track-menu" class="player-track-menu ${state.isAudioTrackMenuOpen ? '' : 'is-hidden'}" role="menu" aria-label="Audio tracks" ${state.isAudioTrackMenuOpen ? '' : 'hidden'}>
-                    ${audioTracks.map((track) => `
-                      <button class="player-track-option ${track.index === activeAudioTrack?.index ? 'active' : ''}" type="button" role="menuitemradio" aria-checked="${track.index === activeAudioTrack?.index ? 'true' : 'false'}" data-player-audio-track-index="${track.index}">
-                        <span>${escapeHtml(track.label)}</span>
-                        <small>${escapeHtml([track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ') || (track.default ? 'Default' : 'Audio'))}</small>
-                      </button>
-                    `).join('')}
-                  </div>
-                </div>
-              ` : ''}
+              ${audioTrackMenuMarkup}
               ${isAudio ? '' : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`}
               <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
             </div>
@@ -906,6 +935,16 @@ export function bindPlayerProgress(): void {
   let skipStepIndex = 0;
   let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0;
 
+  const playbackDurationSeconds = (): number => {
+    if (sourceDurationSeconds > 0) {
+      return sourceDurationSeconds;
+    }
+    if (Number.isFinite(player.duration) && player.duration > 0) {
+      return player.duration;
+    }
+    return 0;
+  };
+
   const setPlayerLoading = (loading: boolean): void => {
     const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
     shell?.classList.toggle('is-media-loading', shouldShowLoading);
@@ -962,11 +1001,7 @@ export function bindPlayerProgress(): void {
   };
 
   const updateTimeline = (): void => {
-    const duration = sourceDurationSeconds > 0
-      ? sourceDurationSeconds
-      : Number.isFinite(player.duration) && player.duration > 0
-        ? player.duration
-        : 0;
+    const duration = playbackDurationSeconds();
     const currentPosition = Math.min(duration || Number.POSITIVE_INFINITY, playbackBaseOffsetSeconds + player.currentTime);
     if (progress && !isScrubbing) {
       progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (currentPosition / duration) * 1000))) : '0';
@@ -984,11 +1019,7 @@ export function bindPlayerProgress(): void {
       return;
     }
 
-    const duration = sourceDurationSeconds > 0
-      ? sourceDurationSeconds
-      : Number.isFinite(player.duration) && player.duration > 0
-        ? player.duration
-        : 0;
+    const duration = playbackDurationSeconds();
     const targetPosition = duration > 0
       ? Math.min(initialDirectSeekSeconds, Math.max(0, duration - 1))
       : initialDirectSeekSeconds;
@@ -1179,7 +1210,7 @@ export function bindPlayerProgress(): void {
   });
   progress?.addEventListener('input', () => {
     isScrubbing = true;
-    const duration = sourceDurationSeconds > 0 ? sourceDurationSeconds : Number.isFinite(player.duration) ? player.duration : 0;
+    const duration = playbackDurationSeconds();
     if (duration > 0) {
       const previewSeconds = (Number(progress.value) / 1000) * duration;
       if (currentTimeLabel) {
@@ -1196,7 +1227,7 @@ export function bindPlayerProgress(): void {
     showControls();
   }, { passive: false });
   progress?.addEventListener('change', () => {
-    const duration = sourceDurationSeconds > 0 ? sourceDurationSeconds : Number.isFinite(player.duration) ? player.duration : 0;
+    const duration = playbackDurationSeconds();
     if (duration > 0) {
       const targetPosition = (Number(progress.value) / 1000) * duration;
       if (isTranscoding) {

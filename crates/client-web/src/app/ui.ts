@@ -11,8 +11,10 @@ export function renderCollapsibleText(text: string, key: string, className = 'he
   const shouldCollapse = normalized.length > COLLAPSIBLE_TEXT_LENGTH || lineCount > COLLAPSIBLE_TEXT_LINE_COUNT;
   const isExpanded = state.expandedTextKeys.has(key);
   const stateClass = shouldCollapse && !isExpanded ? 'is-collapsed' : '';
+  const toggleExpanded = isExpanded ? 'true' : 'false';
+  const toggleLabel = isExpanded ? 'show less' : '... see more';
   const toggle = shouldCollapse
-    ? `<button type="button" class="text-toggle-button" data-toggle-text="${escapeHtml(key)}" aria-expanded="${isExpanded ? 'true' : 'false'}">${isExpanded ? 'show less' : '... see more'}</button>`
+    ? `<button type="button" class="text-toggle-button" data-toggle-text="${escapeHtml(key)}" aria-expanded="${toggleExpanded}">${toggleLabel}</button>`
     : '';
 
   return `

@@ -19,4 +19,3 @@ export function libraryProviderOptions(libraryKind?: string): MetadataProviderSt
   return state.metadataProviders
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
 }
-

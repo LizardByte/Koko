@@ -39,11 +39,26 @@ import {
 } from './ui';
 
 export function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
-  const segment = kind === 'collection' ? 'collections' : kind === 'playlist' ? 'playlists' : 'categories';
+  let segment = 'categories';
+  if (kind === 'collection') {
+    segment = 'collections';
+  } else if (kind === 'playlist') {
+    segment = 'playlists';
+  }
   const encodedKey = encodeURIComponent(key);
   return typeof activeLibraryId() === 'number'
     ? `/libraries/${activeLibraryId()}/items/${segment}/${encodedKey}`
     : `/items/${segment}/${encodedKey}`;
+}
+
+function browseFilterKindLabel(kind: BrowseFilter['kind']): string {
+  if (kind === 'collection') {
+    return 'Collection';
+  }
+  if (kind === 'playlist') {
+    return 'Playlist';
+  }
+  return 'Category';
 }
 
 export function homeBrowsePath(): string {
@@ -109,14 +124,16 @@ export function renderBrowseFilterDetail(): string {
     ? `style="--home-feature-image: url('${escapeHtml(filter.artworkUrl)}');"`
     : '';
   const themeSongOption = currentThemeSongYouTubeTarget();
+  const filterKindLabel = browseFilterKindLabel(filter.kind);
+  const filterOverview = filter.overview ?? `${items.length} title${items.length === 1 ? '' : 's'} in this ${filter.kind}.`;
 
   return `
     <section class="browse-filter-detail">
       <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" ${artworkStyle}>
         <div class="home-feature-copy">
-          <p class="eyebrow">${escapeHtml(filter.kind === 'collection' ? 'Collection' : filter.kind === 'playlist' ? 'Playlist' : 'Category')}</p>
+          <p class="eyebrow">${escapeHtml(filterKindLabel)}</p>
           <h2>${escapeHtml(filter.label)}</h2>
-          <p>${escapeHtml(filter.overview ?? `${items.length} title${items.length === 1 ? '' : 's'} in this ${filter.kind}.`)}</p>
+          <p>${escapeHtml(filterOverview)}</p>
           <div class="hero-meta-row">
             <span class="tag">${items.length} title${items.length === 1 ? '' : 's'}</span>
           </div>
@@ -284,11 +301,10 @@ export function metadataBadgeMarkup(item: MediaItemSummary): string {
     return '';
   }
 
-  const statusLabel = pending
-    ? unmatched
-      ? 'Matching metadata'
-      : 'Refreshing metadata'
-    : 'Metadata is not linked yet';
+  let statusLabel = 'Metadata is not linked yet';
+  if (pending) {
+    statusLabel = unmatched ? 'Matching metadata' : 'Refreshing metadata';
+  }
   return `
     <span class="media-card-status ${unmatched ? 'is-unmatched' : ''} ${pending ? 'is-loading' : ''} ${pending && unmatched ? 'has-multiple' : 'icon-only'}" title="${escapeHtml(statusLabel)}" aria-label="${escapeHtml(statusLabel)}">
       ${unmatched ? `<span class="status-warning-icon">${renderIcon('triangle-alert', 'status-icon')}</span>` : ''}
@@ -398,11 +414,12 @@ export function renderItemCard(item: MediaItemSummary): string {
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
     && item.item_type === 'episode';
-  const secondaryMeta = isSeasonEpisodeCard
-    ? undefined
-    : state.route.page === 'home' && typeof state.route.libraryId === 'number'
+  let secondaryMeta: string | undefined;
+  if (!isSeasonEpisodeCard) {
+    secondaryMeta = state.route.page === 'home' && typeof state.route.libraryId === 'number'
       ? humanizeItemType(item.item_type)
       : `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`;
+  }
   const metricMarkup = item.missing_since
     ? missingItemBadgeMarkup(item)
     : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
@@ -639,6 +656,29 @@ export function renderLibraryOverview(): string {
     `;
   }
 
+  let refreshStatusTag = '';
+  if (activeRefreshProgress) {
+    refreshStatusTag = `<span class="tag warning">Refreshing metadata ${activeRefreshProgress.completed}/${activeRefreshProgress.total}</span>`;
+  } else if (stalePending > 0) {
+    refreshStatusTag = `<span class="tag warning">Pending metadata ${library.metadata_refresh_completed}/${library.metadata_refresh_total}</span>`;
+  }
+  let libraryStatusClass = '';
+  if (library.status === 'available') {
+    libraryStatusClass = 'success';
+  } else if (library.status === 'never_scanned') {
+    libraryStatusClass = 'warning';
+  }
+  const metadataRefreshFailedSuffix = activeRefreshProgress?.failed
+    ? ` (${activeRefreshProgress.failed} failed)`
+    : '';
+  const metadataRefreshNote = activeRefreshProgress
+    ? `<p class="muted library-overview-note">Metadata refresh progress: ${activeRefreshProgress.completed}/${activeRefreshProgress.total}${metadataRefreshFailedSuffix}. Artwork and item cards update automatically as each item completes.</p>`
+    : '';
+  const stalePendingVerb = stalePending === 1 ? ' is' : 's are';
+  const stalePendingNote = stalePending > 0
+    ? `<p class="muted library-overview-note">${stalePending} item${stalePendingVerb} still marked pending without an active refresh worker. Use refresh metadata to resume the library refresh.</p>`
+    : '';
+
   return `
     <section class="panel page-panel library-overview-panel">
       <div class="library-overview-header">
@@ -648,13 +688,9 @@ export function renderLibraryOverview(): string {
         </div>
         <div class="library-overview-actions">
           ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
-          ${activeRefreshProgress
-            ? `<span class="tag warning">Refreshing metadata ${activeRefreshProgress.completed}/${activeRefreshProgress.total}</span>`
-            : stalePending > 0
-              ? `<span class="tag warning">Pending metadata ${library.metadata_refresh_completed}/${library.metadata_refresh_total}</span>`
-            : ''}
+          ${refreshStatusTag}
           <div class="library-status-tags">
-          <span class="tag ${library.status === 'available' ? 'success' : library.status === 'never_scanned' ? 'warning' : ''}">${escapeHtml(libraryStatusLabel(library.status))}</span>
+          <span class="tag ${libraryStatusClass}">${escapeHtml(libraryStatusLabel(library.status))}</span>
           <span class="tag">${library.total_files} file${library.total_files === 1 ? '' : 's'}</span>
           </div>
         </div>
@@ -679,12 +715,8 @@ export function renderLibraryOverview(): string {
       </div>
       ${library.error ? `<p class="muted library-overview-note">${escapeHtml(library.error)}</p>` : ''}
       ${library.status === 'never_scanned' ? '<p class="muted library-overview-note">This library has not been scanned yet. It will populate after the next catalog scan starts.</p>' : ''}
-      ${activeRefreshProgress
-        ? `<p class="muted library-overview-note">Metadata refresh progress: ${activeRefreshProgress.completed}/${activeRefreshProgress.total}${activeRefreshProgress.failed ? ` (${activeRefreshProgress.failed} failed)` : ''}. Artwork and item cards update automatically as each item completes.</p>`
-        : ''}
-      ${stalePending > 0
-        ? `<p class="muted library-overview-note">${stalePending} item${stalePending === 1 ? ' is' : 's are'} still marked pending without an active refresh worker. Use refresh metadata to resume the library refresh.</p>`
-        : ''}
+      ${metadataRefreshNote}
+      ${stalePendingNote}
     </section>
   `;
 }
@@ -693,6 +725,7 @@ export function renderLibraryTab(): string {
   const items = filteredTopLevelLibraryItems();
   const library = activeLibrary();
   const isSpecificLibrary = state.route.page === 'home' && typeof state.route.libraryId === 'number';
+  const browseFilterKind = state.browseFilter ? browseFilterKindLabel(state.browseFilter.kind) : '';
 
   if (!items.length) {
     if (state.libraryItemsLoading) {
@@ -722,7 +755,7 @@ export function renderLibraryTab(): string {
       </div>
       ${state.browseFilter ? `
         <div class="active-filter-bar">
-          <span class="tag success">${escapeHtml(state.browseFilter.kind === 'category' ? 'Category' : 'Collection')}</span>
+          <span class="tag success">${escapeHtml(browseFilterKind)}</span>
           <strong>${escapeHtml(state.browseFilter.label)}</strong>
           <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Clear filter', 'x')}</button>
         </div>
@@ -877,6 +910,17 @@ export function renderHomeNavbar(): string {
   const libraryScanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
   const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
   const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
+  const searchButtonType = hasSearch ? 'button' : 'submit';
+  const searchClearAttribute = hasSearch ? 'data-clear-search' : '';
+  const searchIcon = hasSearch ? 'x' : 'search';
+  const scanButtonDisabled = libraryScanPending ? 'disabled' : '';
+  const refreshButtonDisabled = libraryRefreshPending ? 'disabled' : '';
+  const libraryActionButtons = library
+    ? `
+            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library" ${scanButtonDisabled}>${renderIcon('folder-sync')}</button>
+            <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${refreshButtonDisabled}>${renderIcon('database-zap')}</button>
+            `
+    : '';
 
   return `
     <header class="home-navbar">
@@ -886,19 +930,14 @@ export function renderHomeNavbar(): string {
           <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" autocomplete="off" />
           <button
             id="search-toggle"
-            type="${hasSearch ? 'button' : 'submit'}"
+            type="${searchButtonType}"
             class="icon-button search-toggle-button"
             title="${searchToggleLabel}"
             aria-label="${searchToggleLabel}"
-            ${hasSearch ? 'data-clear-search' : ''}
-          >${renderIcon(hasSearch ? 'x' : 'search')}</button>
+            ${searchClearAttribute}
+          >${renderIcon(searchIcon)}</button>
           </form>
-          ${library
-            ? `
-            <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library" ${libraryScanPending ? 'disabled' : ''}>${renderIcon('folder-sync')}</button>
-            <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${libraryRefreshPending ? 'disabled' : ''}>${renderIcon('database-zap')}</button>
-            `
-            : ''}
+          ${libraryActionButtons}
       </div>
       ${renderSearchPopover()}
     </header>

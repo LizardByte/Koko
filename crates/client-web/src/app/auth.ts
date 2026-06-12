@@ -113,14 +113,13 @@ export function renderUserManagement(): string {
     return '';
   }
 
-  return `
-    <section class="settings-form user-management-form">
-      <div class="section-heading">
-        <h3>Users</h3>
-      </div>
-      <div class="user-list">
-        ${state.users.length
-          ? state.users.map((user) => `
+  let userListMarkup = '<div class="empty-state tight">No users found.</div>';
+  if (state.users.length) {
+    userListMarkup = state.users.map((user) => {
+      const adminChecked = user.admin ? 'checked' : '';
+      const adminTagClass = user.admin ? 'success' : '';
+      const adminTagLabel = user.admin ? 'Admin' : 'User';
+      return `
               <form class="provider-row user-edit-row" data-update-user-id="${user.id}">
                 ${renderUserAvatar(user, 'edit-avatar')}
                 <div class="user-edit-fields">
@@ -128,16 +127,25 @@ export function renderUserManagement(): string {
                   <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
                   <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
                   <label>Metadata languages<input name="preferred_metadata_languages" value="${escapeHtml((user.preferred_metadata_languages ?? ['en-US']).join(', '))}" placeholder="en-US, es-ES" /></label>
-                  <label class="checkbox-inline"><input name="admin" type="checkbox" ${user.admin ? 'checked' : ''} /> Administrator</label>
+                  <label class="checkbox-inline"><input name="admin" type="checkbox" ${adminChecked} /> Administrator</label>
                   <label class="checkbox-inline"><input name="remove_profile_image" type="checkbox" /> Remove image</label>
                 </div>
                 <div class="provider-tags">
-                  <span class="tag ${user.admin ? 'success' : ''}">${user.admin ? 'Admin' : 'User'}</span>
+                  <span class="tag ${adminTagClass}">${adminTagLabel}</span>
                   <button type="submit" class="secondary-button">${renderButtonContent('Save', 'save')}</button>
                 </div>
               </form>
-            `).join('')
-          : '<div class="empty-state tight">No users found.</div>'}
+            `;
+    }).join('');
+  }
+
+  return `
+    <section class="settings-form user-management-form">
+      <div class="section-heading">
+        <h3>Users</h3>
+      </div>
+      <div class="user-list">
+        ${userListMarkup}
       </div>
     </section>
 

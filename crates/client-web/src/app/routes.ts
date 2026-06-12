@@ -6,6 +6,16 @@ export function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
   return 'recommended';
 }
 
+function browseKindFromSegment(segment: string): Extract<AppRoute, { page: 'browse-detail' }>['kind'] {
+  if (segment === 'collections') {
+    return 'collection';
+  }
+  if (segment === 'playlists') {
+    return 'playlist';
+  }
+  return 'category';
+}
+
 /** Converts the current browser path into the web UI's route model. */
 export function parseRoute(): AppRoute {
   const normalizedPath = globalThis.location.pathname.replace(/\/+$/, '') || '/';
@@ -30,11 +40,7 @@ export function parseRoute(): AppRoute {
     return {
       page: 'browse-detail',
       libraryId: Number(libraryBrowseMatch[1]),
-      kind: libraryBrowseMatch[2] === 'collections'
-        ? 'collection'
-        : libraryBrowseMatch[2] === 'playlists'
-          ? 'playlist'
-          : 'category',
+      kind: browseKindFromSegment(libraryBrowseMatch[2]),
       key: decodeURIComponent(libraryBrowseMatch[3]),
     };
   }
@@ -43,11 +49,7 @@ export function parseRoute(): AppRoute {
   if (browseMatch) {
     return {
       page: 'browse-detail',
-      kind: browseMatch[1] === 'collections'
-        ? 'collection'
-        : browseMatch[1] === 'playlists'
-          ? 'playlist'
-          : 'category',
+      kind: browseKindFromSegment(browseMatch[1]),
       key: decodeURIComponent(browseMatch[2]),
     };
   }

@@ -92,10 +92,8 @@ export interface YouTubeIframeApi {
 }
 
 declare global {
-  interface Window {
-    YT?: YouTubeIframeApi;
-    onYouTubeIframeAPIReady?: () => void;
-  }
+  var YT: YouTubeIframeApi | undefined;
+  var onYouTubeIframeAPIReady: (() => void) | undefined;
 }
 
 /** Mutable state for the browser client between render passes. */

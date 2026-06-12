@@ -710,24 +710,24 @@ export function getStoredApiBase(): string {
     return ENV_API_BASE_URL.replace(/\/$/, '');
   }
 
-  const stored = window.localStorage.getItem(LOCAL_STORAGE_KEY)?.trim();
+  const stored = globalThis.localStorage.getItem(LOCAL_STORAGE_KEY)?.trim();
   if (stored) {
     return stored.replace(/\/$/, '');
   }
 
-  return window.location.origin.replace(/\/$/, '');
+  return globalThis.location.origin.replace(/\/$/, '');
 }
 
 export function getStoredAuthToken(): string | undefined {
-  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() || undefined;
+  return globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() || undefined;
 }
 
 export function setStoredAuthToken(token: string): void {
-  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token.trim());
+  globalThis.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token.trim());
 }
 
 export function clearStoredAuthToken(): void {
-  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
 
 export function getApiMode(): ApiMode {
@@ -939,7 +939,7 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
 
   try {
     const abortController = new AbortController();
-    const timeoutHandle = window.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
     const response = await fetch(`${getStoredApiBase()}${path}`, {
       method,
       headers: {
@@ -949,7 +949,7 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: abortController.signal,
     }).finally(() => {
-      window.clearTimeout(timeoutHandle);
+      globalThis.clearTimeout(timeoutHandle);
     });
     if (!response.ok) {
       if (response.status === 401) {

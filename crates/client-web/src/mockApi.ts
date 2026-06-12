@@ -536,7 +536,7 @@ const users: MockUserRecord[] = [
 ];
 
 function activeMockUserId(): number | undefined {
-  const token = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim();
+  const token = globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim();
   if (!token?.startsWith('mock-token-')) {
     return undefined;
   }
@@ -1403,7 +1403,7 @@ export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
     item.metadata_refresh_state = 'pending';
     syncMockLibraryRefreshProgress(item.library_id);
 
-    window.setTimeout(() => {
+    globalThis.setTimeout(() => {
       const source = (metadataSearchResults[itemId] ?? []).find((candidate) => {
         return candidate.provider_id === existingMatch.provider_id
           && candidate.external_id === existingMatch.external_id
@@ -1463,7 +1463,7 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
   });
   syncMockLibraryRefreshProgress(libraryId);
 
-  window.setTimeout(() => {
+  globalThis.setTimeout(() => {
     const refreshedAt = Math.floor(Date.now() / 1000);
     refreshableItems.forEach((item) => {
       item.metadata_refresh_state = 'fresh';

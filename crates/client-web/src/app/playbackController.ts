@@ -309,7 +309,7 @@ function themeSongSourceFromUrl(
 
 function clearTrailerProgressHandle(): void {
   if (trailerProgressHandle !== undefined) {
-    window.clearInterval(trailerProgressHandle);
+    globalThis.clearInterval(trailerProgressHandle);
     trailerProgressHandle = undefined;
   }
 }
@@ -537,8 +537,8 @@ function ensureTrailerYouTubePlayer(videoId: string): Promise<YouTubePlayer> {
     playsinline: 1,
     rel: 0,
   };
-  if (window.location.origin.startsWith('http')) {
-    playerVars.origin = window.location.origin;
+  if (globalThis.location.origin.startsWith('http')) {
+    playerVars.origin = globalThis.location.origin;
   }
 
   trailerYouTubePlayerReady = loadYouTubeIframeApi().then((api) => new Promise<YouTubePlayer>((resolve) => {
@@ -686,9 +686,9 @@ export function bindTrailerPlayer(): void {
     shell.classList.remove('is-controls-hidden');
     document.body.style.cursor = '';
     if (controlsHideHandle !== undefined) {
-      window.clearTimeout(controlsHideHandle);
+      globalThis.clearTimeout(controlsHideHandle);
     }
-    controlsHideHandle = window.setTimeout(() => {
+    controlsHideHandle = globalThis.setTimeout(() => {
       if (isTrailerPlaying() && !isScrubbing) {
         shell.classList.remove('is-controls-visible');
         shell.classList.add('is-controls-hidden');
@@ -866,7 +866,7 @@ export function bindTrailerPlayer(): void {
     player.playVideo();
     updateTrailerPlayerUi();
     clearTrailerProgressHandle();
-    trailerProgressHandle = window.setInterval(updateTrailerPlayerUi, 500);
+    trailerProgressHandle = globalThis.setInterval(updateTrailerPlayerUi, 500);
     showControls();
   });
 }
@@ -1007,9 +1007,9 @@ export function bindPlayerProgress(): void {
     shell?.classList.remove('is-controls-hidden');
     document.body.style.cursor = '';
     if (controlsHideHandle !== undefined) {
-      window.clearTimeout(controlsHideHandle);
+      globalThis.clearTimeout(controlsHideHandle);
     }
-    controlsHideHandle = window.setTimeout(() => {
+    controlsHideHandle = globalThis.setTimeout(() => {
       if (!player.paused && !isScrubbing) {
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');

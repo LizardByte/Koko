@@ -120,7 +120,7 @@ function captureRenderSnapshot(): RenderSnapshot {
 }
 
 function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
-  window.requestAnimationFrame(() => {
+  globalThis.requestAnimationFrame(() => {
     document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;

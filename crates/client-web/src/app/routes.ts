@@ -8,7 +8,7 @@ export function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
 
 /** Converts the current browser path into the web UI's route model. */
 export function parseRoute(): AppRoute {
-  const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  const normalizedPath = globalThis.location.pathname.replace(/\/+$/, '') || '/';
 
   const settingsMatch = normalizedPath.match(/^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/);
   if (settingsMatch) {

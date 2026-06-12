@@ -38,7 +38,7 @@ function pollGamepads(): void {
       ['left', Boolean(gamepad.buttons[14]?.pressed) || gamepad.axes[0] < -0.65, () => moveFocus(-1)],
       ['right', Boolean(gamepad.buttons[15]?.pressed) || gamepad.axes[0] > 0.65, () => moveFocus(1)],
       ['activate', Boolean(gamepad.buttons[0]?.pressed), activateFocusedElement],
-      ['back', Boolean(gamepad.buttons[1]?.pressed), () => window.history.back()],
+      ['back', Boolean(gamepad.buttons[1]?.pressed), () => globalThis.history.back()],
     ];
     actions.forEach(([name, pressed, action]) => {
       const key = `${gamepad.index}:${name}`;
@@ -50,12 +50,12 @@ function pollGamepads(): void {
       }
     });
   });
-  window.requestAnimationFrame(pollGamepads);
+  globalThis.requestAnimationFrame(pollGamepads);
 }
 
 /** Binds global keyboard and gamepad navigation controls for non-player screens. */
 export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 'isPlayerOpen'>): void {
-  window.addEventListener('keydown', (event) => {
+  globalThis.addEventListener('keydown', (event) => {
     if (state.isPlayerOpen || state.activeTrailer || event.defaultPrevented) {
       return;
     }
@@ -76,5 +76,5 @@ export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 
     event.preventDefault();
   });
 
-  window.requestAnimationFrame(pollGamepads);
+  globalThis.requestAnimationFrame(pollGamepads);
 }

@@ -1,7 +1,7 @@
 let spinnerVisibilityObserver: IntersectionObserver | undefined;
 
 function visibleSpinnerObserver(): IntersectionObserver | undefined {
-  if (!('IntersectionObserver' in window)) {
+  if (!('IntersectionObserver' in globalThis)) {
     return undefined;
   }
   spinnerVisibilityObserver ??= new IntersectionObserver((entries) => {

@@ -112,7 +112,7 @@ let pendingLiveSearchHandle: number | undefined;
 function clearHomeSearch(): boolean {
   const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
   if (pendingLiveSearchHandle !== undefined) {
-    window.clearTimeout(pendingLiveSearchHandle);
+    globalThis.clearTimeout(pendingLiveSearchHandle);
     pendingLiveSearchHandle = undefined;
   }
   state.searchQuery = '';
@@ -402,7 +402,7 @@ export function bindEvents(context: AppEventBindingContext): void {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    if (this === window) {
+    if (this === globalThis) {
       originalAddEventListener.call(this, type, listener, options);
       return;
     }
@@ -559,9 +559,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     state.searchQuery = input.value;
     state.showFullSearchResults = false;
     if (pendingLiveSearchHandle !== undefined) {
-      window.clearTimeout(pendingLiveSearchHandle);
+      globalThis.clearTimeout(pendingLiveSearchHandle);
     }
-    pendingLiveSearchHandle = window.setTimeout(() => {
+    pendingLiveSearchHandle = globalThis.setTimeout(() => {
       pendingLiveSearchHandle = undefined;
       void refreshData(false);
     }, 250);
@@ -606,7 +606,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         state.homePreviewCollectionId = undefined;
         clearHomeSearch();
         const nextPath = homeBrowsePath();
-        window.history.pushState({}, '', nextPath);
+        globalThis.history.pushState({}, '', nextPath);
         state.route = parseRoute();
         void refreshData();
         return;
@@ -712,7 +712,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
   document.querySelector<HTMLButtonElement>('#back-to-library')?.addEventListener('click', () => {
     if (state.route.page === 'person') {
-      window.history.back();
+      globalThis.history.back();
       return;
     }
 
@@ -796,7 +796,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     const clearTrailerHoldHandle = (): void => {
       if (trailerHoldHandle !== undefined) {
-        window.clearTimeout(trailerHoldHandle);
+        globalThis.clearTimeout(trailerHoldHandle);
         trailerHoldHandle = undefined;
       }
     };
@@ -834,7 +834,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         return;
       }
 
-      trailerHoldHandle = window.setTimeout(() => {
+      trailerHoldHandle = globalThis.setTimeout(() => {
         trailerHoldHandle = undefined;
         openTrailerChooser();
       }, 450);
@@ -847,7 +847,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         return;
       }
 
-      trailerHoldHandle = window.setTimeout(() => {
+      trailerHoldHandle = globalThis.setTimeout(() => {
         trailerHoldHandle = undefined;
         openTrailerChooser();
       }, 500);
@@ -960,7 +960,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   });
 
   document.querySelector<HTMLButtonElement>('#clear-metadata-cache')?.addEventListener('click', async () => {
-    const confirmed = window.confirm('Clear cached provider metadata responses? The next metadata refresh will fetch fresh data from providers.');
+    const confirmed = globalThis.confirm('Clear cached provider metadata responses? The next metadata refresh will fetch fresh data from providers.');
     if (!confirmed) {
       return;
     }
@@ -1079,7 +1079,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         return;
       }
       row.scrollBy({ left: target.direction * Math.max(320, row.clientWidth * 0.8), behavior: 'smooth' });
-      window.setTimeout(() => {
+      globalThis.setTimeout(() => {
         appendLazyShelfItemsIfNeeded(row);
         updateShelfScrollControls(row);
       }, 220);
@@ -1095,9 +1095,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   document.querySelectorAll<HTMLElement>('[data-shelf-row]:not([data-lazy-shelf-id])').forEach((row) => {
     row.addEventListener('scroll', () => updateShelfScrollControls(row), { passive: true });
   });
-  window.requestAnimationFrame(refreshShelfScrollControls);
+  globalThis.requestAnimationFrame(refreshShelfScrollControls);
   if (!shelfScrollResizeBound) {
-    window.addEventListener('resize', refreshShelfScrollControls, { passive: true });
+    globalThis.addEventListener('resize', refreshShelfScrollControls, { passive: true });
     shelfScrollResizeBound = true;
   }
 
@@ -1190,7 +1190,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
         return;
       }
 
-      const confirmed = window.confirm('Remove this library from settings? This only removes the configuration, not the media files on disk.');
+      const confirmed = globalThis.confirm('Remove this library from settings? This only removes the configuration, not the media files on disk.');
       if (!confirmed) {
         return;
       }
@@ -1284,7 +1284,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       const library = state.libraries.find((entry) => entry.id === libraryId);
       const missingItems = library?.missing_items ?? 0;
       const missingFiles = library?.missing_files ?? 0;
-      if (!window.confirm(`Delete ${missingItems} missing item${missingItems === 1 ? '' : 's'} and ${missingFiles} missing file${missingFiles === 1 ? '' : 's'} from this library?`)) {
+      if (!globalThis.confirm(`Delete ${missingItems} missing item${missingItems === 1 ? '' : 's'} and ${missingFiles} missing file${missingFiles === 1 ? '' : 's'} from this library?`)) {
         return;
       }
 

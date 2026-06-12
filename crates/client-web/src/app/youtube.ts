@@ -71,8 +71,8 @@ export function buildYouTubeWatchUrl(url: string): string | undefined {
 
 /** Loads and memoizes the YouTube iframe API script. */
 export function loadYouTubeIframeApi(): Promise<YouTubeIframeApi> {
-  if (window.YT?.Player) {
-    return Promise.resolve(window.YT);
+  if (globalThis.YT?.Player) {
+    return Promise.resolve(globalThis.YT);
   }
 
   if (youtubeIframeApiPromise) {
@@ -80,11 +80,11 @@ export function loadYouTubeIframeApi(): Promise<YouTubeIframeApi> {
   }
 
   youtubeIframeApiPromise = new Promise((resolve) => {
-    const existingReadyHandler = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = () => {
+    const existingReadyHandler = globalThis.onYouTubeIframeAPIReady;
+    globalThis.onYouTubeIframeAPIReady = () => {
       existingReadyHandler?.();
-      if (window.YT?.Player) {
-        resolve(window.YT);
+      if (globalThis.YT?.Player) {
+        resolve(globalThis.YT);
       }
     };
 

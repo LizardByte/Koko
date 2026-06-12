@@ -164,7 +164,7 @@ function maybeRenderAfterAutoRefresh(shouldRender: boolean): void {
 
 function clearPendingLibraryRefresh(): void {
   if (pendingLibraryRefreshHandle !== undefined) {
-    window.clearTimeout(pendingLibraryRefreshHandle);
+    globalThis.clearTimeout(pendingLibraryRefreshHandle);
     pendingLibraryRefreshHandle = undefined;
   }
 }
@@ -180,7 +180,7 @@ function schedulePendingLibraryRefresh(): void {
     return;
   }
 
-  pendingLibraryRefreshHandle = window.setTimeout(() => {
+  pendingLibraryRefreshHandle = globalThis.setTimeout(() => {
     pendingLibraryRefreshHandle = undefined;
     void refreshPendingLibraryData();
   }, 1800);
@@ -188,7 +188,7 @@ function schedulePendingLibraryRefresh(): void {
 
 function clearPendingMetadataRefresh(): void {
   if (pendingMetadataRefreshHandle !== undefined) {
-    window.clearTimeout(pendingMetadataRefreshHandle);
+    globalThis.clearTimeout(pendingMetadataRefreshHandle);
     pendingMetadataRefreshHandle = undefined;
   }
 }
@@ -248,14 +248,14 @@ function schedulePendingMetadataRefresh(force = false): void {
     return;
   }
 
-  pendingMetadataRefreshHandle = window.setTimeout(() => {
+  pendingMetadataRefreshHandle = globalThis.setTimeout(() => {
     pendingMetadataRefreshHandle = undefined;
     void refreshPendingMetadataData();
   }, 1500);
 }
 
 function navigateTo(path: string, replace = false): void {
-  const currentPath = `${window.location.pathname}${window.location.search}`;
+  const currentPath = `${globalThis.location.pathname}${globalThis.location.search}`;
   if (currentPath === path) {
     state.route = parseRoute();
     render();
@@ -263,9 +263,9 @@ function navigateTo(path: string, replace = false): void {
   }
 
   if (replace) {
-    window.history.replaceState({}, '', path);
+    globalThis.history.replaceState({}, '', path);
   } else {
-    window.history.pushState({}, '', path);
+    globalThis.history.pushState({}, '', path);
   }
   state.route = parseRoute();
   if (state.route.page === 'home') {
@@ -844,7 +844,7 @@ export function startApp(): void {
   configurePlaybackController({ render, refreshData });
   bindGlobalInputHandlers(state);
 
-  window.addEventListener('popstate', () => {
+  globalThis.addEventListener('popstate', () => {
     state.route = parseRoute();
     if (state.route.page === 'home' || state.route.page === 'browse-detail') {
       state.homeTab = defaultHomeTab(state.route);

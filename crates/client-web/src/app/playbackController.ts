@@ -57,6 +57,9 @@ let trailerVolume = 1;
 
 let trailerMuted = false;
 
+const ESCALATING_SEEK_STEPS = [10, 20, 30, 60, 120, 300] as const;
+const ESCALATING_SEEK_WINDOW_MS = 900;
+
 /** Renders the active playback overlay, including trailers and browser playback. */
 export function renderPlayerOverlay(): string {
   if (state.activeTrailer) {
@@ -633,6 +636,25 @@ function updateIconButton(
   createIcons({ icons });
 }
 
+/** Creates a seek handler that increases the step when repeated in one direction. */
+function createEscalatingSeekHandler(seekBy: (seconds: number) => void): (direction: number) => void {
+  let lastSkipDirection = 0;
+  let lastSkipAt = 0;
+  let skipStepIndex = 0;
+
+  return (direction: number): void => {
+    const now = Date.now();
+    if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < ESCALATING_SEEK_WINDOW_MS) {
+      skipStepIndex = Math.min(ESCALATING_SEEK_STEPS.length - 1, skipStepIndex + 1);
+    } else {
+      skipStepIndex = 0;
+    }
+    lastSkipDirection = direction;
+    lastSkipAt = now;
+    seekBy(direction * ESCALATING_SEEK_STEPS[skipStepIndex]);
+  };
+}
+
 function updateTrailerPlayerUi(): void {
   const player = trailerYouTubePlayer;
   if (!player) {
@@ -691,12 +713,8 @@ export function bindTrailerPlayer(): void {
   const muteButton = document.querySelector<HTMLButtonElement>('#trailer-mute-toggle');
   const fullscreenButton = document.querySelector<HTMLButtonElement>('#trailer-fullscreen');
   const idleHitArea = document.querySelector<HTMLElement>('.trailer-idle-hit-area');
-  const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
-  let lastSkipDirection = 0;
-  let lastSkipAt = 0;
-  let skipStepIndex = 0;
 
   const withTrailerPlayer = (action: (player: YouTubePlayer) => void): void => {
     if (trailerYouTubePlayer) {
@@ -737,17 +755,7 @@ export function bindTrailerPlayer(): void {
     });
   };
 
-  const seekWithEscalation = (direction: number): void => {
-    const now = Date.now();
-    if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
-      skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
-    } else {
-      skipStepIndex = 0;
-    }
-    lastSkipDirection = direction;
-    lastSkipAt = now;
-    seekBy(direction * skipSteps[skipStepIndex]);
-  };
+  const seekWithEscalation = createEscalatingSeekHandler(seekBy);
 
   const togglePlayback = (): void => {
     withTrailerPlayer((player) => {
@@ -927,12 +935,8 @@ export function bindPlayerProgress(): void {
   const requestedPlaybackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
   const playbackBaseOffsetSeconds = isTranscoding ? requestedPlaybackStartSeconds : 0;
   const initialDirectSeekSeconds = isTranscoding ? 0 : requestedPlaybackStartSeconds;
-  const skipSteps = [10, 20, 30, 60, 120, 300];
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
-  let lastSkipDirection = 0;
-  let lastSkipAt = 0;
-  let skipStepIndex = 0;
   let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0;
 
   const playbackDurationSeconds = (): number => {
@@ -960,24 +964,14 @@ export function bindPlayerProgress(): void {
     shell?.classList.add('has-media-error');
   };
 
-  const setButtonIcon = (button: HTMLButtonElement | null | undefined, iconName: AppIconName, label: string): void => {
-    if (!button) {
-      return;
-    }
-    button.innerHTML = renderIcon(iconName, 'player-control-icon');
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    createIcons({ icons });
-  };
-
   const updatePlayButtons = (): void => {
     const iconName: AppIconName = player.paused ? 'play' : 'pause';
     const label = player.paused ? 'Play' : 'Pause';
-    playButtons.forEach((button) => setButtonIcon(button, iconName, label));
+    playButtons.forEach((button) => updateIconButton(button, iconName, label));
   };
 
   const updateMuteButton = (): void => {
-    setButtonIcon(muteButton, player.muted || player.volume === 0 ? 'volume-x' : 'volume-2', player.muted ? 'Unmute' : 'Mute');
+    updateIconButton(muteButton, player.muted || player.volume === 0 ? 'volume-x' : 'volume-2', player.muted ? 'Unmute' : 'Mute');
     if (volume && !isScrubbing) {
       volume.value = String(player.muted ? 0 : player.volume);
     }
@@ -1049,18 +1043,6 @@ export function bindPlayerProgress(): void {
     }, 3200);
   };
 
-  const seekWithEscalation = (direction: number): void => {
-    const now = Date.now();
-    if (direction !== 0 && direction === lastSkipDirection && now - lastSkipAt < 900) {
-      skipStepIndex = Math.min(skipSteps.length - 1, skipStepIndex + 1);
-    } else {
-      skipStepIndex = 0;
-    }
-    lastSkipDirection = direction;
-    lastSkipAt = now;
-    seekBy(direction * skipSteps[skipStepIndex]);
-  };
-
   const seekBy = (seconds: number): void => {
     const currentPosition = playbackBaseOffsetSeconds + player.currentTime;
     const targetPosition = Math.max(0, currentPosition + seconds);
@@ -1075,6 +1057,8 @@ export function bindPlayerProgress(): void {
     }
     player.currentTime = Math.min(player.duration, targetPosition);
   };
+
+  const seekWithEscalation = createEscalatingSeekHandler(seekBy);
 
   const togglePlayback = (): void => {
     if (player.paused) {

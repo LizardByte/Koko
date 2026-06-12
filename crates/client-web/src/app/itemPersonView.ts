@@ -1,5 +1,14 @@
 /** Renders item detail, metadata search, person detail, and credit trays. */
-import type { ItemMetadataPerson, MediaItemExtra, MediaItemSummary, MetadataPersonItemCredit, MetadataProviderStatus } from '../api';
+import type {
+  ItemMetadataMatch,
+  ItemMetadataPerson,
+  MediaItemDetail,
+  MediaItemExtra,
+  MediaItemSummary,
+  MediaPlaybackTarget,
+  MetadataPersonItemCredit,
+  MetadataProviderStatus,
+} from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { normalizedMetadataLanguages } from './formUtils';
@@ -10,7 +19,7 @@ import { itemHasActiveMetadataRefresh, itemIsMetadataPending } from './activitie
 import { resumablePlaybackPositionMs } from './playbackProgress';
 import { providerAttributionLogo, providerDisplayName } from './providers';
 import { state } from './state';
-import type { PersonCreditGroup } from './types';
+import type { PersonCreditGroup, TrailerOption } from './types';
 import {
   activeLibrary,
   activeLibrarySettings,
@@ -691,148 +700,136 @@ export function bindPersonCreditTrays(): void {
   });
 }
 
-export function renderItemPage(): string {
-  if (!state.selectedItem) {
-    return '<section class="panel page-panel"><div class="empty-state">Loading item details…</div></section>';
+function selectedItemPosterUrl(item: MediaItemDetail): string | undefined {
+  return item.poster_url
+    ? getArtworkUrl(item.id, 'poster', item.artwork_updated_at)
+    : undefined;
+}
+
+function selectedItemLogoUrl(item: MediaItemDetail): string | undefined {
+  return item.logo_url ? resolveApiUrl(item.logo_url) : undefined;
+}
+
+function selectedItemOverview(item: MediaItemDetail): string {
+  return item.overview
+    ?? state.selectedItemMetadata?.matches[0]?.overview
+    ?? 'No description is stored for this item yet.';
+}
+
+function selectedItemChildSectionTitle(item: MediaItemDetail): string {
+  if (item.item_type === 'show') {
+    return 'Seasons';
   }
 
-  const posterUrl = state.selectedItem.poster_url
-    ? getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at)
-    : undefined;
-  const trailerOptions = currentTrailerOptions();
-  const preferredTrailer = trailerOptions[0];
-  const hasMultipleTrailers = trailerOptions.length > 1;
-  const themeSongOption = currentThemeSongYouTubeTarget();
-  const trailerButtonTitle = hasMultipleTrailers
-    ? 'Click to play the first trailer. Right-click or press and hold to choose another trailer.'
-    : 'Play Trailer';
-  const playback = state.selectedPlayback;
-  const library = state.libraries.find((entry) => entry.id === state.selectedItem?.library_id);
-  const linkedMatch = state.selectedItemMetadata?.matches[0];
-  const overview = state.selectedItem.overview
-    ?? linkedMatch?.overview
-    ?? 'No description is stored for this item yet.';
-  const genres = state.selectedItem.genres.length
-    ? state.selectedItem.genres
-    : [];
-  const logoUrl = state.selectedItem.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
-  const technicalFacts = [
-    { label: 'Duration', value: formatDuration(state.selectedItem.duration_ms) },
-    {
-      label: 'Format',
-      value: [state.selectedItem.container?.toUpperCase(), state.selectedItem.media_kind.toUpperCase()].filter(Boolean).join(' • ') || 'Unknown',
-    },
-    {
-      label: 'Codecs',
-      value: [state.selectedItem.video_codec, state.selectedItem.audio_codec].filter(Boolean).join(' / ') || 'Unknown',
-    },
-    {
-      label: 'Resolution',
-      value: state.selectedItem.width && state.selectedItem.height ? `${state.selectedItem.width}×${state.selectedItem.height}` : 'Unknown',
-    },
-    { label: 'Bitrate', value: formatBitRate(state.selectedItem.bit_rate) },
-    { label: 'Size', value: formatFileSize(state.selectedItem.file_size) },
-  ];
-  const hierarchy = state.selectedItem.hierarchy;
-  const children = state.selectedItem.children;
-  const backTarget = backNavigationTarget();
-  const supportsManualLinking = canManuallyLinkMetadata(state.selectedItem);
-  const metadataRefreshActive = itemHasActiveMetadataRefresh(state.selectedItem);
-  const resumeMs = resumablePlaybackPositionMs(state.selectedItem);
-  const playbackTarget = !state.selectedItem.playable ? state.selectedItem.playback_target : undefined;
-  const restartPlaybackTarget = !state.selectedItem.playable ? state.selectedItem.restart_playback_target : undefined;
-  let childSectionTitle = 'Contained items';
-  if (state.selectedItem.item_type === 'show') {
-    childSectionTitle = 'Seasons';
-  } else if (state.selectedItem.item_type === 'season') {
-    childSectionTitle = 'Episodes';
+  return item.item_type === 'season' ? 'Episodes' : 'Contained items';
+}
+
+function renderSelectedItemBreadcrumbs(item: MediaItemDetail): string {
+  if (!item.hierarchy.length) {
+    return '';
   }
-  const itemHeroClass = state.selectedItem.item_type === 'episode' ? 'episode-hero' : '';
-  const itemPosterClass = state.selectedItem.item_type === 'episode' ? 'item-thumbnail' : '';
-  const posterMarkup = posterUrl
-    ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(state.selectedItem.display_title)} poster" />`
-    : `<span>${escapeHtml(state.selectedItem.display_title.slice(0, 1).toUpperCase())}</span>`;
-  const titleMarkup = logoUrl
-    ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(state.selectedItem.display_title)}" />`
-    : `<h2 class="item-title-fallback">${escapeHtml(state.selectedItem.display_title)}</h2>`;
-  const resumeButtonLabel = `Resume ${formatDuration(resumeMs)}`;
-  const resumeButtonMarkup = state.selectedItem.playable && resumeMs > 0
-    ? `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(resumeButtonLabel, 'play')}</button>`
-    : '';
-  let playButtonMarkup = '';
-  if (state.selectedItem.playable) {
-    const playButtonClass = resumeMs > 0 ? 'secondary-button' : '';
-    const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play now';
-    playButtonMarkup = `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, 'play')}</button>`;
-  }
-  const childCountLabel = countLabel(children.length, 'item');
-  const childGridClass = state.selectedItem.item_type === 'season' ? 'season-episodes-grid' : '';
-  const childrenSectionMarkup = children.length
-    ? `
-        <section class="panel page-panel item-section">
-          <div class="section-heading section-heading-actions">
-            <h3>${escapeHtml(childSectionTitle)}</h3>
-            <span class="muted">${childCountLabel}</span>
-          </div>
-          <div class="item-grid hierarchy-item-grid ${childGridClass}">${children.map(renderItemCard).join('')}</div>
-        </section>
-      `
-    : '';
-  let metadataRefreshButtonMarkup = '';
-  if (supportsManualLinking) {
-    const refreshButtonDisabled = linkedMatch && !metadataRefreshActive ? '' : 'disabled';
-    const refreshButtonLabel = metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata';
-    metadataRefreshButtonMarkup = `<button type="button" class="secondary-button" id="refresh-item-metadata" ${refreshButtonDisabled}>${renderButtonContent(refreshButtonLabel, 'refresh-cw')}</button>`;
-  }
-  const metadataSearchPanel = supportsManualLinking
-    ? `
-              <form id="metadata-search-form" class="metadata-search-form">
-                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
-                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
-                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
-                ${renderMetadataSearchProviderControls()}
-                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
-              </form>
-              <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
-            `
-    : '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
+
   return `
-    <section class="item-page">
-      ${hierarchy.length ? `
         <nav class="item-breadcrumbs panel page-panel" aria-label="Item hierarchy">
-          ${hierarchy.map((item) => `
-            <button type="button" class="breadcrumb-button" data-item-id="${item.id}">${escapeHtml(item.display_title)}</button>
+          ${item.hierarchy.map((hierarchyItem) => `
+            <button type="button" class="breadcrumb-button" data-item-id="${hierarchyItem.id}">${escapeHtml(hierarchyItem.display_title)}</button>
           `).join('<span class="breadcrumb-separator">/</span>')}
           <span class="breadcrumb-separator">/</span>
-          <span class="breadcrumb-current">${escapeHtml(state.selectedItem.display_title)}</span>
+          <span class="breadcrumb-current">${escapeHtml(item.display_title)}</span>
         </nav>
-      ` : ''}
-      <section class="item-hero ${itemHeroClass}">
-        <div class="detail-art item-poster ${itemPosterClass} ${posterUrl ? 'has-image' : ''}">
-          ${posterMarkup}
-        </div>
-        <div class="detail-summary item-summary">
-          ${titleMarkup}
-          ${state.selectedItem.tagline ? `<p class="hero-tagline">${escapeHtml(state.selectedItem.tagline)}</p>` : ''}
-          <div class="hero-meta-row">
-            ${missingItemDetailBadgeMarkup(state.selectedItem)}
-            ${playbackDetailBadgeMarkup(state.selectedItem)}
-            ${state.selectedItem.release_year ? `<span class="tag">${state.selectedItem.release_year}</span>` : ''}
-            ${state.selectedItem.content_rating ? `<span class="tag">${escapeHtml(state.selectedItem.content_rating)}</span>` : ''}
-            ${typeof state.selectedItem.rating === 'number' ? `<span class="tag">${escapeHtml(state.selectedItem.rating.toFixed(1))}</span>` : ''}
-            ${genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('')}
-          </div>
-          ${renderCollapsibleText(overview, `item-overview:${state.selectedItem.id}`)}
+      `;
+}
+
+function renderSelectedItemPoster(item: MediaItemDetail, posterUrl: string | undefined): string {
+  return posterUrl
+    ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(item.display_title)} poster" />`
+    : `<span>${escapeHtml(item.display_title.slice(0, 1).toUpperCase())}</span>`;
+}
+
+function renderSelectedItemTitle(item: MediaItemDetail, logoUrl: string | undefined): string {
+  return logoUrl
+    ? `<img class="item-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
+    : `<h2 class="item-title-fallback">${escapeHtml(item.display_title)}</h2>`;
+}
+
+function renderSelectedItemHeroMeta(item: MediaItemDetail, genres: string[]): string {
+  const tags = [
+    missingItemDetailBadgeMarkup(item),
+    playbackDetailBadgeMarkup(item),
+  ];
+  if (item.release_year) {
+    tags.push(`<span class="tag">${item.release_year}</span>`);
+  }
+  if (item.content_rating) {
+    tags.push(`<span class="tag">${escapeHtml(item.content_rating)}</span>`);
+  }
+  if (typeof item.rating === 'number') {
+    tags.push(`<span class="tag">${escapeHtml(item.rating.toFixed(1))}</span>`);
+  }
+  tags.push(...genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`));
+
+  return `<div class="hero-meta-row">${tags.join('')}</div>`;
+}
+
+function renderResumeButton(item: MediaItemDetail, resumeMs: number): string {
+  if (!item.playable || resumeMs <= 0) {
+    return '';
+  }
+
+  return `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(`Resume ${formatDuration(resumeMs)}`, 'play')}</button>`;
+}
+
+function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number): string {
+  if (!item.playable) {
+    return '';
+  }
+
+  const playButtonClass = resumeMs > 0 ? 'secondary-button' : '';
+  const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play now';
+  return `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, 'play')}</button>`;
+}
+
+function renderTrailerActionButton(preferredTrailer: TrailerOption | undefined, trailerButtonTitle: string): string {
+  return preferredTrailer
+    ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>`
+    : '';
+}
+
+function renderThemeSongButton(themeSongOption: ReturnType<typeof currentThemeSongYouTubeTarget>): string {
+  return themeSongOption
+    ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>`
+    : '';
+}
+
+function renderSelectedItemActions(
+  item: MediaItemDetail,
+  resumeMs: number,
+  playbackTarget: MediaPlaybackTarget | undefined,
+  restartPlaybackTarget: MediaPlaybackTarget | undefined,
+  preferredTrailer: TrailerOption | undefined,
+  themeSongOption: ReturnType<typeof currentThemeSongYouTubeTarget>,
+  trailerButtonTitle: string,
+  backTarget: ReturnType<typeof backNavigationTarget>,
+): string {
+  return `
           <div class="detail-actions">
-            ${resumeButtonMarkup}
-            ${playButtonMarkup}
+            ${renderResumeButton(item, resumeMs)}
+            ${renderPrimaryPlayButton(item, resumeMs)}
             ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false) : ''}
             ${restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true) : ''}
-            ${preferredTrailer ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>` : ''}
-            ${themeSongOption ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>` : ''}
+            ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
+            ${renderThemeSongButton(themeSongOption)}
             <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
           </div>
-          ${hasMultipleTrailers && state.isTrailerMenuOpen ? `
+  `;
+}
+
+function renderTrailerPicker(trailerOptions: TrailerOption[], hasMultipleTrailers: boolean): string {
+  if (!hasMultipleTrailers || !state.isTrailerMenuOpen) {
+    return '';
+  }
+
+  return `
             <section class="trailer-picker panel">
               <div class="section-heading section-heading-actions">
                 <h3>Choose a trailer</h3>
@@ -844,27 +841,129 @@ export function renderItemPage(): string {
                 `).join('')}
               </div>
             </section>
-          ` : ''}
-          <p class="muted">${escapeHtml(playback?.reason ?? 'Loading playback capabilities…')}</p>
+          `;
+}
+
+function selectedItemTechnicalFacts(item: MediaItemDetail): Array<{ label: string; value: string }> {
+  return [
+    { label: 'Duration', value: formatDuration(item.duration_ms) },
+    {
+      label: 'Format',
+      value: [item.container?.toUpperCase(), item.media_kind.toUpperCase()].filter(Boolean).join(' • ') || 'Unknown',
+    },
+    {
+      label: 'Codecs',
+      value: [item.video_codec, item.audio_codec].filter(Boolean).join(' / ') || 'Unknown',
+    },
+    {
+      label: 'Resolution',
+      value: item.width && item.height ? `${item.width}×${item.height}` : 'Unknown',
+    },
+    { label: 'Bitrate', value: formatBitRate(item.bit_rate) },
+    { label: 'Size', value: formatFileSize(item.file_size) },
+  ];
+}
+
+function renderSelectedItemFactList(item: MediaItemDetail): string {
+  return `
           <div class="item-fact-list">
-            ${technicalFacts.map((fact) => `
+            ${selectedItemTechnicalFacts(item).map((fact) => `
               <div class="item-fact">
                 <span class="label">${escapeHtml(fact.label)}</span>
                 <strong>${escapeHtml(fact.value)}</strong>
               </div>
             `).join('')}
           </div>
+  `;
+}
+
+function renderSelectedItemHero(
+  item: MediaItemDetail,
+  posterUrl: string | undefined,
+  logoUrl: string | undefined,
+  overview: string,
+  genres: string[],
+  actionsMarkup: string,
+  trailerPickerMarkup: string,
+): string {
+  const itemHeroClass = item.item_type === 'episode' ? 'episode-hero' : '';
+  const itemPosterClass = item.item_type === 'episode' ? 'item-thumbnail' : '';
+  return `
+      <section class="item-hero ${itemHeroClass}">
+        <div class="detail-art item-poster ${itemPosterClass} ${posterUrl ? 'has-image' : ''}">
+          ${renderSelectedItemPoster(item, posterUrl)}
+        </div>
+        <div class="detail-summary item-summary">
+          ${renderSelectedItemTitle(item, logoUrl)}
+          ${item.tagline ? `<p class="hero-tagline">${escapeHtml(item.tagline)}</p>` : ''}
+          ${renderSelectedItemHeroMeta(item, genres)}
+          ${renderCollapsibleText(overview, `item-overview:${item.id}`)}
+          ${actionsMarkup}
+          ${trailerPickerMarkup}
+          <p class="muted">${escapeHtml(state.selectedPlayback?.reason ?? 'Loading playback capabilities…')}</p>
+          ${renderSelectedItemFactList(item)}
         </div>
       </section>
+  `;
+}
 
-      ${renderPeopleRail()}
+function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
+  if (!item.children.length) {
+    return '';
+  }
 
-      ${renderItemExtrasRail()}
+  const childCountLabel = countLabel(item.children.length, 'item');
+  const childGridClass = item.item_type === 'season' ? 'season-episodes-grid' : '';
+  return `
+        <section class="panel page-panel item-section">
+          <div class="section-heading section-heading-actions">
+            <h3>${escapeHtml(selectedItemChildSectionTitle(item))}</h3>
+            <span class="muted">${childCountLabel}</span>
+          </div>
+          <div class="item-grid hierarchy-item-grid ${childGridClass}">${item.children.map(renderItemCard).join('')}</div>
+        </section>
+      `;
+}
 
-      ${childrenSectionMarkup}
+function renderMetadataRefreshButton(
+  supportsManualLinking: boolean,
+  linkedMatch: ItemMetadataMatch | undefined,
+  metadataRefreshActive: boolean,
+): string {
+  if (!supportsManualLinking) {
+    return '';
+  }
 
-      ${renderSelectedItemCollectionRails()}
+  const refreshButtonDisabled = linkedMatch && !metadataRefreshActive ? '' : 'disabled';
+  const refreshButtonLabel = metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata';
+  return `<button type="button" class="secondary-button" id="refresh-item-metadata" ${refreshButtonDisabled}>${renderButtonContent(refreshButtonLabel, 'refresh-cw')}</button>`;
+}
 
+function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
+  if (!supportsManualLinking) {
+    return '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
+  }
+
+  return `
+              <form id="metadata-search-form" class="metadata-search-form">
+                <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
+                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
+                <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
+                ${renderMetadataSearchProviderControls()}
+                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
+              </form>
+              <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
+            `;
+}
+
+function renderSelectedItemSupportGrid(
+  item: MediaItemDetail,
+  library: ReturnType<typeof activeLibrary>,
+  supportsManualLinking: boolean,
+  metadataRefreshButtonMarkup: string,
+  metadataSearchPanel: string,
+): string {
+  return `
       <section class="item-support-grid">
         <section class="panel page-panel item-section">
           <div class="section-heading">
@@ -881,11 +980,11 @@ export function renderItemPage(): string {
             </div>
             <div>
               <span class="label">Source</span>
-              <strong>${escapeHtml(state.selectedItem.relative_path)}</strong>
+              <strong>${escapeHtml(item.relative_path)}</strong>
             </div>
             <div>
               <span class="label">Updated</span>
-              <strong>${escapeHtml(formatTimestamp(state.selectedItem.modified_at))}</strong>
+              <strong>${escapeHtml(formatTimestamp(item.modified_at))}</strong>
             </div>
           </div>
         </section>
@@ -899,6 +998,67 @@ export function renderItemPage(): string {
           ${metadataSearchPanel}
         </section>
       </section>
+  `;
+}
+
+function renderSelectedItemPage(item: MediaItemDetail): string {
+  const trailerOptions = currentTrailerOptions();
+  const hasMultipleTrailers = trailerOptions.length > 1;
+  const supportsManualLinking = canManuallyLinkMetadata(item);
+  const linkedMatch = state.selectedItemMetadata?.matches[0];
+  const metadataRefreshActive = itemHasActiveMetadataRefresh(item);
+  const resumeMs = resumablePlaybackPositionMs(item);
+  const trailerButtonTitle = hasMultipleTrailers
+    ? 'Click to play the first trailer. Right-click or press and hold to choose another trailer.'
+    : 'Play Trailer';
+  const actionsMarkup = renderSelectedItemActions(
+    item,
+    resumeMs,
+    !item.playable ? item.playback_target ?? undefined : undefined,
+    !item.playable ? item.restart_playback_target ?? undefined : undefined,
+    trailerOptions[0],
+    currentThemeSongYouTubeTarget(),
+    trailerButtonTitle,
+    backNavigationTarget(),
+  );
+  const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
+
+  return `
+    <section class="item-page">
+      ${renderSelectedItemBreadcrumbs(item)}
+      ${renderSelectedItemHero(
+        item,
+        selectedItemPosterUrl(item),
+        selectedItemLogoUrl(item),
+        selectedItemOverview(item),
+        item.genres.length ? item.genres : [],
+        actionsMarkup,
+        renderTrailerPicker(trailerOptions, hasMultipleTrailers),
+      )}
+
+      ${renderPeopleRail()}
+
+      ${renderItemExtrasRail()}
+
+      ${renderSelectedItemChildrenSection(item)}
+
+      ${renderSelectedItemCollectionRails()}
+
+      ${renderSelectedItemSupportGrid(
+        item,
+        state.libraries.find((entry) => entry.id === item.library_id),
+        supportsManualLinking,
+        metadataRefreshButtonMarkup,
+        renderMetadataSearchPanel(supportsManualLinking),
+      )}
     </section>
   `;
+}
+
+export function renderItemPage(): string {
+  if (!state.selectedItem) {
+    return '<section class="panel page-panel"><div class="empty-state">Loading item details…</div></section>';
+  }
+
+  return renderSelectedItemPage(state.selectedItem);
 }

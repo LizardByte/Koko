@@ -1,7 +1,7 @@
 /** Controls trailer, theme-song, and browser playback UI state. */
 import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
-import type { MediaItemDetail } from '../api';
+import type { MediaAudioTrack, MediaItemDetail, PlaybackSession } from '../api';
 import {
   createPlaybackSession,
   deletePlaybackSession,
@@ -62,21 +62,15 @@ const ESCALATING_SEEK_WINDOW_MS = 900;
 
 /** Renders the active playback overlay, including trailers and browser playback. */
 export function renderPlayerOverlay(): string {
-  if (state.activeTrailer) {
-    const videoId = extractYouTubeVideoId(state.activeTrailer.url);
-    const watchUrl = buildYouTubeWatchUrl(state.activeTrailer.url);
-    const label = state.activeTrailer.label ?? 'Trailer';
-    const externalUrl = watchUrl ?? state.activeTrailer.url;
-    const externalLinkLabel = watchUrl ? 'Open on YouTube' : 'Open Source';
-    const errorHint = watchUrl ? 'Open it on YouTube or try again in a moment.' : 'Open the source link or try another extra.';
-    const itemTitle = state.selectedItem?.display_title.trim();
-    const itemLogoUrl = state.selectedItem?.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
-    const trailerTitle = itemLogoUrl || !itemTitle
-      ? state.activeTrailer.title
-      : `${itemTitle} | ${state.activeTrailer.title}`;
-    const trailerVolumeValue = trailerMuted ? '0' : String(trailerVolume);
-    const trailerControlsMarkup = videoId
-      ? `
+  return state.activeTrailer ? renderTrailerOverlay() : renderMediaPlayerOverlay();
+}
+
+function renderTrailerControlsMarkup(videoId: string | undefined): string {
+  if (!videoId) {
+    return '';
+  }
+
+  return `
             <div class="player-bottom-controls player-controls">
               <input id="trailer-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Trailer position" />
               <div class="player-control-row">
@@ -90,20 +84,61 @@ export function renderPlayerOverlay(): string {
                 </div>
                 <div class="player-control-cluster player-tool-cluster">
                   <button id="trailer-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
-                  <input id="trailer-volume" class="player-volume" type="range" min="0" max="1" value="${trailerVolumeValue}" step="0.01" aria-label="Trailer volume" />
+                  <input id="trailer-volume" class="player-volume" type="range" min="0" max="1" value="${trailerMuted ? '0' : String(trailerVolume)}" step="0.01" aria-label="Trailer volume" />
                   <button id="trailer-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
                 </div>
               </div>
             </div>
-          `
-      : '';
+          `;
+}
+
+function renderTrailerFrameMarkup(videoId: string | undefined): string {
+  return videoId
+    ? '<div id="trailer-player" class="trailer-youtube-player"></div>'
+    : '<div class="trailer-unavailable">This external media URL is not a controllable YouTube video.</div>';
+}
+
+function renderTrailerTitleMarkup(
+  itemLogoUrl: string | undefined,
+  itemTitle: string | undefined,
+  trailerTitle: string,
+  brandedTrailerTitle: string,
+): string {
+  if (itemLogoUrl) {
     return `
+                <div class="trailer-title-brand-row">
+                  <img class="player-title-logo trailer-title-logo" src="${escapeHtml(itemLogoUrl)}" alt="${escapeHtml(itemTitle ?? 'Item logo')}" />
+                  <h2>${escapeHtml(brandedTrailerTitle)}</h2>
+                </div>
+              `;
+  }
+
+  return `<h2>${escapeHtml(trailerTitle)}</h2>`;
+}
+
+function renderTrailerOverlay(): string {
+  const activeTrailer = state.activeTrailer;
+  if (!activeTrailer) {
+    return '';
+  }
+
+  const videoId = extractYouTubeVideoId(activeTrailer.url);
+  const watchUrl = buildYouTubeWatchUrl(activeTrailer.url);
+  const label = activeTrailer.label ?? 'Trailer';
+  const externalUrl = watchUrl ?? activeTrailer.url;
+  const externalLinkLabel = watchUrl ? 'Open on YouTube' : 'Open Source';
+  const errorHint = watchUrl ? 'Open it on YouTube or try again in a moment.' : 'Open the source link or try another extra.';
+  const itemTitle = state.selectedItem?.display_title.trim();
+  const itemLogoUrl = state.selectedItem?.logo_url ? resolveApiUrl(state.selectedItem.logo_url) : undefined;
+  const trailerTitle = itemLogoUrl || !itemTitle
+    ? activeTrailer.title
+    : `${itemTitle} | ${activeTrailer.title}`;
+  const trailerControlsMarkup = renderTrailerControlsMarkup(videoId);
+  return `
       <div class="player-overlay trailer-overlay">
         <div class="player-shell trailer-shell is-controls-visible" tabindex="-1" ${videoId ? `data-trailer-video-id="${escapeHtml(videoId)}"` : ''}>
-          <div class="trailer-frame-shell" aria-label="${escapeHtml(state.activeTrailer.title)}">
-            ${videoId
-              ? '<div id="trailer-player" class="trailer-youtube-player"></div>'
-              : '<div class="trailer-unavailable">This external media URL is not a controllable YouTube video.</div>'}
+          <div class="trailer-frame-shell" aria-label="${escapeHtml(activeTrailer.title)}">
+            ${renderTrailerFrameMarkup(videoId)}
           </div>
           <div class="trailer-youtube-chrome-mask" aria-hidden="true"></div>
           <div class="player-loading-indicator" aria-live="polite">
@@ -117,12 +152,7 @@ export function renderPlayerOverlay(): string {
           <div class="player-top-controls player-controls trailer-top-controls">
             <div class="player-title-block">
               <span class="eyebrow">${escapeHtml(label)}</span>
-              ${itemLogoUrl ? `
-                <div class="trailer-title-brand-row">
-                  <img class="player-title-logo trailer-title-logo" src="${escapeHtml(itemLogoUrl)}" alt="${escapeHtml(itemTitle ?? 'Item logo')}" />
-                  <h2>${escapeHtml(state.activeTrailer.title)}</h2>
-                </div>
-              ` : `<h2>${escapeHtml(trailerTitle)}</h2>`}
+              ${renderTrailerTitleMarkup(itemLogoUrl, itemTitle, trailerTitle, activeTrailer.title)}
             </div>
             <div class="player-top-actions">
               ${externalUrl ? `<a class="button-link secondary-button" href="${escapeHtml(externalUrl)}" target="_blank" rel="noreferrer">${renderButtonContent(externalLinkLabel, 'arrow-right')}</a>` : ''}
@@ -133,97 +163,160 @@ export function renderPlayerOverlay(): string {
         </div>
       </div>
     `;
-  }
+}
 
-  const playbackItem = state.activePlaybackItem ?? state.selectedItem;
-  if (!state.isPlayerOpen || !playbackItem || !state.activePlaybackSession) {
+function renderSubtitleTrackMarkup(playbackItem: MediaItemDetail, isAudio: boolean): string {
+  if (isAudio) {
     return '';
   }
 
-  const isAudio = playbackItem.media_kind === 'audio';
-  const tag = isAudio ? 'audio' : 'video';
-  const isExplicitAudioTrackSelection = state.activeAudioStreamIndex !== undefined;
-  const selectedAudioStreamIndex = isExplicitAudioTrackSelection
-    ? state.activeAudioStreamIndex
-    : state.activePlaybackSession.audio_stream_index;
-  const posterUrl = playbackItem.poster_url
-    ? getArtworkUrl(playbackItem.id, 'poster', playbackItem.artwork_updated_at)
-    : undefined;
-  const backdropUrl = playbackItem.backdrop_url
-    ? getArtworkUrl(playbackItem.id, 'backdrop', playbackItem.artwork_updated_at)
-    : posterUrl;
-  const logoUrl = playbackItem.logo_url ? resolveApiUrl(playbackItem.logo_url) : undefined;
-  const trackMarkup = tag === 'video'
-    ? playbackItem.subtitle_tracks
-        .map((track) => `<track kind="subtitles" label="${escapeHtml(track.label)}" srclang="${escapeHtml(subtitleLanguage(track.label))}" src="${escapeHtml(resolveApiUrl(track.url))}" />`)
-        .join('')
-    : '';
+  return playbackItem.subtitle_tracks
+    .map((track) => `<track kind="subtitles" label="${escapeHtml(track.label)}" srclang="${escapeHtml(subtitleLanguage(track.label))}" src="${escapeHtml(resolveApiUrl(track.url))}" />`)
+    .join('');
+}
 
-  const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
-  const isRemuxingForAudio = isAudioStreamOverride && !state.activePlaybackSession.decision.transcode_required;
-  const streamStartMs = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
-    ? state.activePlaybackStartMs
-    : 0;
-  const source = getSessionStreamUrl(state.activePlaybackSession.session_id, streamStartMs, selectedAudioStreamIndex);
-  const transcodeReason = isRemuxingForAudio
-    ? 'Using a non-default audio track requires a remuxed stream.'
-    : state.activePlaybackSession.decision.reason;
-  const transcodeBadge = state.activePlaybackSession.decision.transcode_required || isRemuxingForAudio
-    ? `<span class="player-badge is-transcoding" title="${escapeHtml(transcodeReason)}">Transcoding</span>`
-    : `<span class="player-badge is-direct" title="${escapeHtml(state.activePlaybackSession.decision.reason)}">Direct Play</span>`;
-  const audioTracks = playbackItem.audio_tracks ?? [];
-  const activeAudioTrack = audioTracks.find((track) => track.index === selectedAudioStreamIndex)
-    ?? audioTracks.find((track) => track.default)
-    ?? audioTracks[0];
-  const audioTrackMenuTitle = activeAudioTrack
-    ? `Audio track: ${activeAudioTrack.label}`
-    : 'Audio track changes may require remuxing';
+function renderMediaElementMarkup(isAudio: boolean, source: string, posterUrl: string | undefined, trackMarkup: string): string {
+  if (!isAudio) {
+    return `
+          <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
+        `;
+  }
+
   const audioArtMarkup = posterUrl
     ? `<img src="${escapeHtml(posterUrl)}" alt="" />`
     : renderIcon('music', 'audio-player-art-icon');
   const audioArtClass = posterUrl ? 'has-image' : '';
-  const mediaElementMarkup = isAudio
-    ? `
+  return `
           <div class="audio-player-backdrop" aria-hidden="true"></div>
           <div class="audio-player-art ${audioArtClass}">
             ${audioArtMarkup}
           </div>
           <audio id="media-player" autoplay preload="metadata" src="${escapeHtml(source)}"></audio>
-        `
-    : `
-          <video id="media-player" autoplay preload="metadata" playsinline src="${escapeHtml(source)}">${trackMarkup}</video>
         `;
-  let audioTrackMenuMarkup = '';
-  if (!isAudio && audioTracks.length > 1) {
-    const audioTrackMenuExpanded = state.isAudioTrackMenuOpen ? 'true' : 'false';
-    const audioTrackMenuClass = state.isAudioTrackMenuOpen ? '' : 'is-hidden';
-    const audioTrackMenuHidden = state.isAudioTrackMenuOpen ? '' : 'hidden';
-    const audioTrackOptions = audioTracks.map((track) => {
-      const isActiveTrack = track.index === activeAudioTrack?.index;
-      const activeTrackClass = isActiveTrack ? 'active' : '';
-      const activeTrackChecked = isActiveTrack ? 'true' : 'false';
-      const trackDetail = [track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ')
-        || (track.default ? 'Default' : 'Audio');
-      return `
+}
+
+function activeAudioTrackForSelection(audioTracks: MediaAudioTrack[], selectedAudioStreamIndex: number | undefined): MediaAudioTrack | undefined {
+  return audioTracks.find((track) => track.index === selectedAudioStreamIndex)
+    ?? audioTracks.find((track) => track.default)
+    ?? audioTracks[0];
+}
+
+function renderAudioTrackOptions(audioTracks: MediaAudioTrack[], activeAudioTrack: MediaAudioTrack | undefined): string {
+  return audioTracks.map((track) => {
+    const isActiveTrack = track.index === activeAudioTrack?.index;
+    const activeTrackClass = isActiveTrack ? 'active' : '';
+    const activeTrackChecked = isActiveTrack ? 'true' : 'false';
+    const trackDetail = [track.language?.toUpperCase(), track.codec?.toUpperCase()].filter(Boolean).join(' · ')
+      || (track.default ? 'Default' : 'Audio');
+    return `
         <button class="player-track-option ${activeTrackClass}" type="button" role="menuitemradio" aria-checked="${activeTrackChecked}" data-player-audio-track-index="${track.index}">
           <span>${escapeHtml(track.label)}</span>
           <small>${escapeHtml(trackDetail)}</small>
         </button>
       `;
-    }).join('');
-    audioTrackMenuMarkup = `
+  }).join('');
+}
+
+function renderAudioTrackMenuMarkup(isAudio: boolean, audioTracks: MediaAudioTrack[], activeAudioTrack: MediaAudioTrack | undefined): string {
+  if (isAudio || audioTracks.length <= 1) {
+    return '';
+  }
+
+  const audioTrackMenuTitle = activeAudioTrack
+    ? `Audio track: ${activeAudioTrack.label}`
+    : 'Audio track changes may require remuxing';
+  const audioTrackMenuExpanded = state.isAudioTrackMenuOpen ? 'true' : 'false';
+  const audioTrackMenuClass = state.isAudioTrackMenuOpen ? '' : 'is-hidden';
+  const audioTrackMenuHidden = state.isAudioTrackMenuOpen ? '' : 'hidden';
+  return `
       <div class="player-menu-shell">
         <button id="player-audio-track-toggle" class="player-icon-button" type="button" title="${escapeHtml(audioTrackMenuTitle)}" aria-label="Audio track" aria-expanded="${audioTrackMenuExpanded}" aria-haspopup="menu">${renderIcon('languages', 'player-control-icon')}</button>
         <div id="player-audio-track-menu" class="player-track-menu ${audioTrackMenuClass}" role="menu" aria-label="Audio tracks" ${audioTrackMenuHidden}>
-          ${audioTrackOptions}
+          ${renderAudioTrackOptions(audioTracks, activeAudioTrack)}
         </div>
       </div>
     `;
+}
+
+function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string): string {
+  return logoUrl
+    ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)}" />`
+    : `<h2>${escapeHtml(title)}</h2>`;
+}
+
+function renderTranscodeBadge(isRemuxingForAudio: boolean): string {
+  const session = state.activePlaybackSession;
+  if (!session) {
+    return '';
   }
+
+  const transcodeReason = isRemuxingForAudio
+    ? 'Using a non-default audio track requires a remuxed stream.'
+    : session.decision.reason;
+  return session.decision.transcode_required || isRemuxingForAudio
+    ? `<span class="player-badge is-transcoding" title="${escapeHtml(transcodeReason)}">Transcoding</span>`
+    : `<span class="player-badge is-direct" title="${escapeHtml(session.decision.reason)}">Direct Play</span>`;
+}
+
+function selectedAudioStreamIndexForPlayback(session: PlaybackSession): number | undefined {
+  return state.activeAudioStreamIndex ?? session.audio_stream_index;
+}
+
+function playbackPosterUrl(playbackItem: MediaItemDetail): string | undefined {
+  return playbackItem.poster_url
+    ? getArtworkUrl(playbackItem.id, 'poster', playbackItem.artwork_updated_at)
+    : undefined;
+}
+
+function playbackBackdropUrl(playbackItem: MediaItemDetail, posterUrl: string | undefined): string | undefined {
+  return playbackItem.backdrop_url
+    ? getArtworkUrl(playbackItem.id, 'backdrop', playbackItem.artwork_updated_at)
+    : posterUrl;
+}
+
+function mediaStreamStartMs(session: PlaybackSession, isRemuxingForAudio: boolean): number {
+  return session.decision.transcode_required || isRemuxingForAudio
+    ? state.activePlaybackStartMs
+    : 0;
+}
+
+function mediaPlayerShellClass(isAudio: boolean): string {
+  return isAudio ? 'audio-player-shell' : 'video-player-shell';
+}
+
+function playerBackdropStyle(backdropUrl: string | undefined): string {
+  return backdropUrl ? `style="--player-backdrop-image: url('${escapeHtml(backdropUrl)}');"` : '';
+}
+
+function renderPictureInPictureButton(isAudio: boolean): string {
+  return isAudio
+    ? ''
+    : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`;
+}
+
+function renderMediaPlayerOverlay(): string {
+  const playbackItem = state.activePlaybackItem ?? state.selectedItem;
+  const playbackSession = state.activePlaybackSession;
+  if (!state.isPlayerOpen || !playbackItem || !playbackSession) {
+    return '';
+  }
+
+  const isAudio = playbackItem.media_kind === 'audio';
+  const selectedAudioStreamIndex = selectedAudioStreamIndexForPlayback(playbackSession);
+  const posterUrl = playbackPosterUrl(playbackItem);
+  const backdropUrl = playbackBackdropUrl(playbackItem, posterUrl);
+  const logoUrl = playbackItem.logo_url ? resolveApiUrl(playbackItem.logo_url) : undefined;
+  const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
+  const isRemuxingForAudio = isAudioStreamOverride && !playbackSession.decision.transcode_required;
+  const source = getSessionStreamUrl(playbackSession.session_id, mediaStreamStartMs(playbackSession, isRemuxingForAudio), selectedAudioStreamIndex);
+  const audioTracks = playbackItem.audio_tracks ?? [];
+  const activeAudioTrack = activeAudioTrackForSelection(audioTracks, selectedAudioStreamIndex);
+  const mediaElementMarkup = renderMediaElementMarkup(isAudio, source, posterUrl, renderSubtitleTrackMarkup(playbackItem, isAudio));
+  const audioTrackMenuMarkup = renderAudioTrackMenuMarkup(isAudio, audioTracks, activeAudioTrack);
 
   return `
     <div class="player-overlay media-player-overlay">
-      <div class="player-shell media-player-shell ${isAudio ? 'audio-player-shell' : 'video-player-shell'} is-controls-visible" tabindex="-1" ${backdropUrl ? `style="--player-backdrop-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+      <div class="player-shell media-player-shell ${mediaPlayerShellClass(isAudio)} is-controls-visible" tabindex="-1" ${playerBackdropStyle(backdropUrl)}>
         ${mediaElementMarkup}
         <div class="player-loading-indicator" aria-live="polite">
           <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
@@ -236,12 +329,10 @@ export function renderPlayerOverlay(): string {
         <div class="player-top-controls player-controls">
           <div class="player-title-block">
             <span class="eyebrow">Now playing</span>
-            ${logoUrl
-              ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(playbackItem.display_title)}" />`
-              : `<h2>${escapeHtml(playbackItem.display_title)}</h2>`}
+            ${renderPlayerTitleMarkup(logoUrl, playbackItem.display_title)}
           </div>
           <div class="player-top-actions">
-            ${transcodeBadge}
+            ${renderTranscodeBadge(isRemuxingForAudio)}
             <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
           </div>
         </div>
@@ -260,7 +351,7 @@ export function renderPlayerOverlay(): string {
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
               ${audioTrackMenuMarkup}
-              ${isAudio ? '' : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`}
+              ${renderPictureInPictureButton(isAudio)}
               <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
             </div>
           </div>

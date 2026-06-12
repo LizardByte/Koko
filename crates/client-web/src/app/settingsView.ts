@@ -1,5 +1,5 @@
 /** Renders settings sections and converts settings forms into API payloads. */
-import type { MetadataProviderSettings, ScheduledTaskId, SettingsSnapshot } from '../api';
+import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot } from '../api';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
@@ -80,37 +80,48 @@ export function userPermissionSelect(name: string, allowedUserIds?: number[]): s
   `;
 }
 
-export function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
-  const providers = libraryProviderOptions(libraryKind)
-    .sort((left, right) => {
-      const leftIndex = selectedProviders.indexOf(left.id);
-      const rightIndex = selectedProviders.indexOf(right.id);
-      let roleOrder = 0;
-      if (left.role !== right.role) {
-        roleOrder = left.role === 'primary' ? -1 : 1;
-      }
-      return roleOrder
-        || (leftIndex < 0 ? Number.MAX_SAFE_INTEGER : leftIndex)
-        - (rightIndex < 0 ? Number.MAX_SAFE_INTEGER : rightIndex)
-        || left.display_name.localeCompare(right.display_name);
-    });
-  const selected = new Set(selectedProviders);
-  let primaryPriority = 0;
+function metadataProviderSortIndex(selectedProviders: string[], providerId: string): number {
+  const selectedIndex = selectedProviders.indexOf(providerId);
+  return selectedIndex < 0 ? Number.MAX_SAFE_INTEGER : selectedIndex;
+}
+
+function metadataProviderRoleOrder(provider: MetadataProviderStatus): number {
+  return provider.role === 'primary' ? 0 : 1;
+}
+
+function compareMetadataProviderOptions(selectedProviders: string[]): (left: MetadataProviderStatus, right: MetadataProviderStatus) => number {
+  return (left, right) => {
+    return metadataProviderRoleOrder(left) - metadataProviderRoleOrder(right)
+      || metadataProviderSortIndex(selectedProviders, left.id) - metadataProviderSortIndex(selectedProviders, right.id)
+      || left.display_name.localeCompare(right.display_name);
+  };
+}
+
+function renderPrimaryProviderMoveButtons(label: string, isSecondary: boolean): string {
+  return isSecondary
+    ? ''
+    : `
+            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
+          `;
+}
+
+function renderMetadataProviderOption(
+  prefix: string,
+  provider: MetadataProviderStatus,
+  selected: Set<string>,
+  primaryPriority: number,
+): string {
+  const providerId = provider.id;
+  const label = provider.display_name;
+  const isSecondary = provider.role === 'secondary';
+  const secondaryAvailable = isSecondary
+    ? provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
+    : true;
+  const checked = selected.has(providerId) && secondaryAvailable;
+  const providerPriorityLabel = isSecondary ? 'Secondary' : `Priority ${primaryPriority}`;
 
   return `
-    <div class="metadata-provider-list" data-provider-list="${prefix}">
-      ${providers.map((provider) => `
-      ${(() => {
-        const providerId = provider.id;
-        const label = provider.display_name;
-        const isSecondary = provider.role === 'secondary';
-        if (!isSecondary) {
-          primaryPriority += 1;
-        }
-        const secondaryAvailable = !isSecondary
-          || provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId));
-        const checked = selected.has(providerId) && secondaryAvailable;
-        return `
       <div class="metadata-provider-option" data-provider-option="${providerId}" data-provider-role="${provider.role}" data-extends-provider-ids="${provider.extends_provider_ids.join(',')}">
         <div class="provider-option-main">
           <label class="checkbox-inline">
@@ -124,66 +135,82 @@ export function metadataProviderCheckboxes(prefix: string, selectedProviders: st
             />
             ${escapeHtml(label)}
           </label>
-          <span class="muted">${isSecondary ? 'Secondary' : `Priority ${primaryPriority}`}</span>
+          <span class="muted">${providerPriorityLabel}</span>
         </div>
         <div class="provider-option-actions">
-          ${isSecondary ? '' : `
-            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
-            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
-          `}
+          ${renderPrimaryProviderMoveButtons(label, isSecondary)}
           <button type="button" class="secondary-button" data-provider-settings="${providerId}">${renderButtonContent('Settings', 'settings')}</button>
         </div>
       </div>
-        `;
-      })()}
-      `).join('')}
+  `;
+}
+
+export function metadataProviderCheckboxes(prefix: string, selectedProviders: string[], libraryKind?: string): string {
+  const providers = libraryProviderOptions(libraryKind)
+    .sort(compareMetadataProviderOptions(selectedProviders));
+  const selected = new Set(selectedProviders);
+  let primaryPriority = 0;
+
+  return `
+    <div class="metadata-provider-list" data-provider-list="${prefix}">
+      ${providers.map((provider) => {
+        primaryPriority += provider.role === 'primary' ? 1 : 0;
+        return renderMetadataProviderOption(prefix, provider, selected, primaryPriority);
+      }).join('')}
     </div>
     `;
 }
 
-export function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
-  if (!settings.media.libraries.length) {
-    return '<div class="empty-state tight">No libraries are configured yet.</div>';
+function renderPersistedLibraryTags(persistedLibrary: MediaLibrary | undefined, scanPending: boolean): string {
+  if (!persistedLibrary) {
+    return '';
   }
 
-  return settings.media.libraries
-    .map((library, index) => {
-      const persistedLibrary = persistedLibraryForSettings(library);
-      const refreshPending = persistedLibrary ? Boolean(libraryRefreshProgress(persistedLibrary)) : false;
-      const scanPending = persistedLibrary ? hasActiveLibraryScan(persistedLibrary.id) : hasActiveLibraryScan();
-      const refreshLabel = refreshPending
-        ? 'Refreshing metadata'
-        : 'Refresh metadata';
-      const missingFiles = persistedLibrary?.missing_files ?? 0;
-      const missingItems = persistedLibrary?.missing_items ?? 0;
-      const hasMissingItems = missingFiles > 0 || missingItems > 0;
-      let persistedLibraryTags = '';
-      let persistedLibraryActions = '';
-      if (persistedLibrary) {
-        const scanPendingTag = scanPending ? '<span class="tag warning">Scanning catalog</span>' : '';
-        const missingItemsTagClass = hasMissingItems ? 'warning' : 'success';
-        const missingItemsLabel = hasMissingItems ? `${missingItems} missing items` : 'No missing items';
-        const missingFilesLabel = `${missingFiles} missing files`;
-        const missingFilesTag = missingFiles > 0
-          ? `<span class="tag warning">${escapeHtml(missingFilesLabel)}</span>`
-          : '';
-        const scanButtonDisabled = scanPending ? 'disabled' : '';
-        const scanButtonLabel = scanPending ? 'Scanning' : 'Scan now';
-        const refreshButtonDisabled = refreshPending ? 'disabled' : '';
-        const deleteMissingDisabled = hasMissingItems ? '' : 'disabled';
-        persistedLibraryTags = `<div class="settings-library-tags">
+  const missingFiles = persistedLibrary.missing_files ?? 0;
+  const missingItems = persistedLibrary.missing_items ?? 0;
+  const hasMissingItems = missingFiles > 0 || missingItems > 0;
+  const scanPendingTag = scanPending ? '<span class="tag warning">Scanning catalog</span>' : '';
+  const missingItemsTagClass = hasMissingItems ? 'warning' : 'success';
+  const missingItemsLabel = hasMissingItems ? `${missingItems} missing items` : 'No missing items';
+  const missingFilesLabel = `${missingFiles} missing files`;
+  const missingFilesTag = missingFiles > 0
+    ? `<span class="tag warning">${escapeHtml(missingFilesLabel)}</span>`
+    : '';
+
+  return `<div class="settings-library-tags">
                 ${scanPendingTag}
                 <span class="tag ${missingItemsTagClass}">${escapeHtml(missingItemsLabel)}</span>
                 ${missingFilesTag}
               </div>`;
-        persistedLibraryActions = `
+}
+
+function renderPersistedLibraryActions(persistedLibrary: MediaLibrary | undefined, refreshPending: boolean, scanPending: boolean): string {
+  if (!persistedLibrary) {
+    return '';
+  }
+
+  const hasMissingItems = (persistedLibrary.missing_files ?? 0) > 0 || (persistedLibrary.missing_items ?? 0) > 0;
+  const refreshLabel = refreshPending ? 'Refreshing metadata' : 'Refresh metadata';
+  const scanButtonDisabled = scanPending ? 'disabled' : '';
+  const scanButtonLabel = scanPending ? 'Scanning' : 'Scan now';
+  const refreshButtonDisabled = refreshPending ? 'disabled' : '';
+  const deleteMissingDisabled = hasMissingItems ? '' : 'disabled';
+
+  return `
                 <button type="button" class="secondary-button" data-scan-library-id="${persistedLibrary.id}" ${scanButtonDisabled}>${renderButtonContent(scanButtonLabel, 'refresh-cw')}</button>
                 <button type="button" class="secondary-button" data-refresh-library-id="${persistedLibrary.id}" ${refreshButtonDisabled}>${renderButtonContent(refreshLabel, 'refresh-cw')}</button>
                 <button type="button" class="secondary-button danger-button" data-delete-missing-library-id="${persistedLibrary.id}" ${deleteMissingDisabled}>${renderButtonContent('Delete missing', 'trash-2')}</button>
               `;
-      }
+}
 
-      return `
+function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index: number): string {
+  const persistedLibrary = persistedLibraryForSettings(library);
+  const refreshPending = persistedLibrary ? Boolean(libraryRefreshProgress(persistedLibrary)) : false;
+  const scanPending = persistedLibrary ? hasActiveLibraryScan(persistedLibrary.id) : hasActiveLibraryScan();
+  const persistedLibraryTags = renderPersistedLibraryTags(persistedLibrary, scanPending);
+  const persistedLibraryActions = renderPersistedLibraryActions(persistedLibrary, refreshPending, scanPending);
+
+  return `
       <section class="settings-library-card">
         <div class="settings-library-header">
           <div>
@@ -234,7 +261,15 @@ export function renderExistingLibrariesSettings(settings: SettingsSnapshot): str
         </fieldset>
       </section>
     `;
-    })
+}
+
+export function renderExistingLibrariesSettings(settings: SettingsSnapshot): string {
+  if (!settings.media.libraries.length) {
+    return '<div class="empty-state tight">No libraries are configured yet.</div>';
+  }
+
+  return settings.media.libraries
+    .map(renderExistingLibrarySettingsCard)
     .join('');
 }
 

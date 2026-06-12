@@ -746,248 +746,304 @@ function useMockApi(): void {
   activeApiMode = 'mock';
 }
 
-function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T {
-  const url = new URL(path, 'http://koko.local');
+function getMockGetResponse<T>(method: string, url: URL): T {
+  switch (url.pathname) {
+    case '/api/v1/system/capabilities':
+      return getMockCapabilities() as T;
+    case '/api/v1/bootstrap':
+      return getMockBootstrap() as T;
+    case '/api/v1/users':
+      return getMockUsers() as T;
+    case '/api/v1/libraries':
+      return getMockLibraries() as T;
+    case '/api/v1/metadata/providers':
+      return getMockMetadataProviders() as T;
+    case '/api/v1/system/activities':
+      return getMockSystemActivities() as T;
+    case '/api/v1/settings':
+      return getMockSettings() as T;
+    case '/api/v1/settings/logs':
+      return getMockLogs(
+        url.searchParams.get('level') ?? undefined,
+        url.searchParams.get('module') ?? undefined,
+        url.searchParams.get('search') ?? undefined,
+        url.searchParams.get('since') ?? undefined,
+        url.searchParams.get('until') ?? undefined,
+        url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined,
+      ) as T;
+    case '/api/v1/home':
+      return getMockHome(optionalNumericSearchParam(url, 'library_id')) as T;
+    case '/api/v1/items':
+      return getMockItems(optionalNumericSearchParam(url, 'library_id')) as T;
+    case '/api/v1/search':
+      return searchMockItems(url.searchParams.get('query') ?? '') as T;
+    default:
+      return getMockDynamicGetResponse<T>(method, url);
+  }
+}
 
-  if (method === 'GET') {
-    switch (url.pathname) {
-      case '/api/v1/system/capabilities':
-        return getMockCapabilities() as T;
-      case '/api/v1/bootstrap':
-        return getMockBootstrap() as T;
-      case '/api/v1/users':
-        return getMockUsers() as T;
-      case '/api/v1/libraries':
-        return getMockLibraries() as T;
-      case '/api/v1/metadata/providers':
-        return getMockMetadataProviders() as T;
-      case '/api/v1/system/activities':
-        return getMockSystemActivities() as T;
-      case '/api/v1/settings':
-        return getMockSettings() as T;
-      case '/api/v1/settings/logs':
-        return getMockLogs(
-          url.searchParams.get('level') ?? undefined,
-          url.searchParams.get('module') ?? undefined,
-          url.searchParams.get('search') ?? undefined,
-          url.searchParams.get('since') ?? undefined,
-          url.searchParams.get('until') ?? undefined,
-          url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined,
-        ) as T;
-      case '/api/v1/home': {
-        const libraryId = url.searchParams.get('library_id');
-        return getMockHome(libraryId ? Number(libraryId) : undefined) as T;
-      }
-      case '/api/v1/items': {
-        const libraryId = url.searchParams.get('library_id');
-        return getMockItems(libraryId ? Number(libraryId) : undefined) as T;
-      }
-      case '/api/v1/search': {
-        const query = url.searchParams.get('query') ?? '';
-        return searchMockItems(query) as T;
-      }
-      default: {
-        const itemMetadataSearchMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/search$/.exec(url.pathname);
-        if (itemMetadataSearchMatch) {
-          return searchMockItemMetadata(
-            Number(itemMetadataSearchMatch[1]),
-            url.searchParams.get('query') ?? undefined,
-          ) as T;
-        }
+function optionalNumericSearchParam(url: URL, name: string): number | undefined {
+  const value = url.searchParams.get(name);
+  return value ? Number(value) : undefined;
+}
 
-        const itemMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
-        if (itemMetadataMatch) {
-          const itemMetadata = getMockItemMetadata(Number(itemMetadataMatch[1]));
-          if (!itemMetadata) {
-            throw new Error('404 Not Found');
-          }
+function getMockDynamicGetResponse<T>(method: string, url: URL): T {
+  const itemMetadataSearchMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/search$/.exec(url.pathname);
+  if (itemMetadataSearchMatch) {
+    return searchMockItemMetadata(
+      Number(itemMetadataSearchMatch[1]),
+      url.searchParams.get('query') ?? undefined,
+    ) as T;
+  }
 
-          return itemMetadata as T;
-        }
-
-        const itemPlaybackMatch = /^\/api\/v1\/items\/(\d+)\/playback$/.exec(url.pathname);
-        if (itemPlaybackMatch) {
-          return getMockPlayback(Number(itemPlaybackMatch[1])) as T;
-        }
-
-        const personMatch = /^\/api\/v1\/people\/(\d+)$/.exec(url.pathname);
-        if (personMatch) {
-          return getMockPerson(Number(personMatch[1])) as T;
-        }
-
-        const itemMatch = /^\/api\/v1\/items\/(\d+)$/.exec(url.pathname);
-        if (itemMatch) {
-          const item = getMockItem(Number(itemMatch[1]));
-          if (!item) {
-            throw new Error('404 Not Found');
-          }
-
-          return item as T;
-        }
-
-        const sessionStreamMatch = /^\/api\/v1\/sessions\/([^/]+)\/stream$/.exec(url.pathname);
-        if (sessionStreamMatch) {
-          throw new Error('501 Not Implemented (mock streaming not fully supported)');
-        }
-
-        throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
-      }
+  const itemMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
+  if (itemMetadataMatch) {
+    const itemMetadata = getMockItemMetadata(Number(itemMetadataMatch[1]));
+    if (!itemMetadata) {
+      throw new Error('404 Not Found');
     }
+
+    return itemMetadata as T;
   }
 
-  if (method === 'PUT' && url.pathname === '/api/v1/settings') {
-    return updateMockSettings(body as SettingsSnapshot) as T;
+  const itemPlaybackMatch = /^\/api\/v1\/items\/(\d+)\/playback$/.exec(url.pathname);
+  if (itemPlaybackMatch) {
+    return getMockPlayback(Number(itemPlaybackMatch[1])) as T;
   }
 
-  const updateUserMatch = /^\/api\/v1\/users\/(\d+)$/.exec(url.pathname);
-  if (method === 'PUT' && updateUserMatch) {
-    return updateMockUser(Number(updateUserMatch[1]), body as UpdateUserRequest) as T;
+  const personMatch = /^\/api\/v1\/people\/(\d+)$/.exec(url.pathname);
+  if (personMatch) {
+    return getMockPerson(Number(personMatch[1])) as T;
   }
 
-  if (method === 'POST' && url.pathname === '/login') {
-    return loginMockUser(body as LoginRequest) as T;
+  const itemMatch = /^\/api\/v1\/items\/(\d+)$/.exec(url.pathname);
+  if (itemMatch) {
+    const item = getMockItem(Number(itemMatch[1]));
+    if (!item) {
+      throw new Error('404 Not Found');
+    }
+
+    return item as T;
   }
 
-  if (method === 'POST' && url.pathname === '/create_user') {
-    return createMockUser(body as CreateUserRequest) as T;
-  }
-
-  if (method === 'POST' && url.pathname === '/api/v1/settings/libraries') {
-    return addMockLibrary(body as { library: MediaLibrarySettings }) as T;
-  }
-
-  if (method === 'POST' && url.pathname === '/api/v1/settings/metadata-cache/clear') {
-    return clearMockMetadataCache() as T;
-  }
-
-  const scheduledTaskRunMatch = /^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/.exec(url.pathname);
-  if (method === 'POST' && scheduledTaskRunMatch) {
-    return runMockScheduledTask(scheduledTaskRunMatch[1] as ScheduledTaskId) as T;
-  }
-
-  const removeLibraryMatch = /^\/api\/v1\/settings\/libraries\/(\d+)$/.exec(url.pathname);
-  if (method === 'DELETE' && removeLibraryMatch) {
-    return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
-  }
-
-  const missingItemsMatch = /^\/api\/v1\/libraries\/(\d+)\/missing$/.exec(url.pathname);
-  if (method === 'DELETE' && missingItemsMatch) {
-    return deleteMockMissingItems(Number(missingItemsMatch[1])) as T;
-  }
-
-  const deleteSessionMatch = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
-  if (method === 'DELETE' && deleteSessionMatch) {
-    return undefined as T;
-  }
-
-  const itemProgressMatch = /^\/api\/v1\/items\/(\d+)\/progress$/.exec(url.pathname);
-  if (method === 'POST' && itemProgressMatch) {
-    updateMockPlaybackProgress(Number(itemProgressMatch[1]), body as PlaybackProgressRequest);
-    return undefined as T;
-  }
-
-  const itemLinkMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/link$/.exec(url.pathname);
-  if (method === 'POST' && itemLinkMatch) {
-    return linkMockItemMetadata(Number(itemLinkMatch[1]), body as LinkMetadataRequest) as T;
-  }
-
-  const itemRefreshMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
-  if (method === 'POST' && itemRefreshMatch) {
-    return refreshMockItemMetadata(Number(itemRefreshMatch[1])) as T;
-  }
-
-  const libraryRefreshMatch = /^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
-  if (method === 'POST' && libraryRefreshMatch) {
-    return refreshMockLibraryMetadata(Number(libraryRefreshMatch[1])) as T;
-  }
-
-  const libraryScanMatch = /^\/api\/v1\/libraries\/(\d+)\/scan$/.exec(url.pathname);
-  if (method === 'POST' && libraryScanMatch) {
-    return refreshMockLibraryMetadata(Number(libraryScanMatch[1])) as T;
-  }
-
-  if (method === 'POST' && url.pathname === '/api/v1/sessions') {
-    // Basic mock for create_session
-    const request = body as CreateSessionRequest;
-    const item = getMockItem(request.item_id);
-    const preferredLanguages = getMockBootstrap().current_user?.preferred_metadata_languages ?? ['en-US'];
-    const audioStreamIndex = item?.audio_tracks?.find((track) => {
-      const language = track.language?.toLowerCase();
-      return language && preferredLanguages.some((preferred) => {
-        const normalized = preferred.toLowerCase();
-        return normalized.startsWith(language) || language.startsWith(normalized.split('-')[0]);
-      });
-    })?.index;
-    return {
-      session_id: 'mock-session-123',
-      item_id: request.item_id,
-      client_profile: request.client_profile,
-      decision: getMockPlayback(request.item_id),
-      created_at: Date.now(),
-      audio_stream_index: audioStreamIndex,
-    } as T;
+  const sessionStreamMatch = /^\/api\/v1\/sessions\/([^/]+)\/stream$/.exec(url.pathname);
+  if (sessionStreamMatch) {
+    throw new Error('501 Not Implemented (mock streaming not fully supported)');
   }
 
   throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
 }
 
+function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/api/v1/settings') {
+    return updateMockSettings(body as SettingsSnapshot) as T;
+  }
+
+  const updateUserMatch = /^\/api\/v1\/users\/(\d+)$/.exec(url.pathname);
+  if (updateUserMatch) {
+    return updateMockUser(Number(updateUserMatch[1]), body as UpdateUserRequest) as T;
+  }
+
+  throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
+}
+
+function getMockPostResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/login') {
+    return loginMockUser(body as LoginRequest) as T;
+  }
+  if (url.pathname === '/create_user') {
+    return createMockUser(body as CreateUserRequest) as T;
+  }
+  if (url.pathname === '/api/v1/settings/libraries') {
+    return addMockLibrary(body as { library: MediaLibrarySettings }) as T;
+  }
+  if (url.pathname === '/api/v1/settings/metadata-cache/clear') {
+    return clearMockMetadataCache() as T;
+  }
+  if (url.pathname === '/api/v1/sessions') {
+    return createMockPlaybackSessionResponse<T>(body);
+  }
+
+  const scheduledTaskRunMatch = /^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/.exec(url.pathname);
+  if (scheduledTaskRunMatch) {
+    return runMockScheduledTask(scheduledTaskRunMatch[1] as ScheduledTaskId) as T;
+  }
+
+  const itemProgressMatch = /^\/api\/v1\/items\/(\d+)\/progress$/.exec(url.pathname);
+  if (itemProgressMatch) {
+    updateMockPlaybackProgress(Number(itemProgressMatch[1]), body as PlaybackProgressRequest);
+    return undefined as T;
+  }
+
+  const itemLinkMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/link$/.exec(url.pathname);
+  if (itemLinkMatch) {
+    return linkMockItemMetadata(Number(itemLinkMatch[1]), body as LinkMetadataRequest) as T;
+  }
+
+  const itemRefreshMatch = /^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
+  if (itemRefreshMatch) {
+    return refreshMockItemMetadata(Number(itemRefreshMatch[1])) as T;
+  }
+
+  const libraryRefreshMatch = /^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/.exec(url.pathname);
+  if (libraryRefreshMatch) {
+    return refreshMockLibraryMetadata(Number(libraryRefreshMatch[1])) as T;
+  }
+
+  const libraryScanMatch = /^\/api\/v1\/libraries\/(\d+)\/scan$/.exec(url.pathname);
+  if (libraryScanMatch) {
+    return refreshMockLibraryMetadata(Number(libraryScanMatch[1])) as T;
+  }
+
+  throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
+}
+
+function createMockPlaybackSessionResponse<T>(body?: unknown): T {
+  const request = body as CreateSessionRequest;
+  const item = getMockItem(request.item_id);
+  const preferredLanguages = getMockBootstrap().current_user?.preferred_metadata_languages ?? ['en-US'];
+  const audioStreamIndex = item?.audio_tracks?.find((track) => {
+    const language = track.language?.toLowerCase();
+    return language && preferredLanguages.some((preferred) => {
+      const normalized = preferred.toLowerCase();
+      return normalized.startsWith(language) || language.startsWith(normalized.split('-')[0]);
+    });
+  })?.index;
+
+  return {
+    session_id: 'mock-session-123',
+    item_id: request.item_id,
+    client_profile: request.client_profile,
+    decision: getMockPlayback(request.item_id),
+    created_at: Date.now(),
+    audio_stream_index: audioStreamIndex,
+  } as T;
+}
+
+function getMockDeleteResponse<T>(method: string, url: URL): T {
+  const removeLibraryMatch = /^\/api\/v1\/settings\/libraries\/(\d+)$/.exec(url.pathname);
+  if (removeLibraryMatch) {
+    return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
+  }
+
+  const missingItemsMatch = /^\/api\/v1\/libraries\/(\d+)\/missing$/.exec(url.pathname);
+  if (missingItemsMatch) {
+    return deleteMockMissingItems(Number(missingItemsMatch[1])) as T;
+  }
+
+  const deleteSessionMatch = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
+  if (deleteSessionMatch) {
+    return undefined as T;
+  }
+
+  throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
+}
+
+function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T {
+  const url = new URL(path, 'http://koko.local');
+
+  switch (method) {
+    case 'GET':
+      return getMockGetResponse<T>(method, url);
+    case 'PUT':
+      return getMockPutResponse<T>(method, url, body);
+    case 'POST':
+      return getMockPostResponse<T>(method, url, body);
+    case 'DELETE':
+      return getMockDeleteResponse<T>(method, url);
+    default:
+      throw new Error(`No mock response is defined for ${method} ${url.pathname}`);
+  }
+}
+
+function getMockJsonFallback<T>(method: string, path: string, body?: unknown): T {
+  useMockApi();
+  return getMockJsonResponse<T>(method, path, body);
+}
+
+function requestHeaders(body?: unknown): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = getStoredAuthToken();
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
+  const abortController = new AbortController();
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(`${getStoredApiBase()}${path}`, {
+    method,
+    headers: requestHeaders(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: abortController.signal,
+  }).finally(() => {
+    globalThis.clearTimeout(timeoutHandle);
+  });
+}
+
+async function responseError(response: Response): Promise<Error> {
+  const responseText = (await response.text()).trim();
+  return new Error(
+    responseText
+      ? `${response.status} ${response.statusText}: ${responseText}`
+      : `${response.status} ${response.statusText}`,
+  );
+}
+
+async function handleErrorResponse<T>(method: string, path: string, body: unknown, response: Response): Promise<T> {
+  if (response.status === 401) {
+    clearStoredAuthToken();
+  }
+  const error = await responseError(response);
+  if (import.meta.env.DEV) {
+    return getMockJsonFallback<T>(method, path, body);
+  }
+
+  throw error;
+}
+
+function handleRequestFailure<T>(method: string, path: string, body: unknown, error: unknown): T {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`);
+  }
+  if (import.meta.env.DEV) {
+    return getMockJsonFallback<T>(method, path, body);
+  }
+
+  throw error;
+}
+
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    return response.json() as Promise<T>;
+  }
+
+  return undefined as T;
+}
+
 async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
   if (shouldUseMockApi()) {
-    useMockApi();
-    return getMockJsonResponse<T>(method, path, body);
+    return getMockJsonFallback<T>(method, path, body);
   }
 
   try {
-    const abortController = new AbortController();
-    const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
-    const response = await fetch(`${getStoredApiBase()}${path}`, {
-      method,
-      headers: {
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(getStoredAuthToken() ? { Authorization: `Bearer ${getStoredAuthToken()}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: abortController.signal,
-    }).finally(() => {
-      globalThis.clearTimeout(timeoutHandle);
-    });
+    const response = await fetchJsonResponse(method, path, body);
     if (!response.ok) {
-      if (response.status === 401) {
-        clearStoredAuthToken();
-      }
-      const responseText = (await response.text()).trim();
-      const error = new Error(
-        responseText
-          ? `${response.status} ${response.statusText}: ${responseText}`
-          : `${response.status} ${response.statusText}`,
-      );
-      if (import.meta.env.DEV) {
-        useMockApi();
-        return getMockJsonResponse<T>(method, path, body);
-      }
-
-      return Promise.reject(error);
+      return handleErrorResponse<T>(method, path, body, response);
     }
 
     useLiveApi();
-    if (response.status === 204) {
-      return undefined as T;
-    }
-    if (response.headers.get('content-type')?.includes('application/json')) {
-      return response.json() as Promise<T>;
-    }
-
-    return undefined as T;
+    return readJsonResponse<T>(response);
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`);
-    }
-    if (import.meta.env.DEV) {
-      useMockApi();
-      return getMockJsonResponse<T>(method, path, body);
-    }
-
-    throw error;
+    return handleRequestFailure<T>(method, path, body, error);
   }
 }
 

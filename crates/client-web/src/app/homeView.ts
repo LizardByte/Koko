@@ -1,5 +1,5 @@
 /** Renders home, browse, shelf, and media-card markup. */
-import type { MediaItemSummary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
+import type { MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
@@ -496,58 +496,64 @@ export function renderHomeFeature(): string {
   `;
 }
 
-export function renderSearchResultRow(result: MediaSearchResult, compact: boolean): string {
-  if (result.result_type === 'item') {
-    const item = result.item;
-    const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
-    const library = state.libraries.find((entry) => entry.id === item.library_id);
-    const itemResultDetails = [library?.name ?? 'Library', humanizeItemType(item.item_type)];
-    if (!compact) {
-      itemResultDetails.push(formatChildCount(item));
-    }
-    return `
-      <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
-        <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
-        <span class="search-result-copy">
-          <strong>${escapeHtml(item.display_title)}</strong>
-          <span>${escapeHtml(itemResultDetails.join(' · '))}</span>
-          ${!compact && item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
-        </span>
-      </button>
-    `;
+type ItemSearchResult = Extract<MediaSearchResult, { result_type: 'item' }>;
+type CollectionSearchResult = Extract<MediaSearchResult, { result_type: 'collection' }>;
+type PersonSearchResult = Extract<MediaSearchResult, { result_type: 'person' }>;
+type PlaylistSearchResult = Extract<MediaSearchResult, { result_type: 'playlist' }>;
+
+function renderItemSearchResultRow(result: ItemSearchResult, compact: boolean): string {
+  const item = result.item;
+  const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
+  const library = state.libraries.find((entry) => entry.id === item.library_id);
+  const itemResultDetails = [library?.name ?? 'Library', humanizeItemType(item.item_type)];
+  if (!compact) {
+    itemResultDetails.push(formatChildCount(item));
   }
 
-  if (result.result_type === 'collection') {
-    const collection = result.collection;
-    const posterUrl = collection.artwork_url ?? collection.backdrop_url;
-    return `
-      <button type="button" class="search-result-row" data-collection-filter="${escapeHtml(collection.id)}" data-preview-collection-id="${escapeHtml(collection.id)}">
-        <span class="search-result-thumb" ${posterUrl ? `style="background-image: url('${escapeHtml(resolveApiUrl(posterUrl))}');"` : ''}>${posterUrl ? '' : renderIcon('image')}</span>
-        <span class="search-result-copy">
-          <strong>${escapeHtml(collection.name)}</strong>
-          <span>${escapeHtml(`Collection · ${collection.item_count} title${collection.item_count === 1 ? '' : 's'}`)}</span>
-          ${!compact && collection.overview ? `<small>${escapeHtml(collection.overview)}</small>` : ''}
-        </span>
-      </button>
-    `;
-  }
+  return `
+    <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+      <span class="search-result-thumb" style="background-image: url('${escapeHtml(posterUrl)}');"></span>
+      <span class="search-result-copy">
+        <strong>${escapeHtml(item.display_title)}</strong>
+        <span>${escapeHtml(itemResultDetails.join(' · '))}</span>
+        ${!compact && item.overview ? `<small>${escapeHtml(item.overview)}</small>` : ''}
+      </span>
+    </button>
+  `;
+}
 
-  if (result.result_type === 'person') {
-    const person = result.person;
-    const imageUrl = person.cached_image_path || person.image_url ? getPersonImageUrl(person.id) : undefined;
-    const knownFor = person.known_for.slice(0, 3).join(' · ');
-    return `
-      <button type="button" class="search-result-row" data-person-id="${person.id}">
-        <span class="search-result-thumb" ${imageUrl ? `style="background-image: url('${escapeHtml(imageUrl)}');"` : ''}>${imageUrl ? '' : renderIcon('user-plus')}</span>
-        <span class="search-result-copy">
-          <strong>${escapeHtml(person.name)}</strong>
-          <span>${escapeHtml(knownFor ? `Person · ${knownFor}` : 'Person')}</span>
-          ${!compact && person.biography ? `<small>${escapeHtml(person.biography)}</small>` : ''}
-        </span>
-      </button>
-    `;
-  }
+function renderCollectionSearchResultRow(result: CollectionSearchResult, compact: boolean): string {
+  const collection = result.collection;
+  const posterUrl = collection.artwork_url ?? collection.backdrop_url;
+  return `
+    <button type="button" class="search-result-row" data-collection-filter="${escapeHtml(collection.id)}" data-preview-collection-id="${escapeHtml(collection.id)}">
+      <span class="search-result-thumb" ${posterUrl ? `style="background-image: url('${escapeHtml(resolveApiUrl(posterUrl))}');"` : ''}>${posterUrl ? '' : renderIcon('image')}</span>
+      <span class="search-result-copy">
+        <strong>${escapeHtml(collection.name)}</strong>
+        <span>${escapeHtml(`Collection · ${collection.item_count} title${collection.item_count === 1 ? '' : 's'}`)}</span>
+        ${!compact && collection.overview ? `<small>${escapeHtml(collection.overview)}</small>` : ''}
+      </span>
+    </button>
+  `;
+}
 
+function renderPersonSearchResultRow(result: PersonSearchResult, compact: boolean): string {
+  const person = result.person;
+  const imageUrl = person.cached_image_path || person.image_url ? getPersonImageUrl(person.id) : undefined;
+  const knownFor = person.known_for.slice(0, 3).join(' · ');
+  return `
+    <button type="button" class="search-result-row" data-person-id="${person.id}">
+      <span class="search-result-thumb" ${imageUrl ? `style="background-image: url('${escapeHtml(imageUrl)}');"` : ''}>${imageUrl ? '' : renderIcon('user-plus')}</span>
+      <span class="search-result-copy">
+        <strong>${escapeHtml(person.name)}</strong>
+        <span>${escapeHtml(knownFor ? `Person · ${knownFor}` : 'Person')}</span>
+        ${!compact && person.biography ? `<small>${escapeHtml(person.biography)}</small>` : ''}
+      </span>
+    </button>
+  `;
+}
+
+function renderPlaylistSearchResultRow(result: PlaylistSearchResult, compact: boolean): string {
   const playlist = result.playlist;
   return `
     <button type="button" class="search-result-row" data-playlist-filter="${escapeHtml(playlist.id)}">
@@ -559,6 +565,19 @@ export function renderSearchResultRow(result: MediaSearchResult, compact: boolea
       </span>
     </button>
   `;
+}
+
+export function renderSearchResultRow(result: MediaSearchResult, compact: boolean): string {
+  switch (result.result_type) {
+    case 'item':
+      return renderItemSearchResultRow(result, compact);
+    case 'collection':
+      return renderCollectionSearchResultRow(result, compact);
+    case 'person':
+      return renderPersonSearchResultRow(result, compact);
+    case 'playlist':
+      return renderPlaylistSearchResultRow(result, compact);
+  }
 }
 
 export function renderSearchResults(): string {
@@ -635,55 +654,77 @@ export function renderHomeTabs(): string {
   `;
 }
 
-export function renderLibraryOverview(): string {
-  const library = activeLibrary();
-  const activeRefreshProgress = library ? metadataRefreshActivityProgressForLibrary(library.id) : undefined;
-  const stalePending = library ? Math.max(0, library.metadata_refresh_pending - activeLibraryPendingRefreshCount(library.id)) : 0;
-  const scanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
+type MetadataRefreshProgress = NonNullable<ReturnType<typeof metadataRefreshActivityProgressForLibrary>>;
 
-  if (!library) {
-    return `
-      <section class="panel page-panel library-overview-panel">
-        <div class="library-overview-grid">
-          <article class="library-stat-card">
-            <span class="label">Libraries</span>
-            <strong>${state.libraries.length}</strong>
-          </article>
-          <article class="library-stat-card">
-            <span class="label">Items</span>
-            <strong>${topLevelLibraryItems().length}</strong>
-          </article>
-          <article class="library-stat-card">
-            <span class="label">Status</span>
-            <strong>${state.libraries.some((entry) => entry.status === 'never_scanned') ? 'Pending scans' : 'Ready'}</strong>
-          </article>
-        </div>
-      </section>
-    `;
-  }
+function renderEmptyLibraryOverview(): string {
+  return `
+    <section class="panel page-panel library-overview-panel">
+      <div class="library-overview-grid">
+        <article class="library-stat-card">
+          <span class="label">Libraries</span>
+          <strong>${state.libraries.length}</strong>
+        </article>
+        <article class="library-stat-card">
+          <span class="label">Items</span>
+          <strong>${topLevelLibraryItems().length}</strong>
+        </article>
+        <article class="library-stat-card">
+          <span class="label">Status</span>
+          <strong>${state.libraries.some((entry) => entry.status === 'never_scanned') ? 'Pending scans' : 'Ready'}</strong>
+        </article>
+      </div>
+    </section>
+  `;
+}
 
-  let refreshStatusTag = '';
+function renderLibraryRefreshStatusTag(library: MediaLibrary, activeRefreshProgress: MetadataRefreshProgress | undefined, stalePending: number): string {
   if (activeRefreshProgress) {
-    refreshStatusTag = `<span class="tag warning">Refreshing metadata ${activeRefreshProgress.completed}/${activeRefreshProgress.total}</span>`;
-  } else if (stalePending > 0) {
-    refreshStatusTag = `<span class="tag warning">Pending metadata ${library.metadata_refresh_completed}/${library.metadata_refresh_total}</span>`;
+    return `<span class="tag warning">Refreshing metadata ${activeRefreshProgress.completed}/${activeRefreshProgress.total}</span>`;
   }
-  let libraryStatusClass = '';
-  if (library.status === 'available') {
-    libraryStatusClass = 'success';
-  } else if (library.status === 'never_scanned') {
-    libraryStatusClass = 'warning';
+
+  return stalePending > 0
+    ? `<span class="tag warning">Pending metadata ${library.metadata_refresh_completed}/${library.metadata_refresh_total}</span>`
+    : '';
+}
+
+function libraryStatusTagClass(status: string): string {
+  if (status === 'available') {
+    return 'success';
   }
+  if (status === 'never_scanned') {
+    return 'warning';
+  }
+  return '';
+}
+
+function renderMetadataRefreshNote(activeRefreshProgress: MetadataRefreshProgress | undefined): string {
   const metadataRefreshFailedSuffix = activeRefreshProgress?.failed
     ? ` (${activeRefreshProgress.failed} failed)`
     : '';
-  const metadataRefreshNote = activeRefreshProgress
+  return activeRefreshProgress
     ? `<p class="muted library-overview-note">Metadata refresh progress: ${activeRefreshProgress.completed}/${activeRefreshProgress.total}${metadataRefreshFailedSuffix}. Artwork and item cards update automatically as each item completes.</p>`
     : '';
+}
+
+function renderStalePendingNote(stalePending: number): string {
   const stalePendingVerb = stalePending === 1 ? ' is' : 's are';
-  const stalePendingNote = stalePending > 0
+  return stalePending > 0
     ? `<p class="muted library-overview-note">${stalePending} item${stalePendingVerb} still marked pending without an active refresh worker. Use refresh metadata to resume the library refresh.</p>`
     : '';
+}
+
+export function renderLibraryOverview(): string {
+  const library = activeLibrary();
+  if (!library) {
+    return renderEmptyLibraryOverview();
+  }
+
+  const activeRefreshProgress = metadataRefreshActivityProgressForLibrary(library.id);
+  const stalePending = Math.max(0, library.metadata_refresh_pending - activeLibraryPendingRefreshCount(library.id));
+  const scanPending = hasActiveLibraryScan(library.id);
+  const refreshStatusTag = renderLibraryRefreshStatusTag(library, activeRefreshProgress, stalePending);
+  const metadataRefreshNote = renderMetadataRefreshNote(activeRefreshProgress);
+  const stalePendingNote = renderStalePendingNote(stalePending);
 
   return `
     <section class="panel page-panel library-overview-panel">
@@ -696,7 +737,7 @@ export function renderLibraryOverview(): string {
           ${scanPending ? '<span class="tag warning">Scanning catalog</span>' : ''}
           ${refreshStatusTag}
           <div class="library-status-tags">
-          <span class="tag ${libraryStatusClass}">${escapeHtml(libraryStatusLabel(library.status))}</span>
+          <span class="tag ${libraryStatusTagClass(library.status)}">${escapeHtml(libraryStatusLabel(library.status))}</span>
           <span class="tag">${library.total_files} file${library.total_files === 1 ? '' : 's'}</span>
           </div>
         </div>

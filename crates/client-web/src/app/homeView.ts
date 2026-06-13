@@ -405,6 +405,30 @@ export function itemCardSubtitle(item: MediaItemSummary): string | undefined {
   return undefined;
 }
 
+function mediaCardBadgeGroup(markup: string, className: string): string {
+  if (!markup) {
+    return '';
+  }
+
+  return `<span class="${className}">${markup}</span>`;
+}
+
+function mediaCardDynamicBadges(badgeMarkup: string, playbackBadgeMarkup: string): string {
+  const badgeGroups = [
+    mediaCardBadgeGroup(badgeMarkup, 'media-card-state-badges'),
+    mediaCardBadgeGroup(playbackBadgeMarkup, 'media-card-playback-badges'),
+  ].join('');
+  if (!badgeGroups) {
+    return '';
+  }
+
+  return `
+      <span class="media-card-dynamic-badges">
+        ${badgeGroups}
+      </span>
+    `;
+}
+
 export function renderItemCard(item: MediaItemSummary): string {
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const artworkItemId = item.artwork_item_id ?? item.id;
@@ -425,9 +449,7 @@ export function renderItemCard(item: MediaItemSummary): string {
   const metricMarkup = item.missing_since
     ? missingItemBadgeMarkup(item)
     : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
-  const badgeMarkup = metadataBadgeMarkup(item);
-  const playbackBadgeMarkup = playbackStatusBadgeMarkup(item);
-  const dynamicBadges = `${badgeMarkup}${playbackBadgeMarkup}`;
+  const dynamicBadges = mediaCardDynamicBadges(metadataBadgeMarkup(item), playbackStatusBadgeMarkup(item));
 
   return `
     <button class="media-card ${useEpisodeLayout ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
@@ -436,7 +458,7 @@ export function renderItemCard(item: MediaItemSummary): string {
           <span class="media-card-kind">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>
           ${metricMarkup}
         </span>
-        ${dynamicBadges ? `<span class="media-card-dynamic-badges">${dynamicBadges}</span>` : ''}
+        ${dynamicBadges}
       </span>
       <span class="media-card-title">${escapeHtml(item.display_title)}</span>
       ${cardSubtitle ? `<span class="media-card-subtitle">${escapeHtml(cardSubtitle)}</span>` : ''}

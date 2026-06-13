@@ -986,10 +986,23 @@ legend {
   left: 0.85rem;
   z-index: 2;
   display: flex;
-  flex-wrap: wrap;
   gap: 0.35rem;
   align-items: end;
+  justify-content: space-between;
   pointer-events: none;
+}
+
+.media-card-state-badges,
+.media-card-playback-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.media-card-playback-badges {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .media-card-kind,

@@ -2075,7 +2075,7 @@ pub fn upsert_show_metadata_descendant_items(
                 .map(move |episode| ((season_number, episode.episode_number), episode))
         })
         .collect::<Vec<_>>();
-    episode_numbers.sort_by(|left, right| left.0.cmp(&right.0));
+    episode_numbers.sort_by_key(|entry| entry.0);
     episode_numbers.dedup_by(|left, right| left.0 == right.0);
 
     let mut materialized_season_numbers = episode_numbers
@@ -4115,13 +4115,8 @@ fn container_playback_targets(
     }
 
     if let Some((episode, progress, _)) = latest_resume {
-        let primary = playback_target_from_episode(
-            item,
-            episode,
-            progress.position_ms,
-            true,
-            show_has_started,
-        );
+        let primary =
+            playback_target_from_episode(episode, progress.position_ms, true, show_has_started);
         let restart = restart_playback_target(item, first_episode, &primary, show_has_started);
         return Ok(ContainerPlaybackTargets {
             primary: Some(primary),
@@ -4137,7 +4132,7 @@ fn container_playback_targets(
                 .is_none_or(|progress| progress.watch_count == 0)
         })
         .unwrap_or(first_episode);
-    let primary = playback_target_from_episode(item, next_episode, 0, false, show_has_started);
+    let primary = playback_target_from_episode(next_episode, 0, false, show_has_started);
     let restart = restart_playback_target(item, first_episode, &primary, show_has_started);
 
     Ok(ContainerPlaybackTargets {
@@ -4156,14 +4151,7 @@ fn restart_playback_target(
         return None;
     }
 
-    Some(playback_target_from_episode(
-        container,
-        first_episode,
-        0,
-        false,
-        false,
-    ))
-    .map(|mut target| {
+    Some(playback_target_from_episode(first_episode, 0, false, false)).map(|mut target| {
         target.label = if container.item_type == "season" {
             "Start season".into()
         } else {
@@ -4174,7 +4162,6 @@ fn restart_playback_target(
 }
 
 fn playback_target_from_episode(
-    container: &MediaItem,
     episode: &PlayableEpisodeTarget,
     start_ms: i64,
     resume: bool,
@@ -4186,8 +4173,6 @@ fn playback_target_from_episode(
         format!("Resume {episode_label}")
     } else if show_has_started {
         format!("Play next {episode_label}")
-    } else if container.item_type == "season" {
-        format!("Play {episode_label}")
     } else {
         format!("Play {episode_label}")
     };
@@ -4440,7 +4425,7 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
         .filter(|item| item.child_count == 0)
         .cloned()
         .collect::<Vec<_>>();
-    leaf_items.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+    leaf_items.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
 
     for item in leaf_items {
         if item.item_type == "episode" {
@@ -4644,11 +4629,7 @@ fn codec_matches(
 }
 
 fn normalize_codec_name(codec: &str) -> String {
-    let normalized = codec
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "")
-        .replace('_', "");
+    let normalized = codec.trim().to_ascii_lowercase().replace(['-', '_'], "");
 
     match normalized.as_str() {
         "avc1" | "avc" | "h264" | "x264" => "h264".into(),

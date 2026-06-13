@@ -461,6 +461,22 @@ impl Default for MetadataSnapshotFetchOptions {
     }
 }
 
+/// Inputs for fetching a provider episode metadata snapshot.
+pub struct ProviderEpisodeMetadataSnapshotFetch<'a> {
+    /// Provider show identifier that owns the episode.
+    pub show_external_id: &'a str,
+    /// Season number for the requested episode.
+    pub season_number: i32,
+    /// Episode number within the requested season.
+    pub episode_number: i32,
+    /// Provider episode identifier when the source has one.
+    pub episode_external_id: Option<&'a str>,
+    /// Koko locale key requested for the snapshot.
+    pub locale_key: &'a str,
+    /// Fetch behavior options.
+    pub options: MetadataSnapshotFetchOptions,
+}
+
 /// Provider-normalized metadata fields that are persisted into Koko tables.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderMetadataDetails {
@@ -1773,12 +1789,14 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
     fetch_provider_episode_metadata_snapshot_for_locale_with_options(
         settings,
         provider_id,
-        show_external_id,
-        season_number,
-        episode_number,
-        episode_external_id,
-        locale_key,
-        MetadataSnapshotFetchOptions::FULL,
+        ProviderEpisodeMetadataSnapshotFetch {
+            show_external_id,
+            season_number,
+            episode_number,
+            episode_external_id,
+            locale_key,
+            options: MetadataSnapshotFetchOptions::FULL,
+        },
     )
     .await
 }
@@ -1787,13 +1805,16 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale(
 pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
     settings: &MetadataSettings,
     provider_id: MetadataProviderId,
-    show_external_id: &str,
-    season_number: i32,
-    episode_number: i32,
-    episode_external_id: Option<&str>,
-    locale_key: &str,
-    options: MetadataSnapshotFetchOptions,
+    fetch: ProviderEpisodeMetadataSnapshotFetch<'_>,
 ) -> Result<StoredMetadataSnapshot, String> {
+    let ProviderEpisodeMetadataSnapshotFetch {
+        show_external_id,
+        season_number,
+        episode_number,
+        episode_external_id,
+        locale_key,
+        options,
+    } = fetch;
     let locale_key = normalize_locale_key(locale_key);
     let episode_external_key = episode_external_id.unwrap_or_default();
     let season_number_key = season_number.to_string();
@@ -2788,14 +2809,16 @@ pub fn upsert_secondary_collection_theme_song_url(
     };
     let secondary_collection_id = upsert_metadata_collection(
         conn,
-        provider_id.as_storage_value(),
-        &source_collection.source_provider_id,
-        &source_collection.source_external_id,
-        "secondary",
-        DEFAULT_METADATA_LOCALE,
-        None,
-        secondary_collection,
-        now,
+        MetadataCollectionUpsert {
+            provider_id: provider_id.as_storage_value(),
+            source_provider_id: &source_collection.source_provider_id,
+            source_external_id: &source_collection.source_external_id,
+            relation_kind: "secondary",
+            locale_key: DEFAULT_METADATA_LOCALE,
+            provider_locale_key: None,
+            collection: secondary_collection,
+            now,
+        },
     )?;
 
     diesel::delete(
@@ -4021,14 +4044,16 @@ fn sync_item_metadata_collections(
         let collection_external_id = collection.external_id.clone();
         let collection_id = upsert_metadata_collection(
             conn,
-            &provider_id,
-            &provider_id,
-            &collection_external_id,
-            "primary",
-            &snapshot.locale_key,
-            snapshot.provider_locale_key.clone(),
-            collection,
-            now,
+            MetadataCollectionUpsert {
+                provider_id: &provider_id,
+                source_provider_id: &provider_id,
+                source_external_id: &collection_external_id,
+                relation_kind: "primary",
+                locale_key: &snapshot.locale_key,
+                provider_locale_key: snapshot.provider_locale_key.clone(),
+                collection,
+                now,
+            },
         )?;
         if !seen_collection_ids.insert(collection_id) {
             continue;
@@ -4056,17 +4081,31 @@ fn sync_item_metadata_collections(
     Ok(())
 }
 
-fn upsert_metadata_collection(
-    conn: &mut SqliteConnection,
-    provider_id: &str,
-    source_provider_id: &str,
-    source_external_id: &str,
-    relation_kind: &str,
-    locale_key: &str,
+struct MetadataCollectionUpsert<'a> {
+    provider_id: &'a str,
+    source_provider_id: &'a str,
+    source_external_id: &'a str,
+    relation_kind: &'a str,
+    locale_key: &'a str,
     provider_locale_key: Option<String>,
     collection: ProviderMetadataCollection,
     now: i64,
+}
+
+fn upsert_metadata_collection(
+    conn: &mut SqliteConnection,
+    upsert: MetadataCollectionUpsert<'_>,
 ) -> Result<i32, diesel::result::Error> {
+    let MetadataCollectionUpsert {
+        provider_id,
+        source_provider_id,
+        source_external_id,
+        relation_kind,
+        locale_key,
+        provider_locale_key,
+        collection,
+        now,
+    } = upsert;
     use crate::db::schema::metadata_collections::dsl as collections_dsl;
 
     let theme_song_url = collection.theme_song_url.clone();

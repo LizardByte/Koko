@@ -116,6 +116,7 @@ use crate::metadata::{
     MetadataSearchResult,
     MetadataSnapshotFetchOptions,
     ProviderDescendantTarget,
+    ProviderEpisodeMetadataSnapshotFetch,
     ProviderMetadataPerson,
     StoredMetadataSnapshot,
     expected_artwork_cache_path,
@@ -1791,12 +1792,14 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             fetch_provider_episode_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                *episode_number,
-                None,
-                language,
-                fetch_options,
+                ProviderEpisodeMetadataSnapshotFetch {
+                    show_external_id,
+                    season_number: *season_number,
+                    episode_number: *episode_number,
+                    episode_external_id: None,
+                    locale_key: language,
+                    options: fetch_options,
+                },
             )
             .await
         }
@@ -1825,12 +1828,14 @@ async fn fetch_metadata_refresh_snapshots_for_language(
             fetch_provider_episode_metadata_snapshot_for_locale_with_options(
                 &settings.metadata,
                 target.provider_id.clone(),
-                show_external_id,
-                *season_number,
-                *episode_number,
-                Some(episode_external_id),
-                language,
-                fetch_options,
+                ProviderEpisodeMetadataSnapshotFetch {
+                    show_external_id,
+                    season_number: *season_number,
+                    episode_number: *episode_number,
+                    episode_external_id: Some(episode_external_id),
+                    locale_key: language,
+                    options: fetch_options,
+                },
             )
             .await
         }
@@ -3077,11 +3082,11 @@ pub async fn scan_library(
             Ok(Some(summary)) => {
                 log::info!(
                     "Completed manual media library catalog scan for library {} ({}): {} file(s), \
-                     status {}",
+                     status {:?}",
                     summary.id,
                     summary.name,
                     summary.total_files,
-                    format!("{:?}", summary.status)
+                    summary.status
                 );
                 false
             }

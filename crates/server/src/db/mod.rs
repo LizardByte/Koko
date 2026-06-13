@@ -311,7 +311,7 @@ impl Fairing for ReleaseDatabase {
         rocket: &Rocket<rocket::Orbit>,
     ) {
         if let Some(conn) = DbConn::get_one(rocket).await {
-            conn.run(|c| release_sqlite_database_lock(c)).await;
+            conn.run(release_sqlite_database_lock).await;
         }
     }
 }

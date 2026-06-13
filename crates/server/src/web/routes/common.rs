@@ -63,13 +63,9 @@ fn web_client_index_path() -> Option<PathBuf> {
 }
 
 fn web_client_dist_dir() -> Option<PathBuf> {
-    for candidate in web_client_dist_candidates() {
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    web_client_dist_candidates()
+        .into_iter()
+        .find(|candidate| candidate.is_dir())
 }
 
 fn web_client_dist_candidates() -> Vec<PathBuf> {

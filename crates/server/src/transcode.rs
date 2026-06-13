@@ -80,14 +80,14 @@ impl TranscodeSpec {
         &self,
         output_target: &str,
     ) -> Vec<String> {
-        let mut args = Vec::new();
-
         // Avoid writing banner and stats
-        args.push("-hide_banner".into());
-        args.push("-loglevel".into());
-        args.push("warning".into());
-        args.push("-fflags".into());
-        args.push("+genpts".into());
+        let mut args = vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "warning".into(),
+            "-fflags".into(),
+            "+genpts".into(),
+        ];
 
         if let Some(start_time) = self.start_time_ms {
             let start_sec = start_time as f64 / 1000.0;

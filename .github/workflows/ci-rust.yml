@@ -328,17 +328,6 @@ jobs:
           ${{ matrix.cargo_env }}
           cargo build --locked --target ${{ matrix.target }} --release
 
-      - name: Strip all debug symbols
-        # TODO: is this necessary
-        if: inputs.run_build && contains(matrix.os, 'ubuntu')
-        run: strip --strip-all target/${{ matrix.target }}/release/koko
-
-      - name: Enable reading of cache
-        # TODO: is this necessary
-        if: inputs.run_build
-        continue-on-error: true
-        run: chmod -R a+rwX $HOME/.cargo target
-
       - name: Create 7z archive
         if: inputs.run_build
         run: |

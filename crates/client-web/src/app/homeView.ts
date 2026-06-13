@@ -853,9 +853,9 @@ export function renderCollectionsTab(): string {
           >
             <span class="media-card-art collection" style="${posterUrl ? `background-image: url('${escapeHtml(resolveApiUrl(posterUrl))}');` : ''}">
               <span class="media-card-kind-row">
-                <span class="media-card-kind">${renderIcon('image', 'card-icon')}</span>
+                <span class="media-card-kind">${renderIcon('layers', 'card-icon')}</span>
+                <span class="media-card-duration">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
               </span>
-              <span class="media-card-duration">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
             </span>
             <span class="media-card-title">${escapeHtml(collection.name)}</span>
           </button>

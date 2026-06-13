@@ -171,6 +171,7 @@ export type AppIconName =
   | 'house'
   | 'image'
   | 'languages'
+  | 'layers'
   | 'layout-grid'
   | 'link-2'
   | 'log-in'

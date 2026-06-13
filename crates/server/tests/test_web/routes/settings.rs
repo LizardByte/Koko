@@ -350,7 +350,9 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
     let filtered_response = make_request(
         Some(&client),
         "get",
-        &format!("/api/v1/settings/logs?search={unique}&since=2026-04-22T11%3A06&limit=10"),
+        &format!(
+            "/api/v1/settings/logs?search={unique}&since=2026-04-22T11%3A06%3A00-04%3A00&limit=10"
+        ),
         None,
         None,
         Some(Status::Ok),

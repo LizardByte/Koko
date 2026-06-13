@@ -29,59 +29,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu  # Debian
+          - target: x86_64-unknown-linux-musl  # Alpine
             os: ubuntu-latest
-            container: ''
+            container: rust:1.96-alpine
             shell: bash
-            cargo_env: ''
-          # TODO: Fix compiling for musl
-          # - target: x86_64-unknown-linux-musl  # Alpine
-          #  os: ubuntu-latest
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          - target: aarch64-unknown-linux-gnu  # Debian
+          - target: aarch64-unknown-linux-musl  # Alpine
             os: ubuntu-24.04-arm
-            container: ''
+            container: rust:1.96-alpine
             shell: bash
-            cargo_env: ''
-          # TODO: Fix cross compiling for the below targets
-          # - target: aarch64-unknown-linux-musl  # Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          # - target: armv7-unknown-linux-gnueabihf  # Raspberry Pi 2-5/Debian
-          #  os: ubuntu-24.04-arm
-          #  shell: bash
-          # - target: armv7-unknown-linux-musleabihf  # Raspberry Pi 2-5/Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          # - target: arm-unknown-linux-gnueabihf  # Raspberry Pi 0-1/Debian
-          #  os: ubuntu-24.04-arm
-          #  shell: bash
-          # - target: arm-unknown-linux-musleabihf  # Raspberry Pi 0-1/Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
           - target: x86_64-apple-darwin  # macOS/Intel
             os: macos-latest
             container: ''
             shell: bash
-            cargo_env: ''
           - target: aarch64-apple-darwin  # macOS/Apple Silicon
             os: macos-latest
             container: ''
             shell: bash
-            cargo_env: ''
           - target: x86_64-pc-windows-msvc  # Windows
             os: windows-latest
             container: ''
             shell: bash
-            cargo_env: ''
     name: ${{ inputs.job_name }} (${{ matrix.target }})
     permissions:
       contents: read
@@ -94,173 +61,36 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - name: Fix arm64 Alpine container
+        if: runner.arch == 'ARM64' && contains(matrix.container, 'alpine')
+        uses: laverdet/alpine-arm64@7f0f72ee2f71eb2324e5888e8b6e42b1b53e6160  # v1.0.0
 
-      - name: Setup cross compiling (Debian)
-        id: cross_compile
-        if: contains(matrix.os, 'ubuntu') && matrix.container == null
+      - name: Prepare Alpine container
+        if: contains(matrix.container, 'alpine')
+        shell: sh
         run: |
-          echo "::group::distro detection"
-          # detect dist name like bionic, focal, etc
-          dist_name=$(lsb_release -cs)
-          ubuntu_version=$(lsb_release -rs)
-          ubuntu_major_version=${ubuntu_version%%.*}
-          echo "detected dist name: $dist_name"
-          echo "detected ubuntu version: $ubuntu_version"
-          echo "detected ubuntu major version: $ubuntu_major_version"
-          echo "::endgroup::"
-
-          echo "::group::install aptitude"
-          sudo apt-get update  # must run before changing sources file
-          sudo apt-get install -y \
-            aptitude
-          echo "::endgroup::"
-
-          echo "::group::dependencies prep"
-          dependencies=()
-
-          # extra dependencies for cross-compiling
-          cross_compile=false
-          package_arch=$(dpkg --print-architecture)
-          pkg_config_sysroot_dir="/usr/lib/${package_arch}"
-          qemu_command=""
-          if [[ ${{ matrix.target }} == *"aarch64"* && $package_arch != "arm64" ]]; then
-            dependencies+=("crossbuild-essential-arm64")
-            cross_compile=true
-            package_arch="arm64"
-            pkg_config_sysroot_dir="/usr/lib/aarch64-linux-gnu"
-            qemu_command="qemu-aarch64-static"
-          elif [[ ${{ matrix.target }} == *"arm"* && $package_arch != "armhf" ]]; then
-            dependencies+=("crossbuild-essential-armhf")
-            cross_compile=true
-            package_arch="armhf"
-            pkg_config_sysroot_dir="/usr/lib/arm-linux-gnueabihf"
-            qemu_command="qemu-arm-static"
-          fi
-
-          if [[ $cross_compile == true ]]; then
-            dependencies+=(
-              "qemu-user"
-              "qemu-user-static"
-            )
-          fi
-
-          if [[ ${{ matrix.target }} == *"musl"* ]]; then
-              dependencies+=("musl-tools")
-          fi
-
-          echo "cross compiling: $cross_compile"
-          echo "package architecture: $package_arch"
-
-          dependencies+=(
-            "libayatana-appindicator3-dev:${package_arch}"  # tray icon
-            "libglib2.0-dev:${package_arch}"
-            "libgtk-3-dev:${package_arch}"
-            "libxdo-dev:${package_arch}"
-          )
-          echo "::endgroup::"
-
-          echo "::group::apt sources"
-          extra_sources=$(cat <<- VAREOF
-          Types: deb
-          URIs: mirror+file:/etc/apt/apt-mirrors.txt
-          Suites: ${dist_name} ${dist_name}-updates ${dist_name}-backports ${dist_name}-security
-          Components: main universe restricted multiverse
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          Architectures: $(dpkg --print-architecture)
-
-          Types: deb
-          URIs: https://ports.ubuntu.com/ubuntu-ports
-          Suites: ${dist_name} ${dist_name}-updates ${dist_name}-backports ${dist_name}-security
-          Components: main universe restricted multiverse
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          Architectures: ${package_arch}
-          VAREOF
-          )
-
-          # source file changed in 24.04
-          if [[ $ubuntu_major_version -ge 24 ]]; then
-            source_file="/etc/apt/sources.list.d/ubuntu.sources"
-          else
-            source_file="/etc/apt/sources.list"
-          fi
-
-          if [[ ${cross_compile} == true ]]; then
-            # print original sources
-            echo "original sources:"
-            sudo cat ${source_file}
-            echo "----"
-
-            sudo dpkg --add-architecture ${package_arch}
-
-            echo "$extra_sources" | sudo tee ${source_file} > /dev/null
-            echo "----"
-            echo "new sources:"
-            sudo cat ${source_file}
-            echo "----"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::output"
-          echo "CROSS_COMPILE=${cross_compile}"
-          echo "DEPENDENCIES=${dependencies[@]}"
-          echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
-          echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
-          echo "QEMU_COMMAND=${qemu_command}"
-
-          {
-            echo "CROSS_COMPILE=${cross_compile}"
-            echo "DEPENDENCIES=${dependencies[@]}"
-            echo "QEMU_COMMAND=${qemu_command}"
-          } >> "${GITHUB_OUTPUT}"
-
-          {
-            echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
-            echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
-          } >> "${GITHUB_ENV}"
-          echo "::endgroup::"
-
-      - name: Install system dependencies (Debian)
-        if: contains(matrix.os, 'ubuntu') && matrix.container == null
-        run: |
-          echo "::group::apt update"
-          sudo apt-get update
-          echo "::endgroup::"
-
-          echo "::group::install dependencies"
-          sudo aptitude install -y --without-recommends ${{ steps.cross_compile.outputs.DEPENDENCIES }}
-          echo "::endgroup::"
-
-      - name: Install system dependencies (Alpine)
-        if: contains(matrix.os, 'ubuntu') && contains(matrix.container, 'alpine')
-        run: |
-          echo "::group::apk update"
-          apk update
-          echo "::endgroup::"
-
-          echo "::group::install dependencies"
+          set -eux
           apk add --no-cache \
+            bash \
             build-base \
-            cargo \
-            gcc \
-            g++ \
+            git \
             glib-dev \
             gtk+3.0-dev \
             libayatana-appindicator-dev \
-            musl-dev \
+            nodejs \
+            npm \
             openssl-dev \
-            xdotool-dev \
-              pango-dev \
-              harfbuzz-dev \
-              cairo-dev \
-              gdk-pixbuf-dev \
-              wayland-dev \
-              zlib-dev \
-              gettext-dev
-          echo "::endgroup::"
+            p7zip \
+            pkgconf \
+            xdotool-dev
+
+          echo "/usr/local/cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Setup Rust
+        if: matrix.container == ''
         uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7  # v1.16.0
         with:
           target: ${{ matrix.target }}
@@ -268,6 +98,7 @@ jobs:
           cache-on-failure: false
 
       - name: Setup Node
+        if: matrix.container == ''
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: '24'
@@ -301,7 +132,6 @@ jobs:
         id: test
         if: inputs.run_tests
         run: |
-          ${{ matrix.cargo_env }}
           cargo tarpaulin \
             --locked \
             --color always \
@@ -324,9 +154,7 @@ jobs:
 
       - name: Build
         if: inputs.run_build
-        run: |
-          ${{ matrix.cargo_env }}
-          cargo build --locked --target ${{ matrix.target }} --release
+        run: cargo build --locked --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
         if: inputs.run_build
@@ -334,7 +162,7 @@ jobs:
           mkdir -p artifacts
 
           extension=""
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+          if [[ "${{ matrix.target }}" = *"windows"* ]]; then
             extension=".exe"
           fi
 

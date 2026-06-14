@@ -39,6 +39,16 @@ jobs:
             container: rust:1.96-alpine3.24
             cargo_features: '--no-default-features'
             shell: bash
+          - target: x86_64-unknown-linux-gnu  # Ubuntu
+            os: ubuntu-latest
+            container: ''
+            cargo_features: ''
+            shell: bash
+          - target: aarch64-unknown-linux-gnu  # Ubuntu
+            os: ubuntu-24.04-arm
+            container: ''
+            cargo_features: ''
+            shell: bash
           - target: x86_64-apple-darwin  # macOS/Intel
             os: macos-latest
             container: ''
@@ -92,6 +102,19 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Install Ubuntu dependencies
+        if: matrix.container == '' && contains(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libxdo-dev \
+            p7zip-full \
+            pkg-config
 
       - name: Setup Rust
         if: matrix.container == ''

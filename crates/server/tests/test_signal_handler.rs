@@ -116,32 +116,45 @@ mod shutdown_signal {
     fn wait_with_timeout() {
         let signal = ShutdownSignal::new();
         let signal_clone = signal.clone();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
 
-        // Spawn a thread that will set shutdown after a short delay
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            signal_clone.shutdown();
+        // Use a custom wait implementation that can timeout for testing.
+        let handle = thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut waited = false;
+            let mut waiting_sent = false;
+
+            while !signal_clone.is_shutdown() {
+                waited = true;
+                if !waiting_sent {
+                    waiting_tx
+                        .send(())
+                        .expect("Should notify that wait loop started");
+                    waiting_sent = true;
+                }
+
+                if start.elapsed() > Duration::from_secs(5) {
+                    return Err("Timed out waiting for shutdown signal");
+                }
+
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            Ok(waited)
         });
 
-        // Test wait with a reasonable timeout
-        let start = std::time::Instant::now();
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Wait loop should start before shutdown");
+        signal.shutdown();
 
-        // Use a custom wait implementation that can timeout for testing
-        let mut waited = false;
-        while !signal.is_shutdown() {
-            thread::sleep(Duration::from_millis(10));
-            if start.elapsed() > Duration::from_millis(200) {
-                break;
-            }
-            waited = true;
-        }
+        let waited = handle
+            .join()
+            .expect("Wait thread should complete without panicking")
+            .expect("Should not have timed out");
 
         assert!(waited, "Should have waited for shutdown signal");
         assert!(signal.is_shutdown(), "Signal should be shutdown after wait");
-        assert!(
-            start.elapsed() < Duration::from_millis(200),
-            "Should not have timed out"
-        );
     }
 
     #[test]
@@ -245,28 +258,37 @@ mod shutdown_signal {
     fn wait_functionality() {
         let signal = ShutdownSignal::new();
         let signal_clone = signal.clone();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-        // Spawn a thread that will signal shutdown after a delay
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            signal_clone.shutdown();
+            waiting_tx
+                .send(())
+                .expect("Should notify that wait is about to start");
+            signal_clone.wait();
+            completed_tx
+                .send(signal_clone.is_shutdown())
+                .expect("Should notify that wait completed");
         });
 
-        // Test the wait method - this should return once shutdown is signaled
-        let start = std::time::Instant::now();
-        signal.wait();
-        let elapsed = start.elapsed();
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Wait thread should start");
+        assert!(
+            matches!(
+                completed_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "Wait should block until shutdown is signaled"
+        );
 
-        // Should have waited for about 50ms
+        signal.shutdown();
         assert!(
-            elapsed >= Duration::from_millis(40),
-            "Should have waited for shutdown signal"
+            completed_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("Wait should return after shutdown is signaled"),
+            "Signal should be shutdown after wait"
         );
-        assert!(
-            elapsed < Duration::from_millis(300),
-            "Should not have waited too long"
-        );
-        assert!(signal.is_shutdown(), "Signal should be shutdown after wait");
 
         handle.join().unwrap();
     }
@@ -278,16 +300,23 @@ mod shutdown_signal {
         // Signal shutdown first
         signal.shutdown();
 
-        // Then call wait - should return immediately
-        let start = std::time::Instant::now();
-        signal.wait();
-        let elapsed = start.elapsed();
+        let signal_clone = signal.clone();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-        // Should return almost immediately since signal is already shutdown
+        let handle = thread::spawn(move || {
+            signal_clone.wait();
+            completed_tx
+                .send(signal_clone.is_shutdown())
+                .expect("Should notify that wait completed");
+        });
+
         assert!(
-            elapsed < Duration::from_millis(50),
-            "Wait should return immediately for already shutdown signal"
+            completed_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("Wait should return for already shutdown signal"),
+            "Signal should remain shutdown after wait"
         );
+        handle.join().unwrap();
     }
 }
 

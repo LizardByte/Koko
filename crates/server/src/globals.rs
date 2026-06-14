@@ -8,6 +8,7 @@ use crate::config::current_settings;
 
 // global constants and variables
 pub(crate) static GLOBAL_APP_NAME: &str = "Koko";
+#[cfg(feature = "tray")]
 pub(crate) static GLOBAL_ICON_ICO_PATH: &str = "assets/icon.ico";
 
 /// Environment type for the application

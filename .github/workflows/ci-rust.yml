@@ -31,23 +31,28 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl  # Alpine
             os: ubuntu-latest
-            container: rust:1.96-alpine
+            container: rust:1.96-alpine3.24
+            cargo_features: '--no-default-features'
             shell: bash
           - target: aarch64-unknown-linux-musl  # Alpine
             os: ubuntu-24.04-arm
-            container: rust:1.96-alpine
+            container: rust:1.96-alpine3.24
+            cargo_features: '--no-default-features'
             shell: bash
           - target: x86_64-apple-darwin  # macOS/Intel
             os: macos-latest
             container: ''
+            cargo_features: ''
             shell: bash
           - target: aarch64-apple-darwin  # macOS/Apple Silicon
             os: macos-latest
             container: ''
+            cargo_features: ''
             shell: bash
           - target: x86_64-pc-windows-msvc  # Windows
             os: windows-latest
             container: ''
+            cargo_features: ''
             shell: bash
     name: ${{ inputs.job_name }} (${{ matrix.target }})
     permissions:
@@ -74,15 +79,14 @@ jobs:
             bash \
             build-base \
             git \
-            glib-dev \
-            gtk+3.0-dev \
-            libayatana-appindicator-dev \
             nodejs \
             npm \
             openssl-dev \
+            openssl-libs-static \
             p7zip \
             pkgconf \
-            xdotool-dev
+            zlib-dev \
+            zlib-static
 
           echo "/usr/local/cargo/bin" >> "${GITHUB_PATH}"
 
@@ -138,6 +142,7 @@ jobs:
             --engine llvm \
             --no-fail-fast \
             --out Xml \
+            ${{ matrix.cargo_features }} \
             --target ${{ matrix.target }} \
             --verbose
 
@@ -154,7 +159,7 @@ jobs:
 
       - name: Build
         if: inputs.run_build
-        run: cargo build --locked --target ${{ matrix.target }} --release
+        run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
         if: inputs.run_build

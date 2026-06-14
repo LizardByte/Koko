@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use keyring_core::{
     Entry,
     Error,
+    set_default_store,
 };
 use once_cell::sync::Lazy;
 
@@ -26,13 +27,31 @@ fn initialize_secret_store() -> Result<(), String> {
         "" | "native" | "os" => use_native_secret_store(),
         "memory" | "mock" | "sample" => {
             let config = HashMap::from([("persist", "false")]);
-            keyring::use_sample_store(&config)
+            use_sample_secret_store(&config)
         }
-        store => keyring::use_named_store(store),
+        store => use_named_secret_store(store),
     }
     .map_err(|error| format!("Failed to initialize credential store: {error}"))
 }
 
+fn use_sample_secret_store(config: &HashMap<&str, &str>) -> keyring_core::Result<()> {
+    set_default_store(keyring_core::sample::Store::new_with_configuration(config)?);
+    Ok(())
+}
+
+#[cfg(feature = "native-secret-store")]
+fn use_named_secret_store(store: &str) -> keyring_core::Result<()> {
+    keyring::use_named_store(store)
+}
+
+#[cfg(not(feature = "native-secret-store"))]
+fn use_named_secret_store(store: &str) -> keyring_core::Result<()> {
+    Err(Error::NotSupportedByStore(format!(
+        "credential store {store:?} is not available in this build"
+    )))
+}
+
+#[cfg(feature = "native-secret-store")]
 fn use_native_secret_store() -> keyring_core::Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -42,6 +61,12 @@ fn use_native_secret_store() -> keyring_core::Result<()> {
     {
         keyring::use_native_store(false)
     }
+}
+
+#[cfg(not(feature = "native-secret-store"))]
+fn use_native_secret_store() -> keyring_core::Result<()> {
+    let config = HashMap::from([("persist", "false")]);
+    use_sample_secret_store(&config)
 }
 
 fn ensure_secret_store() -> Result<(), String> {

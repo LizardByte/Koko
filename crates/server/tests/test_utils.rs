@@ -1,10 +1,18 @@
 //! Shared test utilities to eliminate code duplication across test files.
 
 // standard imports
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicU64,
+    Ordering,
+};
 
 // lib imports
-use rocket::http::{ContentType, Header, Status};
+use once_cell::sync::Lazy;
+use rocket::http::{
+    ContentType,
+    Header,
+    Status,
+};
 use rocket::local::asynchronous::Client;
 use serde_json::Value;
 
@@ -13,6 +21,8 @@ use koko::web;
 
 // Global counter to ensure unique database files across all tests
 static GLOBAL_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+static TEST_CLIENT_CREATION_LOCK: Lazy<std::sync::Mutex<()>> =
+    Lazy::new(|| std::sync::Mutex::new(()));
 
 /// Enhanced test response structure with headers
 pub struct TestResponse {
@@ -23,6 +33,8 @@ pub struct TestResponse {
 
 /// Create a test client with an isolated database
 pub async fn create_test_client(prefix: Option<&str>) -> Client {
+    let _lock = TEST_CLIENT_CREATION_LOCK.lock().unwrap();
+
     // Set the test environment first
     use koko::globals::CURRENT_ENV;
     CURRENT_ENV.store(1, Ordering::SeqCst);
@@ -43,11 +55,18 @@ pub async fn create_test_client(prefix: Option<&str>) -> Client {
 
     // Create the full database path
     let db_path = format!("./test_data/{}", db_name);
+    let settings_path = format!("./test_data/{}_{}_{}.yml", prefix, test_id, timestamp);
 
     // Remove the database file if it exists from a previous run
     if std::path::Path::new(&db_path).exists() {
         std::fs::remove_file(&db_path).ok();
     }
+    if std::path::Path::new(&settings_path).exists() {
+        std::fs::remove_file(&settings_path).ok();
+    }
+
+    // Persist settings to a test-scoped file instead of the user's real config path.
+    std::env::set_var("KOKO_SETTINGS_PATH", &settings_path);
 
     // Create a new rocket instance with the unique database path
     let rocket = web::rocket_with_db_path(Some(db_path));
@@ -73,10 +92,7 @@ pub async fn make_request(
     let client = match client {
         Some(c) => c,
         None => {
-            let rocket = web::rocket();
-            owned_client = Client::tracked(rocket)
-                .await
-                .expect("Failed to launch web server");
+            owned_client = create_test_client(Some("request")).await;
             &owned_client
         }
     };

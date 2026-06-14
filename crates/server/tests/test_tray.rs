@@ -1,3 +1,5 @@
+#![cfg(feature = "tray")]
+
 // standard imports
 use std::path::Path;
 use std::thread;

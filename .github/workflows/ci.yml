@@ -36,342 +36,96 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu  # Debian
-            os: ubuntu-latest
-            container: ''
-            shell: bash
-            cargo_env: ''
-          # TODO: Fix compiling for musl
-          # - target: x86_64-unknown-linux-musl  # Alpine
-          #  os: ubuntu-latest
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          - target: aarch64-unknown-linux-gnu  # Debian
-            os: ubuntu-24.04-arm
-            container: ''
-            shell: bash
-            cargo_env: ''
-          # TODO: Fix cross compiling for the below targets
-          # - target: aarch64-unknown-linux-musl  # Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          # - target: armv7-unknown-linux-gnueabihf  # Raspberry Pi 2-5/Debian
-          #  os: ubuntu-24.04-arm
-          #  shell: bash
-          # - target: armv7-unknown-linux-musleabihf  # Raspberry Pi 2-5/Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          # - target: arm-unknown-linux-gnueabihf  # Raspberry Pi 0-1/Debian
-          #  os: ubuntu-24.04-arm
-          #  shell: bash
-          # - target: arm-unknown-linux-musleabihf  # Raspberry Pi 0-1/Alpine
-          #  os: ubuntu-24.04-arm
-          #  container: alpine:latest
-          #  shell: sh
-          #  cargo_env: "source $HOME/.cargo/env"
-          - target: x86_64-apple-darwin  # macOS/Intel
-            os: macos-latest
-            container: ''
-            shell: bash
-            cargo_env: ''
-          - target: aarch64-apple-darwin  # macOS/Apple Silicon
-            os: macos-latest
-            container: ''
-            shell: bash
-            cargo_env: ''
-          - target: x86_64-pc-windows-msvc  # Windows
-            os: windows-latest
-            container: ''
-            shell: bash
-            cargo_env: ''
-    name: Build (${{ matrix.target }})
-    needs: setup_release
+  dependency_policy:
+    name: Dependency Policy
     permissions:
       contents: read
-    runs-on: ${{ matrix.os }}
-    container:
-      image: ${{ matrix.container }}
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
-    env:
-      CARGO_TERM_COLOR: always
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
-      - name: Setup cross compiling (Debian)
-        id: cross_compile
-        if: contains(matrix.os, 'ubuntu') && matrix.container == null
-        run: |
-          echo "::group::distro detection"
-          # detect dist name like bionic, focal, etc
-          dist_name=$(lsb_release -cs)
-          ubuntu_version=$(lsb_release -rs)
-          ubuntu_major_version=${ubuntu_version%%.*}
-          echo "detected dist name: $dist_name"
-          echo "detected ubuntu version: $ubuntu_version"
-          echo "detected ubuntu major version: $ubuntu_major_version"
-          echo "::endgroup::"
-
-          echo "::group::install aptitude"
-          sudo apt-get update  # must run before changing sources file
-          sudo apt-get install -y \
-            aptitude
-          echo "::endgroup::"
-
-          echo "::group::dependencies prep"
-          dependencies=()
-
-          # extra dependencies for cross-compiling
-          cross_compile=false
-          package_arch=$(dpkg --print-architecture)
-          pkg_config_sysroot_dir="/usr/lib/${package_arch}"
-          qemu_command=""
-          if [[ ${{ matrix.target }} == *"aarch64"* && $package_arch != "arm64" ]]; then
-            dependencies+=("crossbuild-essential-arm64")
-            cross_compile=true
-            package_arch="arm64"
-            pkg_config_sysroot_dir="/usr/lib/aarch64-linux-gnu"
-            qemu_command="qemu-aarch64-static"
-          elif [[ ${{ matrix.target }} == *"arm"* && $package_arch != "armhf" ]]; then
-            dependencies+=("crossbuild-essential-armhf")
-            cross_compile=true
-            package_arch="armhf"
-            pkg_config_sysroot_dir="/usr/lib/arm-linux-gnueabihf"
-            qemu_command="qemu-arm-static"
-          fi
-
-          if [[ $cross_compile == true ]]; then
-            dependencies+=(
-              "qemu-user"
-              "qemu-user-static"
-            )
-          fi
-
-          if [[ ${{ matrix.target }} == *"musl"* ]]; then
-              dependencies+=("musl-tools")
-          fi
-
-          echo "cross compiling: $cross_compile"
-          echo "package architecture: $package_arch"
-
-          dependencies+=(
-            "libayatana-appindicator3-dev:${package_arch}"  # tray icon
-            "libglib2.0-dev:${package_arch}"
-            "libgtk-3-dev:${package_arch}"
-            "libxdo-dev:${package_arch}"
-          )
-          echo "::endgroup::"
-
-          echo "::group::apt sources"
-          extra_sources=$(cat <<- VAREOF
-          Types: deb
-          URIs: mirror+file:/etc/apt/apt-mirrors.txt
-          Suites: ${dist_name} ${dist_name}-updates ${dist_name}-backports ${dist_name}-security
-          Components: main universe restricted multiverse
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          Architectures: $(dpkg --print-architecture)
-
-          Types: deb
-          URIs: https://ports.ubuntu.com/ubuntu-ports
-          Suites: ${dist_name} ${dist_name}-updates ${dist_name}-backports ${dist_name}-security
-          Components: main universe restricted multiverse
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          Architectures: ${package_arch}
-          VAREOF
-          )
-
-          # source file changed in 24.04
-          if [[ $ubuntu_major_version -ge 24 ]]; then
-            source_file="/etc/apt/sources.list.d/ubuntu.sources"
-          else
-            source_file="/etc/apt/sources.list"
-          fi
-
-          if [[ ${cross_compile} == true ]]; then
-            # print original sources
-            echo "original sources:"
-            sudo cat ${source_file}
-            echo "----"
-
-            sudo dpkg --add-architecture ${package_arch}
-
-            echo "$extra_sources" | sudo tee ${source_file} > /dev/null
-            echo "----"
-            echo "new sources:"
-            sudo cat ${source_file}
-            echo "----"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::output"
-          echo "CROSS_COMPILE=${cross_compile}"
-          echo "DEPENDENCIES=${dependencies[@]}"
-          echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
-          echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
-          echo "QEMU_COMMAND=${qemu_command}"
-
-          {
-            echo "CROSS_COMPILE=${cross_compile}"
-            echo "DEPENDENCIES=${dependencies[@]}"
-            echo "QEMU_COMMAND=${qemu_command}"
-          } >> "${GITHUB_OUTPUT}"
-
-          {
-            echo "PKG_CONFIG_SYSROOT_DIR=${pkg_config_sysroot_dir}"
-            echo "PKG_CONFIG_PATH=${pkg_config_sysroot_dir}/pkgconfig"
-          } >> "${GITHUB_ENV}"
-          echo "::endgroup::"
-
-      - name: Install system dependencies (Debian)
-        if: contains(matrix.os, 'ubuntu') && matrix.container == null
-        run: |
-          echo "::group::apt update"
-          sudo apt-get update
-          echo "::endgroup::"
-
-          echo "::group::install dependencies"
-          sudo aptitude install -y --without-recommends ${{ steps.cross_compile.outputs.DEPENDENCIES }}
-          echo "::endgroup::"
-
-      - name: Install system dependencies (Alpine)
-        if: contains(matrix.os, 'ubuntu') && contains(matrix.container, 'alpine')
-        run: |
-          echo "::group::apk update"
-          apk update
-          echo "::endgroup::"
-
-          echo "::group::install dependencies"
-          apk add --no-cache \
-            build-base \
-            cargo \
-            gcc \
-            g++ \
-            glib-dev \
-            gtk+3.0-dev \
-            libayatana-appindicator-dev \
-            musl-dev \
-            openssl-dev \
-            xdotool-dev \
-              pango-dev \
-              harfbuzz-dev \
-              cairo-dev \
-              gdk-pixbuf-dev \
-              wayland-dev \
-              zlib-dev \
-              gettext-dev
-          echo "::endgroup::"
-
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7  # v1.16.0
         with:
-          target: ${{ matrix.target }}
-          components: 'clippy'
           cache: true
           cache-on-failure: false
 
-      # TODO: it may be possible to use cargo-bin in the future to install cargo dependencies,
-      # but right now it doesn't work without a lock file
-      # https://github.com/dustinblackman/cargo-run-bin/issues/27
-      #  cargo install cargo-run-bin
-      #  cargo-bin --install
-      - name: Install cargo packages
-        run: |
-          cargo install \
-            cargo-edit \
-            cargo-tarpaulin
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
 
-      - name: Update Version
-        if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
-        run: cargo set-version ${{ needs.setup_release.outputs.release_version }}
+      - name: Check licenses
+        run: cargo deny check licenses
 
-      - name: Test
-        id: test
-        run: |
-          ${{ matrix.cargo_env }}
-          cargo tarpaulin \
-            --color always \
-            --engine llvm \
-            --no-fail-fast \
-            --out Xml \
-            --target ${{ matrix.target }} \
-            --verbose
+  clippy:
+    name: Clippy
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-clippy.yml
 
-      - name: Upload coverage
-        # any except canceled or skipped
-        if: >-
-          always() &&
-          (steps.test.outcome == 'success' || steps.test.outcome == 'failure') &&
-          startsWith(github.repository, 'LizardByte/')
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
-        with:
-          disable_search: true
-          fail_ci_if_error: true
-          files: cobertura.xml
-          flags: ${{ matrix.target }}
-          token: ${{ secrets.CODECOV_TOKEN }}
-          verbose: true
+  test:
+    name: Test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      job_name: Test
+      run_build: false
+      run_tests: true
 
-      - name: Clippy
-        run: |
-          ${{ matrix.cargo_env }}
-          cargo clippy -- -D warnings
+  build:
+    name: Build
+    needs: setup_release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-rust.yml
+    with:
+      job_name: Build
+      publish_release: ${{ needs.setup_release.outputs.publish_release == 'true' }}
+      release_version: ${{ needs.setup_release.outputs.release_version }}
+      run_build: true
+      run_tests: false
 
-      - name: Build
-        run: |
-          ${{ matrix.cargo_env }}
-          cargo build --target ${{ matrix.target }} --release
+  build_flatpak:
+    name: Build Flatpak
+    needs: setup_release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-flatpak.yml
+    with:
+      release_commit: ${{ needs.setup_release.outputs.release_commit }}
+      release_version: ${{ needs.setup_release.outputs.release_version }}
 
-      - name: Strip all debug symbols
-        # TODO: is this necessary
-        if: contains(matrix.os, 'ubuntu')
-        run: strip --strip-all target/${{ matrix.target }}/release/koko
+  coverage:
+    name: Coverage
+    if: >-
+      always() &&
+      !cancelled() &&
+      startsWith(github.repository, 'LizardByte/')
+    needs: test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-coverage.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Enable reading of cache
-        # TODO: is this necessary
-        continue-on-error: true
-        run: chmod -R a+rwX $HOME/.cargo target
-
-      - name: Create 7z archive
-        run: |
-          mkdir -p artifacts
-
-          extension=""
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            extension=".exe"
-          fi
-
-          7z a "./artifacts/koko-${{ matrix.target }}.7z" \
-            "./assets" \
-            "./target/${{ matrix.target }}/release/koko${extension}"
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          if-no-files-found: 'error'
-          name: koko-${{ matrix.target }}
-          path: artifacts
-
-      - name: Create/Update GitHub Release
-        if: ${{ needs.setup_release.outputs.publish_release == 'true' }}
-        uses: LizardByte/actions/actions/release_create@200eaeb897a2b065a65cb6f16b41077432007490  # v2026.605.34721
-        with:
-          allowUpdates: true
-          body: ${{ needs.setup_release.outputs.release_body }}
-          draft: true
-          generateReleaseNotes: ${{ needs.setup_release.outputs.release_generate_release_notes }}
-          name: ${{ needs.setup_release.outputs.release_tag }}
-          prerelease: true
-          tag: ${{ needs.setup_release.outputs.release_tag }}
-          token: ${{ secrets.GH_BOT_TOKEN }}
+  release:
+    name: Release
+    if: >-
+      needs.setup_release.outputs.publish_release == 'true' &&
+      startsWith(github.repository, 'LizardByte/')
+    needs:
+      - setup_release
+      - clippy
+      - test
+      - build
+      - build_flatpak
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-release.yml
+    with:
+      release_body: ${{ needs.setup_release.outputs.release_body }}
+      release_generate_release_notes: ${{ needs.setup_release.outputs.release_generate_release_notes }}
+      release_tag: ${{ needs.setup_release.outputs.release_tag }}
+    secrets:
+      GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}

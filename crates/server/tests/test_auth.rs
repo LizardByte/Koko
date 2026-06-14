@@ -1,7 +1,10 @@
 //! Authentication tests for the application.
 
 // lib imports
-use chrono::{Duration, Utc};
+use chrono::{
+    Duration,
+    Utc,
+};
 use rstest::rstest;
 
 // local imports

@@ -1,0 +1,207 @@
+---
+name: CI-Rust
+permissions: {}
+
+on:
+  workflow_call:
+    inputs:
+      job_name:
+        required: true
+        type: string
+      publish_release:
+        default: false
+        required: false
+        type: boolean
+      release_version:
+        default: ''
+        required: false
+        type: string
+      run_build:
+        required: true
+        type: boolean
+      run_tests:
+        required: true
+        type: boolean
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl  # Alpine
+            os: ubuntu-latest
+            container: rust:1.96-alpine3.24
+            cargo_features: '--no-default-features'
+            shell: bash
+          - target: aarch64-unknown-linux-musl  # Alpine
+            os: ubuntu-24.04-arm
+            container: rust:1.96-alpine3.24
+            cargo_features: '--no-default-features'
+            shell: bash
+          - target: x86_64-unknown-linux-gnu  # Ubuntu
+            os: ubuntu-latest
+            container: ''
+            cargo_features: ''
+            shell: bash
+          - target: aarch64-unknown-linux-gnu  # Ubuntu
+            os: ubuntu-24.04-arm
+            container: ''
+            cargo_features: ''
+            shell: bash
+          - target: x86_64-apple-darwin  # macOS/Intel
+            os: macos-latest
+            container: ''
+            cargo_features: ''
+            shell: bash
+          - target: aarch64-apple-darwin  # macOS/Apple Silicon
+            os: macos-latest
+            container: ''
+            cargo_features: ''
+            shell: bash
+          - target: x86_64-pc-windows-msvc  # Windows
+            os: windows-latest
+            container: ''
+            cargo_features: ''
+            shell: bash
+    name: ${{ inputs.job_name }} (${{ matrix.target }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Fix arm64 Alpine container
+        if: runner.arch == 'ARM64' && contains(matrix.container, 'alpine')
+        uses: laverdet/alpine-arm64@7f0f72ee2f71eb2324e5888e8b6e42b1b53e6160  # v1.0.0
+
+      - name: Prepare Alpine container
+        if: contains(matrix.container, 'alpine')
+        shell: sh
+        run: |
+          set -eux
+          apk add --no-cache \
+            bash \
+            build-base \
+            git \
+            nodejs \
+            npm \
+            openssl-dev \
+            openssl-libs-static \
+            p7zip \
+            pkgconf \
+            zlib-dev \
+            zlib-static
+
+          echo "/usr/local/cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Install Ubuntu dependencies
+        if: matrix.container == '' && contains(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libayatana-appindicator3-dev \
+            libdbus-1-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libxdo-dev \
+            p7zip-full \
+            pkg-config
+
+      - name: Setup Rust
+        if: matrix.container == ''
+        uses: actions-rust-lang/setup-rust-toolchain@2b1f5e9b395427c92ee4e3331786ca3c37afe2d7  # v1.16.0
+        with:
+          target: ${{ matrix.target }}
+          cache: true
+          cache-on-failure: false
+
+      - name: Setup Node
+        if: matrix.container == ''
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: crates/client-web/package-lock.json
+
+      - name: Install cargo-edit
+        if: inputs.run_build && inputs.publish_release
+        run: cargo install cargo-edit
+
+      - name: Install cargo-tarpaulin
+        if: inputs.run_tests
+        run: cargo install --locked cargo-tarpaulin
+
+      - name: Update Version
+        if: inputs.run_build && inputs.publish_release
+        env:
+          INPUTS_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          cargo set-version ${INPUTS_RELEASE_VERSION}
+          cargo update --workspace
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
+      - name: Build web client
+        working-directory: crates/client-web
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Test
+        id: test
+        if: inputs.run_tests
+        run: |
+          cargo tarpaulin \
+            --locked \
+            --color always \
+            --engine llvm \
+            --no-fail-fast \
+            --out Xml \
+            ${{ matrix.cargo_features }} \
+            --target ${{ matrix.target }} \
+            --verbose
+
+      - name: Upload coverage artifact
+        if: >-
+          always() &&
+          inputs.run_tests &&
+          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          if-no-files-found: error
+          name: coverage-${{ matrix.target }}
+          path: cobertura.xml
+
+      - name: Build
+        if: inputs.run_build
+        run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
+
+      - name: Create 7z archive
+        if: inputs.run_build
+        run: |
+          mkdir -p artifacts
+
+          extension=""
+          if [[ "${{ matrix.target }}" = *"windows"* ]]; then
+            extension=".exe"
+          fi
+
+          7z a "./artifacts/koko-${{ matrix.target }}.7z" \
+            "./assets" \
+            "./target/${{ matrix.target }}/release/koko${extension}"
+
+      - name: Upload Artifacts
+        if: inputs.run_build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          if-no-files-found: error
+          name: koko-${{ matrix.target }}
+          path: artifacts

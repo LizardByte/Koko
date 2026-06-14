@@ -3,12 +3,22 @@
 // lib imports
 use tao::{
     event::Event,
-    event_loop::{ControlFlow, EventLoopBuilder},
+    event_loop::{
+        ControlFlow,
+        EventLoopBuilder,
+    },
 };
 use tray_icon::{
     TrayIconBuilder,
     TrayIconEvent,
-    menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{
+        AboutMetadata,
+        Menu,
+        MenuEvent,
+        MenuItem,
+        PredefinedMenuItem,
+        Submenu,
+    },
 };
 
 // local imports

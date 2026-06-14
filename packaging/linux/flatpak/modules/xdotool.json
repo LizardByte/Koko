@@ -1,0 +1,23 @@
+{
+  "name": "xdotool",
+  "buildsystem": "simple",
+  "build-commands": [
+    "make libxdo.so libxdo.so.4 libxdo.pc PREFIX=\"${FLATPAK_DEST}\" WITHOUT_RPATH_FIX=1",
+    "install -Dm0755 libxdo.so \"${FLATPAK_DEST}/lib/libxdo.so.4\"",
+    "ln -sf libxdo.so.4 \"${FLATPAK_DEST}/lib/libxdo.so\"",
+    "install -Dm0644 xdo.h \"${FLATPAK_DEST}/include/xdo.h\"",
+    "install -Dm0644 libxdo.pc \"${FLATPAK_DEST}/lib/pkgconfig/libxdo.pc\""
+  ],
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig"
+  ],
+  "sources": [
+    {
+      "type": "git",
+      "url": "https://github.com/jordansissel/xdotool.git",
+      "tag": "v4.20260303.1",
+      "commit": "d37c16111dbe38ea29194f20ac9de03cff8dfc1c"
+    }
+  ]
+}

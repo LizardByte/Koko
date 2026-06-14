@@ -1,0 +1,186 @@
+---
+name: CI-Flatpak
+permissions: {}
+
+on:
+  workflow_call:
+    inputs:
+      release_commit:
+        required: true
+        type: string
+      release_version:
+        required: true
+        type: string
+
+env:
+  APP_ID: dev.lizardbyte.app.Koko
+  FREEDESKTOP_SDK_VERSION: "25.08"
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  flatpak:
+    name: ${{ matrix.arch }}
+    env:
+      MATRIX_ARCH: ${{ matrix.arch }}
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Sync Python tools
+        run: |
+          uv sync --locked --only-group flatpak \
+            --python "${PYTHON_VERSION}" \
+            --no-python-downloads \
+            --no-install-project
+
+      - name: Setup Flatpak dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y flatpak
+
+          sudo su "$(whoami)" -c "flatpak --user remote-add --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          "
+
+          sudo su "$(whoami)" -c "flatpak --user install -y flathub \
+            org.flatpak.Builder \
+            org.freedesktop.Platform/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
+            org.freedesktop.Sdk/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
+            org.freedesktop.Sdk.Extension.node${NODE_VERSION}/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
+            org.freedesktop.Sdk.Extension.rust-stable/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
+          "
+
+          flatpak run org.flatpak.Builder --version
+
+      - name: Generate Flatpak Node sources
+        run: |
+          uv run --locked --no-sync python -m flatpak_node_generator \
+            npm crates/client-web/package-lock.json \
+            --node-sdk-extension "org.freedesktop.Sdk.Extension.node${NODE_VERSION}//${FREEDESKTOP_SDK_VERSION}" \
+            --output generated-node-sources.json
+
+      - name: Generate Flatpak Cargo sources
+        run: |
+          uv run --locked --no-sync python \
+            ./packaging/linux/flatpak/deps/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
+            Cargo.lock \
+            --output generated-cargo-sources.json
+
+      - name: Configure Flatpak manifest
+        env:
+          INPUT_RELEASE_COMMIT: ${{ inputs.release_commit }}
+          INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+          REPOSITORY_CLONE_URL: ${{ github.event.repository.clone_url }}
+        run: |
+          set -euo pipefail
+          build_date="$(git show -s --format=%cs "${INPUT_RELEASE_COMMIT}")"
+
+          mkdir -p build artifacts
+          cp generated-node-sources.json build/
+          cp generated-cargo-sources.json build/
+          cp -r packaging/linux/flatpak/deps/shared-modules build/shared-modules
+          cp -r packaging/linux/flatpak/modules build/modules
+          cp "packaging/linux/flatpak/${APP_ID}.yml" "build/${APP_ID}.yml"
+          cp "packaging/linux/flatpak/${APP_ID}.metainfo.xml" "build/${APP_ID}.metainfo.xml"
+
+          sed -i \
+            -e "s|@BUILD_DATE@|${build_date}|g" \
+            -e "s|@BUILD_VERSION@|${INPUT_RELEASE_VERSION}|g" \
+            -e "s|@GITHUB_CLONE_URL@|${REPOSITORY_CLONE_URL}|g" \
+            -e "s|@GITHUB_COMMIT@|${INPUT_RELEASE_COMMIT}|g" \
+            "build/${APP_ID}.yml"
+
+          sed -i \
+            -e "s|@BUILD_DATE@|${build_date}|g" \
+            -e "s|@BUILD_VERSION@|${INPUT_RELEASE_VERSION}|g" \
+            "build/${APP_ID}.metainfo.xml"
+
+      - name: Debug manifest
+        working-directory: build
+        run: cat "${APP_ID}.yml"
+
+      - name: Cache Flatpak build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: ./build/.flatpak-builder
+          key: flatpak-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: |
+            flatpak-${{ matrix.arch }}-
+
+      - name: Build Linux Flatpak
+        working-directory: build
+        run: |
+          sudo su "$(whoami)" -c "flatpak run org.flatpak.Builder \
+            --arch=${MATRIX_ARCH} \
+            --force-clean \
+            --repo=repo \
+            --sandbox \
+            build-koko ${APP_ID}.yml"
+
+          sudo su "$(whoami)" -c "flatpak build-bundle \
+            --arch=${MATRIX_ARCH} \
+            ./repo \
+            ../artifacts/koko_${MATRIX_ARCH}.flatpak ${APP_ID}"
+
+      - name: Lint Flatpak
+        working-directory: build
+        run: |
+          exceptions_file="${GITHUB_WORKSPACE}/packaging/linux/flatpak/exceptions.json"
+
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+            --exceptions \
+            --user-exceptions "${exceptions_file}" \
+            manifest \
+            "${APP_ID}.yml"
+
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+            --exceptions \
+            --user-exceptions "${exceptions_file}" \
+            repo \
+            repo
+
+      - name: Package Flathub repo archive
+        if: matrix.arch == 'x86_64'
+        run: |
+          mkdir -p flathub/modules
+          cp "./build/generated-cargo-sources.json" "./flathub/"
+          cp "./build/generated-node-sources.json" "./flathub/"
+          cp "./build/${APP_ID}.yml" "./flathub/"
+          cp "./packaging/linux/flatpak/${APP_ID}.desktop" "./flathub/"
+          cp "./build/${APP_ID}.metainfo.xml" "./flathub/"
+          cp "./packaging/linux/flatpak/README.md" "./flathub/"
+          cp "./packaging/linux/flatpak/flathub.json" "./flathub/"
+          cp -r "./packaging/linux/flatpak/modules/." "./flathub/modules/"
+          # submodules will need to be handled in the workflow that creates the PR
+          tar -czf ./artifacts/flathub.tar.gz -C ./flathub .
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          if-no-files-found: error
+          name: koko-flatpak-${{ matrix.arch }}
+          path: artifacts/

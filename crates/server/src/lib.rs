@@ -11,13 +11,21 @@ pub mod db;
 pub mod dependencies;
 pub mod globals;
 mod logging;
+pub mod media;
+pub mod metadata;
+pub mod scanner;
+pub mod scheduled_tasks;
+mod secrets;
 pub mod signal_handler;
+pub mod transcode;
+#[cfg(feature = "tray")]
 pub mod tray;
+pub mod utils;
 pub mod web;
 
 /// Main entry point for the application.
 /// Initializes logging, the web server, and tray icon.
-#[cfg(not(tarpaulin_include))]
+#[cfg(all(not(tarpaulin_include), feature = "tray"))]
 pub fn main() {
     logging::init().expect("Failed to initialize logging");
 
@@ -46,4 +54,18 @@ pub fn main() {
     coordinator.wait_for_completion();
 
     log::info!("Application shutdown complete");
+}
+
+/// Main entry point for the application without tray support.
+/// Initializes logging and runs the web server on the main thread.
+#[cfg(all(not(tarpaulin_include), not(feature = "tray")))]
+pub fn main() {
+    logging::init().expect("Failed to initialize logging");
+    log::info!("Starting without tray support");
+
+    let runtime =
+        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for web server");
+    runtime.block_on(web::launch_with_shutdown(
+        signal_handler::ShutdownSignal::new(),
+    ));
 }

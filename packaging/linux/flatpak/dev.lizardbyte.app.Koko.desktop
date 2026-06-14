@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories=AudioVideo;Network;
+Comment=Self-hosted media server
+Exec=koko
+Icon=dev.lizardbyte.app.Koko
+Keywords=media;server;movies;tv;music;photos;
+Name=Koko
+Terminal=false
+Type=Application
+Version=1.0

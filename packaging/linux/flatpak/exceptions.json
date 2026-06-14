@@ -1,0 +1,8 @@
+{
+  "dev.lizardbyte.app.Koko": [
+    "appid-url-not-reachable",
+    "appstream-screenshots-not-mirrored-in-ostree",
+    "metainfo-missing-screenshots",
+    "finish-args-home-filesystem-access"
+  ]
+}

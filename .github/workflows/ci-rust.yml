@@ -159,10 +159,16 @@ jobs:
         id: test
         if: inputs.run_tests
         run: |
+          tarpaulin_args=()
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            tarpaulin_args+=(--jobs 1)
+          fi
+
           cargo tarpaulin \
             --locked \
             --color always \
             --engine llvm \
+            "${tarpaulin_args[@]}" \
             --no-fail-fast \
             --out Xml \
             ${{ matrix.cargo_features }} \

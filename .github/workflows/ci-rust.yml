@@ -64,6 +64,11 @@ jobs:
             container: ''
             cargo_features: ''
             shell: bash
+          - target: aarch64-pc-windows-msvc  # Windows/ARM64
+            os: windows-11-arm
+            container: ''
+            cargo_features: ''
+            shell: bash
     name: ${{ inputs.job_name }} (${{ matrix.target }})
     permissions:
       contents: read
@@ -160,7 +165,7 @@ jobs:
         if: inputs.run_tests
         run: |
           tarpaulin_args=()
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" || "${{ matrix.target }}" == "aarch64-pc-windows-msvc" ]]; then
             tarpaulin_args+=(--jobs 1)
           fi
 
@@ -191,7 +196,7 @@ jobs:
         run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
-        if: inputs.run_build
+        if: inputs.run_build && !contains(matrix.target, 'windows')
         run: |
           mkdir -p artifacts
 
@@ -204,8 +209,18 @@ jobs:
             "./assets" \
             "./target/${{ matrix.target }}/release/koko${extension}"
 
+      - name: Upload Windows build artifact
+        if: inputs.run_build && contains(matrix.target, 'windows')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          if-no-files-found: error
+          name: windows-build-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/koko.exe
+            crates/client-web/dist
+
       - name: Upload Artifacts
-        if: inputs.run_build
+        if: inputs.run_build && !contains(matrix.target, 'windows')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error

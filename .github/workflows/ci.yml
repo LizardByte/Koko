@@ -86,6 +86,25 @@ jobs:
       run_build: true
       run_tests: false
 
+  build_windows_installer:
+    name: Build Windows Installer
+    needs:
+      - setup_release
+      - build
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-windows-installer.yml
+    with:
+      azure_signing_account: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      azure_signing_cert_profile: ${{ vars.AZURE_SIGNING_CERT_PROFILE }}
+      azure_signing_endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      publish_release: ${{ needs.setup_release.outputs.publish_release == 'true' }}
+      release_version: ${{ needs.setup_release.outputs.release_version }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
   build_flatpak:
     name: Build Flatpak
     needs: setup_release
@@ -119,6 +138,7 @@ jobs:
       - clippy
       - test
       - build
+      - build_windows_installer
       - build_flatpak
     permissions:
       contents: read

@@ -15,6 +15,7 @@ use tao::{
         ControlFlow,
         EventLoopBuilder,
     },
+    platform::run_return::EventLoopExtRunReturn,
 };
 use tray_icon::{
     TrayIconBuilder,
@@ -49,7 +50,7 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
     let mut event_loop_builder = EventLoopBuilder::<UserEvent>::with_user_event();
     #[cfg(target_os = "windows")]
     event_loop_builder.with_any_thread(true);
-    let event_loop = event_loop_builder.build();
+    let mut event_loop = event_loop_builder.build();
 
     // set a tray event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
@@ -131,12 +132,13 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
 
     let mut tray_icon = None;
 
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run_return(move |event, _, control_flow| {
         // Always check for shutdown signal first and exit immediately
         if shutdown_signal.is_shutdown() {
             log::info!("Tray received shutdown signal, exiting immediately");
             tray_icon.take();
-            std::process::exit(0);
+            *control_flow = ControlFlow::Exit;
+            return;
         }
 
         // Use Poll with a short timeout to check shutdown frequently
@@ -181,7 +183,7 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
                     id if id == quit_i.id() => {
                         log::info!("Quit requested from tray menu");
                         tray_icon.take();
-                        std::process::exit(0);
+                        *control_flow = ControlFlow::Exit;
                     }
                     id if id == options_disable_tray_i.id() => {
                         // TODO: adjust application config first
@@ -222,11 +224,14 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
                 if shutdown_signal.is_shutdown() {
                     log::info!("Tray event - shutdown detected, exiting immediately");
                     tray_icon.take();
-                    std::process::exit(0);
+                    *control_flow = ControlFlow::Exit;
                 }
             }
         }
-    })
+    });
+
+    TrayIconEvent::set_event_handler(Option::<fn(TrayIconEvent)>::None);
+    MenuEvent::set_event_handler(Option::<fn(MenuEvent)>::None);
 }
 
 fn icon_path() -> PathBuf {

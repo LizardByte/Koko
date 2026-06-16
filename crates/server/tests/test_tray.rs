@@ -2,25 +2,29 @@
 
 // standard imports
 use std::path::Path;
-use std::thread;
-use std::time::Duration;
 
-/// Because `launch()` runs an event loop indefinitely, this test spawns a thread to
-/// call `launch()`, waits a brief moment, then ends the test. It mainly verifies that the
-/// function can be invoked without immediate panics. Adjust as needed for full integration testing.
+/// Tests that an existing source icon can be decoded for the tray.
 #[test]
-fn test_launch_does_not_panic_immediately() {
-    // We run this in a separate thread because `launch()` never returns under normal circumstances.
-    let handle = thread::spawn(|| {
-        koko::tray::launch();
-    });
+fn test_load_icon_source_icon() {
+    use koko::tray::load_icon;
 
-    // Wait a short moment to see if a panic happens right away.
-    thread::sleep(Duration::from_secs(1));
+    let icon_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("assets")
+        .join("icon.ico");
 
-    // We don't join the thread because `launch()` won't return in this example,
-    // but dropping the handle will end the spawned thread here.
-    drop(handle);
+    let _icon = load_icon(&icon_path);
+}
+
+/// Tests that the tray event loop honors shutdown without creating a long-running test process.
+#[cfg(target_os = "windows")]
+#[test]
+fn test_launch_with_shutdown_exits() {
+    let shutdown_signal = koko::signal_handler::ShutdownSignal::new();
+    shutdown_signal.shutdown();
+
+    koko::tray::launch_with_shutdown(shutdown_signal);
 }
 
 /// Tests the `load_icon` function with a path that does not exist.

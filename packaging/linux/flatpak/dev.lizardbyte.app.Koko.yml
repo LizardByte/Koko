@@ -58,6 +58,7 @@ modules:
       - install -Dm0755 target/release/koko /app/libexec/koko/koko
       - install -Dm0755 packaging/linux/flatpak/scripts/koko.sh /app/bin/koko
       - install -dm0755 /app/share/koko
+      - cp -a assets /app/share/koko/assets
       - cp -a crates/client-web/dist /app/share/koko/client-web
       - install -Dm0644 assets/Koko.svg /app/share/icons/hicolor/scalable/apps/dev.lizardbyte.app.Koko.svg
       - >-

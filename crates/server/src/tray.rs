@@ -1,6 +1,14 @@
 //! Tray icon utilities for the application.
 
+// standard imports
+use std::path::{
+    Path,
+    PathBuf,
+};
+
 // lib imports
+#[cfg(target_os = "windows")]
+use tao::platform::windows::EventLoopBuilderExtWindows;
 use tao::{
     event::Event,
     event_loop::{
@@ -25,6 +33,9 @@ use tray_icon::{
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 
+const KOKO_ASSETS_DIR_ENV: &str = "KOKO_ASSETS_DIR";
+const ICON_FILE_NAME: &str = "icon.ico";
+
 #[derive(Debug)]
 enum UserEvent {
     TrayIconEvent(TrayIconEvent),
@@ -33,9 +44,12 @@ enum UserEvent {
 
 /// Launch the tray icon and event loop with graceful shutdown support.
 pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
-    let path = std::path::Path::new(globals::GLOBAL_ICON_ICO_PATH);
+    let path = icon_path();
 
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop_builder = EventLoopBuilder::<UserEvent>::with_user_event();
+    #[cfg(target_os = "windows")]
+    event_loop_builder.with_any_thread(true);
+    let event_loop = event_loop_builder.build();
 
     // set a tray event handler that forwards the event and wakes up the event loop
     let proxy = event_loop.create_proxy();
@@ -132,7 +146,7 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
 
         match event {
             Event::NewEvents(tao::event::StartCause::Init) => {
-                let icon = load_icon(std::path::Path::new(path));
+                let icon = load_icon(&path);
 
                 // We create the icon once the event loop is actually running
                 // to prevent issues like https://github.com/tauri-apps/tray-icon/issues/90
@@ -215,8 +229,53 @@ pub fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
     })
 }
 
+fn icon_path() -> PathBuf {
+    icon_path_candidates()
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(source_icon_path)
+}
+
+fn icon_path_candidates() -> Vec<PathBuf> {
+    let configured_path = PathBuf::from(globals::GLOBAL_ICON_ICO_PATH);
+
+    let mut candidates = Vec::new();
+
+    if let Ok(assets_dir) = std::env::var(KOKO_ASSETS_DIR_ENV) {
+        candidates.push(PathBuf::from(assets_dir).join(ICON_FILE_NAME));
+    }
+
+    candidates.push(configured_path.clone());
+
+    if let Ok(executable_path) = std::env::current_exe() {
+        if let Some(executable_dir) = executable_path.parent() {
+            candidates.push(executable_dir.join(&configured_path));
+
+            for ancestor in executable_dir.ancestors() {
+                candidates.push(
+                    ancestor
+                        .join("share")
+                        .join("koko")
+                        .join("assets")
+                        .join(ICON_FILE_NAME),
+                );
+            }
+        }
+    }
+
+    candidates.push(source_icon_path());
+    candidates
+}
+
+fn source_icon_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join(globals::GLOBAL_ICON_ICO_PATH)
+}
+
 /// Load an icon from a file path.
-pub fn load_icon(path: &std::path::Path) -> tray_icon::Icon {
+pub fn load_icon(path: &Path) -> tray_icon::Icon {
     let (icon_rgba, icon_width, icon_height) = {
         let image = image::open(path)
             .expect("Failed to open icon path")

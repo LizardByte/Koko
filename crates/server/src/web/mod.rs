@@ -193,7 +193,15 @@ fn sqlite_database_url(db_path: &str) -> String {
 
 /// Launch the web server with graceful shutdown support.
 pub async fn launch_with_shutdown(shutdown_signal: ShutdownSignal) {
-    let rocket = rocket().ignite().await.expect("Failed to ignite rocket");
+    launch_rocket_with_shutdown(rocket(), shutdown_signal).await;
+}
+
+/// Launch a configured Rocket instance with graceful shutdown support.
+pub async fn launch_rocket_with_shutdown(
+    rocket: rocket::Rocket<rocket::Build>,
+    shutdown_signal: ShutdownSignal,
+) {
+    let rocket = rocket.ignite().await.expect("Failed to ignite rocket");
     let rocket_shutdown = rocket.shutdown();
 
     // Start the rocket server

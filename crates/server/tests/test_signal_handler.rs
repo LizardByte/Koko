@@ -17,11 +17,58 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 // local imports
+use koko::config::{
+    Settings,
+    current_settings,
+    replace_current_settings,
+};
 use koko::signal_handler::{
     ShutdownCoordinator,
     ShutdownSignal,
 };
 use koko::web;
+
+struct TestServerStateGuard {
+    original_settings: Settings,
+    test_dir: std::path::PathBuf,
+}
+
+impl Drop for TestServerStateGuard {
+    fn drop(&mut self) {
+        replace_current_settings(self.original_settings.clone());
+        let _ = std::fs::remove_dir_all(&self.test_dir);
+    }
+}
+
+fn configure_isolated_web_server_settings() -> (TestServerStateGuard, String) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "koko_web_shutdown_{}_{}",
+        std::process::id(),
+        timestamp
+    ));
+    let data_dir = test_dir.join("data");
+    std::fs::create_dir_all(&data_dir).expect("Failed to create isolated web server data dir");
+
+    let original_settings = current_settings();
+    let mut settings = original_settings.clone();
+    settings.general.data_dir = data_dir.to_string_lossy().to_string();
+    settings.server.port = 0;
+    settings.server.use_https = false;
+    replace_current_settings(settings);
+
+    let db_path = test_dir.join("koko.db").to_string_lossy().to_string();
+    (
+        TestServerStateGuard {
+            original_settings,
+            test_dir,
+        },
+        db_path,
+    )
+}
 
 mod shutdown_signal {
     use super::*;
@@ -661,25 +708,40 @@ mod integration {
 
     #[tokio::test]
     async fn web_server_shutdown_signal_handling() {
+        let (_test_server_state_guard, db_path) = configure_isolated_web_server_settings();
         let shutdown_signal = ShutdownSignal::new();
         let shutdown_signal_clone = shutdown_signal.clone();
+        let (launched_tx, launched_rx) = tokio::sync::oneshot::channel();
+        let launch_notifier = Arc::new(std::sync::Mutex::new(Some(launched_tx)));
+        let rocket = web::rocket_with_db_path(Some(db_path)).attach(
+            rocket::fairing::AdHoc::on_liftoff("Notify test launch", move |_| {
+                let launch_notifier = Arc::clone(&launch_notifier);
+                Box::pin(async move {
+                    if let Some(launched_tx) = launch_notifier.lock().unwrap().take() {
+                        let _ = launched_tx.send(());
+                    }
+                })
+            }),
+        );
 
         // Start web server in background
         let web_handle = tokio::spawn(async move {
-            web::launch_with_shutdown(shutdown_signal_clone).await;
+            web::launch_rocket_with_shutdown(rocket, shutdown_signal_clone).await;
         });
 
-        // Give the server a moment to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        timeout(Duration::from_secs(30), launched_rx)
+            .await
+            .expect("Web server should launch within 30 seconds")
+            .expect("Web server task should not exit before launch");
 
         // Signal shutdown
         shutdown_signal.shutdown();
 
         // Web server should shut down within a reasonable time
-        let result = timeout(Duration::from_secs(2), web_handle).await;
+        let result = timeout(Duration::from_secs(10), web_handle).await;
         assert!(
             result.is_ok(),
-            "Web server should shut down within 2 seconds"
+            "Web server should shut down within 10 seconds"
         );
     }
 

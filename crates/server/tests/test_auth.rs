@@ -184,9 +184,20 @@ fn test_claims_struct_functionality() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid role constant")]
 fn test_auth_guard_invalid_role_constant() {
     // This should panic because role constant 99 is not valid
     // We test the panic by calling the role() method with an invalid const generic
-    let _ = AuthGuard::<99>::role();
+    let result = std::panic::catch_unwind(AuthGuard::<99>::role);
+    let panic = result.expect_err("Invalid role constant should panic");
+    let message = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic>");
+
+    assert!(
+        message.contains("Invalid role constant"),
+        "unexpected panic message: {}",
+        message
+    );
 }

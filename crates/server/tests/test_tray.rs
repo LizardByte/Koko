@@ -31,12 +31,23 @@ fn test_launch_with_shutdown_exits() {
 /// We expect a panic, because the code calls `image::open`
 /// and it should fail on a non-existent file.
 #[test]
-#[should_panic(expected = "Failed to open icon path")]
 fn test_load_icon_non_existent_path_panics() {
     use koko::tray::load_icon;
 
     let non_existent_path = Path::new("non_existent_file.ico");
 
     // This should panic based on the logic within `load_icon`.
-    let _icon = load_icon(non_existent_path);
+    let result = std::panic::catch_unwind(|| load_icon(non_existent_path));
+    let panic = result.expect_err("Missing icon path should panic");
+    let message = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic>");
+
+    assert!(
+        message.contains("Failed to open icon path"),
+        "unexpected panic message: {}",
+        message
+    );
 }

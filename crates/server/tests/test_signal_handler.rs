@@ -604,17 +604,7 @@ mod shutdown_coordinator {
     }
 
     #[test]
-    #[should_panic(expected = "Failed to create tokio runtime")]
-    fn async_thread_runtime_creation_failure() {
-        // This test is tricky to trigger in practice, but we can document it
-        // The panic path occurs when tokio runtime creation fails
-        // In normal circumstances this should never happen, but the panic is there for safety
-
-        // Since we can't easily mock runtime creation failure, we'll create a separate test
-        // that documents this behavior. The actual panic line will be covered when/if
-        // runtime creation actually fails in extreme circumstances.
-
-        // For now, let's verify that normal async thread creation works fine
+    fn async_thread_runtime_creation_success() {
         let mut coordinator = create_test_coordinator();
 
         coordinator.register_async_thread("normal-async", |_| async move {
@@ -623,9 +613,7 @@ mod shutdown_coordinator {
 
         coordinator.wait_for_completion();
 
-        // If we reach here, runtime creation worked fine
-        // The panic path is for extreme error conditions that are hard to reproduce in tests
-        panic!("Failed to create tokio runtime for test_panic_scenario");
+        // If we reach here, runtime creation worked fine.
     }
 
     #[test]

@@ -40,6 +40,7 @@ rstest = "0.25.0"
 cargo-run-bin = "1.7.4"
 
 [workspace.metadata.bin]
+cargo-deny = { version = "0.19.9", locked = true }
 cargo-edit = { version = "0.13.1", bins = ["cargo-set-version"], locked = true }
 cargo-tarpaulin = { version = "0.35.4", locked = true }
 cargo-wix = { version = "0.3.9", git = "https://github.com/volks73/cargo-wix.git", rev = "fde983c2e901970267e76b8fd68120fdd5457a57", locked = true }

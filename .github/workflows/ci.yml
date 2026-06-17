@@ -51,11 +51,21 @@ jobs:
           cache: true
           cache-on-failure: false
 
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+      - name: Install Cargo tools
+        run: |
+          cargo_run_bin_version="$(
+            cargo metadata --locked --no-deps --format-version 1 \
+              | sed -n 's/.*"cargo-run-bin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+          )"
+          if [[ -z "${cargo_run_bin_version}" ]]; then
+            echo "Failed to parse cargo-run-bin version from cargo metadata" >&2
+            exit 1
+          fi
+          cargo install --locked cargo-run-bin --version "${cargo_run_bin_version}"
+          cargo bin cargo-deny --version
 
       - name: Check licenses
-        run: cargo deny check licenses
+        run: cargo bin cargo-deny check licenses
 
   clippy:
     name: Clippy

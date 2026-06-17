@@ -102,11 +102,3 @@ objc2-core-foundation = { version = "0.3.0", optional = true }
 [dev-dependencies]
 async-std.workspace = true
 rstest.workspace = true
-
-[package.metadata.ci]
-cargo-run-bin = "1.7.4"
-
-[package.metadata.bin]
-cargo-edit = { version = "0.13.1" }
-cargo-tarpaulin = { version = "0.31.5" }
-cargo-wix = { version = "0.3.9" }

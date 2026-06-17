@@ -47,7 +47,11 @@ jobs:
           - target: aarch64-pc-windows-msvc
     env:
       CARGO_TERM_COLOR: always
-      CARGO_WIX_REV: fde983c2e901970267e76b8fd68120fdd5457a57
+      INPUT_AZURE_SIGNING_ACCOUNT: ${{ inputs.azure_signing_account }}
+      INPUT_AZURE_SIGNING_CERT_PROFILE: ${{ inputs.azure_signing_cert_profile }}
+      INPUT_AZURE_SIGNING_ENDPOINT: ${{ inputs.azure_signing_endpoint }}
+      INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release }}
+      INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
       WIX_EXTENSION_VERSION: 7.0.0
       WIX_TOOL_PATH: ${{ github.workspace }}\.wix
       WIX_VERSION: 7.0.0
@@ -68,17 +72,22 @@ jobs:
           cache: true
           cache-on-failure: false
 
-      - name: Install cargo-edit
-        if: inputs.publish_release
-        run: cargo install cargo-edit
-
-      - name: Update Version
-        if: inputs.publish_release
-        env:
-          INPUTS_RELEASE_VERSION: ${{ inputs.release_version }}
+      - name: Install Cargo tools
         shell: pwsh
         run: |
-          cargo set-version $env:INPUTS_RELEASE_VERSION
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $cargoRunBinVersion = $metadata.metadata.ci.'cargo-run-bin'
+          cargo install --locked cargo-run-bin --version $cargoRunBinVersion
+          if ($env:INPUT_RELEASE_VERSION) {
+            cargo bin cargo-set-version --version
+          }
+          cargo bin cargo-wix --version
+
+      - name: Update Version
+        if: env.INPUT_RELEASE_VERSION != ''
+        shell: pwsh
+        run: |
+          cargo bin cargo-set-version $env:INPUT_RELEASE_VERSION
           cargo update --workspace
           cargo metadata --locked --no-deps --format-version 1 > $null
 
@@ -99,24 +108,17 @@ jobs:
           wix extension add "WixToolset.Util.wixext/$env:WIX_EXTENSION_VERSION"
           wix --version
 
-      - name: Install cargo-wix
-        run: >-
-          cargo install --locked
-          --git https://github.com/volks73/cargo-wix.git
-          --rev ${{ env.CARGO_WIX_REV }}
-          cargo-wix
-
       - name: Sign Windows executable
-        if: inputs.publish_release && inputs.azure_signing_account != ''
+        if: env.INPUT_PUBLISH_RELEASE == 'true' && env.INPUT_AZURE_SIGNING_ACCOUNT != ''
         uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82  # v2.0.0
         with:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          certificate-profile-name: ${{ inputs.azure_signing_cert_profile }}
-          endpoint: ${{ inputs.azure_signing_endpoint }}
+          certificate-profile-name: ${{ env.INPUT_AZURE_SIGNING_CERT_PROFILE }}
+          endpoint: ${{ env.INPUT_AZURE_SIGNING_ENDPOINT }}
           files: ${{ github.workspace }}\target\${{ matrix.target }}\release\koko.exe
-          signing-account-name: ${{ inputs.azure_signing_account }}
+          signing-account-name: ${{ env.INPUT_AZURE_SIGNING_ACCOUNT }}
 
       - name: Create Windows archive
         shell: pwsh
@@ -129,7 +131,7 @@ jobs:
       - name: Package Windows installer
         shell: pwsh
         run: |
-          cargo wix `
+          cargo bin cargo-wix `
             --toolset modern `
             --target ${{ matrix.target }} `
             --no-build `
@@ -140,18 +142,18 @@ jobs:
             crates/server/Cargo.toml
 
       - name: Sign Windows installer
-        if: inputs.publish_release && inputs.azure_signing_account != ''
+        if: env.INPUT_PUBLISH_RELEASE == 'true' && env.INPUT_AZURE_SIGNING_ACCOUNT != ''
         uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82  # v2.0.0
         with:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          certificate-profile-name: ${{ inputs.azure_signing_cert_profile }}
-          endpoint: ${{ inputs.azure_signing_endpoint }}
+          certificate-profile-name: ${{ env.INPUT_AZURE_SIGNING_CERT_PROFILE }}
+          endpoint: ${{ env.INPUT_AZURE_SIGNING_ENDPOINT }}
           files-folder: artifacts
           files-folder-filter: msi
           files-folder-recurse: false
-          signing-account-name: ${{ inputs.azure_signing_account }}
+          signing-account-name: ${{ env.INPUT_AZURE_SIGNING_ACCOUNT }}
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

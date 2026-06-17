@@ -8,10 +8,6 @@ on:
       job_name:
         required: true
         type: string
-      publish_release:
-        default: false
-        required: false
-        type: boolean
       release_version:
         default: ''
         required: false
@@ -80,6 +76,9 @@ jobs:
         shell: ${{ matrix.shell }}
     env:
       CARGO_TERM_COLOR: always
+      INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+      INPUT_RUN_BUILD: ${{ inputs.run_build }}
+      INPUT_RUN_TESTS: ${{ inputs.run_tests }}
     steps:
       - name: Fix arm64 Alpine container
         if: runner.arch == 'ARM64' && contains(matrix.container, 'alpine')
@@ -137,20 +136,29 @@ jobs:
           cache: npm
           cache-dependency-path: crates/client-web/package-lock.json
 
-      - name: Install cargo-edit
-        if: inputs.run_build && inputs.publish_release
-        run: cargo install cargo-edit
-
-      - name: Install cargo-tarpaulin
-        if: inputs.run_tests
-        run: cargo install --locked cargo-tarpaulin
+      - name: Install Cargo tools
+        if: env.INPUT_RUN_TESTS == 'true' || (env.INPUT_RUN_BUILD == 'true' && env.INPUT_RELEASE_VERSION != '')
+        run: |
+          cargo_run_bin_version="$(
+            cargo metadata --locked --no-deps --format-version 1 \
+              | sed -n 's/.*"cargo-run-bin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+          )"
+          if [[ -z "${cargo_run_bin_version}" ]]; then
+            echo "Failed to parse cargo-run-bin version from cargo metadata" >&2
+            exit 1
+          fi
+          cargo install --locked cargo-run-bin --version "${cargo_run_bin_version}"
+          if [[ "${INPUT_RUN_BUILD}" == "true" && -n "${INPUT_RELEASE_VERSION}" ]]; then
+            cargo bin cargo-set-version --version
+          fi
+          if [[ "${INPUT_RUN_TESTS}" == "true" ]]; then
+            cargo bin cargo-tarpaulin --version
+          fi
 
       - name: Update Version
-        if: inputs.run_build && inputs.publish_release
-        env:
-          INPUTS_RELEASE_VERSION: ${{ inputs.release_version }}
+        if: env.INPUT_RUN_BUILD == 'true' && env.INPUT_RELEASE_VERSION != ''
         run: |
-          cargo set-version ${INPUTS_RELEASE_VERSION}
+          cargo bin cargo-set-version "${INPUT_RELEASE_VERSION}"
           cargo update --workspace
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
 
@@ -162,7 +170,7 @@ jobs:
 
       - name: Test
         id: test
-        if: inputs.run_tests
+        if: env.INPUT_RUN_TESTS == 'true'
         run: |
           tarpaulin_args=()
           case "${{ matrix.target }}" in
@@ -171,7 +179,7 @@ jobs:
               ;;
           esac
 
-          cargo tarpaulin \
+          cargo bin cargo-tarpaulin \
             --locked \
             --color always \
             --engine llvm \
@@ -185,7 +193,7 @@ jobs:
       - name: Upload coverage artifact
         if: >-
           always() &&
-          inputs.run_tests &&
+          env.INPUT_RUN_TESTS == 'true' &&
           (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -194,11 +202,11 @@ jobs:
           path: cobertura.xml
 
       - name: Build
-        if: inputs.run_build
+        if: env.INPUT_RUN_BUILD == 'true'
         run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
-        if: inputs.run_build && !contains(matrix.target, 'windows')
+        if: env.INPUT_RUN_BUILD == 'true' && !contains(matrix.target, 'windows')
         run: |
           mkdir -p artifacts
 
@@ -212,7 +220,7 @@ jobs:
             "./target/${{ matrix.target }}/release/koko${extension}"
 
       - name: Upload Windows build artifact
-        if: inputs.run_build && contains(matrix.target, 'windows')
+        if: env.INPUT_RUN_BUILD == 'true' && contains(matrix.target, 'windows')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error
@@ -222,7 +230,7 @@ jobs:
             crates/client-web/dist
 
       - name: Upload Artifacts
-        if: inputs.run_build && !contains(matrix.target, 'windows')
+        if: env.INPUT_RUN_BUILD == 'true' && !contains(matrix.target, 'windows')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error

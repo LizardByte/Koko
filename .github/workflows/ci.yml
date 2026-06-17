@@ -81,7 +81,6 @@ jobs:
     uses: ./.github/workflows/ci-rust.yml
     with:
       job_name: Build
-      publish_release: ${{ needs.setup_release.outputs.publish_release == 'true' }}
       release_version: ${{ needs.setup_release.outputs.release_version }}
       run_build: true
       run_tests: false

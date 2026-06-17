@@ -43,20 +43,6 @@
 
     <UI>
       <ui:WixUI Id="WixUI_FeatureTree" />
-      <Publish
-          Dialog="WelcomeDlg"
-          Control="Next"
-          Event="NewDialog"
-          Value="CustomizeDlg"
-          Order="99"
-          Condition="1" />
-      <Publish
-          Dialog="CustomizeDlg"
-          Control="Back"
-          Event="NewDialog"
-          Value="WelcomeDlg"
-          Order="99"
-          Condition="1" />
     </UI>
 
     <StandardDirectory Id="ProgramFilesFolder">

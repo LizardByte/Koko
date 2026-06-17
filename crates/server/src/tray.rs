@@ -256,14 +256,25 @@ fn icon_path_candidates() -> Vec<PathBuf> {
         if let Some(executable_dir) = executable_path.parent() {
             candidates.push(executable_dir.join(&configured_path));
 
-            for ancestor in executable_dir.ancestors() {
-                candidates.push(
-                    ancestor
-                        .join("share")
-                        .join("koko")
-                        .join("assets")
-                        .join(ICON_FILE_NAME),
-                );
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                for ancestor in executable_dir.ancestors() {
+                    #[cfg(target_os = "macos")]
+                    candidates.push(
+                        ancestor
+                            .join("Resources")
+                            .join("assets")
+                            .join(ICON_FILE_NAME),
+                    );
+                    #[cfg(target_os = "linux")]
+                    candidates.push(
+                        ancestor
+                            .join("share")
+                            .join("koko")
+                            .join("assets")
+                            .join(ICON_FILE_NAME),
+                    );
+                }
             }
         }
     }

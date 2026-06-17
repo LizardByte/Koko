@@ -33,41 +33,57 @@ jobs:
             container: rust:1.96-alpine3.24
             cargo_features: '--no-default-features'
             shell: bash
+            build_artifact_prefix: build-alpine
+            build_artifact_path: artifacts
           - target: aarch64-unknown-linux-musl  # Alpine
             os: ubuntu-24.04-arm
             container: rust:1.96-alpine3.24
             cargo_features: '--no-default-features'
             shell: bash
+            build_artifact_prefix: build-alpine
+            build_artifact_path: artifacts
           - target: x86_64-unknown-linux-gnu  # Ubuntu
             os: ubuntu-latest
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-ubuntu
+            build_artifact_path: artifacts
           - target: aarch64-unknown-linux-gnu  # Ubuntu
             os: ubuntu-24.04-arm
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-ubuntu
+            build_artifact_path: artifacts
           - target: x86_64-apple-darwin  # macOS/Intel
             os: macos-latest
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-macos
+            build_artifact_path: build-artifact
           - target: aarch64-apple-darwin  # macOS/Apple Silicon
             os: macos-latest
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-macos
+            build_artifact_path: build-artifact
           - target: x86_64-pc-windows-msvc  # Windows
             os: windows-latest
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-windows
+            build_artifact_path: build-artifact
           - target: aarch64-pc-windows-msvc  # Windows/ARM64
             os: windows-11-arm
             container: ''
             cargo_features: ''
             shell: bash
+            build_artifact_prefix: build-windows
+            build_artifact_path: build-artifact
         exclude:
           - run: test
             target: aarch64-pc-windows-msvc
@@ -210,7 +226,7 @@ jobs:
         run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
-        if: matrix.run == 'build' && !contains(matrix.target, 'windows')
+        if: matrix.run == 'build' && matrix.build_artifact_path == 'artifacts'
         run: |
           mkdir -p artifacts
 
@@ -223,20 +239,27 @@ jobs:
             "./assets" \
             "./target/${{ matrix.target }}/release/koko${extension}"
 
-      - name: Upload Windows build artifact
-        if: matrix.run == 'build' && contains(matrix.target, 'windows')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          if-no-files-found: error
-          name: windows-build-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/koko.exe
-            crates/client-web/dist
+      - name: Prepare build artifact
+        if: matrix.run == 'build' && matrix.build_artifact_path == 'build-artifact'
+        run: |
+          mkdir -p \
+            "build-artifact/target/${{ matrix.target }}/release" \
+            "build-artifact/crates/client-web"
 
-      - name: Upload Artifacts
-        if: matrix.run == 'build' && !contains(matrix.target, 'windows')
+          extension=""
+          if [[ "${{ matrix.target }}" = *"windows"* ]]; then
+            extension=".exe"
+          fi
+
+          cp \
+            "target/${{ matrix.target }}/release/koko${extension}" \
+            "build-artifact/target/${{ matrix.target }}/release/koko${extension}"
+          cp -R "crates/client-web/dist" "build-artifact/crates/client-web/dist"
+
+      - name: Upload build artifact
+        if: matrix.run == 'build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error
-          name: koko-${{ matrix.target }}
-          path: artifacts
+          name: ${{ matrix.build_artifact_prefix }}-${{ matrix.target }}
+          path: ${{ matrix.build_artifact_path }}

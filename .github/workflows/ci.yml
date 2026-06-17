@@ -91,6 +91,27 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
+  build_macos_dmg:
+    name: Build macOS DMG
+    needs:
+      - setup_release
+      - rust
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-macos-dmg.yml
+    with:
+      publish_release: ${{ needs.setup_release.outputs.publish_release }}
+      release_version: ${{ needs.setup_release.outputs.release_version }}
+    secrets:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_NOTARYTOOL_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_PASSWORD }}
+      APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+      APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64: >-
+        ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+      APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_P12_PASSWORD: >-
+        ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_P12_PASSWORD }}
+
   build_flatpak:
     name: Build Flatpak
     needs: setup_release
@@ -124,6 +145,7 @@ jobs:
       - clippy
       - rust
       - build_windows_installer
+      - build_macos_dmg
       - build_flatpak
     permissions:
       contents: read

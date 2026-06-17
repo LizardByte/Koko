@@ -82,6 +82,27 @@ fn web_client_dist_candidates() -> Vec<PathBuf> {
         candidates.push(current_dir.join("crates").join("client-web").join("dist"));
     }
 
+    if let Ok(executable_path) = env::current_exe() {
+        if let Some(executable_dir) = executable_path.parent() {
+            candidates.push(
+                executable_dir
+                    .join("crates")
+                    .join("client-web")
+                    .join("dist"),
+            );
+
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            {
+                for ancestor in executable_dir.ancestors() {
+                    #[cfg(target_os = "macos")]
+                    candidates.push(ancestor.join("Resources").join("client-web").join("dist"));
+                    #[cfg(target_os = "linux")]
+                    candidates.push(ancestor.join("share").join("koko").join("client-web"));
+                }
+            }
+        }
+    }
+
     candidates.push(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")

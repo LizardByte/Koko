@@ -5,25 +5,28 @@ permissions: {}
 on:
   workflow_call:
     inputs:
-      job_name:
-        required: true
-        type: string
       release_version:
         default: ''
         required: false
         type: string
-      run_build:
-        required: true
-        type: boolean
-      run_tests:
-        required: true
-        type: boolean
 
 jobs:
   rust:
     strategy:
       fail-fast: false
       matrix:
+        run:
+          - test
+          - build
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
         include:
           - target: x86_64-unknown-linux-musl  # Alpine
             os: ubuntu-latest
@@ -65,7 +68,10 @@ jobs:
             container: ''
             cargo_features: ''
             shell: bash
-    name: ${{ inputs.job_name }} (${{ matrix.target }})
+        exclude:
+          - run: test
+            target: aarch64-pc-windows-msvc
+    name: ${{ matrix.run == 'test' && 'Test' || 'Build' }} (${{ matrix.target }})
     permissions:
       contents: read
     runs-on: ${{ matrix.os }}
@@ -77,8 +83,6 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
-      INPUT_RUN_BUILD: ${{ inputs.run_build }}
-      INPUT_RUN_TESTS: ${{ inputs.run_tests }}
     steps:
       - name: Fix arm64 Alpine container
         if: runner.arch == 'ARM64' && contains(matrix.container, 'alpine')
@@ -137,7 +141,7 @@ jobs:
           cache-dependency-path: crates/client-web/package-lock.json
 
       - name: Install Cargo tools
-        if: env.INPUT_RUN_TESTS == 'true' || (env.INPUT_RUN_BUILD == 'true' && env.INPUT_RELEASE_VERSION != '')
+        if: matrix.run == 'test' || env.INPUT_RELEASE_VERSION != ''
         run: |
           cargo_run_bin_version="$(
             cargo metadata --locked --no-deps --format-version 1 \
@@ -148,15 +152,15 @@ jobs:
             exit 1
           fi
           cargo install --locked cargo-run-bin --version "${cargo_run_bin_version}"
-          if [[ "${INPUT_RUN_BUILD}" == "true" && -n "${INPUT_RELEASE_VERSION}" ]]; then
+          if [[ -n "${INPUT_RELEASE_VERSION}" ]]; then
             cargo bin cargo-set-version --version
           fi
-          if [[ "${INPUT_RUN_TESTS}" == "true" ]]; then
+          if [[ "${{ matrix.run }}" == "test" ]]; then
             cargo bin cargo-tarpaulin --version
           fi
 
       - name: Update Version
-        if: env.INPUT_RUN_BUILD == 'true' && env.INPUT_RELEASE_VERSION != ''
+        if: matrix.run == 'build' && env.INPUT_RELEASE_VERSION != ''
         run: |
           cargo bin cargo-set-version "${INPUT_RELEASE_VERSION}"
           cargo update --workspace
@@ -170,11 +174,11 @@ jobs:
 
       - name: Test
         id: test
-        if: env.INPUT_RUN_TESTS == 'true'
+        if: matrix.run == 'test'
         run: |
           tarpaulin_args=()
           case "${{ matrix.target }}" in
-            aarch64-unknown-linux-gnu|aarch64-pc-windows-msvc)
+            aarch64-unknown-linux-gnu)
               tarpaulin_args+=(--jobs 1)
               ;;
           esac
@@ -193,7 +197,7 @@ jobs:
       - name: Upload coverage artifact
         if: >-
           always() &&
-          env.INPUT_RUN_TESTS == 'true' &&
+          matrix.run == 'test' &&
           (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -202,11 +206,11 @@ jobs:
           path: cobertura.xml
 
       - name: Build
-        if: env.INPUT_RUN_BUILD == 'true'
+        if: matrix.run == 'build'
         run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
 
       - name: Create 7z archive
-        if: env.INPUT_RUN_BUILD == 'true' && !contains(matrix.target, 'windows')
+        if: matrix.run == 'build' && !contains(matrix.target, 'windows')
         run: |
           mkdir -p artifacts
 
@@ -220,7 +224,7 @@ jobs:
             "./target/${{ matrix.target }}/release/koko${extension}"
 
       - name: Upload Windows build artifact
-        if: env.INPUT_RUN_BUILD == 'true' && contains(matrix.target, 'windows')
+        if: matrix.run == 'build' && contains(matrix.target, 'windows')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error
@@ -230,7 +234,7 @@ jobs:
             crates/client-web/dist
 
       - name: Upload Artifacts
-        if: env.INPUT_RUN_BUILD == 'true' && !contains(matrix.target, 'windows')
+        if: matrix.run == 'build' && !contains(matrix.target, 'windows')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           if-no-files-found: error

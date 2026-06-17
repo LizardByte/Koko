@@ -63,33 +63,20 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci-clippy.yml
 
-  test:
-    name: Test
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci-rust.yml
-    with:
-      job_name: Test
-      run_build: false
-      run_tests: true
-
-  build:
-    name: Build
+  rust:
+    name: Rust
     needs: setup_release
     permissions:
       contents: read
     uses: ./.github/workflows/ci-rust.yml
     with:
-      job_name: Build
       release_version: ${{ needs.setup_release.outputs.release_version }}
-      run_build: true
-      run_tests: false
 
   build_windows_installer:
     name: Build Windows Installer
     needs:
       - setup_release
-      - build
+      - rust
     permissions:
       contents: read
     uses: ./.github/workflows/ci-windows-installer.yml
@@ -120,7 +107,7 @@ jobs:
       always() &&
       !cancelled() &&
       startsWith(github.repository, 'LizardByte/')
-    needs: test
+    needs: rust
     permissions:
       contents: read
     uses: ./.github/workflows/ci-coverage.yml
@@ -135,8 +122,7 @@ jobs:
     needs:
       - setup_release
       - clippy
-      - test
-      - build
+      - rust
       - build_windows_installer
       - build_flatpak
     permissions:

@@ -43,14 +43,14 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
 }
 
 pub(crate) async fn fetch_youtube_theme_url(
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
 ) -> Result<Option<String>, String> {
-    let Some(database_path) = database_path_for_media_type(media_type) else {
+    let Some(database_path) = database_path_for_item_type(item_type) else {
         return Ok(None);
     };
-    let Some(database_id) = normalize_database_id(media_type, database_id) else {
+    let Some(database_id) = normalize_database_id(item_type, database_id) else {
         return Ok(None);
     };
     let normalized_external_id = external_id.trim();
@@ -82,12 +82,11 @@ pub(crate) async fn fetch_youtube_theme_url(
 }
 
 pub(crate) async fn fetch_youtube_theme_metadata(
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
 ) -> Result<Option<ProviderMetadataDetails>, String> {
-    let Some(theme_song_url) =
-        fetch_youtube_theme_url(media_type, database_id, external_id).await?
+    let Some(theme_song_url) = fetch_youtube_theme_url(item_type, database_id, external_id).await?
     else {
         return Ok(None);
     };
@@ -109,13 +108,13 @@ pub(crate) async fn fetch_youtube_theme_metadata(
 
 pub(crate) fn item_lookup_reference_priority(
     source_provider_id: &MetadataProviderId,
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
 ) -> Option<usize> {
-    let normalized_database_id = normalize_database_id(media_type, database_id)?;
+    let normalized_database_id = normalize_database_id(item_type, database_id)?;
     match source_provider_id {
         MetadataProviderId::Tmdb | MetadataProviderId::Tvdb => {
-            if !themerr_supports_item_media_type(media_type) {
+            if !themerr_supports_item_type(item_type) {
                 return None;
             }
             match normalized_database_id {
@@ -155,30 +154,30 @@ async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadat
     })
 }
 
-fn database_path_for_media_type(media_type: &str) -> Option<&'static str> {
-    match media_type.trim() {
+fn database_path_for_item_type(item_type: &str) -> Option<&'static str> {
+    match item_type.trim() {
         "movie" => Some("movies"),
-        "tv" | "series" | "show" => Some("tv_shows"),
-        "collection" | "movie_collection" => Some("movie_collections"),
+        "show" => Some("tv_shows"),
+        "collection" => Some("movie_collections"),
         _ => None,
     }
 }
 
-fn themerr_supports_item_media_type(media_type: &str) -> bool {
+fn themerr_supports_item_type(item_type: &str) -> bool {
     matches!(
-        media_type.trim().to_ascii_lowercase().as_str(),
-        "movie" | "tv" | "series" | "show"
+        item_type.trim().to_ascii_lowercase().as_str(),
+        "movie" | "show"
     )
 }
 
 fn normalize_database_id(
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
 ) -> Option<&'static str> {
-    let normalized_media_type = media_type.trim().to_ascii_lowercase();
+    let normalized_item_type = item_type.trim().to_ascii_lowercase();
     match database_id.trim().to_ascii_lowercase().as_str() {
-        "themoviedb" | "tmdb" => Some("themoviedb"),
-        "imdb" if normalized_media_type == "movie" => Some("imdb"),
+        "tmdb" => Some("themoviedb"),
+        "imdb" if normalized_item_type == "movie" => Some("imdb"),
         _ => None,
     }
 }
@@ -210,7 +209,7 @@ fn text_field(
 #[cfg(test)]
 mod tests {
     use super::{
-        database_path_for_media_type,
+        database_path_for_item_type,
         item_lookup_reference_priority,
         normalize_database_id,
         parse_youtube_theme_url,
@@ -246,7 +245,7 @@ mod tests {
     #[test]
     fn collection_theme_lookup_uses_movie_collection_database() {
         assert_eq!(
-            database_path_for_media_type("collection"),
+            database_path_for_item_type("collection"),
             Some("movie_collections")
         );
         assert_eq!(
@@ -258,25 +257,26 @@ mod tests {
 
     #[test]
     fn imdb_theme_lookup_is_movie_only() {
-        assert_eq!(database_path_for_media_type("movie"), Some("movies"));
-        assert_eq!(database_path_for_media_type("series"), Some("tv_shows"));
+        assert_eq!(database_path_for_item_type("movie"), Some("movies"));
+        assert_eq!(database_path_for_item_type("show"), Some("tv_shows"));
+        assert_eq!(database_path_for_item_type("series"), None);
+        assert_eq!(database_path_for_item_type("tv"), None);
         assert_eq!(
-            database_path_for_media_type("collection"),
+            database_path_for_item_type("collection"),
             Some("movie_collections")
         );
         assert_eq!(normalize_database_id("movie", "imdb"), Some("imdb"));
-        assert_eq!(normalize_database_id("series", "imdb"), None);
-        assert_eq!(normalize_database_id("tv", "imdb"), None);
+        assert_eq!(normalize_database_id("show", "imdb"), None);
         assert_eq!(normalize_database_id("collection", "imdb"), None);
     }
 
     #[test]
-    fn item_lookup_reference_support_follows_source_provider_and_media_type() {
+    fn item_lookup_reference_support_follows_source_provider_and_item_type() {
         assert!(
             item_lookup_reference_priority(&MetadataProviderId::Tmdb, "movie", "tmdb").is_some()
         );
         assert!(
-            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "series", "tmdb").is_some()
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "show", "tmdb").is_some()
         );
         assert!(
             item_lookup_reference_priority(&MetadataProviderId::Tmdb, "movie", "imdb").is_some()
@@ -285,11 +285,15 @@ mod tests {
             item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "imdb").is_some()
         );
         assert!(
-            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "series", "tmdb").is_some()
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "show", "tmdb").is_some()
         );
         assert!(
-            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "series", "imdb").is_none()
+            item_lookup_reference_priority(&MetadataProviderId::Tvdb, "show", "imdb").is_none()
         );
+        assert!(
+            item_lookup_reference_priority(&MetadataProviderId::Tmdb, "series", "tmdb").is_none()
+        );
+        assert!(item_lookup_reference_priority(&MetadataProviderId::Tvdb, "tv", "tmdb").is_none());
         assert!(
             item_lookup_reference_priority(&MetadataProviderId::Tvdb, "movie", "thetvdb").is_none()
         );

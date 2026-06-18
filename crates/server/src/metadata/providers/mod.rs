@@ -159,10 +159,10 @@ pub trait MetadataProvider {
     fn supports_secondary_metadata_reference(
         &self,
         source_provider_id: &MetadataProviderId,
-        media_type: &str,
+        item_type: &str,
         database_id: &str,
     ) -> bool {
-        self.secondary_metadata_reference_priority(source_provider_id, media_type, database_id)
+        self.secondary_metadata_reference_priority(source_provider_id, item_type, database_id)
             .is_some()
     }
 
@@ -170,7 +170,7 @@ pub trait MetadataProvider {
     fn secondary_metadata_reference_priority(
         &self,
         _source_provider_id: &MetadataProviderId,
-        _media_type: &str,
+        _item_type: &str,
         _database_id: &str,
     ) -> Option<usize> {
         Some(0)
@@ -179,7 +179,7 @@ pub trait MetadataProvider {
     /// Resolve item-level metadata fields contributed by a secondary provider.
     fn fetch_secondary_metadata<'a>(
         &'a self,
-        _media_type: &'a str,
+        _item_type: &'a str,
         _database_id: &'a str,
         _external_id: &'a str,
         _locale_key: &'a str,
@@ -190,7 +190,7 @@ pub trait MetadataProvider {
     /// Resolve collection-level metadata fields contributed by a secondary provider.
     fn fetch_secondary_collection_metadata<'a>(
         &'a self,
-        _media_type: &'a str,
+        _item_type: &'a str,
         _database_id: &'a str,
         _external_id: &'a str,
         _locale_key: &'a str,
@@ -523,21 +523,21 @@ impl MetadataProvider for ThemerrMetadataProvider {
     fn secondary_metadata_reference_priority(
         &self,
         source_provider_id: &MetadataProviderId,
-        media_type: &str,
+        item_type: &str,
         database_id: &str,
     ) -> Option<usize> {
-        themerr::item_lookup_reference_priority(source_provider_id, media_type, database_id)
+        themerr::item_lookup_reference_priority(source_provider_id, item_type, database_id)
     }
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
-        media_type: &'a str,
+        item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
         _locale_key: &'a str,
     ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
         Box::pin(themerr::fetch_youtube_theme_metadata(
-            media_type,
+            item_type,
             database_id,
             external_id,
         ))
@@ -545,17 +545,17 @@ impl MetadataProvider for ThemerrMetadataProvider {
 
     fn fetch_secondary_collection_metadata<'a>(
         &'a self,
-        media_type: &'a str,
+        item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
         _locale_key: &'a str,
     ) -> MetadataProviderFuture<'a, Option<ProviderMetadataCollection>> {
         Box::pin(async move {
             Ok(
-                themerr::fetch_youtube_theme_url(media_type, database_id, external_id)
+                themerr::fetch_youtube_theme_url(item_type, database_id, external_id)
                     .await?
                     .map(|theme_song_url| ProviderMetadataCollection {
-                        external_id: format!("{media_type}:{database_id}:{external_id}"),
+                        external_id: format!("{item_type}:{database_id}:{external_id}"),
                         name: None,
                         overview: None,
                         artwork_url: None,
@@ -585,13 +585,13 @@ impl MetadataProvider for TrailerDbMetadataProvider {
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
-        media_type: &'a str,
+        item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
         locale_key: &'a str,
     ) -> MetadataProviderFuture<'a, Option<ProviderMetadataDetails>> {
         Box::pin(trailerdb::fetch_secondary_metadata(
-            media_type,
+            item_type,
             database_id,
             external_id,
             locale_key,

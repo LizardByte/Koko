@@ -88,7 +88,7 @@ use crate::utils::current_timestamp;
 
 #[derive(Debug)]
 struct SecondaryMetadataReferenceCandidate {
-    media_type: String,
+    item_type: String,
     database_id: String,
     external_id: String,
     priority: usize,
@@ -3509,6 +3509,16 @@ fn get_item_theme_song_source_references(
             break;
         }
 
+        let Some((parent_id, item_type)) = media_items_dsl::media_items
+            .filter(media_items_dsl::id.eq(current_item_id))
+            .filter(media_items_dsl::deleted_at.is_null())
+            .select((media_items_dsl::parent_id, media_items_dsl::item_type))
+            .first::<(Option<i32>, String)>(conn)
+            .optional()?
+        else {
+            break;
+        };
+
         let links =
             get_item_theme_song_source_metadata_links(conn, current_item_id, source_provider_ids)?;
         if !links.is_empty() {
@@ -3518,6 +3528,7 @@ fn get_item_theme_song_source_references(
                 append_theme_song_source_references(
                     conn,
                     secondary_provider,
+                    &item_type,
                     &link,
                     &mut references,
                     &mut seen,
@@ -3526,13 +3537,7 @@ fn get_item_theme_song_source_references(
             return Ok(references);
         }
 
-        current_id = media_items_dsl::media_items
-            .filter(media_items_dsl::id.eq(current_item_id))
-            .filter(media_items_dsl::deleted_at.is_null())
-            .select(media_items_dsl::parent_id)
-            .first::<Option<i32>>(conn)
-            .optional()?
-            .flatten();
+        current_id = parent_id;
     }
 
     Ok(Vec::new())
@@ -3541,6 +3546,7 @@ fn get_item_theme_song_source_references(
 fn append_theme_song_source_references(
     conn: &mut SqliteConnection,
     secondary_provider: &(dyn MetadataProvider + Send + Sync),
+    item_type: &str,
     link: &ItemMetadataLink,
     references: &mut Vec<(String, String, String)>,
     seen: &mut HashSet<(String, String, String)>,
@@ -3548,18 +3554,13 @@ fn append_theme_song_source_references(
     let Some(source_provider_id) = MetadataProviderId::from_storage_value(&link.provider_id) else {
         return Ok(());
     };
-    if let Some(media_type) = link
-        .media_type
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if !item_type.trim().is_empty() {
         let mut candidates = Vec::new();
         let mut order = 0;
         push_supported_secondary_reference_candidate(
             secondary_provider,
             &source_provider_id,
-            media_type,
+            item_type,
             link.provider_id.clone(),
             link.external_id.clone(),
             order,
@@ -3571,7 +3572,7 @@ fn append_theme_song_source_references(
             push_supported_secondary_reference_candidate(
                 secondary_provider,
                 &source_provider_id,
-                media_type,
+                item_type,
                 database_id,
                 external_id,
                 order,
@@ -3582,7 +3583,7 @@ fn append_theme_song_source_references(
         candidates.sort_by_key(|candidate| (candidate.priority, candidate.order));
         for candidate in candidates {
             let reference = (
-                candidate.media_type,
+                candidate.item_type,
                 candidate.database_id,
                 candidate.external_id,
             );
@@ -3598,7 +3599,7 @@ fn append_theme_song_source_references(
 fn push_supported_secondary_reference_candidate(
     secondary_provider: &(dyn MetadataProvider + Send + Sync),
     source_provider_id: &MetadataProviderId,
-    media_type: &str,
+    item_type: &str,
     database_id: String,
     external_id: String,
     order: usize,
@@ -3606,14 +3607,14 @@ fn push_supported_secondary_reference_candidate(
 ) {
     let Some(priority) = secondary_provider.secondary_metadata_reference_priority(
         source_provider_id,
-        media_type,
+        item_type,
         &database_id,
     ) else {
         return;
     };
 
     candidates.push(SecondaryMetadataReferenceCandidate {
-        media_type: media_type.to_string(),
+        item_type: item_type.to_string(),
         database_id,
         external_id,
         priority,

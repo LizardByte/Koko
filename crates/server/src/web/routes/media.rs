@@ -651,10 +651,10 @@ async fn persist_secondary_metadata_for_item(
         for locale_key in &languages {
             let provider_locale = uses_localized_metadata
                 .then(|| provider_locale_key(provider_id.clone(), locale_key));
-            for (media_type, database_id, external_id) in &references {
+            for (item_type, database_id, external_id) in &references {
                 match fetch_provider_secondary_metadata(
                     provider_id.clone(),
-                    media_type,
+                    item_type,
                     database_id,
                     external_id,
                     locale_key,
@@ -664,7 +664,7 @@ async fn persist_secondary_metadata_for_item(
                     Ok(Some(details)) => {
                         db.run({
                             let provider_id = provider_id.clone();
-                            let media_type = media_type.clone();
+                            let item_type = item_type.clone();
                             let database_id = database_id.clone();
                             let external_id = external_id.clone();
                             let locale_key = locale_key.clone();
@@ -675,10 +675,8 @@ async fn persist_secondary_metadata_for_item(
                             move |conn| {
                                 let snapshot = StoredMetadataSnapshot {
                                     provider_id,
-                                    external_id: format!(
-                                        "{media_type}:{database_id}:{external_id}"
-                                    ),
-                                    media_type: Some(media_type),
+                                    external_id: format!("{item_type}:{database_id}:{external_id}"),
+                                    media_type: Some(item_type),
                                     title: None,
                                     overview: None,
                                     artwork_url: None,
@@ -717,7 +715,7 @@ async fn persist_secondary_metadata_for_item(
                             provider_id.as_storage_value(),
                             item_id,
                             locale_key,
-                            media_type,
+                            item_type,
                             database_id,
                             external_id,
                             error
@@ -743,10 +741,10 @@ async fn persist_secondary_metadata_for_item(
                 Status::InternalServerError
             })?;
 
-        for (collection_id, media_type, database_id, external_id) in collection_references {
+        for (collection_id, item_type, database_id, external_id) in collection_references {
             match fetch_provider_secondary_collection_metadata(
                 provider_id.clone(),
-                &media_type,
+                &item_type,
                 &database_id,
                 &external_id,
                 crate::metadata::DEFAULT_METADATA_LOCALE,
@@ -759,7 +757,7 @@ async fn persist_secondary_metadata_for_item(
                     };
                     db.run({
                         let provider_id = provider_id.clone();
-                        let media_type = media_type.clone();
+                        let item_type = item_type.clone();
                         let database_id = database_id.clone();
                         let external_id = external_id.clone();
                         move |conn| {
@@ -767,7 +765,7 @@ async fn persist_secondary_metadata_for_item(
                                 conn,
                                 collection_id,
                                 provider_id,
-                                &media_type,
+                                &item_type,
                                 &database_id,
                                 &external_id,
                                 &url,
@@ -793,7 +791,7 @@ async fn persist_secondary_metadata_for_item(
                          {}): {}",
                         provider_id.as_storage_value(),
                         item_id,
-                        media_type,
+                        item_type,
                         database_id,
                         external_id,
                         error
@@ -2476,11 +2474,15 @@ async fn cache_deferred_person_image(
     let Some(image_url) = details.image_url.as_deref() else {
         return;
     };
+    let person_media_type = match &target.provider_id {
+        MetadataProviderId::Tvdb => "people",
+        _ => "person",
+    };
     let person_dir = managed_metadata_asset_dir(
         &settings.general.data_dir,
         target.provider_id.clone(),
         &target.external_id,
-        Some("person"),
+        Some(person_media_type),
         &target.locale_key,
     );
     let cache_key = format!("{}_profile", target.provider_id.as_storage_value());

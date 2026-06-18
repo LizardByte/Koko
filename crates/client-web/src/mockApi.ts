@@ -210,6 +210,7 @@ const items: MediaItemDetail[] = [
     duration_ms: 2_700_000,
     modified_at: 1760923150,
     genres: ['Drama', 'Fantasy'],
+    linked_media_type: 'tv',
     has_metadata: true,
     metadata_refresh_state: 'fresh',
     theme_song_url: 'https://www.youtube.com/watch?v=uXZd_W5B7N0',
@@ -463,6 +464,23 @@ const metadataProviders: MetadataProviderStatus[] = [
     logo_dark_url: undefined,
   },
   {
+    id: 'tvdb',
+    display_name: 'TheTVDB',
+    description: 'Alternative movie and television metadata provider with strong series and episode coverage.',
+    supported_kinds: ['movies', 'shows'],
+    requires_api_key: true,
+    implemented: true,
+    role: 'primary',
+    extends_provider_ids: [],
+    enabled: false,
+    configured: false,
+    language: 'en-US',
+    attribution_text: 'Metadata and artwork provided by TheTVDB.',
+    attribution_url: 'https://thetvdb.com/',
+    logo_light_url: undefined,
+    logo_dark_url: undefined,
+  },
+  {
     id: 'musicbrainz',
     display_name: 'MusicBrainz',
     description: 'Planned music metadata provider for albums, artists, and tracks.',
@@ -487,7 +505,7 @@ const metadataProviders: MetadataProviderStatus[] = [
     requires_api_key: false,
     implemented: true,
     role: 'secondary',
-    extends_provider_ids: ['tmdb'],
+    extends_provider_ids: ['tmdb', 'tvdb'],
     enabled: true,
     configured: true,
     language: 'en-US',
@@ -599,7 +617,28 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
   201: {
     item_id: 201,
     providers: metadataProviders,
-    matches: [],
+    matches: metadataMatchesWithSecondaries(
+      items.find((item) => item.id === 201),
+      {
+        id: 3,
+        provider_id: 'tmdb',
+        external_id: '1399',
+        title: 'Game of Thrones',
+        overview: 'Nine noble families wage war against each other in order to gain control over the mythical land of Westeros.',
+        artwork_url: 'https://image.tmdb.org/t/p/w500/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg',
+        backdrop_url: 'https://image.tmdb.org/t/p/w1280/suopoADq0k8YZr4dQXcU6pToj6s.jpg',
+        release_year: 2011,
+        media_type: 'tv',
+        relation_kind: 'primary',
+        match_state: 'linked',
+        genres: ['Drama', 'Fantasy'],
+        people: [],
+        locale_key: 'en-US',
+        refresh_state: 'fresh',
+        last_refreshed_at: 1760923200,
+        updated_at: 1760923200,
+      },
+    ),
   },
   202: {
     item_id: 202,
@@ -622,6 +661,47 @@ const itemMetadata: Record<number, ItemMetadataResponse> = {
     matches: [],
   },
 };
+
+function themerrSecondaryMatch(
+  item: MediaItemSummary,
+  primaryMatch: ItemMetadataMatch,
+  id: number,
+): ItemMetadataMatch | undefined {
+  if (item.item_type !== 'movie' && item.item_type !== 'show') {
+    return undefined;
+  }
+  if (primaryMatch.provider_id !== 'tmdb') {
+    return undefined;
+  }
+
+  return {
+    id,
+    provider_id: 'themerr',
+    external_id: `${item.item_type}:tmdb:${primaryMatch.external_id}`,
+    media_type: item.item_type,
+    relation_kind: 'secondary',
+    match_state: 'linked',
+    theme_song_url: item.item_type === 'show'
+      ? 'https://www.youtube.com/watch?v=uXZd_W5B7N0'
+      : 'https://www.youtube.com/watch?v=SLBACEP6LsI',
+    genres: [],
+    people: [],
+    locale_key: 'en-US',
+    refresh_state: 'fresh',
+    last_refreshed_at: primaryMatch.last_refreshed_at,
+    updated_at: primaryMatch.updated_at,
+  };
+}
+
+function metadataMatchesWithSecondaries(
+  item: MediaItemSummary | undefined,
+  primaryMatch: ItemMetadataMatch,
+): ItemMetadataMatch[] {
+  const secondaryMatch = item
+    ? themerrSecondaryMatch(item, primaryMatch, primaryMatch.id + 1)
+    : undefined;
+  return secondaryMatch ? [primaryMatch, secondaryMatch] : [primaryMatch];
+}
 
 interface MockPlaybackProgress extends PlaybackProgressRequest {
   watch_count: number;
@@ -1312,12 +1392,13 @@ export function linkMockItemMetadata(itemId: number, request: LinkMetadataReques
     updated_at: Math.floor(Date.now() / 1000),
   };
 
+  const item = items.find((candidate) => candidate.id === itemId);
+
   itemMetadata[itemId] = {
     item_id: itemId,
     providers: metadataProviders,
-    matches: [linkedMatch],
+    matches: metadataMatchesWithSecondaries(item, linkedMatch),
   };
-  const item = items.find((candidate) => candidate.id === itemId);
   if (item) {
     item.display_title = candidate.title;
   }

@@ -1939,7 +1939,7 @@ pub async fn load_provider_show_descendant_targets(
 /// Resolve item-level metadata fields contributed by a secondary provider.
 pub async fn fetch_provider_secondary_metadata(
     provider_id: MetadataProviderId,
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
     locale_key: &str,
@@ -1952,14 +1952,14 @@ pub async fn fetch_provider_secondary_metadata(
         )
     })?;
     provider
-        .fetch_secondary_metadata(media_type, database_id, external_id, locale_key)
+        .fetch_secondary_metadata(item_type, database_id, external_id, locale_key)
         .await
 }
 
 /// Resolve collection-level metadata fields contributed by a secondary provider.
 pub async fn fetch_provider_secondary_collection_metadata(
     provider_id: MetadataProviderId,
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
     locale_key: &str,
@@ -1972,7 +1972,7 @@ pub async fn fetch_provider_secondary_collection_metadata(
         )
     })?;
     provider
-        .fetch_secondary_collection_metadata(media_type, database_id, external_id, locale_key)
+        .fetch_secondary_collection_metadata(item_type, database_id, external_id, locale_key)
         .await
 }
 
@@ -2781,7 +2781,7 @@ pub fn upsert_secondary_collection_theme_song_url(
     conn: &mut SqliteConnection,
     source_collection_id: i32,
     provider_id: MetadataProviderId,
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
     theme_song_url: &str,
@@ -2800,7 +2800,7 @@ pub fn upsert_secondary_collection_theme_song_url(
         .first::<MetadataCollection>(conn)?;
     let now = current_timestamp();
     let secondary_collection = ProviderMetadataCollection {
-        external_id: format!("{media_type}:{database_id}:{external_id}"),
+        external_id: format!("{item_type}:{database_id}:{external_id}"),
         name: None,
         overview: None,
         artwork_url: None,

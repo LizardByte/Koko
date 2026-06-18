@@ -44,12 +44,12 @@ pub(crate) fn provider_locale_key(locale_key: &str) -> String {
 }
 
 pub(crate) async fn fetch_secondary_metadata(
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
     locale_key: &str,
 ) -> Result<Option<ProviderMetadataDetails>, String> {
-    let Some(path) = trailerdb_path(media_type, database_id, external_id) else {
+    let Some(path) = trailerdb_path(item_type, database_id, external_id) else {
         return Ok(None);
     };
 
@@ -74,7 +74,7 @@ pub(crate) async fn fetch_secondary_metadata(
 }
 
 fn trailerdb_path(
-    media_type: &str,
+    item_type: &str,
     database_id: &str,
     external_id: &str,
 ) -> Option<String> {
@@ -84,11 +84,11 @@ fn trailerdb_path(
     }
 
     match (
-        media_type.trim().to_ascii_lowercase().as_str(),
+        item_type.trim().to_ascii_lowercase().as_str(),
         database_id.trim().to_ascii_lowercase().as_str(),
     ) {
         ("movie", "imdb") => Some(format!("movie/{external_id}")),
-        ("tv" | "series" | "show", "tmdb" | "themoviedb") => Some(format!("series/{external_id}")),
+        ("show", "tmdb") => Some(format!("series/{external_id}")),
         _ => None,
     }
 }
@@ -263,14 +263,13 @@ mod tests {
     #[test]
     fn show_lookup_uses_tmdb_series_detail_endpoint() {
         assert_eq!(
-            trailerdb_path("tv", "tmdb", "1399").as_deref(),
+            trailerdb_path("show", "tmdb", "1399").as_deref(),
             Some("series/1399")
         );
-        assert_eq!(
-            trailerdb_path("show", "themoviedb", "1399").as_deref(),
-            Some("series/1399")
-        );
-        assert_eq!(trailerdb_path("tv", "imdb", "tt0944947"), None);
+        assert_eq!(trailerdb_path("tv", "tmdb", "1399"), None);
+        assert_eq!(trailerdb_path("series", "tmdb", "1399"), None);
+        assert_eq!(trailerdb_path("show", "themoviedb", "1399"), None);
+        assert_eq!(trailerdb_path("show", "imdb", "tt0944947"), None);
     }
 
     #[test]

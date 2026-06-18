@@ -93,7 +93,7 @@ pub(crate) fn metadata_item_kind(media_type: Option<&str>) -> MetadataItemKind {
         "tv_season" => MetadataItemKind::Season,
         "tv_episode" => MetadataItemKind::Episode,
         "collection" => MetadataItemKind::Collection,
-        "person" | "people" => MetadataItemKind::Person,
+        "person" => MetadataItemKind::Person,
         "company" => MetadataItemKind::Company,
         _ => MetadataItemKind::Item,
     }
@@ -108,7 +108,7 @@ pub(crate) async fn search(
     let api_key = tmdb_api_key_from_provider(&provider)?;
     let query = query.to_string();
     let language = provider.language;
-    let expected_media_type = media_type.map(normalize_tmdb_search_media_type);
+    let expected_media_type = media_type.map(|value| value.trim().to_ascii_lowercase());
     run_tmdb_blocking(move || {
         let client = TmdbApiClient::new_with_api_key(api_key);
         let payload = client
@@ -131,13 +131,6 @@ pub(crate) async fn search(
     .await
 }
 
-fn normalize_tmdb_search_media_type(media_type: &str) -> String {
-    match media_type {
-        "series" => "tv".into(),
-        other => other.into(),
-    }
-}
-
 pub(crate) async fn fetch_snapshot(
     settings: &MetadataSettings,
     external_id: &str,
@@ -150,10 +143,7 @@ pub(crate) async fn fetch_snapshot(
     let image_languages = tmdb_include_image_languages(&language);
     let external_id_number = parse_external_id(external_id, media_type)?;
     let external_id_string = external_id.to_string();
-    let normalized_media_type = match media_type {
-        "series" => "tv".to_string(),
-        other => other.to_string(),
-    };
+    let normalized_media_type = media_type.trim().to_ascii_lowercase();
 
     run_tmdb_blocking(move || match normalized_media_type.as_str() {
         "movie" => {
@@ -1776,10 +1766,14 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
 mod tests {
     use super::{
         metadata_details,
+        metadata_item_kind,
         tmdb_logo_url,
     };
     use crate::config::MetadataProviderId;
-    use crate::metadata::StoredMetadataSnapshot;
+    use crate::metadata::{
+        MetadataItemKind,
+        StoredMetadataSnapshot,
+    };
     use serde_json::json;
 
     #[test]
@@ -1814,6 +1808,23 @@ mod tests {
             tmdb_logo_url(&payload).as_deref(),
             Some("https://image.tmdb.org/t/p/w500/logo.png")
         );
+    }
+
+    #[test]
+    fn tmdb_metadata_item_kind_uses_exact_provider_media_types() {
+        assert_eq!(metadata_item_kind(Some("movie")), MetadataItemKind::Movie);
+        assert_eq!(metadata_item_kind(Some("tv")), MetadataItemKind::Show);
+        assert_eq!(
+            metadata_item_kind(Some("tv_season")),
+            MetadataItemKind::Season
+        );
+        assert_eq!(
+            metadata_item_kind(Some("tv_episode")),
+            MetadataItemKind::Episode
+        );
+        assert_eq!(metadata_item_kind(Some("person")), MetadataItemKind::Person);
+        assert_eq!(metadata_item_kind(Some("series")), MetadataItemKind::Item);
+        assert_eq!(metadata_item_kind(Some("people")), MetadataItemKind::Item);
     }
 
     #[test]

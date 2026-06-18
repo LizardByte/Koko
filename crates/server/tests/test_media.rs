@@ -3067,7 +3067,7 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
             MetadataProviderId::Themerr
         )
         .unwrap(),
-        vec![("tv".into(), "tmdb".into(), "1399".into())]
+        vec![("show".into(), "tmdb".into(), "1399".into())]
     );
     assert_eq!(
         get_item_youtube_theme_provider_references(
@@ -3076,7 +3076,7 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
             MetadataProviderId::Themerr
         )
         .unwrap(),
-        vec![("tv".into(), "tmdb".into(), "1399".into())]
+        vec![("show".into(), "tmdb".into(), "1399".into())]
     );
     assert_eq!(
         get_item_youtube_theme_provider_references(
@@ -3085,7 +3085,7 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
             MetadataProviderId::Themerr
         )
         .unwrap(),
-        vec![("tv".into(), "tmdb".into(), "1399".into())]
+        vec![("show".into(), "tmdb".into(), "1399".into())]
     );
 
     drop(connection);
@@ -3158,8 +3158,8 @@ fn test_item_detail_theme_song_inherits_from_show() {
         show.id,
         &StoredMetadataSnapshot {
             provider_id: MetadataProviderId::Themerr,
-            external_id: "tv:tmdb:1399".into(),
-            media_type: Some("tv".into()),
+            external_id: "show:tmdb:1399".into(),
+            media_type: Some("show".into()),
             title: None,
             overview: None,
             artwork_url: None,
@@ -3422,7 +3422,7 @@ fn test_themerr_references_include_tvdb_show_tmdb_fallback() {
             MetadataProviderId::Themerr
         )
         .unwrap(),
-        vec![("series".into(), "tmdb".into(), "1399".into())]
+        vec![("show".into(), "tmdb".into(), "1399".into())]
     );
 
     drop(connection);

@@ -86,11 +86,11 @@ pub(crate) fn metadata_item_kind(media_type: Option<&str>) -> MetadataItemKind {
         .as_str()
     {
         "movie" => MetadataItemKind::Movie,
-        "series" | "tv" => MetadataItemKind::Show,
+        "series" => MetadataItemKind::Show,
         "season" => MetadataItemKind::Season,
         "episode" => MetadataItemKind::Episode,
         "list" => MetadataItemKind::Collection,
-        "people" | "person" | "actor" => MetadataItemKind::Person,
+        "people" => MetadataItemKind::Person,
         "company" => MetadataItemKind::Company,
         "award" => MetadataItemKind::Award,
         _ => MetadataItemKind::Item,
@@ -108,7 +108,7 @@ pub(crate) async fn search(
         ("query", query.to_string()),
         ("limit", "20".to_string()),
     ];
-    if let Some(media_type) = media_type.map(normalize_tvdb_search_media_type) {
+    if let Some(media_type) = media_type.map(|value| value.trim().to_ascii_lowercase()) {
         query_params.push(("type", media_type));
     }
     let payload = get_json(
@@ -124,7 +124,7 @@ pub(crate) async fn search(
         .cloned()
         .unwrap_or_default();
 
-    let expected_media_type = media_type.map(normalize_tvdb_search_media_type);
+    let expected_media_type = media_type.map(|value| value.trim().to_ascii_lowercase());
     Ok(results
         .into_iter()
         .filter_map(|result| search_result_from_value(result, &provider.language))
@@ -135,13 +135,6 @@ pub(crate) async fn search(
                 .unwrap_or(true)
         })
         .collect())
-}
-
-fn normalize_tvdb_search_media_type(media_type: &str) -> String {
-    match media_type {
-        "tv" => "series".into(),
-        other => other.into(),
-    }
 }
 
 pub(crate) async fn fetch_snapshot(
@@ -166,7 +159,7 @@ pub(crate) async fn fetch_snapshot(
                 &provider.language,
             ))
         }
-        "series" | "tv" => {
+        "series" => {
             let provider = provider_settings(settings, MetadataProviderId::Tvdb)
                 .map_err(|error| format!("TheTVDB {}", error))?;
             let payload =
@@ -800,8 +793,8 @@ fn search_result_from_value(
         .and_then(Value::as_str)
         .map(|value| value.to_ascii_lowercase())?;
     let media_type = match item_type.as_str() {
-        "series" | "tv series" | "tv" | "show" => "series",
-        "movie" | "film" | "feature film" => "movie",
+        "series" => "series",
+        "movie" => "movie",
         _ => return None,
     };
 
@@ -1226,7 +1219,7 @@ async fn cache_tvdb_people_payload_images(
             data_dir,
             snapshot.provider_id.clone(),
             &external_id,
-            Some("person"),
+            Some("people"),
             &snapshot.locale_key,
         );
         let cache_key = format!("{}_profile", snapshot.provider_id.as_storage_value());
@@ -2152,11 +2145,13 @@ mod tests {
         backdrop_url,
         best_overview,
         metadata_details,
+        metadata_item_kind,
         movie_snapshot_from_value,
         search_result_from_value,
         tvdb_logo_url,
         tvdb_people_with_language,
     };
+    use crate::metadata::MetadataItemKind;
     use serde_json::json;
 
     #[test]
@@ -2231,10 +2226,25 @@ mod tests {
     }
 
     #[test]
-    fn tvdb_search_result_accepts_show_alias_type() {
+    fn tvdb_metadata_item_kind_uses_exact_provider_media_types() {
+        assert_eq!(metadata_item_kind(Some("movie")), MetadataItemKind::Movie);
+        assert_eq!(metadata_item_kind(Some("series")), MetadataItemKind::Show);
+        assert_eq!(metadata_item_kind(Some("season")), MetadataItemKind::Season);
+        assert_eq!(
+            metadata_item_kind(Some("episode")),
+            MetadataItemKind::Episode
+        );
+        assert_eq!(metadata_item_kind(Some("people")), MetadataItemKind::Person);
+        assert_eq!(metadata_item_kind(Some("tv")), MetadataItemKind::Item);
+        assert_eq!(metadata_item_kind(Some("person")), MetadataItemKind::Item);
+        assert_eq!(metadata_item_kind(Some("actor")), MetadataItemKind::Item);
+    }
+
+    #[test]
+    fn tvdb_search_result_accepts_series_type() {
         let result = search_result_from_value(
             json!({
-                "type": "show",
+                "type": "series",
                 "tvdb_id": "42",
                 "name": "Example Show"
             }),
@@ -2245,6 +2255,32 @@ mod tests {
         assert_eq!(result.external_id, "42");
         assert_eq!(result.media_type, "series");
         assert_eq!(result.title, "Example Show");
+    }
+
+    #[test]
+    fn tvdb_search_result_rejects_media_type_aliases() {
+        assert!(
+            search_result_from_value(
+                json!({
+                    "type": "show",
+                    "tvdb_id": "42",
+                    "name": "Example Show"
+                }),
+                "eng",
+            )
+            .is_none()
+        );
+        assert!(
+            search_result_from_value(
+                json!({
+                    "type": "feature film",
+                    "objectID": "901",
+                    "name": "Example Movie"
+                }),
+                "eng",
+            )
+            .is_none()
+        );
     }
 
     #[test]

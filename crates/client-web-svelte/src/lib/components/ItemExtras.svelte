@@ -75,9 +75,21 @@
     aspect-ratio: 16 / 9;
     border-radius: 8px;
     overflow: hidden;
-    background: linear-gradient(135deg, rgba(57, 78, 123, 0.88), rgba(12, 18, 32, 0.94));
     border: 1px solid rgba(255, 255, 255, 0.08);
+    /* background-size/position/repeat apply when an inline background-image
+       (thumbnail) is present, making it cover the box like <img object-fit>.
+       The gradient fallback is layered underneath via :not(.has-image) so the
+       image, when present, sits on top and fully covers. */
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
     color: #e7f0ff;
+  }
+
+  /* Gradient fallback — shown only when there's no thumbnail image. Defined
+     as a layer so an inline background-image (when .has-image) overrides it. */
+  .media-extra-thumbnail:not(.has-image) {
+    background-image: linear-gradient(135deg, rgba(57, 78, 123, 0.88), rgba(12, 18, 32, 0.94));
   }
 
   .media-extra-placeholder-icon :global(svg) {

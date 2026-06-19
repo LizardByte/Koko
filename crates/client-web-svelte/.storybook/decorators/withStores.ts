@@ -32,6 +32,13 @@ import { untrack } from 'svelte';
 import type { Decorator } from '@storybook/svelte';
 import { applyPreset, type Preset } from '$lib/storybook/presets';
 import { setPage } from '$lib/storybook/mockAppState.svelte';
+import { setMockArtworkResolver } from '$lib/api';
+import { lookupArtwork } from '$lib/storybook/artworks';
+
+// Register the local CC0 artwork resolver once so getArtworkUrl() in mock mode
+// serves bundled images for fixture item ids (see artworks.ts registry).
+// Unknown ids fall through to the mock:// placeholder (gradient fallback).
+setMockArtworkResolver((itemId, kind) => lookupArtwork(itemId, kind));
 
 export const withStores: Decorator = (storyFn, context) => {
   const args = (context.args ?? {}) as { preset?: Preset; route?: string };

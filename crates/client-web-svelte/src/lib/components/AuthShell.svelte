@@ -1,14 +1,15 @@
 <script lang="ts">
   // AuthShell — replaces renderAuthShell() (../client-web/src/app/auth.ts:59-78).
-  // Brand mark uses the Koko.svg from /static. Error panel reads from the ui
-  // store (the vanilla client reads state.error).
+  // Brand mark uses the Koko logo (imported as a Vite URL asset — see import
+  // below). Error panel reads from the ui store (the vanilla client reads
+  // state.error).
   import { ui } from '$lib/stores';
   import type { Snippet } from 'svelte';
-
-  // The logo lives in /static, so it's served at /Koko.svg. Reference it as a
-  // URL string — importing it as a module makes Vite serve it with an SVG MIME
-  // type, which fails strict module-script checking under HMR.
-  const KokoLogo = '/Koko.svg';
+  // Import as a Vite URL asset so it resolves in both SvelteKit (served from
+  // the app origin) and Storybook (served from the Storybook dev/build origin).
+  // Plain `*.svg` imports resolve to a hashed URL string at build time
+  // (see vite/client.d.ts `declare module '*.svg'`), working in both contexts.
+  import KokoLogo from '$lib/assets/Koko.svg';
 
   type Props = {
     title: string;

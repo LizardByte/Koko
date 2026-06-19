@@ -345,7 +345,15 @@ export function mockMetadata(): ItemMetadataResponse {
         release_year: 1999,
         overview: 'A mock movie overview from the linked metadata provider.',
         genres: ['Action', 'Sci-Fi'],
-        people: [],
+        // Populated so ItemPeople renders real cast cards. No images wired
+        // (cached_image_path / image_url absent) → cards show the initials
+        // placeholder, exercising the no-photo branch.
+        people: [
+          { id: 1, person_id: 501, name: 'Ada Lovelace', character_name: 'The Architect', sort_order: 0 },
+          { id: 2, person_id: 502, name: 'Alan Turing', character_name: 'The Cryptographer', sort_order: 1 },
+          { id: 3, person_id: 503, name: 'Grace Hopper', character_name: 'The Admiral', sort_order: 2 },
+          { id: 4, person_id: 504, name: 'Claude Shannon', role: 'Director', department: 'Directing', sort_order: 3 },
+        ],
         locale_key: 'en-US',
       },
     ],

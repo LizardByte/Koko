@@ -712,14 +712,27 @@ export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'log
     params.set('rev', String(revision));
   }
   if (isMockApi()) {
-    // The vanilla client serves real (broken) artwork URLs in mock mode; the
-    // browser shows broken-image. For the Svelte port we render a deterministic
-    // placeholder via the MediaCard's gradient fallback, so this value is only
-    // hit by <img> tags that lack a fallback — same broken-img behavior as
-    // vanilla, which is the faithful outcome.
+    // Storybook / mock mode: if a local artwork has been registered for this
+    // item id + kind (see storybook/artworks.ts), serve the bundled asset URL.
+    // Otherwise fall back to a deterministic mock:// placeholder — components
+    // with gradient fallbacks (MediaCard) render cleanly either way; <img>
+    // tags without a fallback show broken-image, matching vanilla's mock mode.
+    const local = mockArtworkResolver?.(itemId, kind);
+    if (local) return local;
     return `mock://artwork/${itemId}/${kind}`;
   }
   return `${getStoredApiBase()}/api/v1/items/${itemId}/artwork?${params.toString()}`;
+}
+
+/**
+ * Optional resolver hook for mock mode. The Storybook layer sets this to serve
+ * bundled CC0 artwork for fixture items (see storybook/artworks.ts). Production
+ * never sets it, so it stays a no-op and is tree-shaken from the real bundle.
+ */
+export type MockArtworkResolver = (itemId: number, kind: 'poster' | 'backdrop' | 'logo') => string | undefined;
+export let mockArtworkResolver: MockArtworkResolver | undefined;
+export function setMockArtworkResolver(resolver: MockArtworkResolver | undefined): void {
+  mockArtworkResolver = resolver;
 }
 
 export function getStreamUrl(itemId: number): string {

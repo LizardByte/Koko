@@ -11,6 +11,7 @@
   import { isMockApi } from '$lib/api';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import KokoLogo from '$lib/assets/Koko.svg';
 
   type Props = { collapsed?: boolean };
   let { collapsed = false }: Props = $props();
@@ -67,7 +68,7 @@
   <div class="library-rail-top">
     <div class="brand-block">
       <div class="brand-mark logo-brand-mark">
-        <img class="brand-logo" src="/Koko.svg" alt="" />
+        <img class="brand-logo" src={KokoLogo} alt="" />
       </div>
       <div>
         <h1>Koko</h1>

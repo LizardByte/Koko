@@ -8,7 +8,7 @@
   import type { MediaCollectionSummary } from '$lib/api';
 
   const { Story } = defineMeta({
-    title: 'Components/HomeFeature',
+    title: 'Fragments/HomeFeature',
     // No `component` — stories compose the component with explicit props, so
     // args (preset/route) are decorator-only and not typed against Props.
     tags: ['autodocs'],

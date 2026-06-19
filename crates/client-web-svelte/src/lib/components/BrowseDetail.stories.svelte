@@ -8,7 +8,7 @@
   import BrowseDetail from './BrowseDetail.svelte';
 
   const { Story } = defineMeta({
-    title: 'Components/BrowseDetail',
+    title: 'Fragments/BrowseDetail',
     // No `component` — stories use asChild to mount with explicit props.
     tags: ['autodocs'],
     args: { preset: 'home' },

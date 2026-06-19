@@ -104,6 +104,11 @@ button.is-busy {
 button.is-busy::after {
   content: '';
   position: absolute;
+  /* Center the fixed-size spinner within the button. Vanilla (style.css:89)
+     omits centering, so the spinner renders off-center to the right — a
+     pre-existing vanilla bug. Fixed here as a documented delta. */
+  inset: 0;
+  margin: auto;
   width: 1rem;
   height: 1rem;
   border-radius: 999px;

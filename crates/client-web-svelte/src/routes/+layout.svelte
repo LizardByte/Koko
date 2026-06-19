@@ -10,6 +10,7 @@
   import Rail from '$lib/components/Rail.svelte';
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
+  import KokoLogo from '$lib/assets/Koko.svg';
 
   let { children } = $props();
 
@@ -53,7 +54,7 @@
     <section class="auth-panel panel">
       <div class="auth-header">
         <div class="brand-mark logo-brand-mark">
-          <img class="brand-logo" src="/Koko.svg" alt="" />
+          <img class="brand-logo" src={KokoLogo} alt="" />
         </div>
         <div>
           <h1>Koko</h1>

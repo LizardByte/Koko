@@ -8,7 +8,7 @@
   import { item as itemStore } from '$lib/stores';
 
   const { Story } = defineMeta({
-    title: 'Components/ItemHero',
+    title: 'Fragments/ItemHero',
     component: ItemHero,
     tags: ['autodocs'],
     args: { preset: 'item-movie' },

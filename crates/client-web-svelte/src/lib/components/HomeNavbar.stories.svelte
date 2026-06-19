@@ -7,7 +7,7 @@
   import HomeNavbar from './HomeNavbar.svelte';
 
   const { Story } = defineMeta({
-    title: 'Components/HomeNavbar',
+    title: 'Fragments/HomeNavbar',
     component: HomeNavbar,
     tags: ['autodocs'],
     args: { preset: 'home' },
@@ -15,7 +15,13 @@
       docs: {
         description: {
           component:
-            'Home top bar: 5 browse tabs, search form with toggle button (submit vs clear), and per-library scan/refresh-metadata buttons when a library is active.',
+            'Home top bar: 5 browse tabs, search form with toggle button (submit vs clear), and per-library scan/refresh-metadata buttons when a library is active.\n\n' +
+            '> ⚠️ **Store-driven component.** HomeNavbar takes **no props** — it reads the ' +
+            '`catalog` store (active tab, search query) and `libraries` store (active library), ' +
+            'seeded via the `preset` / `route` args (see `.storybook/decorators/withStores.ts`). ' +
+            'The controls panel is sparse for this reason: switch `route` between `/` and ' +
+            '`/libraries/:id` to drive the nav state. **TODO:** consider per-tab stories that ' +
+            'seed catalog.homeTab so each tab is self-describing.',
         },
       },
     },

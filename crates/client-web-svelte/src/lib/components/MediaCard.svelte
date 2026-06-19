@@ -94,9 +94,12 @@
   const watchedLabel = $derived(watchCount === 1 ? 'Watched' : `Watched ${watchCount} times`);
   const hasPlaybackBadges = $derived(progressPercent !== undefined || isWatched);
 
-  // In mock mode, artwork URLs are placeholders; render a gradient fallback
-  // so cards aren't broken images.
+  // In mock mode, getArtworkUrl returns either a real bundled asset URL (for
+  // fixture items registered in storybook/artworks.ts) or a `mock://` placeholder
+  // for unknown ids. Show the image only when it's a real URL; otherwise render
+  // the gradient fallback so cards aren't broken images.
   const mock = $derived(isMockApi());
+  const hasRealArtwork = $derived(!mock || !artworkUrl.startsWith('mock://'));
 
   function open() {
     goto(`/items/${item.id}`);
@@ -112,9 +115,9 @@
 >
   <span
     class="media-card-art {item.media_kind} {artworkTypeClass}"
-    style={mock ? '' : `background-image: url('${artworkUrl}');`}
+    style={hasRealArtwork ? `background-image: url('${artworkUrl}');` : ''}
   >
-    {#if mock}
+    {#if !hasRealArtwork}
       <span class="media-card-art-fallback fallback-{item.id % 5} {artworkTypeClass}">
         <Icon name={selectedLibraryIcon(library?.kind)} size={28} />
       </span>

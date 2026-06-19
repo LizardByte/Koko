@@ -3,12 +3,12 @@
   // `onnavigate` (no $app/navigation dependency in the story). Hierarchy is
   // exercised via the show→season→episode fixture below.
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import ItemBreadcrumbs from './ItemBreadcrumbs.svelte';
+  import SectionBreadcrumbs from './SectionBreadcrumbs.svelte';
   import { movieDetail } from '$lib/storybook/fixtures';
   import type { MediaItemDetail } from '$lib/api';
 
   const { Story } = defineMeta({
-    title: 'Components/ItemBreadcrumbs',
+    title: 'Components/SectionBreadcrumbs',
     // No `component` — stories compose with explicit props; args are
     // decorator-only (preset/route) and not typed against Props.
     tags: ['autodocs'],
@@ -41,9 +41,9 @@
 </script>
 
 <Story name="Episode In Show" args={{ preset: 'empty' }} asChild>
-  <ItemBreadcrumbs item={episodeInHierarchy} onnavigate={noopNavigate} />
+  <SectionBreadcrumbs item={episodeInHierarchy} onnavigate={noopNavigate} />
 </Story>
 
 <Story name="No Hierarchy" args={{ preset: 'empty' }} asChild>
-  <ItemBreadcrumbs item={movieDetail()} onnavigate={noopNavigate} />
+  <SectionBreadcrumbs item={movieDetail()} onnavigate={noopNavigate} />
 </Story>

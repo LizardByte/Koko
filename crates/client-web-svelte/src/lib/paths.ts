@@ -2,10 +2,10 @@
 // homeBrowsePath from ../client-web/src/app/homeView.ts:41-67. Used by the
 // collection/category/playlist cards to navigate to the browse-detail route.
 
-export type BrowseDetailKind = 'collection' | 'category' | 'playlist';
+export type BrowseListingKind = 'collection' | 'category' | 'playlist';
 
 /** The URL segment for a browse-detail kind (collections/categories/playlists). */
-function browseSegment(kind: BrowseDetailKind): string {
+function browseSegment(kind: BrowseListingKind): string {
   if (kind === 'collection') return 'collections';
   if (kind === 'playlist') return 'playlists';
   return 'categories';
@@ -18,7 +18,7 @@ function browseSegment(kind: BrowseDetailKind): string {
  * /items/<segment>/<key>.
  */
 export function browseDetailPath(
-  kind: BrowseDetailKind,
+  kind: BrowseListingKind,
   key: string,
   libraryId?: number,
 ): string {

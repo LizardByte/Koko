@@ -4,12 +4,12 @@
   // store item to the component's `itemValue` prop to mirror the route wiring
   // (items/[id]/+page.svelte passes item.item to ItemHero).
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import ItemHero from './ItemHero.svelte';
+  import SectionHero from './SectionHero.svelte';
   import { item as itemStore } from '$lib/stores';
 
   const { Story } = defineMeta({
-    title: 'Fragments/ItemHero',
-    component: ItemHero,
+    title: 'Fragments/SectionHero',
+    component: SectionHero,
     tags: ['autodocs'],
     args: { preset: 'item-movie' },
     parameters: {
@@ -24,17 +24,17 @@
 </script>
 
 <Story name="Movie" args={{ preset: 'item-movie' }} asChild>
-  {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
+  {#if itemStore.item}<SectionHero itemValue={itemStore.item} />{/if}
 </Story>
 
 <Story name="Show" args={{ preset: 'item-show' }} asChild>
-  {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
+  {#if itemStore.item}<SectionHero itemValue={itemStore.item} />{/if}
 </Story>
 
 <Story name="Missing" args={{ preset: 'item-missing' }} asChild>
-  {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
+  {#if itemStore.item}<SectionHero itemValue={itemStore.item} />{/if}
 </Story>
 
 <Story name="Watched" args={{ preset: 'item-watched' }} asChild>
-  {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
+  {#if itemStore.item}<SectionHero itemValue={itemStore.item} />{/if}
 </Story>

@@ -128,7 +128,7 @@ export { libraries };
 // Browse-detail selectors — ports of ../client-web/src/app/selectors.ts
 // (categorySummaries, collectionSummaries, topLevelLibraryItems,
 // rootAncestorForItem). Pure functions over the catalog's libraryItems, which
-// BrowseDetail.svelte and the Categories home tab consume.
+// BrowseListing.svelte and the Categories home tab consume.
 // ---------------------------------------------------------------------------
 
 /** Top-level (parentless) library items — the browseable roots. */

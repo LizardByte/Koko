@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ItemExtras — replaces renderItemExtrasRail() + renderMediaExtraCard()
+  // SectionExtras — replaces renderItemExtrasRail() + renderMediaExtraCard()
   // (../client-web/src/app/itemPersonView.ts:314-359). Thumbnails for trailers
   // and theme songs. Clicking dispatches into the (future) playback controller.
   import Icon from './Icon.svelte';

@@ -1,13 +1,13 @@
 <script module>
-  // ItemExtras stories. Props-driven (extras). Playback click is a stub
+  // SectionExtras stories. Props-driven (extras). Playback click is a stub
   // (playbackController spike) — harmless in stories.
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import ItemExtras from './ItemExtras.svelte';
+  import SectionExtras from './SectionExtras.svelte';
   import { mockExtras } from '$lib/storybook/fixtures';
 
   const { Story } = defineMeta({
-    title: 'Components/ItemExtras',
-    component: ItemExtras,
+    title: 'Components/SectionExtras',
+    component: SectionExtras,
     tags: ['autodocs'],
     args: { preset: 'empty' },
     parameters: {
@@ -23,9 +23,9 @@
 </script>
 
 <Story name="Populated" args={{ preset: 'empty' }} asChild>
-  <ItemExtras {extras} />
+  <SectionExtras {extras} />
 </Story>
 
 <Story name="Empty" args={{ preset: 'empty' }} asChild>
-  <ItemExtras extras={[]} />
+  <SectionExtras extras={[]} />
 </Story>

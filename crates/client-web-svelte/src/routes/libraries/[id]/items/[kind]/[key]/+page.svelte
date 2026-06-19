@@ -1,11 +1,11 @@
 <script lang="ts">
   // Library-scoped browse-detail route:
   // /libraries/<id>/items/<kind>/<key>. Same as /items/<kind>/<key> but
-  // scopes the BrowseDetail data to a library (passes libraryId). Port of
+  // scopes the BrowseListing data to a library (passes libraryId). Port of
   // vanilla routes.ts:38-46 (libraryBrowseMatch).
   import { page } from '$app/state';
-  import BrowseDetail from '$lib/components/BrowseDetail.svelte';
-  import type { BrowseDetailKind } from '$lib/paths';
+  import BrowseListing from '$lib/components/BrowseListing.svelte';
+  import type { BrowseListingKind } from '$lib/paths';
 
   const VALID_KINDS: ReadonlySet<string> = new Set(['collections', 'categories', 'playlists']);
 
@@ -18,7 +18,7 @@
           ? 'collection'
           : kindParam === 'categories'
             ? 'category'
-            : 'playlist') as BrowseDetailKind
+            : 'playlist') as BrowseListingKind
       : undefined,
   );
 </script>
@@ -26,7 +26,7 @@
 <svelte:head><title>{key ? `${decodeURIComponent(key)} — Koko` : 'Koko'}</title></svelte:head>
 
 {#if kind && Number.isFinite(libraryId)}
-  <BrowseDetail {kind} {key} {libraryId} />
+  <BrowseListing {kind} {key} {libraryId} />
 {:else}
   <section class="panel page-panel">
     <div class="empty-state">This browse view is not available.</div>

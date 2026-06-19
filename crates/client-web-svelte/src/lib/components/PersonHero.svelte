@@ -68,7 +68,7 @@
   /*
    * Component-owned (PersonHero-only). The shared .item-hero / .detail-art /
    * .item-poster / .item-summary / .item-title-fallback / .hero-tagline /
-   * .hero-meta-row / .detail-actions rules live in app.css (used by ItemHero
+   * .hero-meta-row / .detail-actions rules live in app.css (used by SectionHero
    * too). .person-poster / .button-link / .person-hero are PersonHero-only.
    * Values mirror vanilla style.css:1541-1574, 1710-1718, 1863-1865.
    */

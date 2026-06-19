@@ -5,12 +5,12 @@
   // so the "No People" story is intentionally blank — that's the faithful
   // behavior, not a bug.
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import ItemPeople from './ItemPeople.svelte';
+  import SectionPeople from './SectionPeople.svelte';
   import { mockMetadata } from '$lib/storybook/fixtures';
 
   const { Story } = defineMeta({
-    title: 'Components/ItemPeople',
-    component: ItemPeople,
+    title: 'Components/SectionPeople',
+    component: SectionPeople,
     tags: ['autodocs'],
     args: { preset: 'home' },
     parameters: {
@@ -27,9 +27,9 @@
 </script>
 
 <Story name="With Cast" args={{ preset: 'home' }} asChild>
-  <ItemPeople {metadata} />
+  <SectionPeople {metadata} />
 </Story>
 
 <Story name="No People" args={{ preset: 'home' }} asChild>
-  <ItemPeople metadata={undefined} />
+  <SectionPeople metadata={undefined} />
 </Story>

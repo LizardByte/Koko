@@ -5,10 +5,10 @@
   // doesn't forward a children snippet reliably to global decorators in
   // Svelte CSF v5 — asChild is the documented composed-story pattern).
   import { defineMeta } from '@storybook/addon-svelte-csf';
-  import BrowseDetail from './BrowseDetail.svelte';
+  import BrowseListing from './BrowseListing.svelte';
 
   const { Story } = defineMeta({
-    title: 'Fragments/BrowseDetail',
+    title: 'Fragments/BrowseListing',
     // No `component` — stories use asChild to mount with explicit props.
     tags: ['autodocs'],
     args: { preset: 'home' },
@@ -30,13 +30,13 @@
 </script>
 
 <Story name="Collection" args={{ preset: 'home' }} asChild>
-  <BrowseDetail kind="collection" key="mock-collection" />
+  <BrowseListing kind="collection" key="mock-collection" />
 </Story>
 
 <Story name="Category" args={{ preset: 'home' }} asChild>
-  <BrowseDetail kind="category" key="Action" />
+  <BrowseListing kind="category" key="Action" />
 </Story>
 
 <Story name="Playlist" args={{ preset: 'home' }} asChild>
-  <BrowseDetail kind="playlist" key="Playlists" />
+  <BrowseListing kind="playlist" key="Playlists" />
 </Story>

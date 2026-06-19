@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ItemBreadcrumbs — replaces renderSelectedItemBreadcrumbs()
+  // SectionBreadcrumbs — replaces renderSelectedItemBreadcrumbs()
   // (../client-web/src/app/itemPersonView.ts:736-750).
   //
   // Navigation is injectable via `onnavigate` so Storybook/tests can avoid

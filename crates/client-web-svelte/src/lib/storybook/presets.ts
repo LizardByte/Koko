@@ -88,7 +88,7 @@ export function applyPreset(preset: Preset): void {
       // from /libraries/:id/items). Home shelves can legitimately reference the
       // same item across rows (e.g. a show in both 'recently_added' and
       // 'recommended'), so dedupe by id when flattening to avoid duplicate
-      // each-block keys in BrowseDetail/category grids.
+      // each-block keys in BrowseListing/category grids.
       const seen = new Set<number>();
       catalog.libraryItems = home.shelves
         .flatMap((s) => s.items)

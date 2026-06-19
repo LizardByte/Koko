@@ -13,10 +13,10 @@
     itemsForCollection,
   } from '$lib/selectors';
   import { pageBackdropUrlForCollection } from '$lib/selectors';
-  import { homeBrowsePath, type BrowseDetailKind } from '$lib/paths';
+  import { homeBrowsePath, type BrowseListingKind } from '$lib/paths';
 
   type Props = {
-    kind: BrowseDetailKind;
+    kind: BrowseListingKind;
     key: string;
     libraryId?: number;
   };

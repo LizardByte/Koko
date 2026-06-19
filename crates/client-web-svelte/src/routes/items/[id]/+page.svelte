@@ -5,12 +5,12 @@
   // the support grid. Loads via the item store on mount + on id change.
   import { page } from '$app/state';
   import { item, ui } from '$lib/stores';
-  import ItemBreadcrumbs from '$lib/components/ItemBreadcrumbs.svelte';
-  import ItemHero from '$lib/components/ItemHero.svelte';
-  import ItemPeople from '$lib/components/ItemPeople.svelte';
-  import ItemExtras from '$lib/components/ItemExtras.svelte';
-  import ItemChildren from '$lib/components/ItemChildren.svelte';
-  import ItemSupport from '$lib/components/ItemSupport.svelte';
+  import SectionBreadcrumbs from '$lib/components/SectionBreadcrumbs.svelte';
+  import SectionHero from '$lib/components/SectionHero.svelte';
+  import SectionPeople from '$lib/components/SectionPeople.svelte';
+  import SectionExtras from '$lib/components/SectionExtras.svelte';
+  import SectionChildren from '$lib/components/SectionChildren.svelte';
+  import SectionSupport from '$lib/components/SectionSupport.svelte';
 
   const itemId = $derived(Number(page.params.id));
 
@@ -32,12 +32,12 @@
   </section>
 {:else if item.item}
   <section class="item-page">
-    <ItemBreadcrumbs item={item.item} />
-    <ItemHero itemValue={item.item} />
-    <ItemPeople metadata={item.metadata} />
-    <ItemExtras extras={item.item.extras} />
-    <ItemChildren item={item.item} />
-    <ItemSupport item={item.item} metadata={item.metadata} />
+    <SectionBreadcrumbs item={item.item} />
+    <SectionHero itemValue={item.item} />
+    <SectionPeople metadata={item.metadata} />
+    <SectionExtras extras={item.item.extras} />
+    <SectionChildren item={item.item} />
+    <SectionSupport item={item.item} metadata={item.metadata} />
   </section>
 {:else}
   <section class="panel page-panel">

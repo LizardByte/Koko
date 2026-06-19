@@ -38,7 +38,7 @@
 
 <style>
   /*
-   * Component-owned (CollapsibleText owns these; reusers like ItemHero /
+   * Component-owned (CollapsibleText owns these; reusers like SectionHero /
    * PersonHero just mount the component, so the rules travel with it).
    * Values mirror vanilla style.css:1420-1449.
    */

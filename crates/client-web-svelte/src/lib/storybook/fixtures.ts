@@ -121,7 +121,7 @@ export function trackSummary(overrides: Partial<MediaItemSummary> = {}): MediaIt
   };
 }
 
-// --- Item detail (for ItemHero/ItemSupport stories) ---
+// --- Item detail (for SectionHero/SectionSupport stories) ---
 
 export function movieDetail(overrides: Partial<MediaItemDetail> = {}): MediaItemDetail {
   return {
@@ -253,7 +253,7 @@ export function mockHome(): MediaHome {
         title: 'Continue watching',
         // Distinct id + title so this in-progress movie doesn't collide with
         // the canonical movie (id 101) in 'recently_added' when shelves are
-        // flattened into libraryItems for BrowseDetail resolution.
+        // flattened into libraryItems for BrowseListing resolution.
         items: [{ ...movie, id: 401, display_title: 'Mock Movie (continued)', playback_position_ms: 1_260_000, playback_completed: false }],
       },
       {
@@ -293,7 +293,7 @@ export function mockUser(overrides: Partial<BootstrapUser> = {}): BootstrapUser 
   };
 }
 
-// --- Extras + metadata (for ItemExtras/ItemPeople/ItemSupport stories) ---
+// --- Extras + metadata (for SectionExtras/SectionPeople/SectionSupport stories) ---
 
 export function mockExtras(): MediaItemExtra[] {
   return [
@@ -345,7 +345,7 @@ export function mockMetadata(): ItemMetadataResponse {
         release_year: 1999,
         overview: 'A mock movie overview from the linked metadata provider.',
         genres: ['Action', 'Sci-Fi'],
-        // Populated so ItemPeople renders real cast cards. No images wired
+        // Populated so SectionPeople renders real cast cards. No images wired
         // (cached_image_path / image_url absent) → cards show the initials
         // placeholder, exercising the no-photo branch.
         people: [

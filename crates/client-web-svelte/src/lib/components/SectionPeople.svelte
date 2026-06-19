@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ItemPeople — replaces renderPeopleRail() + renderPersonCredit()
+  // SectionPeople — replaces renderPeopleRail() + renderPersonCredit()
   // (../client-web/src/app/itemPersonView.ts:259-299). A horizontal rail of
   // person cards driven by the first metadata match's people array.
   import { goto } from '$app/navigation';
@@ -43,7 +43,7 @@
 
 <style>
   /*
-   * Component-owned (ItemPeople-only). Values mirror vanilla style.css
+   * Component-owned (SectionPeople-only). Values mirror vanilla style.css
    * :1819-1861. The flat .people-row layout is shared (app.css); grouping
    * wrappers (.people-groups / .people-group h4) aren't rendered by this port
    * (people render as a single flat rail), so they're omitted.

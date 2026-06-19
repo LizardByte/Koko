@@ -468,7 +468,7 @@ function render(preserveScroll = true): void {
       ${renderRail()}
       <div class="main-shell">
         <div class="main-shell-inner">
-          ${state.error ? `<section class="panel error-panel page-panel">${escapeHtml(state.error)}</section>` : ''}
+          ${state.error ? `<section class="panel error-panel page-panel">${escapeHtml(state.error)}${state.playbackError?.action === 'open_settings' ? `<button class="secondary-button" type="button" data-action="open-settings">Open settings</button>` : ''}</section>` : ''}
           ${renderCurrentPage()}
         </div>
       </div>

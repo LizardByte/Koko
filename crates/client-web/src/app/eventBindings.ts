@@ -527,6 +527,12 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     });
   });
 
+  document.querySelectorAll<HTMLElement>('[data-action="open-settings"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      navigateTo('/settings');
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
     button.addEventListener('click', () => {
       const providerId = button.dataset.providerSettings;

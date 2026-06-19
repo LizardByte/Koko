@@ -123,3 +123,72 @@ function formatFileSizeOrUnknown(bytes?: number): string {
 
 // Re-export so consumers don't need to know about the libraries store import.
 export { libraries };
+
+// ---------------------------------------------------------------------------
+// Browse-detail selectors — ports of ../client-web/src/app/selectors.ts
+// (categorySummaries, collectionSummaries, topLevelLibraryItems,
+// rootAncestorForItem). Pure functions over the catalog's libraryItems, which
+// BrowseDetail.svelte and the Categories home tab consume.
+// ---------------------------------------------------------------------------
+
+/** Top-level (parentless) library items — the browseable roots. */
+export function topLevelLibraryItems(items: MediaItemSummary[]): MediaItemSummary[] {
+  return items.filter((item) => item.parent_id == null);
+}
+
+/** Walks parent_id chain to the root ancestor of an item. */
+export function rootAncestorForItem(
+  item: MediaItemSummary,
+  itemsById: Map<number, MediaItemSummary>,
+): MediaItemSummary {
+  let current = item;
+  while (typeof current.parent_id === 'number') {
+    const parent = itemsById.get(current.parent_id);
+    if (!parent) break;
+    current = parent;
+  }
+  return current;
+}
+
+export interface CategorySummary {
+  genre: string;
+  count: number;
+  items: MediaItemSummary[];
+}
+
+/**
+ * Groups libraryItems by genre, deduplicating on each genre's root items
+ * (so a show's episodes don't inflate a genre's count). Sorted by count desc
+ * then genre name. Port of selectors.ts:135-163.
+ */
+export function categorySummaries(libraryItems: MediaItemSummary[]): CategorySummary[] {
+  const itemsById = new Map(libraryItems.map((item) => [item.id, item]));
+  const topLevelById = new Map(topLevelLibraryItems(libraryItems).map((item) => [item.id, item]));
+  const categories = new Map<string, Map<number, MediaItemSummary>>();
+
+  for (const item of libraryItems) {
+    if (!item.genres.length) continue;
+    const rootItem = rootAncestorForItem(item, itemsById);
+    const root = topLevelById.get(rootItem.id) ?? rootItem;
+    for (const genre of item.genres) {
+      const normalized = genre.trim();
+      if (!normalized) continue;
+      if (!categories.has(normalized)) categories.set(normalized, new Map());
+      categories.get(normalized)!.set(root.id, root);
+    }
+  }
+
+  return [...categories.entries()]
+    .map(([genre, items]) => ({ genre, count: items.size, items: [...items.values()] }))
+    .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre));
+}
+
+/** Items belonging to a collection (top-level items whose id is in item_ids). */
+export function itemsForCollection(
+  collection: MediaCollectionSummary,
+  libraryItems: MediaItemSummary[],
+): MediaItemSummary[] {
+  const allowedIds = new Set(collection.item_ids);
+  return topLevelLibraryItems(libraryItems).filter((item) => allowedIds.has(item.id));
+}
+

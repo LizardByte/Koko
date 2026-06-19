@@ -16,6 +16,7 @@
   import { libraries } from '$lib/stores';
   import { formatChildCount, humanizeItemType } from '$lib/ui';
   import { resolveApiUrl } from '$lib/api';
+  import { browseDetailPath } from '$lib/paths';
 
   type Props = {
     collection?: MediaCollectionSummary;
@@ -57,7 +58,7 @@
         <span class="tag">{collection.item_count} title{collection.item_count === 1 ? '' : 's'}</span>
       </div>
     </div>
-    <Button variant="secondary" icon="arrow-right" class="home-feature-action" label="Open" onclick={() => goto(`/collections/${collection.id}`)} />
+    <Button variant="secondary" icon="arrow-right" class="home-feature-action" label="Open" onclick={() => goto(browseDetailPath('collection', collection.id))} />
   </section>
 {:else if item}
   <section

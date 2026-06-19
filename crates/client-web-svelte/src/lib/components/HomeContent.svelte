@@ -11,6 +11,8 @@
   import { catalog, libraries, ui } from '$lib/stores';
   import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '$lib/api';
   import { humanizeItemType, formatChildCount } from '$lib/ui';
+  import { browseDetailPath } from '$lib/paths';
+  import { categorySummaries } from '$lib/selectors';
 
   type Props = { libraryId?: number };
   let { libraryId }: Props = $props();
@@ -46,6 +48,9 @@
 
   const shelves = $derived((catalog.home?.shelves ?? []).filter((shelf) => shelf.items.length > 0));
   const collections = $derived(catalog.home?.collections ?? []);
+  // Genre categories derived from the loaded library items (vanilla
+  // categorySummaries — selectors.ts:135-163). Empty until libraryItems load.
+  const categories = $derived(categorySummaries(catalog.libraryItems));
   const hasContent = $derived(shelves.length > 0 || collections.length > 0);
 
   const preview = $derived(resolvePreview());
@@ -106,7 +111,7 @@
               </span>
             </button>
           {:else if result.result_type === 'collection'}
-            <button type="button" class="search-result-row" onclick={() => goto(`/collections/${result.collection.id}`)}>
+            <button type="button" class="search-result-row" onclick={() => goto(browseDetailPath('collection', result.collection.id, libraryId))}>
               <span class="search-result-thumb" style={collectionThumb(result.collection.artwork_url, result.collection.backdrop_url) ? `background-image: url('${collectionThumb(result.collection.artwork_url, result.collection.backdrop_url)}');` : ''}>
                 {#if !collectionThumb(result.collection.artwork_url, result.collection.backdrop_url)}<Icon name="image" size={20} />{/if}
               </span>
@@ -179,7 +184,7 @@
         {:else}
           <div class="item-grid">
             {#each collections as collection (collection.id)}
-              <button type="button" class="media-card collection-browse-card" onclick={() => goto(`/collections/${collection.id}`)}>
+              <button type="button" class="media-card collection-browse-card" onclick={() => goto(browseDetailPath('collection', collection.id, libraryId))}>
                 <span class="media-card-art collection" style={collection.artwork_url ? `background-image: url('${collection.artwork_url}');` : ''}>
                   <span class="media-card-kind-row">
                     <span class="media-card-kind"><Icon name="layers" size={16} /></span>
@@ -194,12 +199,46 @@
       </section>
     {:else if catalog.homeTab === 'playlists'}
       <section class="panel page-panel home-tab-panel">
-        <div class="empty-state">Playlist creation is planned.</div>
+        <div class="category-grid">
+          <button
+            type="button"
+            class="category-card panel filter-card-button"
+            onclick={() => goto(browseDetailPath('playlist', 'Playlists', libraryId))}
+          >
+            <div class="category-card-header">
+              <strong>Playlists</strong>
+              <span class="tag">0 titles</span>
+            </div>
+            <p class="muted">Playlist creation is planned. Items will appear here when playlists are available.</p>
+          </button>
+        </div>
       </section>
     {:else if catalog.homeTab === 'categories'}
       <section class="panel page-panel home-tab-panel">
         <div class="shelf-header"><h3>Categories</h3></div>
-        <div class="empty-state tight">Categories will be derived from your libraries' genres.</div>
+        {#if categories.length === 0}
+          {#if catalog.libraryItemsLoading}
+            <div class="empty-state tight">Loading library items…</div>
+          {:else}
+            <div class="empty-state tight">No genre metadata is available yet for the current library.</div>
+          {/if}
+        {:else}
+          <div class="category-grid">
+            {#each categories as category (category.genre)}
+              <button
+                type="button"
+                class="category-card panel filter-card-button"
+                onclick={() => goto(browseDetailPath('category', category.genre, libraryId))}
+              >
+                <div class="category-card-header">
+                  <strong>{category.genre}</strong>
+                  <span class="tag">{category.count} title{category.count === 1 ? '' : 's'}</span>
+                </div>
+                <p class="muted">{category.items.slice(0, 3).map((item) => item.display_title).join(' · ') || 'No titles yet'}</p>
+              </button>
+            {/each}
+          </div>
+        {/if}
       </section>
     {/if}
   {/if}
@@ -287,5 +326,34 @@
     background: linear-gradient(180deg, rgba(93, 123, 255, 0.6), rgba(22, 31, 54, 0.92));
     background-size: cover;
     background-position: center;
+  }
+
+  /* Category cards (Collections/Categories/Playlists tabs). Vanilla style.css
+     :801-832. .panel/.tag/.muted are shared (app.css). */
+  .category-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.9rem;
+  }
+
+  .filter-card-button {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem 1.1rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .category-card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .filter-card-button:hover {
+    border-color: rgba(93, 123, 255, 0.35);
+    background: rgba(255, 255, 255, 0.06);
   }
 </style>

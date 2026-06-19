@@ -1,4 +1,4 @@
-<script lang="ts" module>
+<script lang="ts">
   // Global Storybook decorator: seeds the store singletons + mock $app/state
   // before rendering a story, and resets on cleanup. Registered in preview.ts.
   //
@@ -11,9 +11,7 @@
   import { setPage } from '$lib/storybook/mockAppState.svelte';
 
   let { preset = 'empty', route, children }: { preset?: Preset; route?: string; children: Snippet } = $props();
-</script>
 
-<script lang="ts">
   // (Re)apply whenever the preset/route args change.
   $effect(() => {
     applyPreset(preset);

@@ -39,6 +39,36 @@ impl From<std::io::Error> for SpawnTranscodeError {
     }
 }
 
+impl std::fmt::Display for SpawnTranscodeError {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match self {
+            SpawnTranscodeError::ExecutableMissing { checked_paths } => {
+                let checked = checked_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "FFmpeg could not be found. Checked: [{checked}]")
+            }
+            SpawnTranscodeError::BadInput { ffmpeg_stderr } => {
+                write!(
+                    f,
+                    "FFmpeg could not read the source media. {}",
+                    ffmpeg_stderr.trim()
+                )
+            }
+            SpawnTranscodeError::Io(error) => {
+                write!(f, "Transcode failed to start: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpawnTranscodeError {}
+
 /// The JSON body returned to clients when a transcode fails. The `action`
 /// field lets the UI decide whether to show an actionable control (e.g.
 /// "Open settings") for this kind of failure.
@@ -261,25 +291,40 @@ impl TranscodeSpec {
     }
 }
 
+/// Resolve the configured ffmpeg path to an absolute, verified executable,
+/// logging the resolution. Returns [`SpawnTranscodeError::ExecutableMissing`]
+/// when it cannot be found — this is the actual fix for issue 1 (a bare
+/// `ffmpeg` lookup fails in GUI-launched processes that don't inherit the
+/// user's shell PATH).
+fn resolve_ffmpeg_for_spawn(
+    settings: &FfmpegSettings,
+    args_label: &str,
+) -> Result<PathBuf, SpawnTranscodeError> {
+    match crate::ffmpeg_resolve::resolve_ffmpeg(&settings.ffmpeg_path) {
+        crate::ffmpeg_resolve::ResolvedBinary::Found { resolved_path, .. } => {
+            log::info!("Starting FFmpeg {args_label}: {}", resolved_path.display());
+            Ok(resolved_path)
+        }
+        crate::ffmpeg_resolve::ResolvedBinary::Missing { checked_paths, .. } => {
+            Err(SpawnTranscodeError::ExecutableMissing { checked_paths })
+        }
+    }
+}
+
 /// Spawns a transcode process and returns it.
 pub async fn spawn_transcode(
     _session_id: &str,
     spec: &TranscodeSpec,
     settings: &FfmpegSettings,
-) -> Result<Child, std::io::Error> {
+) -> Result<Child, SpawnTranscodeError> {
     if let Some(parent) = spec.output_path.parent() {
         fs::create_dir_all(parent).await?;
     }
 
     let args = spec.to_ffmpeg_args();
+    let ffmpeg_path = resolve_ffmpeg_for_spawn(settings, &args.join(" "))?;
 
-    log::info!(
-        "Starting FFmpeg: {} {}",
-        settings.ffmpeg_path,
-        args.join(" ")
-    );
-
-    let mut command = Command::new(&settings.ffmpeg_path);
+    let mut command = Command::new(&ffmpeg_path);
     command
         .args(&args)
         .stdin(Stdio::null())
@@ -296,16 +341,13 @@ pub async fn spawn_transcode_stdout(
     _session_id: &str,
     spec: &TranscodeSpec,
     settings: &FfmpegSettings,
-) -> Result<Child, std::io::Error> {
+) -> Result<Child, SpawnTranscodeError> {
     let args = spec.to_ffmpeg_stdout_args();
+    let ffmpeg_path = resolve_ffmpeg_for_spawn(settings, "stdout stream")?;
 
-    log::info!(
-        "Starting FFmpeg stdout stream: {} {}",
-        settings.ffmpeg_path,
-        args.join(" ")
-    );
+    log::info!("FFmpeg stdout args: {}", args.join(" "));
 
-    let mut command = Command::new(&settings.ffmpeg_path);
+    let mut command = Command::new(&ffmpeg_path);
     command
         .args(&args)
         .stdin(Stdio::null())

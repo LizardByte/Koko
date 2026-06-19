@@ -23,7 +23,9 @@ export type Preset =
   | 'item-show'
   | 'item-missing'
   | 'item-watched'
-  | 'auth-logged-in';
+  | 'auth-logged-in'
+  | 'requires-login'
+  | 'requires-setup';
 
 /** Reset all store singletons to a clean baseline (call between stories). */
 export function resetStores(): void {
@@ -102,6 +104,14 @@ export function applyPreset(preset: Preset): void {
       return;
     case 'auth-logged-in':
       auth.bootstrap = loggedInBootstrap;
+      return;
+    case 'requires-login':
+      // has_users true, no current_user → LoginScreen shows.
+      auth.bootstrap = { has_users: true };
+      return;
+    case 'requires-setup':
+      // no users yet → WelcomeScreen shows.
+      auth.bootstrap = { has_users: false };
       return;
   }
 }

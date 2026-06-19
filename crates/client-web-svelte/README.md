@@ -32,6 +32,49 @@ Mock login: `admin` / `adminpass`.
 
 For a real backend, drop the `:mock` and set `VITE_API_BASE_URL` to the server.
 
+## Storybook
+
+Component-level documentation and isolated dev environment.
+
+```bash
+npm run storybook      # http://localhost:6006
+npm run build-storybook  # static build → storybook-static/
+```
+
+Stories live next to their components as `*.stories.svelte` (Svelte CSF —
+`defineMeta` + `<Story>`, Svelte 5 runes-native). Every ported component has
+coverage; highlights:
+
+- **`Components/MediaCard`** — every badge variant (unmatched / watched /
+  in-progress / missing / metadata-pending). The `Unmatched` story is a
+  regression cage for the `has_metadata !== true` predicate.
+- **`Components/Icon`** — gallery of the entire `ICONS` map (canonical set +
+  missing-icon catcher).
+
+**How stories handle global state.** Most components read the store
+singletons (`catalog`, `item`, `auth`, …) and `$app/state`. Storybook isn't a
+router, so:
+
+- `.storybook/main.ts` `viteFinal` aliases `$app/state` →
+  `src/lib/storybook/mockAppState.svelte.ts` (a mutable runes-based `page`)
+  and `$app/navigation` → `mockAppNavigation.ts` (no-op `goto`).
+- `.storybook/preview.ts` applies a global `WithStores` decorator that seeds
+  the stores from a named preset before each story and resets on cleanup.
+  Pick a preset per story via `args.preset`:
+
+  | preset | what it seeds |
+  |---|---|
+  | `empty` | clean baseline (default) |
+  | `home` | libraries + home shelves + library items + logged-in user |
+  | `item-movie` / `item-show` / `item-missing` / `item-watched` | item store variant + libraries |
+  | `auth-logged-in` / `requires-login` / `requires-setup` | auth bootstrap states |
+
+  Override the mock route via `args.route` (e.g. `'/libraries/2'`) to test
+  active-state rendering.
+
+Adding fixtures: extend `src/lib/storybook/fixtures.ts` (self-contained data
+builders, kept separate from `mockApi.ts`). Add a new preset in `presets.ts`.
+
 ## What this demonstrates
 
 - **SvelteKit + `adapter-static`** produces a static `dist/` the Rust server can

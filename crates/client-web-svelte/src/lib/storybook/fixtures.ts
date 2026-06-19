@@ -7,9 +7,11 @@
 
 import type {
   BootstrapUser,
+  ItemMetadataResponse,
   MediaCollectionSummary,
   MediaHome,
   MediaItemDetail,
+  MediaItemExtra,
   MediaItemSummary,
   MediaLibrary,
 } from '$lib/api';
@@ -265,6 +267,8 @@ export function mockHome(): MediaHome {
     collections: [
       {
         id: 'mock-collection',
+        provider_id: 'tmdb',
+        external_id: 'mock-collection',
         name: 'Mock Collection',
         item_ids: [101, 201],
         item_count: 2,
@@ -283,5 +287,64 @@ export function mockUser(overrides: Partial<BootstrapUser> = {}): BootstrapUser 
     admin: true,
     preferred_metadata_languages: ['en-US'],
     ...overrides,
+  };
+}
+
+// --- Extras + metadata (for ItemExtras/ItemPeople/ItemSupport stories) ---
+
+export function mockExtras(): MediaItemExtra[] {
+  return [
+    {
+      extra_type: 'trailer',
+      title: 'Official Trailer',
+      url: 'https://example.com/trailer.mp4',
+      duration_seconds: 132,
+      thumbnail_url: 'https://example.com/trailer-thumb.jpg',
+    },
+    {
+      extra_type: 'theme_song',
+      title: 'Main Theme',
+      url: 'https://www.youtube.com/watch?v=mock',
+      duration_seconds: 90,
+    },
+  ];
+}
+
+export function mockMetadata(): ItemMetadataResponse {
+  return {
+    item_id: 101,
+    providers: [
+      {
+        id: 'tmdb',
+        display_name: 'TMDB',
+        description: 'The Movie Database',
+        supported_kinds: ['movies', 'shows'],
+        requires_api_key: true,
+        implemented: true,
+        role: 'primary',
+        extends_provider_ids: [],
+        enabled: true,
+        configured: true,
+        language: 'en-US',
+        attribution_text: 'TMDB',
+        attribution_url: 'https://www.themoviedb.org',
+      },
+    ],
+    matches: [
+      {
+        id: 101,
+        provider_id: 'tmdb',
+        external_id: '603',
+        media_type: 'movie',
+        title: 'Mock Movie',
+        relation_kind: 'primary',
+        match_state: 'linked',
+        release_year: 1999,
+        overview: 'A mock movie overview from the linked metadata provider.',
+        genres: ['Action', 'Sci-Fi'],
+        people: [],
+        locale_key: 'en-US',
+      },
+    ],
   };
 }

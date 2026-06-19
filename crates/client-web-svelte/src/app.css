@@ -884,6 +884,28 @@ legend {
   box-shadow: none;
 }
 
+/*
+ * Media cards are navigation surfaces, not action buttons — suppress the
+ * global button:hover lift/glow (which lights up the text block below the
+ * poster as a mismatched "card" leaking past the poster's rounded corners;
+ * the same bug exists in vanilla). Instead lift the poster tile only, so the
+ * hover reads as one coherent poster element. Documented Svelte-port delta.
+ */
+.media-card:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  filter: none;
+}
+
+.media-card:hover:not(:disabled) .media-card-art {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.42);
+}
+
+.media-card:focus-visible {
+  outline-offset: 4px;
+}
+
 .episode-card {
   gap: 0.45rem;
 }

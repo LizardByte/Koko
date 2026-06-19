@@ -153,7 +153,30 @@ vanilla handler reproduces:
 
 ---
 
-## 7. Per-component verification checklist
+## 7. Deliberate deltas (improvements over vanilla)
+
+These are intentional divergences from vanilla, recorded here so they aren't
+"fixed" back during future fidelity passes. Each has a comment at the rule
+site too.
+
+- **Mock artwork gradient fallbacks** (`MediaCard.svelte` `.fallback-0`…`.fallback-4`,
+  `.media-card-art-fallback`). Vanilla lets mock image URLs render as broken;
+  the port shows colored gradient tiles keyed by item id.
+- **`overflow: hidden` on `.media-card-art`** (app.css). Vanilla omits it
+  because it never renders an absolutely-positioned child; the mock fallback
+  is one and would bleed past the 18px corners without clipping.
+- **Media-card hover** (app.css `.media-card:hover`). The global `button:hover`
+  lift/glow applies to `.media-card`, lighting up the title block below the
+  poster as a mismatched "card" that leaks past the poster's rounded corners
+  (the same bug exists in vanilla). The port suppresses the button hover on
+  `.media-card` and instead lifts only the poster tile, so hover reads as one
+  coherent poster element.
+
+When adding a new delta, add a code comment at the rule and an entry here.
+
+---
+
+## 8. Per-component verification checklist
 
 Before declaring a component ported:
 

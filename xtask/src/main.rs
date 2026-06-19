@@ -1,28 +1,13 @@
 use std::{
-    collections::{
-        HashSet,
-        hash_map::DefaultHasher,
-    },
+    collections::{HashSet, hash_map::DefaultHasher},
     env,
     error::Error,
     fs,
-    hash::{
-        Hash,
-        Hasher,
-    },
-    io::{
-        self,
-        Write,
-    },
-    path::{
-        Path,
-        PathBuf,
-    },
+    hash::{Hash, Hasher},
+    io::{self, Write},
+    path::{Path, PathBuf},
     process::Command,
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const MIGRATIONS_DIR: &str = "crates/server/sql/migrations";

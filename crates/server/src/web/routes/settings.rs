@@ -381,6 +381,22 @@ pub async fn update_settings(
     runtime_settings.media.libraries.clear();
     replace_current_settings(runtime_settings);
 
+    // Trigger: if the ffprobe path changed (or may have become newly available),
+    // re-probe any media files that were scanned without ffprobe. The save above
+    // borrows db via db.run(&self); we then move db into the background job
+    // (Rocket's pool keeps the connection checked out until the job finishes,
+    // same pattern as scan_library).
+    let ffprobe_changed =
+        existing_settings.ffmpeg.ffprobe_path != settings_for_database.ffmpeg.ffprobe_path;
+    if ffprobe_changed {
+        let ffmpeg_settings = settings_for_database.ffmpeg.clone();
+        tokio::spawn(async move {
+            crate::web::routes::media::try_spawn_reprobe(db, ffmpeg_settings).await;
+        });
+    } else {
+        drop(db);
+    }
+
     Ok(Json(merged_settings_response(
         settings_for_database,
         persisted_libraries,

@@ -266,37 +266,21 @@ fn test_movie_library_ignores_sidecar_audio_and_json_files() {
 }
 
 #[test]
-fn test_inspect_transcoding_capability_surfaces_configured_path() {
-    // The resolver self-heals a misconfigured path by falling back to well-known
-    // dirs, so availability on a machine with ffmpeg installed is true regardless
-    // of the configured value. What we can assert hermetically is that the
-    // capability echoes the configured path back, and that a non-allowed binary
-    // name (rejected by the security allow-list) never silently changes it.
+fn test_inspect_transcoding_capability_reports_missing_binary() {
+    // The resolver is literal: it runs exactly what is configured and never
+    // substitutes a binary found elsewhere (smart discovery is the Detect UI's
+    // job). A base name rejected by the security allow-list therefore resolves
+    // to Missing on any machine, regardless of whether ffmpeg is installed.
     let settings = FfmpegSettings {
-        ffmpeg_path: "/usr/local/bin/koko-ffmpeg-missing-binary".into(),
-        ffprobe_path: "/usr/local/bin/koko-ffprobe-missing-binary".into(),
+        ffmpeg_path: "koko-ffmpeg-missing-binary".into(),
+        ffprobe_path: "koko-ffprobe-missing-binary".into(),
     };
 
     let capability = inspect_transcoding_capability(&settings);
-    assert_eq!(
-        capability.ffmpeg.configured_path,
-        "/usr/local/bin/koko-ffmpeg-missing-binary"
-    );
-    assert_eq!(
-        capability.ffprobe.configured_path,
-        "/usr/local/bin/koko-ffprobe-missing-binary"
-    );
-    // If ffmpeg is NOT installed anywhere, the allow-list rejection makes both
-    // unavailable with an error. If it IS installed, the fallback finds it. Either
-    // way the field is well-formed (not panic), so we only assert consistency.
-    assert_eq!(
-        capability.ffmpeg.available,
-        capability.ffmpeg.version.is_some()
-    );
-    assert_eq!(
-        capability.ffprobe.available,
-        capability.ffprobe.version.is_some()
-    );
+    assert!(!capability.ffmpeg.available);
+    assert!(!capability.ffprobe.available);
+    assert!(capability.ffmpeg.error.is_some());
+    assert!(capability.ffprobe.error.is_some());
 }
 
 #[test]

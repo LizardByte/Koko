@@ -24,8 +24,6 @@ pub enum ResolveSource {
     ConfiguredAbsolute,
     /// The configured bare name resolved on PATH.
     PathLookup,
-    /// Found in a well-known install directory (not the configured path).
-    WellKnown,
 }
 
 /// Result of resolving a single binary.
@@ -94,28 +92,30 @@ fn well_known_dirs() -> Vec<PathBuf> {
 /// absolute/relative path). `binary_name` is the canonical name being looked
 /// up and MUST be in [`ALLOWED_BINARIES`].
 ///
+/// Resolution is literal — the resolver runs exactly what is configured and
+/// never silently substitutes a binary found elsewhere. Smart discovery
+/// (PATH + well-known directories) is a separate concern handled on demand by
+/// the Detect UI; the runtime just executes the configured value.
+///
 /// Resolution order:
 /// 1. If `configured` looks like a path (contains a separator) or is absolute,
 ///    validate its base name is allowed and it exists + is executable.
 /// 2. Else treat `configured` as a bare name: require it to be allowed, then
 ///    look it up on PATH.
-/// 3. Else fall back to the well-known directory list for `binary_name`.
-/// 4. Else [`ResolvedBinary::Missing`] with every checked location.
+/// 3. Else [`ResolvedBinary::Missing`] with every checked location.
 pub fn resolve_binary(
     configured: &str,
     binary_name: &str,
 ) -> ResolvedBinary {
-    resolve_binary_with(configured, binary_name, &WELL_KNOWN_DIRS, lookup_on_path)
+    resolve_binary_with(configured, binary_name, lookup_on_path)
 }
 
-/// Internal resolver that accepts an explicit well-known directory list and a
-/// PATH-lookup function so tests can run hermetically (the static
-/// [`WELL_KNOWN_DIRS`] and the real `PATH` reflect the actual machine, where
-/// ffmpeg may be installed).
+/// Internal resolver that accepts a PATH-lookup function so tests can run
+/// hermetically (the real `PATH` reflects the actual machine, where ffmpeg may
+/// be installed).
 fn resolve_binary_with(
     configured: &str,
     binary_name: &str,
-    well_known_dirs: &[PathBuf],
     path_lookup: impl Fn(&str) -> Option<PathBuf>,
 ) -> ResolvedBinary {
     if !ALLOWED_BINARIES.contains(&binary_name) {
@@ -154,18 +154,6 @@ fn resolve_binary_with(
             }
             checked.push(PathBuf::from(configured));
         }
-    }
-
-    // 3. Well-known directories.
-    for dir in well_known_dirs.iter() {
-        let candidate = dir.join(binary_name);
-        if is_executable(&candidate) {
-            return ResolvedBinary::Found {
-                resolved_path: canonicalize(&candidate),
-                via: ResolveSource::WellKnown,
-            };
-        }
-        checked.push(candidate);
     }
 
     ResolvedBinary::Missing {
@@ -341,10 +329,11 @@ mod tests {
         path
     }
 
-    // The public `resolve_binary` searches the real machine's well-known dirs
-    // and PATH (where ffmpeg may actually be installed), so these tests use the
-    // internal `resolve_binary_with` with controlled inputs to stay hermetic.
-    const NO_WELL_KNOWN: &[PathBuf] = &[];
+    // The public `resolve_binary` consults the real machine's PATH (where
+    // ffmpeg may actually be installed), so these tests use the internal
+    // `resolve_binary_with` with a controlled PATH-lookup function to stay
+    // hermetic. The resolver no longer searches well-known directories — that
+    // is the Detect UI's job, not the runtime's.
     fn no_path_lookup(_: &str) -> Option<PathBuf> {
         None
     }
@@ -354,12 +343,7 @@ mod tests {
     fn absolute_configured_path_is_used() {
         let dir = tempfile::tempdir().unwrap();
         let ffmpeg = write_shim(dir.path(), "ffmpeg");
-        let resolved = resolve_binary_with(
-            ffmpeg.to_str().unwrap(),
-            "ffmpeg",
-            NO_WELL_KNOWN,
-            no_path_lookup,
-        );
+        let resolved = resolve_binary_with(ffmpeg.to_str().unwrap(), "ffmpeg", no_path_lookup);
         assert!(matches!(
             resolved,
             ResolvedBinary::Found {
@@ -380,33 +364,22 @@ mod tests {
         let rogue = write_shim(dir.path(), "not-ffmpeg");
         // The requested binary_name itself must be allowed; a rogue name is never resolved.
         assert!(matches!(
-            resolve_binary_with(
-                rogue.to_str().unwrap(),
-                "rogue",
-                NO_WELL_KNOWN,
-                no_path_lookup
-            ),
+            resolve_binary_with(rogue.to_str().unwrap(), "rogue", no_path_lookup),
             ResolvedBinary::Missing { .. }
         ));
         // Asking for an allowed name via a path whose base name is rogue is also rejected.
         assert!(matches!(
-            resolve_binary_with(
-                rogue.to_str().unwrap(),
-                "ffmpeg",
-                NO_WELL_KNOWN,
-                no_path_lookup
-            ),
+            resolve_binary_with(rogue.to_str().unwrap(), "ffmpeg", no_path_lookup),
             ResolvedBinary::Missing { .. }
         ));
     }
 
     #[test]
     fn missing_returns_checked_paths() {
-        // Empty well-known list + no PATH -> the only checked path is the configured one.
+        // No PATH hit -> the only checked path is the configured one.
         let resolved = resolve_binary_with(
             "/definitely/does/not/exist/ffmpeg",
             "ffmpeg",
-            NO_WELL_KNOWN,
             no_path_lookup,
         );
         match resolved {
@@ -427,35 +400,14 @@ mod tests {
     }
 
     #[test]
-    fn well_known_dir_hit_reports_wellknown_source() {
-        // A well-known dir containing the shim resolves via WellKnown, with PATH
-        // lookup disabled so the real machine's ffmpeg can't interfere.
-        let dir = tempfile::tempdir().unwrap();
-        write_shim(dir.path(), "ffmpeg");
-        let resolved = resolve_binary_with(
-            "ffmpeg",
-            "ffmpeg",
-            &[dir.path().to_path_buf()],
-            no_path_lookup,
-        );
-        match resolved {
-            ResolvedBinary::Found {
-                via: ResolveSource::WellKnown,
-                ..
-            } => {}
-            other => panic!("expected Found via WellKnown, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn path_lookup_hit_reports_pathlookup_source() {
-        // A bare name found via PATH lookup reports PathLookup, not WellKnown.
+        // A bare name found via PATH lookup reports PathLookup.
         let dir = tempfile::tempdir().unwrap();
         let ffmpeg = write_shim(dir.path(), "ffmpeg");
         let via_path = move |name: &str| {
             if name == "ffmpeg" { Some(ffmpeg.clone()) } else { None }
         };
-        let resolved = resolve_binary_with("ffmpeg", "ffmpeg", NO_WELL_KNOWN, via_path);
+        let resolved = resolve_binary_with("ffmpeg", "ffmpeg", via_path);
         assert!(matches!(
             resolved,
             ResolvedBinary::Found {

@@ -20,7 +20,7 @@ This is discovery open-question 7 and it shapes everything below.
 
 **Option B — Persistent transcode keyed by `(session_id, start_ms, audio_index)` (larger change).** A long-lived ffmpeg process that stream requests attach to, eliminating the per-request re-spawn (and the double-spawn concern that killed the probe). Natural home for a single watcher. Higher risk; touches session lifecycle, replacement semantics, and concurrency (multiple readers of one stdout).
 
-**Recommendation (tentative, to confirm in planning):** Start with **Option A**. It delivers the three scope items with the least surface area, reuses the shipped seams directly, and leaves Option B as a follow-on if re-spawn cost or reader-fan-out ever becomes a problem. The rest of this draft assumes Option A.
+**Recommendation (tentative, to confirm in planning):** Start with **Option A**. It delivers the three scope items with the least surface area, reuses the shipped seams directly, and leaves Option B as a follow-on if re-spawn cost or reader-fan-out ever becomes a problem. The rest of this draft assumes Option A. The user affirmed there may be many users using the client in parallel, so per-request has it's benefits, but persistent keyed also allows the admin to kill some stalle transcoding spawn that for some reason is still running. Investigate further impacts unrelated to the stream-experience as another task too. And the user thinks "how do we handle transcoding caching?" has to be answered before deciding on anything other than option A.
 
 ## 2. (C-early) Pre-commit stream validation — event-driven, not a fixed timer
 
@@ -83,6 +83,7 @@ The shipped best-effort recovery (fetch status on `<video>` `error`) stays. The 
 - Before spawning, validate the resolved source path is readable. On failure return **404** (not a confusing ffmpeg stderr path).
 - **Reconcile with `missing_since`** (discovery open question 6): the backing-file row already has `missing_since` (`media.rs:3145`). Decide whether a per-play check also *sets* `missing_since` (so the UI/library can reflect it) or only returns 404. Prefer marking `missing_since` to avoid a parallel notion of "missing".
 - Network/removable paths are the primary motivation; for local indexed files this is cheap insurance.
+- Check the need to have an "hydration" method for network attached paths. And/or some addtional setting/checkbox in the library config of said path to allow features and improvements only for network paths.
 
 ## 5. Implementation phases (suggested sequencing)
 

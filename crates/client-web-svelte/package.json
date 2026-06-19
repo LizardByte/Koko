@@ -1,0 +1,23 @@
+{
+  "name": "koko-client-web-svelte",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "PoC: Svelte 5 SPA port of the Koko web client (logs view only).",
+  "scripts": {
+    "dev": "vite dev",
+    "dev:mock": "vite dev --mode mock",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.8.0",
+    "@sveltejs/vite-plugin-svelte": "^6.0.0",
+    "svelte": "^5.1.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.1.0"
+  }
+}

@@ -1,0 +1,148 @@
+/* Minimal shared styles for the PoC. A real migration would import the
+   existing ../client-web/src/style.css and progressively replace view-specific
+   rules as components are ported. The log-message-col rule below is carried
+   over verbatim from the logs Message column fix to prove the CSS ports. */
+
+:root {
+  --koko-surface: #fff;
+  --koko-muted: #777;
+  --koko-border: #ddd;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --koko-surface: #1c1c1e;
+    --koko-muted: #999;
+    --koko-border: #333;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--koko-surface);
+}
+
+/* --- Tag helpers (mirrors vanilla client) --- */
+.tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  background: rgba(127, 127, 127, 0.18);
+}
+.tag.warning {
+  background: rgba(234, 179, 8, 0.18);
+  color: #b45309;
+}
+.tag.danger-tag {
+  background: rgba(239, 68, 68, 0.18);
+  color: #b91c1c;
+}
+
+/* --- Settings/log panel (carried from vanilla client style.css) --- */
+.panel.page-panel {
+  background: var(--koko-surface);
+  border: 1px solid var(--koko-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.section-heading h3 {
+  margin: 0;
+}
+.muted {
+  color: var(--koko-muted);
+}
+
+/* Horizontally scrollable table wrapper. Carried verbatim from vanilla client. */
+.table-shell {
+  overflow-x: auto;
+  width: 100%;
+}
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+table.data-table th,
+table.data-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--koko-border);
+  vertical-align: top;
+}
+
+/* THE FIX: Message column stays ~70 chars wide regardless of viewport. */
+.log-entries-table .log-message-col {
+  min-width: 70ch;
+  width: 70ch;
+}
+.log-entries-table .log-entry-message {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.84rem;
+}
+
+/* --- Forms --- */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.form-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+input,
+select {
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--koko-border);
+  border-radius: 4px;
+  background: var(--koko-surface);
+  color: inherit;
+}
+button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--koko-border);
+  border-radius: 4px;
+  background: var(--koko-surface);
+  color: inherit;
+  cursor: pointer;
+}
+button[type='submit'] {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.page-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.empty-state {
+  color: var(--koko-muted);
+  padding: 1rem;
+  text-align: center;
+}
+.empty-state.tight {
+  padding: 0.5rem;
+}

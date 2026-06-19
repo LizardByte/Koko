@@ -1,0 +1,191 @@
+<script lang="ts">
+  // HomeFeature — replaces renderHomeFeature() (../client-web/src/app/
+  // homeView.ts:470-519). Two variants: collection hero and item hero. Both
+  // use the --home-feature-image technique: a ::before pseudo-element holds
+  // the backdrop with a right-side mask (only the left ~18% fades), and a
+  // ::after pseudo-element adds a left-side dark scrim. isolation:isolate
+  // keeps the layers from bleeding through. The CSS lives here (scoped) so it
+  // travels with the component.
+  import Button from './Button.svelte';
+  import { goto } from '$app/navigation';
+  import {
+    getArtworkUrl,
+    type MediaCollectionSummary,
+    type MediaItemSummary,
+  } from '$lib/api';
+  import { libraries } from '$lib/stores';
+  import { formatChildCount, humanizeItemType } from '$lib/ui';
+  import { resolveApiUrl } from '$lib/api';
+
+  type Props = {
+    collection?: MediaCollectionSummary;
+    item?: MediaItemSummary;
+  };
+  let { collection, item }: Props = $props();
+
+  // Backdrop URL: collection uses artwork/backdrop via resolveApiUrl; item uses
+  // getArtworkUrl(backdrop) when item.backdrop_url is set (pageBackdropUrlForItem
+  // semantics). In mock mode these are placeholders, so has-artwork stays off
+  // and the hero renders a solid base — matching the vanilla client's
+  // broken-image behavior.
+  const backdropUrl = $derived(
+    collection
+      ? collection.backdrop_url
+        ? resolveApiUrl(collection.backdrop_url)
+        : collection.artwork_url
+          ? resolveApiUrl(collection.artwork_url)
+          : undefined
+      : item?.backdrop_url
+        ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at)
+        : undefined,
+  );
+  const logoUrl = $derived(item?.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined);
+  const libraryName = $derived(item ? libraries.byId(item.library_id)?.name ?? 'your library' : '');
+</script>
+
+{#if collection}
+  <section
+    class="home-feature"
+    class:has-artwork={Boolean(backdropUrl)}
+    style={backdropUrl ? `--home-feature-image: url('${backdropUrl}');` : ''}
+  >
+    <div class="home-feature-copy">
+      <p class="eyebrow">Collection</p>
+      <h2>{collection.name}</h2>
+      <p>{collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`}</p>
+      <div class="hero-meta-row">
+        <span class="tag">{collection.item_count} title{collection.item_count === 1 ? '' : 's'}</span>
+      </div>
+    </div>
+    <Button variant="secondary" icon="arrow-right" iconPosition="end" label="Open" onclick={() => goto(`/collections/${collection.id}`)} />
+  </section>
+{:else if item}
+  <section
+    class="home-feature"
+    class:has-artwork={Boolean(backdropUrl)}
+    style={backdropUrl ? `--home-feature-image: url('${backdropUrl}');` : ''}
+  >
+    <div class="home-feature-copy">
+      {#if logoUrl}
+        <img class="home-feature-logo" src={logoUrl} alt={item.display_title} />
+      {:else}
+        <h2>{item.display_title}</h2>
+      {/if}
+      <p>{item.overview ?? `${humanizeItemType(item.item_type)} from ${libraryName}.`}</p>
+      <div class="hero-meta-row">
+        {#each item.genres.slice(0, 3) as genre (genre)}
+          <span class="tag">{genre}</span>
+        {/each}
+        <span class="tag">{formatChildCount(item)}</span>
+      </div>
+    </div>
+    <Button variant="secondary" icon="arrow-right" iconPosition="end" label="Open" onclick={() => goto(`/items/${item.id}`)} />
+  </section>
+{/if}
+
+<style>
+  .home-feature {
+    position: sticky;
+    top: 3.75rem;
+    z-index: 7;
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 1rem;
+    height: 350px;
+    min-height: 350px;
+    max-height: 350px;
+    padding: 1.4rem;
+    border-radius: 0;
+    overflow: hidden;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    /* Solid base prevents item cards from bleeding through when scrolled under. */
+    background: #0d1221;
+  }
+
+  .home-feature.has-artwork {
+    background: #0a0f1c;
+  }
+
+  .home-feature::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(72%, 1040px);
+    background-image: var(--home-feature-image);
+    background-position: top right;
+    background-size: cover;
+    background-repeat: no-repeat;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 18%);
+    mask-image: linear-gradient(to right, transparent 0%, black 18%);
+  }
+
+  .home-feature::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: linear-gradient(
+      90deg,
+      rgba(8, 12, 20, 0.95) 0%,
+      rgba(8, 12, 20, 0.72) 28%,
+      rgba(8, 12, 20, 0.18) 52%,
+      transparent 68%
+    );
+  }
+
+  .home-feature-copy {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-width: 760px;
+  }
+
+  .home-feature-copy h2 {
+    margin: 0;
+    font-size: 2.35rem;
+    line-height: 1;
+  }
+
+  .home-feature-copy p {
+    margin: 0;
+    max-width: 68ch;
+    color: #d7e4ff;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .home-feature-logo {
+    width: min(420px, 70%);
+    max-height: 135px;
+    object-fit: contain;
+    object-position: left center;
+  }
+
+  .hero-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  :global(.home-feature-action) {
+    position: relative;
+    z-index: 2;
+    align-self: end;
+  }
+
+  @media (max-width: 960px) {
+    .home-feature {
+      top: 5.6rem;
+      height: 230px;
+      min-height: 230px;
+      max-height: 230px;
+    }
+  }
+</style>

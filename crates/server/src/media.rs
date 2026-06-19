@@ -1,89 +1,43 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
 // standard imports
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // lib imports
 use diesel::{
-    ExpressionMethods,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-    SelectableHelper,
-    SqliteConnection,
-    sql_types,
+    ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl, SelectableHelper,
+    SqliteConnection, sql_types,
 };
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // local imports
 use crate::config::{
-    FfmpegSettings,
-    MediaLibraryKind,
-    MediaLibraryMetadataLanguageMode,
-    MediaLibraryScanner,
-    MediaLibrarySettings,
-    MetadataProviderId,
+    FfmpegSettings, MediaLibraryKind, MediaLibraryMetadataLanguageMode, MediaLibraryScanner,
+    MediaLibrarySettings, MetadataProviderId,
 };
 use crate::db::models::{
-    ItemMetadataLink,
-    MediaFile,
-    MediaItem,
-    MediaLibrary,
-    MetadataCollection,
-    MetadataCollectionItem,
-    NewMediaFile,
-    NewMediaFileLibrary,
-    NewMediaItem,
-    NewMediaLibrary,
-    NewPlaybackProgress,
-    NewScanState,
-    PlaybackProgress,
-    ScanState,
-    User,
+    ItemMetadataLink, MediaFile, MediaItem, MediaLibrary, MetadataCollection,
+    MetadataCollectionItem, NewMediaFile, NewMediaFileLibrary, NewMediaItem, NewMediaLibrary,
+    NewPlaybackProgress, NewScanState, PlaybackProgress, ScanState, User,
 };
 use crate::metadata::{
-    ArtworkKind,
-    DEFAULT_METADATA_LOCALE,
-    LinkedMetadataExtra,
-    MetadataCollectionSummary,
-    MetadataProvider,
-    MetadataRegistry,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, LinkedMetadataExtra, MetadataCollectionSummary,
+    MetadataProvider, MetadataRegistry,
     list_metadata_collection_summaries_with_preferred_languages,
-    metadata_extras_from_metadata_links,
-    normalize_locale_key,
-    presentation_from_metadata_links,
+    metadata_extras_from_metadata_links, normalize_locale_key, presentation_from_metadata_links,
 };
 use crate::scanner::shows::parse_show_path;
-pub use crate::scanner::shows::{
-    infer_episode_number,
-    infer_season_number,
-};
+pub use crate::scanner::shows::{infer_episode_number, infer_season_number};
 use crate::scanner::{
-    DiscoveredMediaFile,
-    FileHashCandidate,
-    ScannerSink,
-    fallback_title_from_relative_path,
-    inspect_library,
-    inspect_library_streaming,
+    DiscoveredMediaFile, FileHashCandidate, ScannerSink, fallback_title_from_relative_path,
+    inspect_library, inspect_library_streaming,
 };
-pub use crate::scanner::{
-    LibraryScanStatus,
-    LibraryScanSummary,
-};
+pub use crate::scanner::{LibraryScanStatus, LibraryScanSummary};
 use crate::utils::current_timestamp;
 
 #[derive(Debug)]
@@ -198,8 +152,7 @@ struct LibraryMetadataRefreshCounts {
     failed_items: i64,
 }
 
-const CATALOG_MEDIA_FILE_COLUMNS: &str =
-    "\
+const CATALOG_MEDIA_FILE_COLUMNS: &str = "\
       files.id AS id,files.path AS path,memberships.id AS library_file_id,memberships.library_id \
      AS library_id,memberships.source_root_path AS source_root_path,memberships.relative_path AS \
      relative_path,files.file_size AS file_size,files.modified_at AS modified_at,files.media_kind \
@@ -784,8 +737,8 @@ pub fn inspect_libraries(libraries: &[MediaLibrarySettings]) -> Vec<LibraryScanS
 /// Detect FFmpeg and ffprobe availability from the configured settings.
 pub fn inspect_transcoding_capability(settings: &FfmpegSettings) -> TranscodingCapability {
     TranscodingCapability {
-        ffmpeg: detect_binary(&settings.ffmpeg_path),
-        ffprobe: detect_binary(&settings.ffprobe_path),
+        ffmpeg: detect_binary(&settings.ffmpeg_path, "ffmpeg"),
+        ffprobe: detect_binary(&settings.ffprobe_path, "ffprobe"),
     }
 }
 
@@ -1553,7 +1506,7 @@ fn sync_library_catalog_filtered(
 
     let probe_context = ProbeContext {
         ffprobe_path: &ffmpeg_settings.ffprobe_path,
-        enabled: detect_binary(&ffmpeg_settings.ffprobe_path).available,
+        enabled: detect_binary(&ffmpeg_settings.ffprobe_path, "ffprobe").available,
     };
     let existing_library_rows = media_libraries_dsl::media_libraries
         .order(media_libraries_dsl::id.asc())
@@ -5994,48 +5947,60 @@ pub fn list_media_item_children_with_preferred_languages(
     Ok(items)
 }
 
-fn detect_binary(binary: &str) -> BinaryCapability {
-    let output = Command::new(binary).arg("-version").output();
+fn detect_binary(
+    configured: &str,
+    binary_name: &str,
+) -> BinaryCapability {
+    use crate::ffmpeg_resolve::{self, ResolvedBinary};
 
-    match output {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .next()
-                .map(|line| line.trim().to_string())
-                .filter(|line| !line.is_empty());
-
+    match ffmpeg_resolve::resolve_binary(configured, binary_name) {
+        ResolvedBinary::Found { resolved_path, via } => {
+            // "available" means the binary actually launches and reports a
+            // version, not merely that it exists on disk. A found binary whose
+            // `-version` fails (e.g. a broken shim) is reported unavailable
+            // with the probe error, matching the previous semantics.
+            let version = ffmpeg_resolve::probe_version(&resolved_path);
+            let (available, error) = match &version {
+                Some(_) => (true, None),
+                None => (
+                    false,
+                    Some(format!(
+                        "{} was found at {} but did not report a version",
+                        binary_name,
+                        resolved_path.display()
+                    )),
+                ),
+            };
+            log::info!(
+                "Resolved {binary_name} via {via:?}: {} (available: {available})",
+                resolved_path.display()
+            );
             BinaryCapability {
-                configured_path: binary.to_string(),
-                available: true,
+                configured_path: configured.to_string(),
+                available,
                 version,
-                error: None,
+                error,
             }
         }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let error = if !stderr.is_empty() {
-                stderr
-            } else if !stdout.is_empty() {
-                stdout
-            } else {
-                format!("Process exited with status {}", output.status)
-            };
-
+        ResolvedBinary::Missing { checked_paths, .. } => {
+            let checked_display = checked_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            log::warn!(
+                "Could not resolve {binary_name}; checked: [{}]",
+                checked_display
+            );
             BinaryCapability {
-                configured_path: binary.to_string(),
+                configured_path: configured.to_string(),
                 available: false,
                 version: None,
-                error: Some(error),
+                error: Some(format!(
+                    "Could not find {binary_name}. Checked: [{checked_display}]"
+                )),
             }
         }
-        Err(error) => BinaryCapability {
-            configured_path: binary.to_string(),
-            available: false,
-            version: None,
-            error: Some(error.to_string()),
-        },
     }
 }
 

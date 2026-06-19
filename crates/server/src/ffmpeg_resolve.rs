@@ -228,6 +228,24 @@ fn lookup_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Run `<binary> -version` and return the first stdout line, or [`None`] on
+/// failure. Used for capability display. Uses the synchronous std [`Command`]
+/// because this is called rarely and from sync contexts (`detect_binary`).
+pub fn probe_version(path: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(path)
+        .arg("-version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,5 +395,33 @@ mod tests {
     #[test]
     fn allowed_binaries_constant_is_what_we_expect() {
         assert_eq!(ALLOWED_BINARIES, &["ffmpeg", "ffprobe"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_version_reads_first_stdout_line() {
+        let dir = tempfile::tempdir().unwrap();
+        // A shim that mimics `ffmpeg -version` first line.
+        let shim = dir.path().join("ffmpeg");
+        std::fs::write(
+            &shim,
+            "#!/bin/sh\necho 'ffmpeg version 7.0.2, built locally'\nexit 0\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&shim).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&shim, perms).unwrap();
+
+        let version = probe_version(&shim);
+        assert_eq!(
+            version.as_deref(),
+            Some("ffmpeg version 7.0.2, built locally")
+        );
+    }
+
+    #[test]
+    fn probe_version_returns_none_for_missing_binary() {
+        assert!(probe_version(std::path::Path::new("/definitely/does/not/exist/ffmpeg")).is_none());
     }
 }

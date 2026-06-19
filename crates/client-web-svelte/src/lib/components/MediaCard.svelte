@@ -56,7 +56,9 @@
 
   // Metadata badges (pending / unmatched). Mirrors metadataBadgeMarkup
   // (homeView.ts:297-314): a single status span whose classes depend on state.
-  const isUnmatched = $derived(item.has_metadata === false);
+  // Vanilla uses the falsy `!item.has_metadata` (so undefined → unmatched);
+  // `=== false` would miss items where the field is absent (e.g. mock tracks).
+  const isUnmatched = $derived(!item.has_metadata);
   const isMetadataLoading = $derived(item.metadata_refresh_state === 'pending');
   const hasMetadataBadges = $derived(isUnmatched || isMetadataLoading);
   const hasMultipleMetaBadges = $derived(isUnmatched && isMetadataLoading);

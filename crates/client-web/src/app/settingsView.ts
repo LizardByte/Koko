@@ -1,5 +1,5 @@
 /** Renders settings sections and converts settings forms into API payloads. */
-import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot } from '../api';
+import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot, ToolDiscoveryResponse } from '../api';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
@@ -554,6 +554,10 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
           </div>
+          <div class="ffmpeg-discover">
+            <button id="detect-ffmpeg" class="secondary-button" type="button">Detect ffmpeg</button>
+            <div id="ffmpeg-discover-results" class="ffmpeg-discover-results" hidden></div>
+          </div>
         </section>
 
         <section>
@@ -658,6 +662,49 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
     return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
   }
   return '';
+}
+
+/**
+ * Render the discovered ffmpeg/ffprobe candidates as radio options grouped by
+ * directory. Pairs both binaries per directory (disabled when one is missing).
+ * Exported so the event binding can call it after the discovery request.
+ */
+export function renderDiscoverResults(discovery: ToolDiscoveryResponse): string {
+  const parts: string[] = [];
+
+  // Configured-path option (paired validation).
+  const configuredOk = Boolean(discovery.configured_ffmpeg.resolved_path) && Boolean(discovery.configured_ffprobe.resolved_path);
+  const configuredLabel = configuredOk
+    ? `Current (${discovery.configured_ffmpeg.version ?? 'ffmpeg'} · ${discovery.configured_ffprobe.version ?? 'ffprobe'})`
+    : `Current — ${discovery.configured_ffmpeg.error ?? discovery.configured_ffprobe.error ?? 'not found'}`;
+  parts.push(`
+    <label class="ffmpeg-discover-option">
+      <input type="radio" name="ffmpeg-discover-choice" value="current" ${configuredOk ? 'checked' : ''} />
+      <span>${escapeHtml(configuredLabel)}</span>
+    </label>
+  `);
+
+  // Candidate directories, paired.
+  for (const candidate of discovery.candidates) {
+    const both = candidate.ffmpeg && candidate.ffprobe;
+    const label = `${candidate.directory} — ${candidate.ffmpeg?.version ?? 'ffmpeg missing'} · ${candidate.ffprobe?.version ?? 'ffprobe missing'}`;
+    parts.push(`
+      <label class="ffmpeg-discover-option${both ? '' : ' is-disabled'}">
+        <input type="radio" name="ffmpeg-discover-choice" value="${escapeHtml(candidate.directory)}" ${both ? '' : 'disabled'} />
+        <span>${escapeHtml(label)}</span>
+      </label>
+    `);
+  }
+
+  // Manual option (keep the text inputs authoritative).
+  parts.push(`
+    <label class="ffmpeg-discover-option">
+      <input type="radio" name="ffmpeg-discover-choice" value="manual" />
+      <span>Use the manual paths above</span>
+    </label>
+  `);
+
+  return parts.join('');
 }
 
 export function renderSettingsPage(): string {

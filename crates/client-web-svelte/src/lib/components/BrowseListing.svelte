@@ -1,18 +1,22 @@
 <script lang="ts">
-  // BrowseDetail — replaces renderBrowseDetailPage() + the collection/category/
-  // playlist sub-renderers (../client-web/src/app/homeView.ts:112-295).
-  // Reads kind/key/libraryId from the route (page.params via the route page)
-  // and derives its data purely from the catalog store — no browseFilter
-  // state (vanilla's is dead code; see BROWSE_FILTER_PROPOSAL.md).
-  import Button from './Button.svelte';
-  import MediaCard from './MediaCard.svelte';
+  // BrowseListing — a routed page-level item list for a browse target
+  // (collection, category/genre, or playlist). Resolves data from the catalog
+  // store + route params, then renders BrowseListingHero + BrowseListingGrid.
+  //
+  // Replaces renderBrowseDetailPage() + the collection/category/playlist
+  // sub-renderers (../client-web/src/app/homeView.ts:112-295). The three kinds
+  // share the same structure (hero + grid); only copy + data source differ, so
+  // we keep a single dispatcher rather than three kind-components. No
+  // browseFilter state (vanilla's is dead code; see BROWSE_FILTER_PROPOSAL.md).
+  import BrowseListingHero from './BrowseListingHero.svelte';
+  import BrowseListingGrid from './BrowseListingGrid.svelte';
   import { goto } from '$app/navigation';
   import { catalog } from '$lib/stores';
   import {
     categorySummaries,
     itemsForCollection,
+    pageBackdropUrlForCollection,
   } from '$lib/selectors';
-  import { pageBackdropUrlForCollection } from '$lib/selectors';
   import { homeBrowsePath, type BrowseListingKind } from '$lib/paths';
 
   type Props = {
@@ -76,6 +80,9 @@
   const heroBackdropUrl = $derived(
     kind === 'collection' ? pageBackdropUrlForCollection(collection) : undefined,
   );
+  const collectionArtworkUrl = $derived(
+    kind === 'collection' ? collection?.artwork_url : undefined,
+  );
 
   // Back target — the home browse path for the active library (or all).
   function back() {
@@ -84,81 +91,26 @@
 </script>
 
 <section class="browse-detail item-page">
-  <section class="item-hero collection-hero" class:has-artwork={Boolean(heroBackdropUrl)}>
-    <div class="detail-art item-poster collection-poster" class:has-image={Boolean(heroBackdropUrl)}>
-      {#if kind === 'collection' && collection?.artwork_url}
-        <img src={collection.artwork_url} alt={title} />
-      {:else}
-        <span class="collection-poster-placeholder">
-          {title.slice(0, 1).toUpperCase()}
-        </span>
-      {/if}
-    </div>
-    <div class="detail-summary item-summary">
-      <p class="eyebrow">{eyebrow}</p>
-      <h2 class="item-title-fallback">{title}</h2>
-      <div class="hero-meta-row">
-        <span class="tag">{items.length} title{items.length === 1 ? '' : 's'}</span>
-      </div>
-      <p class="hero-description">{overview}</p>
-      <div class="detail-actions">
-        <Button variant="secondary" label="Back" icon="arrow-left" onclick={back} />
-      </div>
-    </div>
-  </section>
+  <BrowseListingHero
+    {eyebrow}
+    {title}
+    itemCount={items.length}
+    {overview}
+    posterUrl={collectionArtworkUrl ?? heroBackdropUrl}
+    onBack={back}
+  />
 
-  <section class="panel page-panel item-section">
-    <div class="section-heading section-heading-actions">
-      <h3>Items</h3>
-      <span class="muted">{items.length} item{items.length === 1 ? '' : 's'}</span>
-    </div>
-    {#if catalog.libraryItemsLoading}
-      <div class="empty-state tight">Loading library items…</div>
-    {:else if items.length === 0}
-      <div class="empty-state tight">
-        {kind === 'collection'
-          ? 'No titles are currently linked to this collection.'
-          : kind === 'category'
-            ? 'No titles are currently linked to this genre.'
-            : 'Playlist creation is planned. Items will appear here when playlists are available.'}
-      </div>
-    {:else}
-      <div class="item-grid hierarchy-item-grid">
-        {#each items as item (item.id)}
-          <MediaCard {item} />
-        {/each}
-      </div>
-    {/if}
-  </section>
+  <BrowseListingGrid {items} loading={catalog.libraryItemsLoading} {kind} />
 </section>
 
 <style>
-  /*
-   * Component-owned layout glue. The shared .item-hero / .detail-art /
-   * .item-summary / .hero-meta-row / .detail-actions / .item-section / .item-grid
-   * rules live in app.css (mirrors vanilla style.css). .collection-hero and
-   * .collection-poster match vanilla style.css:1541-1552; the placeholder
-   * initial is browse-detail-only.
-   */
+  /* Layout glue only. Hero + grid rules moved to their components. The shared
+     .item-page / .panel / .item-section / .item-grid rules live in app.css. */
   .browse-detail {
     display: flex;
     flex-direction: column;
     gap: 1.25rem;
     padding-top: 1rem;
     padding-bottom: 1.2rem;
-  }
-
-  .collection-hero {
-    min-height: min(48vh, 560px);
-  }
-
-  .collection-poster {
-    position: relative;
-  }
-
-  .collection-poster-placeholder {
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: rgba(255, 255, 255, 0.85);
   }
 </style>

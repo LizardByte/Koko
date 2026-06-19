@@ -1,12 +1,33 @@
 <script lang="ts">
-  // Temporary landing — replaced by Phase 2's home page.
-  import { isMockApi } from '$lib/api';
-  const mock = $derived(isMockApi());
+  // Home — Phase 1 placeholder. Phase 2 replaces this with the real home
+  // (navbar, hero, shelves, tabs, search). Loads the catalog + libraries so
+  // the rail + shell have real data and we can verify the foundation end to end.
+  import { onMount } from 'svelte';
+  import { catalog, libraries } from '$lib/stores';
+
+  onMount(async () => {
+    await Promise.all([catalog.loadHome(), libraries.load()]);
+  });
+
+  const shelves = $derived(catalog.home?.shelves ?? []);
 </script>
 
-<main style="padding:2rem;font-family:Inter,system-ui,sans-serif;color:#f4f7fb">
-  <h1>Koko — Svelte port (Phase 0)</h1>
-  <p>Foundation laid: shared CSS, full API/types, verbatim mock data, helpers, primitives, stores.</p>
-  <p>Mock API: <strong>{mock ? 'on' : 'off'}</strong></p>
-  <p>Navigate to /settings/logs once Phase 1+ land.</p>
-</main>
+<svelte:head><title>Koko — Home</title></svelte:head>
+
+<section class="panel page-panel" style="padding:1.2rem">
+  <h2 style="margin:0 0 0.5rem">Koko — Phase 1 (shell + auth)</h2>
+  <p class="muted" style="margin:0 0 1rem">
+    Sidebar rail, page backdrop, auth gating, and split stores are in place.
+    Phase 2 will replace this placeholder with the real home (hero, shelves,
+    tabs, search).
+  </p>
+
+  {#if shelves.length}
+    <p class="muted">Loaded {shelves.length} shelves from the mock API:</p>
+    <ul>
+      {#each shelves as shelf (shelf.id)}
+        <li><strong>{shelf.title}</strong> — {shelf.items.length} items</li>
+      {/each}
+    </ul>
+  {/if}
+</section>

@@ -31,6 +31,8 @@
   import LogIn from '@lucide/svelte/icons/log-in';
   import LogOut from '@lucide/svelte/icons/log-out';
   import Layers from '@lucide/svelte/icons/layers';
+  import Settings from '@lucide/svelte/icons/settings';
+  import Star from '@lucide/svelte/icons/star';
   import type { Component } from 'svelte';
 
   export const ICONS: Record<string, Component> = {
@@ -59,6 +61,8 @@
     'log-in': LogIn,
     'log-out': LogOut,
     layers: Layers,
+    settings: Settings,
+    star: Star,
   };
 </script>
 

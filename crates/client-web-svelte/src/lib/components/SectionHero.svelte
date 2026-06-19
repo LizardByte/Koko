@@ -1,22 +1,22 @@
 <script lang="ts">
-  // ItemHero — replaces renderSelectedItemHero() + renderSelectedItemActions()
-  // + renderSelectedItemFactList() (../client-web/src/app/itemPersonView.ts:
-  // 764-909). The poster, title (logo or fallback), tagline, meta row in fixed
-  // badge order (missing, playback, year, content rating, rating, genres),
-  // collapsible overview, action buttons, and the technical fact list.
-  import Button from './Button.svelte';
+  // SectionHero — the top summary banner of the item-detail page: poster,
+  // title (logo or fallback), tagline, badge row, collapsible overview, action
+  // buttons (HeroActions), and technical facts (FactList).
+  //
+  // "Hero" is an industry-standard web-design term for the large summary
+  // banner at the top of a detail/landing page (Netflix, Disney+, Spotify,
+  // e-commerce). It's not media-specific jargon.
+  //
+  // Replaces renderSelectedItemHero() (../client-web/src/app/itemPersonView.ts:
+  // 764-909). Actions + facts were split out (mirroring vanilla's separate
+  // renderSelectedItemActions / renderSelectedItemFactList functions).
   import CollapsibleText from './CollapsibleText.svelte';
   import Icon from './Icon.svelte';
-  import { getArtworkUrl, resolveApiUrl, type MediaItemDetail, type MediaPlaybackTarget } from '$lib/api';
-  import {
-    backNavigationTarget,
-    selectedItemTechnicalFacts,
-  } from '$lib/selectors';
-  import { playbackProgressPercent, resumablePlaybackPositionMs } from '$lib/playbackProgress';
+  import HeroActions from './HeroActions.svelte';
+  import FactList from './FactList.svelte';
+  import { getArtworkUrl, resolveApiUrl, type MediaItemDetail } from '$lib/api';
+  import { playbackProgressPercent } from '$lib/playbackProgress';
   import { formatTimestamp } from '$lib/format';
-  import { libraries } from '$lib/stores';
-  import { item, ui } from '$lib/stores';
-  import { goto } from '$app/navigation';
 
   type Props = { itemValue: MediaItemDetail };
   let { itemValue }: Props = $props();
@@ -27,10 +27,6 @@
       : undefined,
   );
   const logoUrl = $derived(itemValue.logo_url ? resolveApiUrl(itemValue.logo_url) : undefined);
-  const library = $derived(libraries.byId(itemValue.library_id));
-  const resumeMs = $derived(resumablePlaybackPositionMs(itemValue));
-  const backTarget = $derived(backNavigationTarget(itemValue));
-  const facts = $derived(selectedItemTechnicalFacts(itemValue));
   const isMissing = $derived(Boolean(itemValue.missing_since));
   const genres = $derived(itemValue.genres);
 
@@ -54,47 +50,6 @@
   });
   const progressPercent = $derived(playbackProgressPercent(summaryForProgress));
   const missingTitle = $derived(`Missing from disk since ${formatTimestamp(itemValue.missing_since ?? undefined)}`);
-
-  const primaryTarget = $derived(itemValue.playable ? undefined : itemValue.playback_target ?? undefined);
-  const restartTarget = $derived(
-    itemValue.playable ? undefined : itemValue.restart_playback_target ?? undefined,
-  );
-  const hasTrailer = $derived(Boolean(itemValue.trailer_url));
-  const hasThemeSong = $derived(Boolean(itemValue.theme_song_url));
-
-  function back() {
-    if (backTarget.parentId !== undefined) {
-      goto(`/items/${backTarget.parentId}`);
-    } else if (library) {
-      goto(`/libraries/${library.id}`);
-    } else {
-      goto('/');
-    }
-  }
-
-  // Playback actions dispatch into the item store — the actual player lands in
-  // the playbackController spike. For now they surface a message.
-  function play(_startMs: number) {
-    ui.setError(`Playback of "${itemValue.display_title}" is not yet implemented (playbackController spike).`);
-  }
-  function playTarget(target: MediaPlaybackTarget) {
-    ui.setError(`Playback target "${target.label}" is not yet implemented (playbackController spike).`);
-  }
-  function playTrailer() {
-    ui.setError(`Trailer playback is not yet implemented (playbackController spike).`);
-  }
-  function playThemeSong() {
-    ui.setError(`Theme song playback is not yet implemented (playbackController spike).`);
-  }
-
-  function formatResumeLabel(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    if (minutes > 0) return `${minutes}m`;
-    return `${totalSeconds}s`;
-  }
 </script>
 
 <section class="item-hero" class:episode-hero={itemValue.item_type === 'episode'}>
@@ -140,52 +95,19 @@
 
     <CollapsibleText text={itemValue.overview ?? 'No description is stored for this item yet.'} storageKey="item-overview:{itemValue.id}" className="hero-description" />
 
-    <div class="detail-actions">
-      {#if resumeMs > 0}
-        <Button label="Resume {formatResumeLabel(resumeMs)}" icon="play" onclick={() => play(resumeMs)} />
-      {/if}
-      {#if itemValue.playable}
-        <Button
-          variant={resumeMs > 0 ? 'secondary' : 'primary'}
-          label={resumeMs > 0 ? 'Start over' : 'Play now'}
-          icon="play"
-          onclick={() => play(0)}
-        />
-      {/if}
-      {#if primaryTarget}
-        <Button label="Play" onclick={() => playTarget(primaryTarget)} title={primaryTarget.display_title} />
-      {/if}
-      {#if restartTarget}
-        <Button variant="secondary" label={restartTarget.label} onclick={() => playTarget(restartTarget)} title={restartTarget.display_title} />
-      {/if}
-      {#if hasTrailer}
-        <Button variant="secondary" label="Play Trailer" icon="play" onclick={playTrailer} title={itemValue.trailer_title ?? ''} />
-      {/if}
-      {#if hasThemeSong}
-        <Button variant="secondary" label="Play Theme" icon="volume-2" onclick={playThemeSong} />
-      {/if}
-      <Button variant="secondary" label={backTarget.label} icon="arrow-left" onclick={back} />
-    </div>
+    <HeroActions {itemValue} />
 
-    <p class="muted">{item.playback?.reason ?? 'Loading playback capabilities…'}</p>
-
-    <div class="item-fact-list">
-      {#each facts as fact (fact.label)}
-        <div class="item-fact">
-          <span class="label">{fact.label}</span>
-          <strong>{fact.value}</strong>
-        </div>
-      {/each}
-    </div>
+    <FactList {itemValue} />
   </div>
 </section>
 
 <style>
   /*
-   * Component-owned (ItemHero-only). Shared .item-hero / .item-poster /
+   * Component-owned (SectionHero-only). Shared .item-hero / .item-poster /
    * .item-summary / .item-title-fallback / .detail-art / .detail-summary /
    * .hero-meta-row / .hero-tagline / .detail-actions live in app.css (used by
-   * PersonHero too). Values mirror vanilla style.css:1537-1592.
+   * PersonHero too). Fact-list rules moved to FactList.svelte. Values mirror
+   * vanilla style.css:1537-1592.
    */
   .item-hero.episode-hero {
     grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -202,24 +124,6 @@
     max-height: 120px;
     object-fit: contain;
     object-position: left center;
-  }
-
-  .item-fact-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 0.8rem;
-    margin-top: 0.5rem;
-  }
-
-  .item-fact {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    padding: 0.75rem 0.9rem;
-    border-radius: 18px;
-    background: rgba(8, 11, 18, 0.28);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(16px);
   }
 
   @media (max-width: 960px) {

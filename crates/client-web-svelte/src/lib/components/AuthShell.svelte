@@ -4,7 +4,11 @@
   // store (the vanilla client reads state.error).
   import { ui } from '$lib/stores';
   import type { Snippet } from 'svelte';
-  import KokoLogo from '/Koko.svg';
+
+  // The logo lives in /static, so it's served at /Koko.svg. Reference it as a
+  // URL string — importing it as a module makes Vite serve it with an SVG MIME
+  // type, which fails strict module-script checking under HMR.
+  const KokoLogo = '/Koko.svg';
 
   type Props = {
     title: string;

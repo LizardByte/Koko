@@ -645,6 +645,11 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
     };
     state.error = 'Transcoding requires FFmpeg, which the server could not find. Set its path in Settings.';
     render();
+    // The player overlay is rendered on top of the page banner, so we must also
+    // toggle the in-player error class directly (the player shell is mounted by
+    // the render() above). Mirrors what setPlayerError() does post-mount.
+    document.querySelector<HTMLElement>('.media-player-shell')?.classList.remove('is-media-loading');
+    document.querySelector<HTMLElement>('.media-player-shell')?.classList.add('has-media-error');
     return;
   }
 

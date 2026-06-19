@@ -3,7 +3,6 @@
   // (../client-web/src/app/itemPersonView.ts:1035-1095). Composes breadcrumbs,
   // hero, people rail, extras rail, children section, collection rails, and
   // the support grid. Loads via the item store on mount + on id change.
-  import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { item, ui } from '$lib/stores';
   import ItemBreadcrumbs from '$lib/components/ItemBreadcrumbs.svelte';
@@ -15,11 +14,7 @@
 
   const itemId = $derived(Number(page.params.id));
 
-  onMount(() => {
-    if (Number.isFinite(itemId)) item.loadItem(itemId);
-  });
-
-  // Reload when navigating between items without unmounting.
+  // Load on mount + reload when navigating between items without unmounting.
   $effect(() => {
     if (Number.isFinite(itemId)) {
       item.loadItem(itemId).catch((err: unknown) => {

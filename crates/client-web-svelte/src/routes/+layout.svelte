@@ -6,7 +6,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { auth, ui, libraries } from '$lib/stores';
+  import { auth, ui, libraries, activities } from '$lib/stores';
   import Rail from '$lib/components/Rail.svelte';
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
@@ -45,6 +45,36 @@
     if (auth.isLoggedIn && libraries.libraries.length === 0 && !libraries.loading) {
       libraries.load();
     }
+  });
+
+  // Load system activities once logged in (needed to detect in-progress
+  // metadata/scan work for the polling predicate).
+  $effect(() => {
+    if (auth.isLoggedIn && !activities.systemActivities) {
+      activities.loadActivities().catch(() => {});
+    }
+  });
+
+  // Auto-refresh polling (Phase 6.5d). When metadata refresh or library scan
+  // activities are in-progress, poll every 1500ms to update the UI as they
+  // complete. The $effect reactively arms/tears-down the timer based on
+  // activities.shouldPoll — when work finishes, the predicate goes false and
+  // the cleanup cancels the timer. Mirrors vanilla app.ts:245-255, 724-840
+  // (simplified — Svelte reactivity replaces snapshot-diff + force-render).
+  $effect(() => {
+    if (!auth.isLoggedIn || !activities.shouldPoll) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      activities.poll().finally(() => {
+        // Re-arm only if still polling (the predicate is reactive — if it
+        // flipped to false, this $effect's cleanup will have cancelled).
+        if (activities.shouldPoll) {
+          timer = setTimeout(tick, 1500);
+        }
+      });
+    };
+    timer = setTimeout(tick, 1500);
+    return () => clearTimeout(timer);
   });
 </script>
 

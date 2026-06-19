@@ -2,11 +2,13 @@
 import {
   getSystemActivities,
   getLogs,
+  getLibraries,
   type SystemActivitiesResponse,
   type LogEntriesResponse,
   type LogFilters,
   EMPTY_LOG_FILTERS,
 } from '$lib/api';
+import { libraries } from './libraries.svelte';
 
 class ActivitiesStore {
   systemActivities = $state<SystemActivitiesResponse | undefined>(undefined);
@@ -40,6 +42,50 @@ class ActivitiesStore {
 
   clearLogFilters() {
     this.logFilters = { ...EMPTY_LOG_FILTERS };
+  }
+
+  // --- Auto-refresh polling (Phase 6.5d) ---
+  // Mirrors vanilla app.ts:212-255, 724-840. When metadata refresh or library
+  // scan activities are in-progress (or items/libraries are pending), poll
+  // every 1500ms to update the UI as they complete. Svelte's fine-grained
+  // reactivity replaces vanilla's snapshot-diff + maybeRenderAfterAutoRefresh.
+
+  /**
+   * Whether any background work warrants polling. Reactive — the layout's $effect
+   * reads this to arm/tear-down the timer. Mirrors shouldAutoRefreshMetadata
+   * (app.ts:212-243) but simplified: we poll when there are active activities OR
+   * pending metadata-refresh counts on libraries.
+   */
+  get shouldPoll(): boolean {
+    const acts = this.systemActivities?.activities ?? [];
+    const hasActive = acts.some(
+      (a) =>
+        (a.category === 'metadata_refresh' || a.category === 'library_scan') &&
+        a.state !== 'completed' &&
+        a.state !== 'failed',
+    );
+    const librariesPending = libraries.libraries.some((lib) => (lib.metadata_refresh_pending ?? 0) > 0);
+    return hasActive || librariesPending;
+  }
+
+  /**
+   * One poll tick: re-fetch activities + libraries. Page-specific data
+   * (item/home) is re-fetched by the stores that own it when their inputs
+   * change reactively, so we only need the global bundle here. Called by the
+   * layout's self-rescheduling timer.
+   */
+  async poll() {
+    try {
+      const [activitiesData, libs] = await Promise.all([
+        getSystemActivities(),
+        getLibraries(),
+      ]);
+      this.systemActivities = activitiesData;
+      libraries.libraries = libs;
+    } catch {
+      // Swallow — polling errors shouldn't clobber the UI (vanilla surfaces
+      // them via state.error, but a transient poll failure isn't actionable).
+    }
   }
 }
 

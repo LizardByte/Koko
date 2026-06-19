@@ -1,6 +1,13 @@
 import type { Preview } from '@storybook/sveltekit';
+import { themes, ensure } from 'storybook/theming';
 import '../src/app.css'; // design tokens + shared rules — components depend on these
 import { withStores } from './decorators/withStores';
+
+// The Koko client is dark-only. Force the docs page to the dark theme too —
+// the manager's `addons.setConfig({ theme: themes.dark })` (see manager.ts)
+// doesn't reliably propagate to docs pages (storybookjs/storybook#28664), so
+// we set it explicitly here. `ensure` makes the theme resolve synchronously.
+ensure(themes.dark);
 
 const preview: Preview = {
   parameters: {
@@ -9,6 +16,10 @@ const preview: Preview = {
         color: /(background|color)$/i,
         date: /Date$/i,
       },
+    },
+    docs: {
+      // Force the docs page chrome to dark (sidebar is handled by manager.ts).
+      theme: themes.dark,
     },
     backgrounds: {
       // The Koko client is dark-only (color-scheme: dark hardcoded in app.css).

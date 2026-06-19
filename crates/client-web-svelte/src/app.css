@@ -95,27 +95,9 @@ button:disabled {
   justify-content: center;
 }
 
-button.is-busy {
-  position: relative;
-  color: transparent;
-  pointer-events: none;
-}
-
-button.is-busy::after {
-  content: '';
-  position: absolute;
-  /* Center the fixed-size spinner within the button. Vanilla (style.css:89)
-     omits centering, so the spinner renders off-center to the right — a
-     pre-existing vanilla bug. Fixed here as a documented delta. */
-  inset: 0;
-  margin: auto;
-  width: 1rem;
-  height: 1rem;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  animation: spin 0.85s linear infinite;
-}
+/* Note: button.is-busy styling (transparent text, spinner) is owned by
+   Button.svelte as a scoped style — see its <style> block. It was moved out
+   of global CSS so the spinner centering is component-scoped and correct. */
 
 .button-content {
   display: inline-flex;

@@ -65,3 +65,34 @@
     {label}
   {/if}
 </button>
+
+<!--
+  Busy spinner — component-scoped so the centering fix lives with the button,
+  not in global app.css. Vanilla's style.css:83-98 has the same rule but its
+  ::after spinner lacks centering (renders off-center to the right); we add
+  `inset: 0; margin: auto` here so the spinner is centered. This is a
+  documented delta — the global `button.is-busy` rule was removed from app.css.
+  `@keyframes spin` stays global in app.css (shared with .loading-spinner).
+-->
+<style>
+  .is-busy {
+    position: relative;
+    color: transparent;
+    pointer-events: none;
+  }
+
+  .is-busy::after {
+    content: '';
+    position: absolute;
+    /* Center the fixed-size spinner within the button. Vanilla omits this,
+       leaving it off-center to the right. */
+    inset: 0;
+    margin: auto;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 999px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    animation: spin 0.85s linear infinite;
+  }
+</style>

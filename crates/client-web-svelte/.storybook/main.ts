@@ -1,8 +1,4 @@
 import type { StorybookConfig } from '@storybook/sveltekit';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-const darkCss = readFileSync(fileURLToPath(new URL('./storybook-dark.css', import.meta.url)), 'utf8');
 
 const config: StorybookConfig = {
   stories: ['../src/**/*.mdx', '../src/**/*.stories.@(js|ts|svelte)'],
@@ -20,11 +16,11 @@ const config: StorybookConfig = {
   docs: {
     autodocs: 'tag',
   },
-  // The Koko client is dark-only, so force the Storybook chrome (manager
-  // sidebar + docs page) to dark too. The story canvas already renders dark
-  // via app.css (color-scheme: dark) + backgrounds.default in preview.ts.
-  managerHead: `<style>${darkCss}</style>`,
-  previewHead: `<style>${darkCss}</style>`,
+  // Dark theming is applied via the proper Storybook theme API, not CSS:
+  //  - manager.ts sets `addons.setConfig({ theme: themes.dark })` for the
+  //    sidebar + toolbar (Storybook 10 uses Emotion CSS-in-JS, so overriding
+  //    CSS variables does nothing — the theme API generates the right styles).
+  //  - preview.ts sets `parameters.docs.theme = themes.dark` for the docs page.
   viteFinal: async (config) => {
     // Stub the SvelteKit $app modules — Storybook isn't a router, so components
     // that read $app/state (page) or $app/navigation (goto) get a mutable mock.

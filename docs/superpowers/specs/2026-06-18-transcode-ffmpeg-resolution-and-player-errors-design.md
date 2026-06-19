@@ -13,7 +13,7 @@ Two failures were reported when playing an HEVC (transcode-required) item:
 
 ### 1.1 Root cause of issue 1 (the "spaces in path" framing is a red herring)
 
-FFmpeg arguments are built into a `Vec<String>` and passed via `tokio::process::Command::args(&args)` (`crates/server/src/transcode.rs:227-229`). This bypasses the shell entirely — each vector element is handed directly to the OS `exec` as a discrete argv entry. A source path containing spaces or brackets (e.g. `/Users/.../Witch Hat Atelier ....mkv`) is passed to ffmpeg verbatim. The unquoted appearance in the server log is purely cosmetic: it comes from `args.join(" ")` at `transcode.rs:222-225`, not from what is executed.
+FFmpeg arguments are built into a `Vec<String>` and passed via `tokio::process::Command::args(&args)` (`crates/server/src/transcode.rs:227-229`). This bypasses the shell entirely — each vector element is handed directly to the OS `exec` as a discrete argv entry. A source path containing spaces or brackets (e.g. `/Users/.../Witch Hat Atelier ....mkv`) is passed to ffmpeg verbatim. The unquoted appearance in the server log is purely cosmetic: it comes from `args.join(" ")` at `transcode.rs:222-225`, not from what is executed. We could fix that, but that's not the real issue.
 
 `No such file or directory (os error 2)` returned by **`spawn()` itself** (not by ffmpeg later) is, on Unix, `ENOENT` from the exec layer. When spawning the *command* fails with `ENOENT`, it means **the executable was not found** — i.e. `ffmpeg` is not resolvable from the server process's environment.
 
@@ -92,6 +92,12 @@ pub fn resolve_ffprobe(configured: &str) -> ResolvedBinary { resolve_binary(conf
 - `detect_binary` (`media.rs:5997`) is refactored to delegate to the resolver, preserving the existing `BinaryCapability` return shape so `TranscodingCapability` stays wire-compatible.
 
 **Logging:** at startup and on each resolve, `INFO`/`WARN` naming the resolved path and source, or all `checked_paths` when missing.
+
+**Notes:**
+1. The user inquired if there's difference in figuring out if the `configured` is a bare name, or not, and the impact of having different treatment for a path or a filename, he is not sure the distinction is meaninful, but also unsure it isn't. Consider it and state your recommendations.
+2. Homebrew may have different paths for arm and x86, so we need to consider that. Also, other popular package managers that we should have the well-known paths listed with lower priority (just further down the list, no need to create a priority property), both macOS/Linux?
+3. Any popular package managers for Windows that may have a different path of installation than `Program Files\ffmpeg` and `%USERPROFILE%\bin` that we may want to include?
+4. Should we enforce a hardcoded binary names allow-list that `resolve_binary` consumes to avoid potential attacks leveraging some vulnerability in the future? The user is concerned some mistake could expose use to a bunch of problems from path lookups via this method.
 
 ### 4.2 Discovery endpoint + settings UI (the "easy setup")
 
@@ -228,6 +234,15 @@ The project splits tests by kind: pure logic lives in **inline `#[cfg(test)] mod
 ### 6.2 Why not SSE (rejected for this scope)
 
 SSE would mean a new transport, a server endpoint, reconnection logic, and a client subscription model — all for a path that is fundamentally *request → response* (one error per stream attempt). The structured JSON error body (§4.3) plus the deterministic capabilities preflight (§4.4) covers the same need using patterns the codebase already has. SSE earns its place only if realtime playback health (quality metrics, adaptive bitrate) becomes a goal — separate spec.
+
+### 6.3 ffmpeg checks
+
+- We haven't talked about transcoding codecs, but if the list of available ffmpeg binaries could also show, via some additional info dialog, or "show more" kinda behavior, the list of "available" codecs in each binary, that would be great, but we can consider a future improvement. But how hard would be to also include this info?
+- Is there any risk that the current ffmpeg args, may not work with different ffmpeg versions? Should we have a compatibility check too in the future? While making the default template somehow customizable for admins, I kinda want to postpone this as much as possible, and if we really need we could have some compatibility check for that as well.
+
+### 6.4 Setup wizard
+
+Should we include in the current first start setup, an optional, collapsed, similar component to find, or manually provide, the ffmpeg binaries, but totally skippable? So eager admins do configure it in that screen, and other admins just set their user details and move on? I believe that screen may be reused for creating regular users too, so I'd be cautious about doing it there, but maybe it is a good idea, or in a follow up screen with a "Skip, I'll do it later" button? Let's get everything working first, but I think this is a good improvement for later.
 
 ## Appendix A — Files touched (planning reference)
 

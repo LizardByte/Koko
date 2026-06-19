@@ -65,6 +65,7 @@ These are recorded so they are not lost; they need investigation/decisions in th
 5. **Status endpoint vs 500-on-reconnect.** Is the `GET /sessions/<id>/status` read sufficient for the watchdog, or does the stream endpoint itself need to return the structured error on a *reconnect* attempt (e.g. after the player retries the src)?
 6. **(E) scope.** Should source-existence be only a per-play 404, or also drive a server-side "missing since scan" background job (mark `missing_since`, surface in the UI)? The shipped code already has a `missing_since` column on backing files (`media.rs:3145`) — the lifecycle phase should reconcile per-play checks with that existing mechanism rather than duplicate it.
 7. **Persistent vs per-request transcode.** Should a stream request attach to a long-lived transcode keyed by `(session_id, start_ms, audio_index)` instead of spawning fresh each time? This would eliminate the double-spawn concern entirely and is the natural home for a watcher — but it is a larger change. Decide whether the lifecycle phase takes it on or stays per-request.
+8. **Tooling.** Would Rayon and/or https://github.com/tqwewe/kameo improve our handling of lifecycle, in or out, of transcoding? Where? How? Should we take it as something to plan now, or later? Do the project currently has parallel libs or actor libs besides what tokio and axum does?
 
 ## 6. What is already built for this phase (no rework needed)
 

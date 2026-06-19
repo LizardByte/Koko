@@ -3,10 +3,7 @@
 // standard imports
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{
-    AtomicU64,
-    Ordering,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // lib imports
 use tokio::fs;
@@ -15,6 +12,90 @@ use tokio::process::Command;
 
 // local imports
 use crate::config::FfmpegSettings;
+
+use rocket::http::Status;
+
+/// A structured error from attempting to spawn a transcode.
+#[derive(Debug)]
+pub enum SpawnTranscodeError {
+    /// ffmpeg could not be resolved/executed. `checked_paths` lists where we looked.
+    ExecutableMissing {
+        /// Every location the resolver inspected, for diagnostics.
+        checked_paths: Vec<PathBuf>,
+    },
+    /// ffmpeg started but reported its input was unusable. Produced by the
+    /// deferred lifecycle phase; declared here so the shared mapper is complete.
+    BadInput {
+        /// The captured stderr from ffmpeg explaining the input failure.
+        ffmpeg_stderr: String,
+    },
+    /// Any other spawn-time I/O error.
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for SpawnTranscodeError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// The JSON body returned to clients when a transcode fails. The `action`
+/// field lets the UI decide whether to show an actionable control (e.g.
+/// "Open settings") for this kind of failure.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscodeErrorBody {
+    /// Stable machine code: `transcode_executable_missing` | `transcode_input_error` | `transcode_failed`.
+    pub code: &'static str,
+    /// Human-readable explanation.
+    pub message: String,
+    /// Optional UI action hint, e.g. `Some("open_settings")`.
+    pub action: Option<&'static str>,
+}
+
+/// Map a [`SpawnTranscodeError`] to an HTTP status + body. This is the single
+/// error-shaping function reused by the route handler today and the lifecycle
+/// watcher in a later phase.
+pub fn map_transcode_error(error: SpawnTranscodeError) -> (Status, TranscodeErrorBody) {
+    match error {
+        SpawnTranscodeError::ExecutableMissing { checked_paths } => {
+            let checked = checked_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                Status::ServiceUnavailable,
+                TranscodeErrorBody {
+                    code: "transcode_executable_missing",
+                    message: format!(
+                        "FFmpeg could not be found. Install it or set its path in Settings. \
+                         Checked: [{checked}]"
+                    ),
+                    action: Some("open_settings"),
+                },
+            )
+        }
+        SpawnTranscodeError::BadInput { ffmpeg_stderr } => (
+            Status::UnprocessableEntity,
+            TranscodeErrorBody {
+                code: "transcode_input_error",
+                message: format!(
+                    "FFmpeg could not read the source media. {}",
+                    ffmpeg_stderr.trim()
+                ),
+                action: None,
+            },
+        ),
+        SpawnTranscodeError::Io(error) => (
+            Status::InternalServerError,
+            TranscodeErrorBody {
+                code: "transcode_failed",
+                message: format!("Transcode failed to start: {error}"),
+                action: None,
+            },
+        ),
+    }
+}
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -234,4 +315,52 @@ pub async fn spawn_transcode_stdout(
     let child = command.spawn()?;
 
     Ok(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn executable_missing_maps_to_open_settings_action() {
+        let err = SpawnTranscodeError::ExecutableMissing {
+            checked_paths: vec![PathBuf::from(
+                "/usr/bin/ffmpeg",
+            )],
+        };
+        let (status, body) = map_transcode_error(err);
+        assert_eq!(status, Status::ServiceUnavailable);
+        assert_eq!(body.code, "transcode_executable_missing");
+        assert_eq!(body.action, Some("open_settings"));
+        assert!(body.message.contains("ffmpeg"), "{}", body.message);
+    }
+
+    #[test]
+    fn io_error_maps_to_failed_with_no_action() {
+        let err = SpawnTranscodeError::Io(std::io::Error::other("boom"));
+        let (status, body) = map_transcode_error(err);
+        assert_eq!(status, Status::InternalServerError);
+        assert_eq!(body.code, "transcode_failed");
+        assert_eq!(body.action, None);
+    }
+
+    #[test]
+    fn bad_input_maps_to_input_error() {
+        let err = SpawnTranscodeError::BadInput {
+            ffmpeg_stderr: "No such file".into(),
+        };
+        let (status, body) = map_transcode_error(err);
+        assert_eq!(status, Status::UnprocessableEntity);
+        assert_eq!(body.code, "transcode_input_error");
+        assert_eq!(body.action, None);
+        assert!(body.message.contains("No such file"));
+    }
+
+    #[test]
+    fn io_error_conversion_wraps_in_variant() {
+        let io_err = std::io::Error::other("disk full");
+        let wrapped: SpawnTranscodeError = io_err.into();
+        assert!(matches!(wrapped, SpawnTranscodeError::Io(_)));
+    }
 }

@@ -5,11 +5,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 // lib imports
-use keyring_core::{
-    Entry,
-    Error,
-    set_default_store,
-};
+use keyring_core::{Entry, Error, set_default_store};
 use once_cell::sync::Lazy;
 
 // local imports

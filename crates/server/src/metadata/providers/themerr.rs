@@ -2,13 +2,8 @@ use serde_json::Value;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
-    METADATA_EXTRA_TYPE_THEME_SONG,
-    MediaLibraryKind,
-    MetadataProviderDescriptor,
-    MetadataProviderRole,
-    ProviderMetadataDetails,
-    ProviderMetadataExtra,
-    youtube_watch_url,
+    METADATA_EXTRA_TYPE_THEME_SONG, MediaLibraryKind, MetadataProviderDescriptor,
+    MetadataProviderRole, ProviderMetadataDetails, ProviderMetadataExtra, youtube_watch_url,
 };
 
 const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
@@ -209,9 +204,7 @@ fn text_field(
 #[cfg(test)]
 mod tests {
     use super::{
-        database_path_for_item_type,
-        item_lookup_reference_priority,
-        normalize_database_id,
+        database_path_for_item_type, item_lookup_reference_priority, normalize_database_id,
         parse_youtube_theme_url,
     };
     use crate::config::MetadataProviderId;

@@ -8,19 +8,12 @@ pub mod photos;
 pub mod shows;
 
 use std::collections::HashSet;
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::config::{
-    MediaLibraryKind,
-    MediaLibraryScanner,
-    MediaLibrarySettings,
-};
+use crate::config::{MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings};
 
 pub(crate) use directory::fallback_title_from_relative_path;
 

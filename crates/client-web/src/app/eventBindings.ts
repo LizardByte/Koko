@@ -53,6 +53,7 @@ import {
   deleteLibrary,
   deleteMissingItems,
   discoverTranscodingTools,
+  getReprobeStatus,
   getItemMetadata,
   getLogs,
   getUsers,
@@ -72,6 +73,7 @@ import {
   type MediaShelf,
   type ScheduledTaskId,
   type UpdateUserRequest,
+  triggerReprobe,
 } from '../api';
 
 /** Replaces a DOM subtree while preserving any coordinator-level patch behavior. */
@@ -578,6 +580,42 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       setButtonBusy(button, false);
     }
   });
+
+  // Re-probe media info: show the button when there are unanalyzed files
+  // (ffprobe was missing during scan), and trigger the job on click.
+  const reprobeButton = document.querySelector<HTMLButtonElement>('#reprobe-media');
+  const reprobeStatus = document.querySelector<HTMLElement>('#reprobe-status');
+  if (reprobeButton && reprobeStatus) {
+    getReprobeStatus()
+      .then((status) => {
+        if (status.in_progress) {
+          reprobeStatus.hidden = false;
+          reprobeStatus.textContent = 'Re-probing media info is in progress… (see Dashboard → Activities).';
+        } else if (status.pending_count > 0) {
+          reprobeButton.hidden = false;
+          reprobeStatus.hidden = false;
+          reprobeStatus.textContent = `${status.pending_count} media file(s) were scanned without ffprobe and need re-analysis. Click to re-probe.`;
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch reprobe status', error);
+      });
+
+    reprobeButton.addEventListener('click', async () => {
+      setButtonBusy(reprobeButton, true);
+      try {
+        await triggerReprobe();
+        reprobeStatus.hidden = false;
+        reprobeStatus.textContent = 'Re-probe started. Watch Dashboard → Activities for progress; playback unlocks as files are analyzed.';
+        reprobeButton.hidden = true;
+      } catch (error) {
+        reprobeStatus.hidden = false;
+        reprobeStatus.textContent = `Re-probe failed to start: ${escapeHtml(error instanceof Error ? error.message : 'unknown error')}`;
+      } finally {
+        setButtonBusy(reprobeButton, false);
+      }
+    });
+  }
 
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
     button.addEventListener('click', () => {

@@ -1,33 +1,19 @@
 //! Tray icon utilities for the application.
 
 // standard imports
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::{Path, PathBuf};
 
 // lib imports
 #[cfg(target_os = "windows")]
 use tao::platform::windows::EventLoopBuilderExtWindows;
 use tao::{
     event::Event,
-    event_loop::{
-        ControlFlow,
-        EventLoopBuilder,
-    },
+    event_loop::{ControlFlow, EventLoopBuilder},
     platform::run_return::EventLoopExtRunReturn,
 };
 use tray_icon::{
-    TrayIconBuilder,
-    TrayIconEvent,
-    menu::{
-        AboutMetadata,
-        Menu,
-        MenuEvent,
-        MenuItem,
-        PredefinedMenuItem,
-        Submenu,
-    },
+    TrayIconBuilder, TrayIconEvent,
+    menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 // local imports

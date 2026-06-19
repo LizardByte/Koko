@@ -557,11 +557,27 @@ pub struct ClientProfile {
     pub prefer_hls: bool,
 }
 
+/// Whether the source media has been analyzed by ffprobe, which determines
+/// whether a playback decision can be trusted.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub enum PlaybackAnalysisState {
+    /// The source media was probed by ffprobe; codec/container are known and
+    /// the direct-play vs transcode decision is reliable.
+    Analyzed,
+    /// The source media was never probed (ffprobe was missing during scan), so
+    /// codec/container are unknown and no trustworthy playback decision can be
+    /// made. The client should refuse to open a player and surface a setup hint.
+    AwaitingAnalysis,
+}
+
 /// Direct-play versus transcode decision for one media item.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct PlaybackDecision {
     /// Stable database identifier for the item.
     pub item_id: i32,
+    /// Whether the source media has been analyzed; if [`PlaybackAnalysisState::AwaitingAnalysis`],
+    /// the other fields are not trustworthy and playback should be blocked.
+    pub analysis_state: PlaybackAnalysisState,
     /// Whether the item can be played directly in the browser.
     pub can_direct_play: bool,
     /// Whether transcoding would be required for ideal playback.
@@ -1669,6 +1685,161 @@ fn sync_library_catalog_filtered(
     delete_unreferenced_media_files(conn)?;
 
     Ok(persisted)
+}
+
+/// A `media_files` row selected for re-probing (ffprobe was missing when it was
+/// first scanned, so its codec/container/metadata_json are NULL). Carries just
+/// the fields needed to reconstruct a [`DiscoveredMediaFile`] for probing.
+#[derive(Debug, Clone, diesel::QueryableByName)]
+#[diesel(table_name = crate::db::schema::media_files)]
+struct ReprobeCandidate {
+    #[diesel(sql_type = sql_types::Integer)]
+    id: i32,
+    #[diesel(sql_type = sql_types::Text)]
+    path: String,
+    #[diesel(sql_type = sql_types::BigInt)]
+    file_size: i64,
+    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    modified_at: Option<i64>,
+    #[diesel(sql_type = sql_types::Text)]
+    media_kind: String,
+    #[diesel(sql_type = sql_types::Text)]
+    file_hash: String,
+}
+
+/// Count media files that were cataloged without being probed (ffprobe was
+/// missing during their scan). These are candidates for auto re-probe.
+pub fn count_media_files_needing_reprobe(
+    conn: &mut SqliteConnection
+) -> Result<i64, diesel::result::Error> {
+    use crate::db::schema::media_files::dsl as media_files_dsl;
+    media_files_dsl::media_files
+        .filter(media_files_dsl::metadata_json.is_null())
+        .filter(media_files_dsl::media_kind.eq_any([
+            "video".to_string(),
+            "audio".to_string(),
+        ]))
+        .count()
+        .get_result(conn)
+}
+
+/// Load the media files needing re-probe (see [`count_media_files_needing_reprobe`]).
+fn load_media_files_needing_reprobe(
+    conn: &mut SqliteConnection
+) -> Result<Vec<ReprobeCandidate>, diesel::result::Error> {
+    diesel::sql_query(
+        "SELECT id, path, file_size, modified_at, media_kind, file_hash \
+         FROM media_files \
+         WHERE metadata_json IS NULL AND media_kind IN ('video', 'audio') \
+         ORDER BY id",
+    )
+    .load::<ReprobeCandidate>(conn)
+}
+
+/// Outcome of a re-probe run: how many files were inspected, how many produced
+/// real metadata, and how many failed.
+#[derive(Debug, Clone, Default)]
+pub struct ReprobeOutcome {
+    /// Total candidate files inspected.
+    pub inspected: usize,
+    /// Files whose probe succeeded and whose codec columns were updated.
+    pub updated: usize,
+    /// Files whose probe failed (ffprobe errored or parse failed); left as-is.
+    pub failed: usize,
+}
+
+/// Re-probe media files that were cataloged without ffprobe (their
+/// `metadata_json` is NULL). For each candidate, runs ffprobe and writes only
+/// the codec/container/stream columns via a targeted UPDATE (path, hash, and
+/// modified_at are untouched — the file content didn't change, only ffprobe
+/// availability did). Does not ride the scan path because `sync_discovered_media_file`
+/// skips re-probe when `file_hash` matches.
+///
+/// `progress` is called with the running count of inspected files after each
+/// one, so callers can update an activity record between probes.
+pub fn reprobe_media_files<F>(
+    conn: &mut SqliteConnection,
+    ffmpeg_settings: &FfmpegSettings,
+    mut progress: F,
+) -> Result<ReprobeOutcome, diesel::result::Error>
+where
+    F: FnMut(usize),
+{
+    use crate::db::schema::media_files::dsl as media_files_dsl;
+
+    // Re-check ffprobe availability at call time; detect_binary is stateless.
+    let probe_context = ProbeContext {
+        ffprobe_path: &ffmpeg_settings.ffprobe_path,
+        enabled: detect_binary(&ffmpeg_settings.ffprobe_path, "ffprobe").available,
+    };
+    if !probe_context.enabled {
+        log::warn!(
+            "reprobe_media_files called but ffprobe is not available; skipping ({} configured)",
+            ffmpeg_settings.ffprobe_path
+        );
+        return Ok(ReprobeOutcome::default());
+    }
+
+    let candidates = load_media_files_needing_reprobe(conn)?;
+    let mut outcome = ReprobeOutcome {
+        inspected: candidates.len(),
+        ..Default::default()
+    };
+
+    for candidate in candidates {
+        // Reconstruct a minimal DiscoveredMediaFile for extract_metadata.
+        let discovered = DiscoveredMediaFile {
+            full_path: PathBuf::from(&candidate.path),
+            source_root_path: String::new(),
+            relative_path: String::new(),
+            file_size: candidate.file_size,
+            modified_at: candidate.modified_at,
+            media_kind: candidate.media_kind.clone(),
+            file_hash: candidate.file_hash.clone(),
+            default_title: String::new(),
+        };
+        let metadata = extract_metadata(&discovered, probe_context);
+
+        // Only update when the probe actually produced metadata_json; otherwise
+        // leave the row as-is so a future run retries it.
+        if metadata.metadata_json.is_some() {
+            let now = current_timestamp();
+            diesel::update(
+                media_files_dsl::media_files.filter(media_files_dsl::id.eq(candidate.id)),
+            )
+            .set((
+                media_files_dsl::container.eq(&metadata.container),
+                media_files_dsl::duration_ms.eq(metadata.duration_ms),
+                media_files_dsl::bit_rate.eq(metadata.bit_rate),
+                media_files_dsl::width.eq(metadata.width),
+                media_files_dsl::height.eq(metadata.height),
+                media_files_dsl::video_codec.eq(&metadata.video_codec),
+                media_files_dsl::audio_codec.eq(&metadata.audio_codec),
+                media_files_dsl::metadata_json.eq(&metadata.metadata_json),
+                media_files_dsl::metadata_updated_at.eq(Some(now)),
+            ))
+            .execute(conn)?;
+            outcome.updated += 1;
+        } else {
+            outcome.failed += 1;
+        }
+        progress(outcome.inspected_done());
+    }
+
+    log::info!(
+        "reprobe_media_files complete: inspected={}, updated={}, failed={}",
+        outcome.inspected,
+        outcome.updated,
+        outcome.failed
+    );
+    Ok(outcome)
+}
+
+impl ReprobeOutcome {
+    /// Number of candidates processed so far (updated + failed).
+    fn inspected_done(&self) -> usize {
+        self.updated + self.failed
+    }
 }
 
 fn sync_logical_media_items_for_library(
@@ -3098,11 +3269,43 @@ pub fn get_playback_decision(
         if row.missing_since.is_some() {
             return Ok(Some(PlaybackDecision {
                 item_id,
+                analysis_state: PlaybackAnalysisState::Analyzed,
                 can_direct_play: false,
                 transcode_required: false,
                 reason: "This item is missing from disk and cannot be played.".into(),
                 stream_url: None,
                 mime_type: detect_mime_type(&row),
+                transcode_container: None,
+                transcode_video_codec: None,
+                transcode_audio_codec: None,
+                video_transcode_required: false,
+                audio_transcode_required: false,
+                source_video_codec: row.video_codec,
+                source_audio_codec: row.audio_codec,
+                source_container: row.container,
+            }));
+        }
+
+        // Decision guard: if the source media was never analyzed by ffprobe
+        // (metadata_json is NULL — ffprobe was missing during scan), the
+        // codec/container fields are unknown and no trustworthy direct-play vs
+        // transcode decision can be made. Refuse to decide and tell the client
+        // analysis is pending, rather than returning an untrustworthy "transcode
+        // required" verdict that opens a doomed player.
+        let media_kind = row.media_kind.as_str();
+        let needs_analysis = row.metadata_json.is_none() && matches!(media_kind, "video" | "audio");
+        if needs_analysis {
+            return Ok(Some(PlaybackDecision {
+                item_id,
+                analysis_state: PlaybackAnalysisState::AwaitingAnalysis,
+                can_direct_play: false,
+                transcode_required: false,
+                reason: "This media has not been analyzed yet (ffprobe was \
+                         unavailable during scan). Set the ffprobe path in \
+                         Settings and re-probe media info."
+                    .into(),
+                stream_url: None,
+                mime_type: None,
                 transcode_container: None,
                 transcode_video_codec: None,
                 transcode_audio_codec: None,
@@ -3165,6 +3368,7 @@ pub fn get_playback_decision(
 
         PlaybackDecision {
             item_id,
+            analysis_state: PlaybackAnalysisState::Analyzed,
             can_direct_play,
             transcode_required: item.playable && !can_direct_play,
             reason: if can_direct_play {
@@ -3186,6 +3390,7 @@ pub fn get_playback_decision(
     } else {
         PlaybackDecision {
             item_id,
+            analysis_state: PlaybackAnalysisState::Analyzed,
             can_direct_play: false,
             transcode_required: false,
             reason: "This item is a container and cannot be played directly.".into(),

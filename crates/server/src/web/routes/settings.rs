@@ -1,14 +1,7 @@
 //! Settings and library-management routes.
 
 // lib imports
-use chrono::{
-    DateTime,
-    Local,
-    LocalResult,
-    NaiveDate,
-    NaiveDateTime,
-    TimeZone,
-};
+use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rocket::delete;
@@ -19,35 +12,19 @@ use rocket::put;
 use rocket::serde::json::Json;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 // local imports
 use crate::config::{
-    MediaLibrarySettings,
-    Settings,
-    current_settings,
-    merge_metadata_provider_secret_state,
-    replace_current_settings,
-    save_database_settings,
-    save_settings,
-    settings_file_path,
-    settings_for_api_response,
-    settings_with_persisted_secrets,
+    MediaLibrarySettings, Settings, current_settings, merge_metadata_provider_secret_state,
+    replace_current_settings, save_database_settings, save_settings, settings_file_path,
+    settings_for_api_response, settings_with_persisted_secrets,
 };
 use crate::db::DbConn;
 use crate::globals;
-use crate::logging::{
-    normalize_display_path,
-    normalize_log_source_path,
-};
+use crate::logging::{normalize_display_path, normalize_log_source_path};
 use crate::media::{
-    add_library_setting,
-    count_persisted_libraries,
-    list_library_settings,
-    remove_library_setting,
+    add_library_setting, count_persisted_libraries, list_library_settings, remove_library_setting,
     replace_library_settings,
 };
 

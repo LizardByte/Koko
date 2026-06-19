@@ -22,6 +22,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         dependencies::get_dependencies,
         media::get_server_capabilities,
         media::discover_transcoding_tools,
+        media::get_reprobe_status,
+        media::trigger_reprobe,
         media::get_system_activities,
         media::get_metadata_providers,
         media::get_metadata_locales,

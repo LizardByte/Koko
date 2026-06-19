@@ -4,26 +4,15 @@ use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fs;
 use std::io;
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use imohash::Hasher as ImoHasher;
 
-use crate::config::{
-    MediaLibraryKind,
-    MediaLibraryScanner,
-    MediaLibrarySettings,
-};
+use crate::config::{MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings};
 use crate::scanner::{
-    DiscoveredMediaFile,
-    FileHashCandidate,
-    LibraryInspection,
-    LibraryScanStatus,
-    LibraryScanSummary,
-    ScannerSink,
+    DiscoveredMediaFile, FileHashCandidate, LibraryInspection, LibraryScanStatus,
+    LibraryScanSummary, ScannerSink,
 };
 
 #[derive(Debug, Default)]

@@ -10,25 +10,14 @@ use rocket::config::TlsConfig;
 use rocket::fairing::AdHoc;
 use rocket::figment::Figment;
 use rocket_okapi::settings::UrlObject;
-use rocket_okapi::{
-    rapidoc::*,
-    swagger_ui::*,
-};
+use rocket_okapi::{rapidoc::*, swagger_ui::*};
 
 // local imports
 use crate::certs;
 use crate::config::{
-    current_settings,
-    load_database_settings,
-    replace_current_settings,
-    seed_database_settings,
+    current_settings, load_database_settings, replace_current_settings, seed_database_settings,
 };
-use crate::db::{
-    DbConn,
-    Migrate,
-    ReleaseDatabase,
-    initialize_sqlite_database,
-};
+use crate::db::{DbConn, Migrate, ReleaseDatabase, initialize_sqlite_database};
 use crate::globals;
 use crate::signal_handler::ShutdownSignal;
 
@@ -140,6 +129,27 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
                     None => {
                         log::error!(
                             "Failed to acquire database connection for metadata refresh recovery"
+                        );
+                    }
+                }
+
+                // Startup trigger: if ffprobe is now available and media files
+                // were scanned while it was missing, re-probe them automatically.
+                let reprobe_db = DbConn::get_one(rocket).await;
+                match reprobe_db {
+                    Some(reprobe_db) => {
+                        rocket::tokio::spawn(async move {
+                            let settings = crate::config::current_settings();
+                            crate::web::routes::media::try_spawn_reprobe(
+                                reprobe_db,
+                                settings.ffmpeg.clone(),
+                            )
+                            .await;
+                        });
+                    }
+                    None => {
+                        log::error!(
+                            "Failed to acquire database connection for ffprobe re-probe startup"
                         );
                     }
                 }

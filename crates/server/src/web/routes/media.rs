@@ -508,6 +508,10 @@ static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<tokio::sync::RwLock<HashSet<i32>
 static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_MANUAL_CATALOG_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+/// Gate for the ffprobe re-probe job. Shares the scan-gate semantics: a re-probe
+/// and a manual scan cannot run simultaneously (avoids concurrent SQLite writes
+/// and double ffprobe load). Either can start when the other isn't running.
+static ACTIVE_REPROBE_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
@@ -554,6 +558,149 @@ fn begin_catalog_scan_execution() -> bool {
 
 fn finish_catalog_scan_execution() {
     ACTIVE_MANUAL_CATALOG_SCAN_RUNNING.store(false, Ordering::SeqCst);
+}
+
+fn begin_reprobe_execution() -> bool {
+    // A re-probe and a manual scan can't run at the same time; both gates must be free.
+    if !begin_catalog_scan_execution() {
+        return false;
+    }
+    if ACTIVE_REPROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        finish_catalog_scan_execution();
+        return false;
+    }
+    true
+}
+
+fn finish_reprobe_execution() {
+    ACTIVE_REPROBE_RUNNING.store(false, Ordering::SeqCst);
+    finish_catalog_scan_execution();
+}
+
+async fn register_reprobe_activity(total_items: usize) -> String {
+    let activity_id = next_system_activity_id();
+    let now = current_timestamp();
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
+        activity_id.clone(),
+        MetadataRefreshActivityRecord {
+            activity: SystemActivity {
+                id: activity_id.clone(),
+                category: "media_reprobe".into(),
+                scope: "system".into(),
+                source: "ffprobe".into(),
+                state: "running".into(),
+                label: "Re-probe media info (ffprobe now available)".into(),
+                provider_id: None,
+                library_id: None,
+                root_item_id: None,
+                item_ids: Vec::new(),
+                total_items: i32::try_from(total_items).unwrap_or(i32::MAX),
+                completed_items: 0,
+                failed_items: 0,
+                queued_at: now,
+                started_at: Some(now),
+                updated_at: now,
+            },
+        },
+    );
+    activity_id
+}
+
+async fn complete_reprobe_activity(
+    activity_id: &str,
+    outcome: &crate::media::ReprobeOutcome,
+) {
+    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
+        record.activity.state = if outcome.failed > 0 && outcome.updated == 0 {
+            "failed".into()
+        } else {
+            "completed".into()
+        };
+        record.activity.completed_items = i32::try_from(outcome.updated).unwrap_or(i32::MAX);
+        record.activity.failed_items = i32::try_from(outcome.failed).unwrap_or(i32::MAX);
+        record.activity.updated_at = current_timestamp();
+    }
+}
+
+/// Whether a re-probe job is currently running.
+pub fn reprobe_in_progress() -> bool {
+    ACTIVE_REPROBE_RUNNING.load(Ordering::SeqCst)
+}
+
+/// Try to start a background ffprobe re-probe if there are unanalyzed media
+/// files and ffprobe is available. Returns true if a job was started, false if
+/// skipped (already running, a scan is running, ffprobe unavailable, or no
+/// candidates). Safe to call from any trigger (startup, settings change, manual).
+///
+/// This is the single entry point for all three re-probe triggers; it owns the
+/// gate, the activity record, and the per-file progress updates.
+pub async fn try_spawn_reprobe(
+    db: DbConn,
+    ffmpeg_settings: crate::config::FfmpegSettings,
+) -> bool {
+    if !begin_reprobe_execution() {
+        log::debug!("Re-probe not started: another scan or re-probe is already running");
+        return false;
+    }
+
+    // ffprobe availability is re-checked inside reprobe_media_files, but we also
+    // check here to avoid a pointless job and a spurious activity record.
+    if !crate::media::inspect_transcoding_capability(&ffmpeg_settings)
+        .ffprobe
+        .available
+    {
+        log::debug!("Re-probe not started: ffprobe is not available");
+        finish_reprobe_execution();
+        return false;
+    }
+
+    tokio::spawn(async move {
+        // Count + reprobe share the single DbConn (it isn't Clone), so both run
+        // inside one db.run closure. The activity is registered after the count
+        // (it needs total_items) and completed after the reprobe.
+        let outcome_with_total = db
+            .run(
+                move |conn| -> Result<(crate::media::ReprobeOutcome, i64), diesel::result::Error> {
+                    let total = crate::media::count_media_files_needing_reprobe(conn)?;
+                    if total == 0 {
+                        return Ok((crate::media::ReprobeOutcome::default(), 0));
+                    }
+                    let outcome =
+                        crate::media::reprobe_media_files(conn, &ffmpeg_settings, |_| {})?;
+                    Ok((outcome, total))
+                },
+            )
+            .await;
+
+        match outcome_with_total {
+            Ok((_outcome, total)) if total == 0 => {
+                log::debug!("Re-probe: no media files needed re-probing");
+            }
+            Ok((outcome, total)) => {
+                log::info!(
+                    "Starting ffprobe re-probe of {} unanalyzed media file(s)",
+                    total
+                );
+                let activity_id =
+                    register_reprobe_activity(usize::try_from(total).unwrap_or(usize::MAX)).await;
+                complete_reprobe_activity(&activity_id, &outcome).await;
+                log::info!(
+                    "ffprobe re-probe complete: inspected={}, updated={}, failed={}",
+                    outcome.inspected,
+                    outcome.updated,
+                    outcome.failed
+                );
+            }
+            Err(error) => {
+                log::error!("ffprobe re-probe failed: {error}");
+            }
+        }
+        finish_reprobe_execution();
+    });
+    true
 }
 
 fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
@@ -3184,6 +3331,51 @@ pub async fn get_session_status(session_id: String) -> Result<Json<SessionStatus
         return Err(Status::NotFound);
     }
     Ok(Json(SessionStatusResponse { error }))
+}
+
+/// Response describing how many media files still need ffprobe re-analysis.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ReprobeStatusResponse {
+    /// Whether a re-probe job is currently running.
+    pub in_progress: bool,
+    /// Count of media files with NULL metadata_json (scanned without ffprobe).
+    pub pending_count: i64,
+}
+
+/// Return whether a ffprobe re-probe is running and how many files await it.
+#[openapi(tag = "Media")]
+#[get("/api/v1/system/tools/reprobe")]
+pub async fn get_reprobe_status(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+) -> Result<Json<ReprobeStatusResponse>, Status> {
+    let pending_count = db
+        .run(move |conn| crate::media::count_media_files_needing_reprobe(conn))
+        .await
+        .map_err(|error| {
+            log::error!("Failed to count media files needing reprobe: {error}");
+            Status::InternalServerError
+        })?;
+    Ok(Json(ReprobeStatusResponse {
+        in_progress: reprobe_in_progress(),
+        pending_count,
+    }))
+}
+
+/// Manually trigger a ffprobe re-probe of all unanalyzed media files. Admin-only.
+#[openapi(tag = "Media")]
+#[post("/api/v1/system/tools/reprobe")]
+pub async fn trigger_reprobe(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+) -> Result<Json<ReprobeStatusResponse>, Status> {
+    let settings = current_settings();
+    try_spawn_reprobe(db, settings.ffmpeg.clone()).await;
+    Ok(Json(ReprobeStatusResponse {
+        in_progress: reprobe_in_progress(),
+        // The count is best-effort here; if the job just started it'll trend to 0.
+        pending_count: 0,
+    }))
 }
 
 /// Trigger a full catalog scan and return the updated summary for one library.

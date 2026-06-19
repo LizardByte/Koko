@@ -8,11 +8,7 @@ use crate::config::ScheduledTasksSettings;
 use crate::db::DbConn;
 use crate::utils::current_timestamp;
 
-use super::{
-    ScheduledTask,
-    ScheduledTaskFuture,
-    save_scheduled_task_last_run,
-};
+use super::{ScheduledTask, ScheduledTaskFuture, save_scheduled_task_last_run};
 
 const LAST_RUN_KEY: &str = "scheduled_tasks.database_maintenance.last_run_at";
 

@@ -1,9 +1,6 @@
 //! Module for everything related to dependencies.
 
-use cargo_metadata::{
-    MetadataCommand,
-    Package,
-};
+use cargo_metadata::{MetadataCommand, Package};
 use std::error::Error;
 
 /// Get the dependencies from the Cargo.toml file.

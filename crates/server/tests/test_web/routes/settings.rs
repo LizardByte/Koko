@@ -1,14 +1,7 @@
 use rocket::http::Status;
-use rocket::serde::json::{
-    Value,
-    json,
-    serde_json,
-};
+use rocket::serde::json::{Value, json, serde_json};
 
-use crate::test_utils::{
-    create_test_client,
-    make_request,
-};
+use crate::test_utils::{create_test_client, make_request};
 use koko::globals;
 
 #[rocket::async_test]

@@ -6,22 +6,11 @@ pub(crate) mod tvdb;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::config::{
-    MediaLibraryKind,
-    MetadataProviderId,
-    MetadataSettings,
-};
+use crate::config::{MediaLibraryKind, MetadataProviderId, MetadataSettings};
 use crate::metadata::{
-    MetadataItemKind,
-    MetadataProviderDescriptor,
-    MetadataProviderRole,
-    MetadataSearchResult,
-    ProviderDescendantTarget,
-    ProviderMetadataCollection,
-    ProviderMetadataDetails,
-    ProviderMetadataPerson,
-    StoredMetadataSnapshot,
-    normalize_locale_key,
+    MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole, MetadataSearchResult,
+    ProviderDescendantTarget, ProviderMetadataCollection, ProviderMetadataDetails,
+    ProviderMetadataPerson, StoredMetadataSnapshot, normalize_locale_key,
 };
 
 /// Boxed async result returned by metadata provider operations.

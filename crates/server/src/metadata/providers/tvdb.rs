@@ -1,47 +1,20 @@
 use serde_json::Value;
 use strsim::normalized_levenshtein;
-use tvdb4::apis::{
-    self,
-    login_api,
-};
+use tvdb4::apis::{self, login_api};
 use tvdb4::models::LoginPostRequest;
 
-use crate::config::{
-    MetadataProviderId,
-    MetadataProviderSettings,
-    MetadataSettings,
-};
+use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
-    MediaLibraryKind,
-    MetadataItemKind,
-    MetadataProviderDescriptor,
-    MetadataProviderRole,
-    MetadataSearchResult,
-    ProviderDescendantTarget,
-    ProviderExternalId,
-    ProviderMetadataDetails,
-    ProviderMetadataPerson,
-    StoredMetadataSnapshot,
-    cleanup_movie_title,
-    extract_release_year,
-    format_payload_snippet,
-    image_format_preference_rank,
-    managed_metadata_asset_dir,
-    metadata_asset_db_path,
-    metadata_response_cache_key,
-    movie_match_score,
-    normalize_external_id_source,
-    parse_movie_name,
-    provider_settings,
-    read_metadata_response_cache_text,
-    show_search_query,
-    try_cache_item_artwork,
+    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
+    MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataDetails,
+    ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title, extract_release_year,
+    format_payload_snippet, image_format_preference_rank, managed_metadata_asset_dir,
+    metadata_asset_db_path, metadata_response_cache_key, movie_match_score,
+    normalize_external_id_source, parse_movie_name, provider_settings,
+    read_metadata_response_cache_text, show_search_query, try_cache_item_artwork,
     write_metadata_response_cache_text,
 };
-use std::time::{
-    Duration,
-    Instant,
-};
+use std::time::{Duration, Instant};
 
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
 
@@ -2141,14 +2114,8 @@ fn episode_number(value: &Value) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        artwork_url,
-        backdrop_url,
-        best_overview,
-        metadata_details,
-        metadata_item_kind,
-        movie_snapshot_from_value,
-        search_result_from_value,
-        tvdb_logo_url,
+        artwork_url, backdrop_url, best_overview, metadata_details, metadata_item_kind,
+        movie_snapshot_from_value, search_result_from_value, tvdb_logo_url,
         tvdb_people_with_language,
     };
     use crate::metadata::MetadataItemKind;

@@ -405,4 +405,74 @@ mod tests {
         let wrapped: SpawnTranscodeError = io_err.into();
         assert!(matches!(wrapped, SpawnTranscodeError::Io(_)));
     }
+
+    fn spec_with_source(source: &str) -> TranscodeSpec {
+        TranscodeSpec {
+            source_path: PathBuf::from(source),
+            output_path: PathBuf::from("/tmp/out.mp4"),
+            container: "mp4".into(),
+            video_codec: None,
+            audio_codec: None,
+            max_width: None,
+            max_height: None,
+            max_bitrate_kbps: None,
+            start_time_ms: None,
+            audio_stream_index: None,
+        }
+    }
+
+    #[test]
+    fn source_path_with_spaces_and_brackets_is_one_argv_entry() {
+        // The "spaces in path" framing is a red herring: Command::args bypasses
+        // the shell, so a source path with spaces/brackets is passed to ffmpeg
+        // as a single argv entry. This test pins that invariant.
+        let spec =
+            spec_with_source("/Users/hazer/Downloads/Torrents/[Group] Title With Spaces E10.mkv");
+        let args = spec.to_ffmpeg_args();
+        let i_pos = args.iter().position(|a| a == "-i").expect("-i present");
+        let path_arg = &args[i_pos + 1];
+        assert_eq!(
+            path_arg,
+            "/Users/hazer/Downloads/Torrents/[Group] Title With Spaces E10.mkv"
+        );
+        // And it must be exactly one element (no shell splitting happened).
+        assert_eq!(args.iter().filter(|a| **a == *path_arg).count(), 1);
+    }
+
+    #[test]
+    fn copy_codecs_when_none_specified() {
+        let spec = spec_with_source("/tmp/in.mkv");
+        let args = spec.to_ffmpeg_args();
+        let v_pos = args.iter().position(|a| a == "-c:v").expect("-c:v present");
+        assert_eq!(args[v_pos + 1], "copy");
+        let a_pos = args.iter().position(|a| a == "-c:a").expect("-c:a present");
+        assert_eq!(args[a_pos + 1], "copy");
+    }
+
+    #[test]
+    fn mp4_container_emits_fragmented_movflags() {
+        let spec = spec_with_source("/tmp/in.mkv");
+        let args = spec.to_ffmpeg_args();
+        let mf_pos = args
+            .iter()
+            .position(|a| a == "-movflags")
+            .expect("-movflags present");
+        assert!(
+            args[mf_pos + 1].contains("frag_keyframe"),
+            "expected frag_keyframe in movflags, got {}",
+            args[mf_pos + 1]
+        );
+        assert!(
+            args[mf_pos + 1].contains("empty_moov"),
+            "expected empty_moov in movflags, got {}",
+            args[mf_pos + 1]
+        );
+    }
+
+    #[test]
+    fn stdout_args_target_pipe1() {
+        let spec = spec_with_source("/tmp/in.mkv");
+        let args = spec.to_ffmpeg_stdout_args();
+        assert_eq!(args.last().expect("args non-empty"), "pipe:1");
+    }
 }

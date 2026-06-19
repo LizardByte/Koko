@@ -1,46 +1,25 @@
 //! Media and system discovery routes.
 
 // lib imports
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::sync::atomic::{
-    AtomicBool,
-    AtomicU64,
-    Ordering,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use once_cell::sync::Lazy;
 use rocket::delete;
 use rocket::fs::NamedFile;
 use rocket::get;
-use rocket::http::{
-    ContentType,
-    Status,
-};
+use rocket::http::{ContentType, Status};
 use rocket::outcome::Outcome;
 use rocket::post;
-use rocket::request::{
-    FromRequest,
-    Request,
-};
+use rocket::request::{FromRequest, Request};
 use rocket::response::stream::ReaderStream;
-use rocket::response::{
-    self,
-    Responder,
-    Response,
-};
+use rocket::response::{self, Responder, Response};
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
 use rocket::tokio::fs::File;
-use rocket::tokio::io::{
-    AsyncReadExt,
-    AsyncSeekExt,
-    Take,
-};
+use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
 use rocket::tokio::process::ChildStdout;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
@@ -49,113 +28,53 @@ use strsim::normalized_levenshtein;
 
 // local imports
 use crate::auth::UserGuard;
-use crate::config::{
-    MetadataProviderId,
-    Settings,
-    current_settings,
-};
+use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
-    MediaHome,
-    MediaItemDetail,
-    MediaItemSummary,
-    PersistedLibrarySummary,
-    PersistedMediaFileSummary,
-    PlaybackDecision,
-    ShowMetadataDescendantPlan,
-    ShowMetadataEpisodePlan,
-    ShowMetadataSeasonPlan,
-    TranscodingCapability,
-    apply_user_playback_context_to_detail,
-    delete_missing_media_items,
-    get_item_secondary_provider_references,
-    get_item_youtube_theme_collection_references,
-    get_library_files,
-    get_library_metadata_languages,
-    get_library_metadata_providers,
-    get_media_home_with_preferred_languages,
-    get_media_item,
-    get_media_item_summary,
-    get_media_item_with_preferred_languages,
-    get_persisted_library_summaries,
-    get_playback_decision,
-    get_preferred_item_artwork_metadata_link_for_languages,
-    get_preferred_item_metadata_link,
-    inspect_transcoding_capability,
-    library_exists,
-    list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates,
-    list_library_settings,
-    list_media_item_children,
-    list_media_items,
-    list_media_items_for_user_with_preferred_languages,
-    mark_metadata_match_attempted,
-    preferred_audio_stream_index,
-    resolve_item_subtitle_path,
-    resolve_item_theme_song_path,
-    resolve_local_item_artwork_path,
-    resolve_media_item_source_path,
+    MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
+    PersistedMediaFileSummary, PlaybackDecision, ShowMetadataDescendantPlan,
+    ShowMetadataEpisodePlan, ShowMetadataSeasonPlan, TranscodingCapability,
+    apply_user_playback_context_to_detail, delete_missing_media_items,
+    get_item_secondary_provider_references, get_item_youtube_theme_collection_references,
+    get_library_files, get_library_metadata_languages, get_library_metadata_providers,
+    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
+    get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
+    get_preferred_item_metadata_link, inspect_transcoding_capability, library_exists,
+    list_automatic_metadata_candidates, list_automatic_metadata_refresh_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    list_media_items_for_user_with_preferred_languages, mark_metadata_match_attempted,
+    preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
+    resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_for_user_with_preferred_languages,
-    sync_persisted_library_catalog_for_library,
-    upsert_playback_progress,
-    upsert_show_metadata_descendant_items,
-    user_can_access_library,
+    sync_persisted_library_catalog_for_library, upsert_playback_progress,
+    upsert_show_metadata_descendant_items, user_can_access_library,
 };
 use crate::metadata::{
-    ArtworkKind,
-    DEFAULT_METADATA_LOCALE,
-    ItemMetadataSummary,
-    MetadataCollectionSummary,
-    MetadataPersonCreditSummary,
-    MetadataPersonEnrichmentTarget,
-    MetadataPersonSummary,
-    MetadataProviderRole,
-    MetadataProviderStatus,
-    MetadataSearchResult,
-    MetadataSnapshotFetchOptions,
-    ProviderDescendantTarget,
-    ProviderEpisodeMetadataSnapshotFetch,
-    ProviderMetadataPerson,
-    StoredMetadataSnapshot,
-    expected_artwork_cache_path,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
+    MetadataPersonCreditSummary, MetadataPersonEnrichmentTarget, MetadataPersonSummary,
+    MetadataProviderRole, MetadataProviderStatus, MetadataSearchResult,
+    MetadataSnapshotFetchOptions, ProviderDescendantTarget, ProviderEpisodeMetadataSnapshotFetch,
+    ProviderMetadataPerson, StoredMetadataSnapshot, expected_artwork_cache_path,
     fetch_provider_episode_metadata_snapshot_for_locale_with_options,
     fetch_provider_metadata_snapshot_for_locale_with_options,
     fetch_provider_person_metadata_for_locale,
     fetch_provider_season_metadata_snapshot_for_locale_with_options,
-    fetch_provider_secondary_collection_metadata,
-    fetch_provider_secondary_metadata,
-    get_item_metadata_summaries,
-    get_metadata_person_for_languages,
-    get_metadata_person_locale_peer_ids,
-    get_primary_item_metadata_link,
-    guess_provider_movie_match,
-    guess_provider_show_match,
-    list_due_item_metadata_links,
-    list_metadata_collection_summaries_with_preferred_languages,
-    list_metadata_people_for_library,
-    list_metadata_person_credit_summaries_for_person_ids,
-    list_pending_item_metadata_links,
-    list_provider_statuses,
-    load_provider_show_descendant_targets,
-    managed_metadata_asset_dir,
-    metadata_asset_db_path,
-    normalize_locale_key,
-    persist_item_metadata_assets,
-    persist_metadata_people_assets,
-    provider_locale_key,
-    provider_uses_localized_metadata,
-    resolve_metadata_asset_db_path,
-    search_metadata_people_with_preferred_languages,
-    search_provider,
-    set_item_metadata_refresh_state,
-    sort_item_metadata_summaries_for_languages,
-    try_cache_item_artwork,
-    update_cached_artwork_path,
-    update_metadata_person_details,
-    upsert_item_metadata_link,
-    upsert_item_metadata_snapshot_with_refresh_interval,
+    fetch_provider_secondary_collection_metadata, fetch_provider_secondary_metadata,
+    get_item_metadata_summaries, get_metadata_person_for_languages,
+    get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
+    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    list_metadata_collection_summaries_with_preferred_languages, list_metadata_people_for_library,
+    list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
+    list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
+    metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
+    persist_metadata_people_assets, provider_locale_key, provider_uses_localized_metadata,
+    resolve_metadata_asset_db_path, search_metadata_people_with_preferred_languages,
+    search_provider, set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
+    try_cache_item_artwork, update_cached_artwork_path, update_metadata_person_details,
+    upsert_item_metadata_link, upsert_item_metadata_snapshot_with_refresh_interval,
     upsert_secondary_collection_theme_song_url,
 };
 use crate::utils::current_timestamp;
@@ -184,6 +103,39 @@ impl<'r> Responder<'r, 'static> for SessionStream {
                 .ok(),
         }
     }
+}
+
+/// The structured transcode error as exposed to clients (owned strings, so it
+/// serializes cleanly and matches the client `TranscodeErrorBody` type).
+#[allow(dead_code)] // constructed by get_session_status in the next task
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct SessionTranscodeError {
+    /// Stable machine code.
+    pub code: String,
+    /// Human-readable explanation.
+    pub message: String,
+    /// Optional UI action hint, e.g. `Some("open_settings")`.
+    pub action: Option<String>,
+}
+
+impl From<crate::transcode::TranscodeErrorBody> for SessionTranscodeError {
+    fn from(body: crate::transcode::TranscodeErrorBody) -> Self {
+        Self {
+            code: body.code.to_string(),
+            message: body.message,
+            action: body.action.map(str::to_string),
+        }
+    }
+}
+
+/// Status of a playback session's transcode, returned to the client so it can
+/// recover a structured error when the `<video>` element stalls.
+#[allow(dead_code)] // constructed by get_session_status in the next task
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct SessionStatusResponse {
+    /// A transcode error for this session, if any. `None` while the session is
+    /// healthy or (in this phase) when only a successful spawn has occurred.
+    pub error: Option<SessionTranscodeError>,
 }
 
 pub struct RangedFile {
@@ -528,6 +480,25 @@ static ACTIVE_PLAYBACK_SESSIONS: Lazy<
 static ACTIVE_TRANSCODE_TASKS: Lazy<
     tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+/// Per-session transcode errors, written by the lifecycle watcher (deferred
+/// phase) and read by [`get_session_status`]. Inert in the current phase:
+/// only spawn-time failures are recorded here.
+static ACTIVE_SESSION_ERRORS: Lazy<
+    tokio::sync::RwLock<HashMap<String, crate::transcode::TranscodeErrorBody>>,
+> = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+
+/// Record a per-session transcode error so the client can recover structured
+/// detail via [`get_session_status`] (the stream response body is unreadable
+/// from a `<video>` src). The lifecycle watcher will also call this.
+async fn record_session_error(
+    session_id: &str,
+    error: crate::transcode::TranscodeErrorBody,
+) {
+    ACTIVE_SESSION_ERRORS
+        .write()
+        .await
+        .insert(session_id.to_string(), error);
+}
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
@@ -2871,12 +2842,7 @@ fn user_preferred_metadata_languages(
     user_id: Option<i32>,
 ) -> Result<Vec<String>, diesel::result::Error> {
     use crate::db::schema::users::dsl as users_dsl;
-    use diesel::{
-        ExpressionMethods,
-        OptionalExtension,
-        QueryDsl,
-        RunQueryDsl,
-    };
+    use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 
     let Some(user_id) = user_id else {
         return Ok(vec![crate::metadata::DEFAULT_METADATA_LOCALE.to_string()]);
@@ -3649,8 +3615,18 @@ pub async fn get_session_stream(
             })
         }
         Err(e) => {
-            log::error!("Failed to spawn transcode: {}", e);
-            Err(Status::InternalServerError)
+            let (status, body) = crate::transcode::map_transcode_error(e);
+            log::error!(
+                "Failed to spawn transcode for session {}: {} ({} — action: {:?})",
+                session_id,
+                body.message,
+                body.code,
+                body.action
+            );
+            // Persist for the status read, so the client can recover the detail
+            // even though the stream response body is unreadable from a <video> src.
+            record_session_error(&session_id, body).await;
+            Err(status)
         }
     }
 }

@@ -322,8 +322,8 @@ function renderMediaPlayerOverlay(): string {
           <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
         </div>
         <div class="player-error-indicator" aria-live="polite">
-          <strong>Playback could not start</strong>
-          <span>Try another audio track or start playback again.</span>
+          <strong>${escapeHtml(state.playbackError ? 'Playback failed' : 'Playback could not start')}</strong>
+          <span>${escapeHtml(state.playbackError?.message ?? 'Try another audio track or start playback again.')}</span>
         </div>
         <div class="player-idle-hit-area" aria-hidden="true"></div>
         <div class="player-top-controls player-controls">

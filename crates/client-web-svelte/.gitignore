@@ -8,3 +8,6 @@ node_modules/
 !.env.mock
 *.log
 .DS_Store
+
+*storybook.log
+storybook-static

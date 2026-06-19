@@ -668,24 +668,29 @@ legend {
   color: #ffd7d7;
 }
 
-.ffmpeg-discover {
-  margin-top: 0.5rem;
+.ffmpeg-tools-panel {
+  padding: 1.2rem;
+  margin-bottom: 1rem;
 }
 
-.ffmpeg-discover-results {
-  margin-top: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+.ffmpeg-tools-table .ffmpeg-tool-detail {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
 }
 
-.ffmpeg-discover-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.ffmpeg-tool-encoders {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
 }
 
-.ffmpeg-discover-option.is-disabled {
+.ffmpeg-path-validation {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.ffmpeg-tools-table tr.is-disabled {
   opacity: 0.5;
 }
 

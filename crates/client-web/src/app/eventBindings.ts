@@ -43,7 +43,7 @@ import {
   selectedItemDefaultMetadataYear,
   selectedItemExtras,
 } from './itemPersonView';
-import { buildSettingsFromForm, renderDiscoverResults } from './settingsView';
+import { buildSettingsFromForm, renderDiscoverResults, renderPathValidation } from './settingsView';
 import { setButtonBusy } from './ui';
 import {
   addLibrary,
@@ -539,6 +539,8 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     const resultsContainer = document.querySelector<HTMLElement>('#ffmpeg-discover-results');
     const ffmpegInput = document.querySelector<HTMLInputElement>('input[name="ffmpeg_path"]');
     const ffprobeInput = document.querySelector<HTMLInputElement>('input[name="ffprobe_path"]');
+    const ffmpegValidation = document.querySelector<HTMLElement>('#ffmpeg-path-validation');
+    const ffprobeValidation = document.querySelector<HTMLElement>('#ffprobe-path-validation');
     if (!resultsContainer || !ffmpegInput || !ffprobeInput) {
       return;
     }
@@ -547,13 +549,24 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       const discovery = await discoverTranscodingTools();
       resultsContainer.innerHTML = renderDiscoverResults(discovery);
       resultsContainer.hidden = false;
-      resultsContainer.querySelectorAll<HTMLInputElement>('input[name="ffmpeg-discover-choice"]').forEach((radio) => {
-        radio.addEventListener('change', () => {
-          if (radio.value === 'manual' || radio.value === 'current') {
-            return; // leave the text inputs as-is
+
+      // Per-field validation detail, driven by the configured-path probes.
+      if (ffmpegValidation) {
+        ffmpegValidation.innerHTML = renderPathValidation(discovery.configured_ffmpeg, 'ffmpeg');
+        ffmpegValidation.hidden = !ffmpegValidation.innerHTML;
+      }
+      if (ffprobeValidation) {
+        ffprobeValidation.innerHTML = renderPathValidation(discovery.configured_ffprobe, 'ffprobe');
+        ffprobeValidation.hidden = !ffprobeValidation.innerHTML;
+      }
+
+      // [Use] buttons write <dir>/ffmpeg + <dir>/ffprobe into the path fields.
+      resultsContainer.querySelectorAll<HTMLButtonElement>('[data-use-directory]').forEach((useButton) => {
+        useButton.addEventListener('click', () => {
+          const dir = useButton.dataset.useDirectory;
+          if (!dir) {
+            return;
           }
-          // A directory: set both inputs to <dir>/ffmpeg and <dir>/ffprobe.
-          const dir = radio.value;
           ffmpegInput.value = `${dir}/ffmpeg`;
           ffprobeInput.value = `${dir}/ffprobe`;
         });

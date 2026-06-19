@@ -58,6 +58,8 @@ export interface BinaryProbe {
   resolved_path?: string;
   version?: string;
   error?: string;
+  /** Transcoding-relevant encoders this ffmpeg supports (ffmpeg only). */
+  encoders?: string[];
 }
 
 /** One directory discovered to contain ffmpeg and/or ffprobe. */

@@ -26,7 +26,16 @@
 
   function refreshPercent(libraryId: number): number | undefined {
     const library = libraries.byId(libraryId);
-    if (!library || library.metadata_refresh_total === 0) {
+    if (!library) {
+      return undefined;
+    }
+    // Matches vanilla libraryRefreshProgress() (activities.ts:42-60): the ring
+    // only shows when there is an active metadata-refresh activity OR the
+    // library has both total>0 and pending>0 stored progress. The active-
+    // activity path needs the activities store wired into the rail (Phase 6);
+    // until then the stored-progress clause alone reproduces the seed-data
+    // behavior (Movies/Shows: total>0 pending=0 → no ring; Music: total=0).
+    if (library.metadata_refresh_total <= 0 || library.metadata_refresh_pending <= 0) {
       return undefined;
     }
     const ratio = library.metadata_refresh_completed / library.metadata_refresh_total;
@@ -65,7 +74,7 @@
 
     <nav class="rail-nav">
       <button type="button" class="rail-button" class:active={onHome} onclick={navHome}>
-        <span class="rail-icon"><Icon name="layout-grid" size={24} /></span>
+        <span class="rail-icon"><Icon name="house" size={18} /></span>
         <span class="rail-label">Home</span>
       </button>
       {#each libraries.libraries as library (library.id)}
@@ -76,14 +85,20 @@
           title={library.name}
           onclick={() => navLibrary(library.id)}
         >
-          <span class="rail-icon"><Icon name={selectedLibraryIcon(library.kind)} size={24} /></span>
+          <span class="rail-icon"><Icon name={selectedLibraryIcon(library.kind)} size={18} /></span>
           <span class="rail-library-copy">
             <span class="rail-label">{library.name}</span>
             {#if refreshPercent(library.id) !== undefined}
               <span
-                class="library-refresh-ring"
-                style="--library-refresh-progress: {refreshPercent(library.id)}%"
-              ></span>
+                class="library-refresh-indicator"
+                title="Metadata refresh progress: {library.metadata_refresh_completed}/{library.metadata_refresh_total}"
+                aria-label="Metadata refresh in progress"
+              >
+                <span
+                  class="library-refresh-ring"
+                  style="--library-refresh-progress: {refreshPercent(library.id)}%"
+                ></span>
+              </span>
             {/if}
           </span>
         </button>
@@ -94,7 +109,7 @@
   <div class="library-rail-bottom">
     {#if auth.currentUser}
       <div class="rail-user-card">
-        <UserAvatar user={auth.currentUser} />
+        <UserAvatar user={auth.currentUser} class="rail-avatar" />
         <div class="rail-user-copy">
           <strong>{auth.currentUser.username}</strong>
           <span>{auth.currentUser.admin ? 'Administrator' : 'Signed in'}</span>
@@ -102,41 +117,24 @@
       </div>
     {/if}
     <button type="button" class="rail-button rail-settings" class:active={onSettings} onclick={navSettings}>
-      <span class="rail-icon"><Icon name="settings" size={24} /></span>
+      <span class="rail-icon"><Icon name="settings" size={18} /></span>
       <span class="rail-label">Settings</span>
     </button>
     <button type="button" class="rail-button" onclick={signOut}>
-      <span class="rail-icon"><Icon name="log-out" size={24} /></span>
+      <span class="rail-icon"><Icon name="log-out" size={18} /></span>
       <span class="rail-label">Sign out</span>
     </button>
   </div>
 </aside>
 
 <style>
-  .library-refresh-ring {
-    position: relative;
-    display: inline-block;
-    width: 1rem;
-    height: 1rem;
-    border-radius: 999px;
-    background: conic-gradient(
-      #5d7bff var(--library-refresh-progress, 0%),
-      rgba(255, 255, 255, 0.14) 0
-    );
-  }
-
-  .library-refresh-ring::after {
-    content: '';
-    position: absolute;
-    inset: 2px;
-    border-radius: inherit;
-    background: rgba(14, 20, 35, 0.96);
-  }
-
-  .rail-settings {
-    width: 100%;
-  }
-
+  /*
+   * Component-private rules only. The `.library-refresh-indicator`,
+   * `.library-refresh-ring`, and `.rail-settings` rules live in app.css
+   * (mirroring vanilla style.css:464-491) — see PORTING_GUIDELINES.md.
+   * The scoped `strong` rule below has no vanilla counterpart (the rail
+   * user-card label styling is rail-specific glue).
+   */
   strong {
     color: #f4f7fb;
     font-size: 0.85rem;

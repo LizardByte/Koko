@@ -18,7 +18,13 @@
   });
 
   function back() {
-    goto('/');
+    // Vanilla eventBindings.ts:728-732 uses history.back() from the person
+    // page (the #back-to-library handler), not a hard navigate to '/'.
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      window.history.back();
+    } else {
+      goto('/');
+    }
   }
 </script>
 

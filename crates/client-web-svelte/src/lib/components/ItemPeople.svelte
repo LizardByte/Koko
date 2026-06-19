@@ -42,39 +42,57 @@
 {/if}
 
 <style>
+  /*
+   * Component-owned (ItemPeople-only). Values mirror vanilla style.css
+   * :1819-1861. The flat .people-row layout is shared (app.css); grouping
+   * wrappers (.people-groups / .people-group h4) aren't rendered by this port
+   * (people render as a single flat rail), so they're omitted.
+   */
   .item-people-section .section-heading {
     margin-bottom: 0.6rem;
   }
+
   .person-card {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.5rem;
+    align-items: stretch;
+    width: 142px;
     padding: 0;
+    border-radius: 12px;
     background: transparent;
     box-shadow: none;
     text-align: left;
   }
+
   .person-card-art {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     aspect-ratio: 2 / 3;
-    border-radius: 12px;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    background: linear-gradient(180deg, rgba(93, 123, 255, 0.5), rgba(27, 37, 62, 0.9));
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
     background-size: cover;
     background-position: center;
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 1.4rem;
+    overflow: hidden;
+    color: #dfe9ff;
+    font-size: 2.2rem;
     font-weight: 700;
-    border: 1px solid rgba(255, 255, 255, 0.08);
   }
-  .person-card-title {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: #f4f7fb;
-  }
+
+  .person-card-title,
   .person-card-subtitle {
-    font-size: 0.75rem;
-    color: #9ab1d1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .person-card-title {
+    font-weight: 700;
+  }
+
+  .person-card-subtitle {
+    color: var(--muted);
+    font-size: 0.8rem;
   }
 </style>

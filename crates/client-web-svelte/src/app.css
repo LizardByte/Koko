@@ -464,13 +464,22 @@ legend {
 
 .brand-icon,
 .rail-icon,
-.card-icon,
-.button-icon svg {
-  width: 1.5rem;
-  height: 1.5rem;
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-icon svg,
+.rail-icon svg,
+.card-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  stroke-width: 2;
 }
 
 .rail-icon {
+  width: 1.5rem;
   min-width: 1.5rem;
   text-align: center;
 }
@@ -480,14 +489,17 @@ legend {
   flex-direction: column;
   gap: 0.5rem;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 0.2rem;
 }
 
 .rail-button {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.7rem;
+  width: 100%;
   padding: 0.85rem 0.9rem;
   border-radius: 16px;
   background: transparent;
@@ -503,7 +515,43 @@ legend {
   color: #fff;
 }
 
+.library-refresh-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.12rem;
+  height: 1.12rem;
+  flex: 0 0 auto;
+}
+
+.library-refresh-ring {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: conic-gradient(
+    #5d7bff var(--library-refresh-progress, 0%),
+    rgba(255, 255, 255, 0.14) 0
+  );
+}
+
+.library-refresh-ring::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: inherit;
+  background: rgba(14, 20, 35, 0.96);
+}
+
+.rail-settings {
+  width: 100%;
+}
+
 .rail-label {
+  max-width: 100%;
+  font-size: 0.92rem;
+  line-height: 1.2;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -511,11 +559,12 @@ legend {
 
 .rail-user-card {
   display: flex;
+  gap: 0.7rem;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.4rem 0.5rem;
+  padding: 0.85rem 0.9rem;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
+  color: #dbe7ff;
 }
 
 .rail-user-card span {
@@ -526,26 +575,26 @@ legend {
 .rail-user-copy {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  overflow: hidden;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .rail-library-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
 }
 
 .user-avatar {
   display: inline-grid;
   place-items: center;
-  width: 2.35rem;
-  height: 2.35rem;
-  min-width: 2.35rem;
+  width: 2.3rem;
+  height: 2.3rem;
+  flex: 0 0 auto;
   border-radius: 999px;
   background: #263f5f;
-  color: #f4f7fb;
+  color: #dbe7ff;
   font-weight: 700;
   overflow: hidden;
 }
@@ -604,17 +653,25 @@ legend {
 /* --- Shared section/detail utilities (used by item + settings) --- */
 
 .detail-panel {
+  position: sticky;
+  top: 1.2rem;
+  align-self: start;
+  max-height: calc(100vh - 2.4rem);
+  overflow: auto;
   padding: 1.2rem;
 }
 
 .detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
   padding: 1.1rem;
 }
 
 .detail-section {
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
+  gap: 0.7rem;
 }
 
 .item-section {
@@ -625,6 +682,7 @@ legend {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  padding: 1.2rem;
 }
 
 .shelf-stack.panel {
@@ -676,6 +734,103 @@ legend {
   gap: 0.8rem;
 }
 
+/* --- Item hero shared (ItemHero + PersonHero): mirrors style.css:1377-1412, 1457-1466, 1528-1574 --- */
+
+.detail-art {
+  aspect-ratio: 2 / 3;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(93, 123, 255, 0.9), rgba(27, 37, 62, 0.96));
+  font-size: 2.2rem;
+  font-weight: 800;
+}
+
+.detail-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.hero-tagline {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #d6e5ff;
+}
+
+.hero-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+/* Caller-supplied className on CollapsibleText (ItemHero + PersonHero). */
+.hero-description {
+  margin: 0.2rem 0 0;
+  max-width: 70ch;
+  color: #dbe7ff;
+}
+
+.detail-summary h2 {
+  margin: 0;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.item-hero {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  min-height: min(58vh, 720px);
+  padding: 1.3rem 0 0.75rem;
+}
+
+.item-poster {
+  width: min(100%, 220px);
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.34);
+}
+
+.item-summary {
+  align-self: start;
+  padding: 0.35rem 0 1rem;
+}
+
+.item-summary h2,
+.item-title-fallback {
+  font-size: 3.2rem;
+  line-height: 1.04;
+  margin-top: 0;
+}
+
+.item-title-fallback {
+  max-width: min(780px, 100%);
+  overflow-wrap: anywhere;
+}
+
+/* --- Item grid: shared by HomeContent + ItemChildren (style.css:921-925) --- */
+
+.item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+/* --- Media card family: shared by MediaCard + HomeContent collection cards --- */
+
 .shelf-row-shell {
   display: grid;
   grid-template-columns: 2.3rem minmax(0, 1fr) 2.3rem;
@@ -713,6 +868,215 @@ legend {
 .shelf-scroll-button:focus-visible {
   background: #d8ffe9;
   color: #061018;
+}
+
+/* --- Media card (mirrors vanilla style.css:927-1141, 1339-1342) --- */
+
+.media-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: stretch;
+  text-align: left;
+  padding: 0;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.episode-card {
+  gap: 0.45rem;
+}
+
+.media-card-art {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: 18px;
+  padding: 0.9rem;
+  display: block;
+  background: linear-gradient(180deg, rgba(93, 123, 255, 0.8), rgba(22, 31, 54, 0.92));
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.media-card-art.episode {
+  aspect-ratio: 16 / 9;
+}
+
+.media-card-art.audio {
+  background: linear-gradient(180deg, rgba(66, 214, 158, 0.78), rgba(17, 44, 40, 0.94));
+}
+
+.media-card.is-missing .media-card-art {
+  border-color: rgba(255, 191, 84, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 191, 84, 0.14);
+}
+
+.media-card-kind-row {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: start;
+  pointer-events: none;
+}
+
+.media-card-dynamic-badges {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+  align-items: end;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.media-card-state-badges,
+.media-card-playback-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.media-card-playback-badges {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.media-card-kind,
+.media-card-duration {
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(10, 14, 24, 0.36);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.media-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.72rem;
+}
+
+.media-card-status.icon-only {
+  width: 1.96rem;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  min-height: 1.96rem;
+  justify-content: center;
+  padding: 0;
+}
+
+.media-card-status.has-multiple {
+  min-height: 1.45rem;
+  padding-inline: 0.38rem;
+}
+
+.media-card-status.is-unmatched {
+  padding: 0.24rem 0.34rem;
+  background: rgba(10, 14, 24, 0.52);
+  color: #ffe5b5;
+}
+
+.media-card-status.is-unmatched.icon-only {
+  width: 1.45rem;
+  min-width: 1.45rem;
+  height: 1.45rem;
+  min-height: 1.45rem;
+}
+
+.media-card-status.is-loading {
+  color: #dce6ff;
+}
+
+.media-card-dynamic-badges .media-card-status.is-loading {
+  justify-content: center;
+  background: rgba(10, 14, 24, 0.52);
+}
+
+.media-card-status.is-missing {
+  min-width: 1.45rem;
+  min-height: 1.45rem;
+  padding: 0.24rem 0.42rem;
+  justify-content: center;
+  gap: 0.28rem;
+  background: rgba(10, 14, 24, 0.52);
+  color: #ffd78a;
+  white-space: nowrap;
+}
+
+.media-card-status.is-watched {
+  background: rgba(10, 14, 24, 0.58);
+  color: #8bf3ca;
+}
+
+.media-card-status.is-watched .status-icon svg {
+  width: 1.12rem;
+  height: 1.12rem;
+}
+
+.media-card-progress {
+  --watch-progress: 0%;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 1.96rem;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  border-radius: 999px;
+  background: conic-gradient(#8bf3ca var(--watch-progress), rgba(255, 255, 255, 0.18) 0);
+  color: #f4f7fb;
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.media-card-progress::before {
+  content: '';
+  position: absolute;
+  inset: 0.25rem;
+  border-radius: inherit;
+  background: rgba(10, 14, 24, 0.82);
+}
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.status-icon svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2.2;
+}
+
+.media-card-status .status-warning-icon {
+  display: inline-flex;
+  color: #ffe5b5;
+}
+
+.media-card-title {
+  font-weight: 700;
+}
+
+.media-card-subtitle {
+  font-size: 0.82rem;
+  color: #d8e5ff;
 }
 
 .shelf-row .media-card {

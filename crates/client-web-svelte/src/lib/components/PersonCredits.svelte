@@ -194,27 +194,32 @@
 </section>
 
 <style>
-  .item-section {
-    padding: 1.1rem;
-  }
+  /*
+   * Component-owned (PersonCredits-only). Values mirror vanilla style.css
+   * :1618-1693. .item-section is shared (app.css).
+   */
   .section-heading {
     margin-bottom: 0.8rem;
   }
+
   .person-credit-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 1rem;
     align-items: start;
   }
+
   .person-credit-card,
   .person-season-credit-card {
     display: grid;
     align-items: start;
   }
+
   .person-credit-card.is-active,
   .person-season-credit-card.is-active {
     z-index: 1;
   }
+
   .person-credit-tray {
     display: none;
     grid-column: 1 / -1;
@@ -223,10 +228,12 @@
     background: rgba(255, 255, 255, 0.055);
     border: 1px solid rgba(255, 255, 255, 0.09);
   }
+
   .person-credit-tray.is-active {
     display: grid;
     gap: 0.75rem;
   }
+
   .person-credit-tray-heading {
     display: flex;
     align-items: center;
@@ -235,6 +242,7 @@
     font-size: 0.78rem;
     color: var(--muted);
   }
+
   .person-credit-tray-close {
     display: inline-flex;
     align-items: center;
@@ -247,20 +255,27 @@
     color: #dfe9ff;
     box-shadow: none;
   }
+
   .person-credit-tray-close:hover,
   .person-credit-tray-close:focus-visible {
     background: #d8ffe9;
     color: #061018;
   }
-  .person-season-credit-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 0.75rem;
-    align-items: start;
+
+  .person-credit-tray-close :global(svg) {
+    width: 0.95rem;
+    height: 0.95rem;
   }
+
+  .person-season-credit-grid,
   .person-episode-credit-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 0.6rem;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.8rem;
+    align-items: start;
+  }
+
+  .person-episode-credit-grid {
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   }
 </style>

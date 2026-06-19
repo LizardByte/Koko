@@ -6,12 +6,14 @@
   // collapsible overview, action buttons, and the technical fact list.
   import Button from './Button.svelte';
   import CollapsibleText from './CollapsibleText.svelte';
+  import Icon from './Icon.svelte';
   import { getArtworkUrl, resolveApiUrl, type MediaItemDetail, type MediaPlaybackTarget } from '$lib/api';
   import {
     backNavigationTarget,
     selectedItemTechnicalFacts,
   } from '$lib/selectors';
-  import { resumablePlaybackPositionMs } from '$lib/playbackProgress';
+  import { playbackProgressPercent, resumablePlaybackPositionMs } from '$lib/playbackProgress';
+  import { formatTimestamp } from '$lib/format';
   import { libraries } from '$lib/stores';
   import { item, ui } from '$lib/stores';
   import { goto } from '$app/navigation';
@@ -31,6 +33,27 @@
   const facts = $derived(selectedItemTechnicalFacts(itemValue));
   const isMissing = $derived(Boolean(itemValue.missing_since));
   const genres = $derived(itemValue.genres);
+
+  // Detail-badge state — mirrors playbackDetailBadgeMarkup / missingItemDetail
+  // BadgeMarkup (homeView.ts:330-382): watch count + label, progress %, and
+  // the missing-since timestamp for the warning tag.
+  const watchCount = $derived(itemValue.watch_count ?? 0);
+  const watchedLabel = $derived(watchCount <= 1 ? 'Watched' : `Watched ${watchCount}x`);
+  const watchedTitle = $derived(
+    itemValue.last_watched_at
+      ? `Last watched ${formatTimestamp(itemValue.last_watched_at)}`
+      : watchedLabel,
+  );
+  // MediaItemDetail allows null on the playback fields where MediaItemSummary
+  // uses undefined; coerce to the summary shape playbackProgressPercent wants.
+  const summaryForProgress = $derived({
+    ...itemValue,
+    playback_position_ms: itemValue.playback_position_ms ?? undefined,
+    playback_duration_ms: itemValue.playback_duration_ms ?? undefined,
+    duration_ms: itemValue.duration_ms ?? undefined,
+  });
+  const progressPercent = $derived(playbackProgressPercent(summaryForProgress));
+  const missingTitle = $derived(`Missing from disk since ${formatTimestamp(itemValue.missing_since ?? undefined)}`);
 
   const primaryTarget = $derived(itemValue.playable ? undefined : itemValue.playback_target ?? undefined);
   const restartTarget = $derived(
@@ -95,10 +118,19 @@
 
     <div class="hero-meta-row">
       {#if isMissing}
-        <span class="tag warning status-tag">Missing from disk</span>
+        <span class="tag warning status-tag" title={missingTitle} aria-label={missingTitle}>
+          <span class="status-icon"><Icon name="triangle-alert" size={15} strokeWidth={2.2} /></span>
+          <span>Missing</span>
+        </span>
       {/if}
-      {#if itemValue.playback_completed}
-        <span class="tag success status-tag">Watched</span>
+      {#if watchCount > 0}
+        <span class="tag success status-tag" title={watchedTitle}>
+          <span class="status-icon"><Icon name="circle-check" size={15} strokeWidth={2.2} /></span>
+          <span>{watchedLabel}</span>
+        </span>
+      {/if}
+      {#if progressPercent !== undefined}
+        <span class="tag status-tag">{progressPercent}% watched</span>
       {/if}
       {#if itemValue.release_year}<span class="tag">{itemValue.release_year}</span>{/if}
       {#if itemValue.content_rating}<span class="tag">{itemValue.content_rating}</span>{/if}
@@ -149,63 +181,19 @@
 </section>
 
 <style>
-  .item-hero {
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    gap: 1.5rem;
-    align-items: start;
-    min-height: min(58vh, 720px);
-    padding: 1.3rem 0 0.75rem;
-  }
-
+  /*
+   * Component-owned (ItemHero-only). Shared .item-hero / .item-poster /
+   * .item-summary / .item-title-fallback / .detail-art / .detail-summary /
+   * .hero-meta-row / .hero-tagline / .detail-actions live in app.css (used by
+   * PersonHero too). Values mirror vanilla style.css:1537-1592.
+   */
   .item-hero.episode-hero {
     grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  }
-
-  .item-poster {
-    width: min(100%, 220px);
-    box-shadow: 0 24px 44px rgba(0, 0, 0, 0.34);
   }
 
   .item-thumbnail {
     width: min(100%, 360px);
     aspect-ratio: 16 / 9;
-  }
-
-  .detail-art {
-    aspect-ratio: 2 / 3;
-    border-radius: 20px;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    background: linear-gradient(180deg, rgba(93, 123, 255, 0.9), rgba(27, 37, 62, 0.96));
-    font-size: 2.2rem;
-    font-weight: 800;
-    color: rgba(255, 255, 255, 0.85);
-  }
-
-  .detail-art img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .item-summary {
-    align-self: start;
-    padding: 0.35rem 0 1rem;
-  }
-
-  .item-summary h2,
-  .item-title-fallback {
-    font-size: 3.2rem;
-    line-height: 1.04;
-    margin-top: 0;
-    margin-bottom: 0.2rem;
-  }
-
-  .item-title-fallback {
-    max-width: min(780px, 100%);
-    overflow-wrap: anywhere;
   }
 
   .item-title-logo {
@@ -216,46 +204,22 @@
     object-position: left center;
   }
 
-  .hero-tagline {
-    margin: 0;
-    font-size: 1.05rem;
-    color: #d6e5ff;
-  }
-
-  .hero-meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.55rem;
-    margin: 0.5rem 0;
-  }
-
-  .detail-actions {
-    display: flex;
-    gap: 0.7rem;
-    flex-wrap: wrap;
-    margin: 0.8rem 0;
-  }
-
   .item-fact-list {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 0.6rem;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.8rem;
     margin-top: 0.5rem;
   }
 
   .item-fact {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
-    padding: 0.6rem 0.8rem;
+    gap: 0.2rem;
+    padding: 0.75rem 0.9rem;
     border-radius: 18px;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(8, 11, 18, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(16px);
-    font-size: 0.85rem;
-  }
-
-  .item-fact strong {
-    color: #f4f7fb;
   }
 
   @media (max-width: 960px) {

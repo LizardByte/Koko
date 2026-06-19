@@ -9,9 +9,26 @@
   import MediaCard from '$lib/components/MediaCard.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import { catalog, libraries, ui } from '$lib/stores';
+  import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '$lib/api';
+  import { humanizeItemType, formatChildCount } from '$lib/ui';
 
   type Props = { libraryId?: number };
   let { libraryId }: Props = $props();
+
+  // Thumbnail resolvers for the four search-result types — mirrors vanilla
+  // renderSearchResultRow (homeView.ts:526-590).
+  function itemThumb(id: number, artworkUpdatedAt?: number): string {
+    return getArtworkUrl(id, 'poster', artworkUpdatedAt);
+  }
+  function collectionThumb(artwork?: string | null, backdrop?: string | null): string | undefined {
+    const url = artwork ?? backdrop;
+    return url ? resolveApiUrl(url) : undefined;
+  }
+  function personThumb(person: { cached_image_path?: string | null; image_url?: string | null; id: number }): string | undefined {
+    if (person.cached_image_path) return getPersonImageUrl(person.id);
+    if (person.image_url) return resolveApiUrl(person.image_url);
+    return undefined;
+  }
 
   onMount(async () => {
     try {
@@ -81,16 +98,42 @@
         {#each catalog.searchResults as result, i (i)}
           {#if result.result_type === 'item'}
             <button type="button" class="search-result-row" onclick={() => goto(`/items/${result.item.id}`)}>
+              <span class="search-result-thumb" style={`background-image: url('${itemThumb(result.item.id, result.item.artwork_updated_at)}');`}></span>
               <span class="search-result-copy">
                 <strong>{result.item.display_title}</strong>
-                <span>{result.item.display_subtitle ?? ''}</span>
+                <span>{[libraries.byId(result.item.library_id)?.name ?? 'Library', humanizeItemType(result.item.item_type), formatChildCount(result.item)].filter(Boolean).join(' · ')}</span>
+                {#if result.item.overview}<small>{result.item.overview}</small>{/if}
               </span>
             </button>
           {:else if result.result_type === 'collection'}
             <button type="button" class="search-result-row" onclick={() => goto(`/collections/${result.collection.id}`)}>
+              <span class="search-result-thumb" style={collectionThumb(result.collection.artwork_url, result.collection.backdrop_url) ? `background-image: url('${collectionThumb(result.collection.artwork_url, result.collection.backdrop_url)}');` : ''}>
+                {#if !collectionThumb(result.collection.artwork_url, result.collection.backdrop_url)}<Icon name="image" size={20} />{/if}
+              </span>
               <span class="search-result-copy">
                 <strong>{result.collection.name}</strong>
                 <span>Collection · {result.collection.item_count} title{result.collection.item_count === 1 ? '' : 's'}</span>
+                {#if result.collection.overview}<small>{result.collection.overview}</small>{/if}
+              </span>
+            </button>
+          {:else if result.result_type === 'person'}
+            <button type="button" class="search-result-row" onclick={() => goto(`/people/${result.person.id}`)}>
+              <span class="search-result-thumb" style={personThumb(result.person) ? `background-image: url('${personThumb(result.person)}');` : ''}>
+                {#if !personThumb(result.person)}<Icon name="user-plus" size={20} />{/if}
+              </span>
+              <span class="search-result-copy">
+                <strong>{result.person.name}</strong>
+                <span>{result.person.known_for.slice(0, 3).join(' · ') || 'Person'}</span>
+                {#if result.person.biography}<small>{result.person.biography}</small>{/if}
+              </span>
+            </button>
+          {:else if result.result_type === 'playlist'}
+            <button type="button" class="search-result-row" onclick={() => goto(`/items/playlists/${encodeURIComponent(result.playlist.id)}`)}>
+              <span class="search-result-thumb"><Icon name="music" size={20} /></span>
+              <span class="search-result-copy">
+                <strong>{result.playlist.name}</strong>
+                <span>Playlist · {result.playlist.item_count} title{result.playlist.item_count === 1 ? '' : 's'}</span>
+                {#if result.playlist.overview}<small>{result.playlist.overview}</small>{/if}
               </span>
             </button>
           {/if}
@@ -163,6 +206,12 @@
 </div>
 
 <style>
+  /*
+   * Component-owned (HomeContent-only). Values mirror vanilla style.css
+   * :1257-1337. .item-grid / .shelf-header / .shelf / .tag are shared
+   * (app.css). .home-tab-panel / .search-results-section / collection cards
+   * are HomeContent-only.
+   */
   .home-content {
     gap: 0;
   }
@@ -175,13 +224,6 @@
     padding: 1.2rem;
   }
 
-  .item-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
-    gap: 0.9rem;
-    align-items: start;
-  }
-
   .search-results-section .shelf-header {
     margin-bottom: 0.8rem;
   }
@@ -189,33 +231,52 @@
   .search-results-list {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.8rem;
   }
 
   .search-result-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 0.85rem;
     align-items: center;
-    gap: 0.8rem;
-    padding: 0.6rem 0.8rem;
-    border-radius: 12px;
-    background: transparent;
-    box-shadow: none;
+    padding: 0.65rem;
     text-align: left;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: none;
+    color: inherit;
   }
 
-  .search-result-row:hover {
-    background: rgba(255, 255, 255, 0.05);
+  .search-result-row:hover,
+  .search-result-row:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .search-result-thumb {
+    width: 64px;
+    aspect-ratio: 2 / 3;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08) center / cover no-repeat;
   }
 
   .search-result-copy {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.2rem;
+    min-width: 0;
   }
 
-  .search-result-copy span {
+  .search-result-copy span,
+  .search-result-copy small {
     color: #9ab1d1;
-    font-size: 0.82rem;
+  }
+
+  .search-result-copy small {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
 
   .collection-browse-card {

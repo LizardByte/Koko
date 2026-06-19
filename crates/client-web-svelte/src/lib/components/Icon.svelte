@@ -33,6 +33,20 @@
   import Layers from '@lucide/svelte/icons/layers';
   import Settings from '@lucide/svelte/icons/settings';
   import Star from '@lucide/svelte/icons/star';
+  // Icons used by views not yet ported (Phase 5 settings, playback spike).
+  // Added now so a missing key never silently renders nothing — see
+  // PORTING_GUIDELINES.md "Icons".
+  import House from '@lucide/svelte/icons/house';
+  import Link2 from '@lucide/svelte/icons/link-2';
+  import Plus from '@lucide/svelte/icons/plus';
+  import Trash2 from '@lucide/svelte/icons/trash-2';
+  import Languages from '@lucide/svelte/icons/languages';
+  import Maximize from '@lucide/svelte/icons/maximize';
+  import Pause from '@lucide/svelte/icons/pause';
+  import PictureInPicture from '@lucide/svelte/icons/picture-in-picture';
+  import SkipBack from '@lucide/svelte/icons/skip-back';
+  import SkipForward from '@lucide/svelte/icons/skip-forward';
+  import VolumeX from '@lucide/svelte/icons/volume-x';
   import type { Component } from 'svelte';
 
   export const ICONS: Record<string, Component> = {
@@ -63,6 +77,18 @@
     layers: Layers,
     settings: Settings,
     star: Star,
+    // Phase 5 / playback-spike icons (pre-registered — see header comment).
+    house: House,
+    'link-2': Link2,
+    plus: Plus,
+    'trash-2': Trash2,
+    languages: Languages,
+    maximize: Maximize,
+    pause: Pause,
+    'picture-in-picture': PictureInPicture,
+    'skip-back': SkipBack,
+    'skip-forward': SkipForward,
+    'volume-x': VolumeX,
   };
 </script>
 

@@ -37,25 +37,40 @@
 {/if}
 
 <style>
+  /*
+   * Component-owned (CollapsibleText owns these; reusers like ItemHero /
+   * PersonHero just mount the component, so the rules travel with it).
+   * Values mirror vanilla style.css:1420-1449.
+   */
+  .collapsible-text {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
   .collapsible-text.is-collapsed {
     display: -webkit-box;
+    -webkit-box-orient: vertical;
     -webkit-line-clamp: 6;
     line-clamp: 6;
-    -webkit-box-orient: vertical;
     overflow: hidden;
   }
 
   .text-toggle-button {
+    align-self: flex-start;
+    margin-top: -0.1rem;
+    padding: 0;
+    min-height: auto;
+    border: 0;
+    border-radius: 0;
     background: transparent;
     box-shadow: none;
-    color: #9ab1d1;
-    padding: 0.2rem 0;
-    font-size: 0.82rem;
+    color: #9fc2ff;
+    font-weight: 700;
   }
 
   .text-toggle-button:hover {
-    transform: none;
+    color: #ffffff;
     background: transparent;
-    color: #dbe7ff;
+    transform: none;
   }
 </style>

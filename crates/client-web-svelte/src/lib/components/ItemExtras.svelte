@@ -31,9 +31,9 @@
         <button type="button" class="media-extra-card" onclick={() => play(extra)} title={extra.title}>
           <span class="media-extra-thumbnail" class:has-image={Boolean(thumbnail(extra))} style={thumbnail(extra) ? `background-image: url('${thumbnail(extra)}');` : ''}>
             {#if !thumbnail(extra)}
-              <span class="media-extra-placeholder"><Icon name={extra.extra_type === 'theme_song' ? 'volume-2' : 'play'} size={24} /></span>
+              <span class="media-extra-placeholder-icon"><Icon name={extra.extra_type === 'theme_song' ? 'music' : 'play'} size={32} /></span>
             {/if}
-            <span class="media-extra-play-icon"><Icon name="play" size={20} /></span>
+            <span class="media-extra-play-icon"><Icon name="play" size={16} /></span>
           </span>
           <span class="media-extra-title">{extra.title ?? extra.extra_type}</span>
           <span class="media-extra-meta">
@@ -47,62 +47,80 @@
 {/if}
 
 <style>
+  /*
+   * Component-owned. Values mirror vanilla style.css:1745-1817.
+   * .extras-row is shared (app.css); everything else here is ItemExtras-only.
+   */
   .item-section .section-heading {
     margin-bottom: 0.6rem;
   }
+
   .media-extra-card {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.55rem;
+    align-items: stretch;
+    width: 244px;
     padding: 0;
+    border-radius: 8px;
     background: transparent;
     box-shadow: none;
     text-align: left;
   }
+
   .media-extra-thumbnail {
     position: relative;
+    display: grid;
+    place-items: center;
     aspect-ratio: 16 / 9;
-    border-radius: 12px;
+    border-radius: 8px;
     overflow: hidden;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(180deg, rgba(93, 123, 255, 0.4), rgba(27, 37, 62, 0.9));
-    background-size: cover;
-    background-position: center;
+    background: linear-gradient(135deg, rgba(57, 78, 123, 0.88), rgba(12, 18, 32, 0.94));
     border: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.85);
+    color: #e7f0ff;
   }
-  .media-extra-placeholder {
-    display: grid;
-    place-items: center;
+
+  .media-extra-placeholder-icon :global(svg) {
+    width: 2rem;
+    height: 2rem;
   }
+
   .media-extra-play-icon {
     position: absolute;
-    inset: 0;
-    display: grid;
+    right: 0.55rem;
+    bottom: 0.55rem;
+    display: inline-grid;
     place-items: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    background: rgba(5, 10, 18, 0.72);
     color: #fff;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-    background: rgba(0, 0, 0, 0.4);
   }
-  .media-extra-card:hover .media-extra-play-icon {
-    opacity: 1;
-  }
+
   .media-extra-title {
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: #f4f7fb;
+    min-height: 2.5rem;
+    overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
-    overflow: hidden;
+    font-weight: 700;
+    line-height: 1.25;
   }
+
   .media-extra-meta {
     display: flex;
-    gap: 0.5rem;
-    font-size: 0.75rem;
-    color: #9ab1d1;
+    justify-content: space-between;
+    gap: 0.65rem;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+
+  .media-extra-meta span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

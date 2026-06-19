@@ -80,7 +80,7 @@
       title="Scroll left"
       onclick={() => scrollBy(-1)}
     >
-      <Icon name="chevron-left" size={20} />
+      <Icon name="chevron-left" size={18} />
     </button>
     <div class="shelf-row" bind:this={scroller} onscroll={onScroll} data-shelf-row={rowCountId}>
       {#each visibleItems as card (card.id)}
@@ -94,7 +94,7 @@
       title="Scroll right"
       onclick={() => scrollBy(1)}
     >
-      <Icon name="chevron-right" size={20} />
+      <Icon name="chevron-right" size={18} />
     </button>
   </div>
 </section>

@@ -9,6 +9,9 @@
   import { catalog, libraries, ui } from '$lib/stores';
 
   let searchInput = $state('');
+  // Debounce timer for live-search-on-type (vanilla eventBindings.ts:572-583
+  // uses 250ms). Stored on the component so each keystroke resets it.
+  let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 
   // Keep the input in sync with the store value (e.g. cleared elsewhere).
   $effect(() => {
@@ -20,15 +23,32 @@
   );
 
   function selectTab(tabId: (typeof HOME_TABS)[number]['id']) {
+    // Matches vanilla eventBindings.ts:610-644: switching tabs clears any
+    // active search and browse filter so the selected tab shows cleanly.
     catalog.homeTab = tabId;
+    catalog.clearSearch();
+    searchInput = '';
   }
 
   async function submitSearch(event: SubmitEvent) {
     event.preventDefault();
+    if (searchDebounce) clearTimeout(searchDebounce);
     await catalog.runSearch(searchInput);
   }
 
+  // Live search as the user types — vanilla binds an input handler with a
+  // 250ms debounce (eventBindings.ts:572-583). Submit still works for IME /
+  // explicit "enter" and runs immediately.
+  function onSearchInput(event: Event) {
+    searchInput = (event.currentTarget as HTMLInputElement).value;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      void catalog.runSearch(searchInput);
+    }, 250);
+  }
+
   async function clearSearch() {
+    if (searchDebounce) clearTimeout(searchDebounce);
     searchInput = '';
     catalog.clearSearch();
   }
@@ -77,12 +97,13 @@
         placeholder="Search"
         autocomplete="off"
         bind:value={searchInput}
+        oninput={onSearchInput}
         aria-label="Search"
       />
       {#if catalog.searchQuery}
         <button
           type="button"
-          class="icon-button secondary-button search-toggle-button"
+          class="icon-button search-toggle-button"
           title="Clear search"
           aria-label="Clear search"
           onclick={clearSearch}
@@ -92,7 +113,7 @@
       {:else}
         <button
           type="submit"
-          class="icon-button secondary-button search-toggle-button"
+          class="icon-button search-toggle-button"
           title="Search"
           aria-label="Search"
         >
@@ -128,6 +149,11 @@
 -->
 
 <style>
+  /*
+   * Component-owned (HomeNavbar-only). Values mirror vanilla style.css
+   * :578-715. .icon-button is shared (app.css). The 960px responsive override
+   * is here because only HomeNavbar renders .home-navbar.
+   */
   .home-navbar {
     position: sticky;
     top: 0;
@@ -135,12 +161,21 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.75rem;
+    width: 100%;
     min-height: 3.75rem;
     padding: 0.45rem 0.9rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(7, 11, 20, 0.96);
     backdrop-filter: blur(18px);
+  }
+
+  .home-navbar-tools {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.45rem;
+    min-width: 0;
   }
 
   .browse-tabs {
@@ -165,12 +200,6 @@
     color: #fff;
   }
 
-  .home-navbar-tools {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
   .search-form {
     display: flex;
     width: min(100%, 360px);
@@ -192,7 +221,7 @@
   .search-toggle-button {
     width: 2.75rem;
     height: 2.75rem;
-    min-width: 2.75rem;
+    min-height: 2.75rem;
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
     box-shadow: none;

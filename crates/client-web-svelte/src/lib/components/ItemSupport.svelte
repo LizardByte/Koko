@@ -56,37 +56,41 @@
 </section>
 
 <style>
+  /*
+   * Component-owned (ItemSupport-only). Values mirror vanilla style.css
+   * :1594-1708. .panel / .page-panel / .detail-card / .hero-meta-row / .tag
+   * are shared (app.css); .hero-meta-row is used across components but the
+   * shared rule lives global, this block adds no override to it.
+   */
   .item-support-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
     gap: 1rem;
+    align-items: start;
   }
+
   .item-info-list {
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .item-info-list > div {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    font-size: 0.85rem;
+    gap: 0.2rem;
   }
-  .item-info-list > div {
-    display: grid;
-    grid-template-columns: 90px 1fr;
-    gap: 0.5rem;
-  }
+
   .mono {
     font-family: 'Cascadia Mono', 'Fira Code', Consolas, monospace;
     font-size: 0.82rem;
     word-break: break-all;
   }
-  .hero-meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-bottom: 0.5rem;
-  }
+
   .attribution {
     font-size: 0.78rem;
     margin-top: 0.4rem;
   }
+
   .attribution a {
     color: #9ab1d1;
   }

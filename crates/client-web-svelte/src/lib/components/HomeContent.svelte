@@ -35,6 +35,7 @@
   onMount(async () => {
     try {
       await Promise.all([catalog.loadHome(libraryId), libraries.load()]);
+      ui.clearError();
     } catch (err) {
       ui.setError(err instanceof Error ? err.message : String(err));
     }
@@ -43,7 +44,10 @@
   // Reload home when the library prop changes.
   $effect(() => {
     libraryId;
-    catalog.loadHome(libraryId).catch((err) => ui.setError(err instanceof Error ? err.message : String(err)));
+    catalog
+      .loadHome(libraryId)
+      .then(() => ui.clearError())
+      .catch((err) => ui.setError(err instanceof Error ? err.message : String(err)));
   });
 
   const shelves = $derived((catalog.home?.shelves ?? []).filter((shelf) => shelf.items.length > 0));

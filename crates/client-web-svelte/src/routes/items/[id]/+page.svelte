@@ -15,11 +15,17 @@
   const itemId = $derived(Number(page.params.id));
 
   // Load on mount + reload when navigating between items without unmounting.
+  // Clear any previous error on success (vanilla clears state.error in every
+  // success branch — app.ts:340 — so navigating away from a failed item
+  // removes the banner). Without this the error persists indefinitely.
   $effect(() => {
     if (Number.isFinite(itemId)) {
-      item.loadItem(itemId).catch((err: unknown) => {
-        ui.setError(err instanceof Error ? err.message : String(err));
-      });
+      item
+        .loadItem(itemId)
+        .then(() => ui.clearError())
+        .catch((err: unknown) => {
+          ui.setError(err instanceof Error ? err.message : String(err));
+        });
     }
   });
 </script>

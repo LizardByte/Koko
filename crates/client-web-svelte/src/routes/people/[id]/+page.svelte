@@ -11,9 +11,12 @@
 
   $effect(() => {
     if (Number.isFinite(personId)) {
-      item.loadPerson(personId).catch((err: unknown) => {
-        ui.setError(err instanceof Error ? err.message : String(err));
-      });
+      item
+        .loadPerson(personId)
+        .then(() => ui.clearError())
+        .catch((err: unknown) => {
+          ui.setError(err instanceof Error ? err.message : String(err));
+        });
     }
   });
 

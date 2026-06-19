@@ -434,4 +434,22 @@ mod tests {
     fn probe_version_returns_none_for_missing_binary() {
         assert!(probe_version(std::path::Path::new("/definitely/does/not/exist/ffmpeg")).is_none());
     }
+
+    /// Smoke test that only runs when invoked with `--features real-ffmpeg-tests`
+    /// AND ffmpeg is actually installed. Skipped in normal CI so the suite stays
+    /// hermetic; locally, a developer with ffmpeg can opt in.
+    #[cfg(feature = "real-ffmpeg-tests")]
+    #[test]
+    fn real_ffmpeg_on_path_is_found() {
+        match resolve_binary("ffmpeg", "ffmpeg") {
+            ResolvedBinary::Found { via, .. } => {
+                println!("resolved ffmpeg via {via:?}");
+            }
+            ResolvedBinary::Missing { checked_paths, .. } => {
+                panic!(
+                    "real-ffmpeg-tests feature is enabled but ffmpeg was not found; checked: {checked_paths:?}"
+                );
+            }
+        }
+    }
 }

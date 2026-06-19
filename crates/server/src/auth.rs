@@ -1,44 +1,17 @@
 //! Authentication utilities for the application.
 
 // lib imports
-use base64::{
-    Engine as _,
-    engine::general_purpose,
-};
-use bcrypt::{
-    DEFAULT_COST,
-    hash,
-    verify,
-};
-use diesel::{
-    QueryDsl,
-    RunQueryDsl,
-};
-use jsonwebtoken::{
-    DecodingKey,
-    EncodingKey,
-    Header,
-    Validation,
-    decode,
-    encode,
-};
+use base64::{Engine as _, engine::general_purpose};
+use bcrypt::{DEFAULT_COST, hash, verify};
+use diesel::{QueryDsl, RunQueryDsl};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rocket::http::Status;
 use rocket::outcome::Outcome;
-use rocket::request::{
-    self,
-    FromRequest,
-    Request,
-};
-use rocket_okapi::request::{
-    OpenApiFromRequest,
-    RequestHeaderInput,
-};
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use rocket::request::{self, FromRequest, Request};
+use rocket_okapi::request::{OpenApiFromRequest, RequestHeaderInput};
+use serde::{Deserialize, Serialize};
 
 // local imports
 use crate::db::DbConn;
@@ -139,11 +112,7 @@ impl<'r, const ROLE: u8> FromRequest<'r> for AuthGuard<ROLE> {
 /// Helper function to create Bearer token security configuration for OpenAPI
 fn create_bearer_auth_security(scopes: Vec<String>) -> rocket_okapi::Result<RequestHeaderInput> {
     use rocket_okapi::okapi::Map;
-    use rocket_okapi::okapi::openapi3::{
-        SecurityRequirement,
-        SecurityScheme,
-        SecuritySchemeData,
-    };
+    use rocket_okapi::okapi::openapi3::{SecurityRequirement, SecurityScheme, SecuritySchemeData};
 
     let security_scheme = SecurityScheme {
         data: SecuritySchemeData::Http {

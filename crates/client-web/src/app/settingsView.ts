@@ -556,7 +556,9 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
             </div>
             <div class="page-actions">
               <button id="detect-ffmpeg" class="secondary-button" type="button">${renderButtonContent('Detect ffmpeg', 'search')}</button>
+              <button id="reprobe-media" class="secondary-button" type="button" hidden>${renderButtonContent('Re-probe media info', 'refresh-cw')}</button>
             </div>
+            <p id="reprobe-status" class="muted" hidden></p>
           </div>
           <div id="ffmpeg-discover-results" hidden></div>
           <div class="form-row">

@@ -4,32 +4,15 @@ use diesel::RunQueryDsl;
 use diesel::connection::SimpleConnection;
 use diesel::sql_types::Text;
 use koko::config::{
-    DatabaseMaintenanceTaskSettings,
-    FfmpegSettings,
-    MediaLibraryKind,
-    MediaLibrarySettings,
-    MetadataProviderId,
-    MetadataProviderSettings,
-    MetadataRefreshTaskSettings,
-    MetadataSettings,
-    ScheduledTaskWeekday,
-    ScheduledTaskWindowSettings,
-    ScheduledTasksSettings,
-    Settings,
-    TrashCleanupTaskSettings,
-    load_database_settings,
-    save_database_settings,
-    seed_database_settings,
-    settings_for_persistence,
-    settings_yaml_for_persistence,
+    DatabaseMaintenanceTaskSettings, FfmpegSettings, MediaLibraryKind, MediaLibrarySettings,
+    MetadataProviderId, MetadataProviderSettings, MetadataRefreshTaskSettings, MetadataSettings,
+    ScheduledTaskWeekday, ScheduledTaskWindowSettings, ScheduledTasksSettings, Settings,
+    TrashCleanupTaskSettings, load_database_settings, save_database_settings,
+    seed_database_settings, settings_for_persistence, settings_yaml_for_persistence,
 };
 use koko::metadata::{
-    StoredMetadataSnapshot,
-    expected_artwork_cache_path,
-    list_provider_statuses,
-    managed_metadata_asset_dir,
-    metadata_asset_uuid,
-    persist_item_metadata_assets,
+    StoredMetadataSnapshot, expected_artwork_cache_path, list_provider_statuses,
+    managed_metadata_asset_dir, metadata_asset_uuid, persist_item_metadata_assets,
 };
 use std::fs;
 

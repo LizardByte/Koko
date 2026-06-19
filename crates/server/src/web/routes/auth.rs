@@ -3,31 +3,15 @@
 // lib imports
 use diesel::QueryDsl;
 use diesel::RunQueryDsl;
-use diesel::{
-    ExpressionMethods,
-    SelectableHelper,
-};
+use diesel::{ExpressionMethods, SelectableHelper};
 use rocket::http::Status;
-use rocket::serde::{
-    Deserialize,
-    Serialize,
-    json::Json,
-};
-use rocket::{
-    get,
-    post,
-};
-use rocket_okapi::{
-    JsonSchema,
-    openapi,
-};
+use rocket::serde::{Deserialize, Serialize, json::Json};
+use rocket::{get, post};
+use rocket_okapi::{JsonSchema, openapi};
 use serde_json::json;
 
 // local imports
-use crate::auth::{
-    AdminGuard,
-    UserGuard,
-};
+use crate::auth::{AdminGuard, UserGuard};
 use crate::db::DbConn;
 use crate::db::models::User;
 

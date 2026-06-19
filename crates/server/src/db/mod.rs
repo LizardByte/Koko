@@ -4,10 +4,7 @@ pub(crate) mod models;
 pub(crate) mod schema;
 
 // standard imports
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -16,30 +13,13 @@ use std::path::Path;
 // lib imports
 use diesel::Connection;
 use diesel::connection::SimpleConnection;
-use diesel::migration::{
-    Migration,
-    MigrationSource,
-    MigrationVersion,
-    Result as MigrationResult,
-};
-use diesel_migrations::{
-    EmbeddedMigrations,
-    MigrationHarness,
-    embed_migrations,
-};
+use diesel::migration::{Migration, MigrationSource, MigrationVersion, Result as MigrationResult};
+use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use rocket::{
-    Build,
-    Rocket,
-    fairing::{
-        Fairing,
-        Info,
-        Kind,
-    },
+    Build, Rocket,
+    fairing::{Fairing, Info, Kind},
 };
-use rocket_sync_db_pools::{
-    database,
-    diesel,
-};
+use rocket_sync_db_pools::{database, diesel};
 
 /// Embedded migrations for the SQLite database.
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");

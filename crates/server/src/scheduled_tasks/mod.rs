@@ -6,11 +6,7 @@ mod metadata_refresh;
 mod trash_cleanup;
 
 // lib imports
-use chrono::{
-    Datelike,
-    Local,
-    Timelike,
-};
+use chrono::{Datelike, Local, Timelike};
 use diesel::ExpressionMethods;
 use diesel::OptionalExtension;
 use diesel::QueryDsl;
@@ -19,17 +15,10 @@ use diesel::SelectableHelper;
 use once_cell::sync::Lazy;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{
-    AtomicBool,
-    Ordering,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // local imports
-use crate::config::{
-    ScheduledTaskWeekday,
-    ScheduledTasksSettings,
-    current_settings,
-};
+use crate::config::{ScheduledTaskWeekday, ScheduledTasksSettings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::AppSetting;
 

@@ -7,12 +7,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 // lib imports
-use config::{
-    Config,
-    ConfigError,
-    Environment,
-    File,
-};
+use config::{Config, ConfigError, Environment, File};
 use diesel::prelude::*;
 use dirs::config_local_dir;
 use once_cell::sync::Lazy;

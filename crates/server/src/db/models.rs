@@ -5,24 +5,10 @@ use diesel::prelude::*;
 
 // local imports
 use crate::db::schema::{
-    app_settings,
-    external_media,
-    item_metadata_external_ids,
-    item_metadata_links,
-    item_metadata_people,
-    media_file_libraries,
-    media_files,
-    media_items,
-    media_libraries,
-    metadata_collection_items,
-    metadata_collections,
-    metadata_extras,
-    metadata_people,
-    metadata_person_credits,
-    metadata_person_external_ids,
-    playback_progress,
-    scan_state,
-    users,
+    app_settings, external_media, item_metadata_external_ids, item_metadata_links,
+    item_metadata_people, media_file_libraries, media_files, media_items, media_libraries,
+    metadata_collection_items, metadata_collections, metadata_extras, metadata_people,
+    metadata_person_credits, metadata_person_external_ids, playback_progress, scan_state, users,
 };
 
 #[derive(Queryable, Selectable, Insertable, AsChangeset, Debug, Clone)]

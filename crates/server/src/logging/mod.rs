@@ -5,10 +5,7 @@ use std::io;
 use std::path::Path;
 
 // lib imports
-use fern::colors::{
-    Color,
-    ColoredLevelConfig,
-};
+use fern::colors::{Color, ColoredLevelConfig};
 use log::LevelFilter;
 use regex::Regex;
 

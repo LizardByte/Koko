@@ -631,23 +631,22 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
     client_profile: getWebClientProfile(),
   });
 
-  // Preflight: if this item needs transcoding but ffmpeg is unavailable on the
-  // server, don't attach a doomed stream — surface the error now instead of a
-  // black screen. This is the deterministic, timer-free detection for issue 2.
-  const ffmpegAvailable = state.capabilities?.transcoding.ffmpeg.available === true;
-  const needsTranscode = state.activePlaybackSession.decision.transcode_required;
-  if (needsTranscode && !ffmpegAvailable) {
-    const capabilityError = state.capabilities?.transcoding.ffmpeg.error;
+  // Server-truth gate: if the source media was never analyzed by ffprobe
+  // (ffprobe was missing during scan), the decision is untrustworthy and the
+  // server returns analysis_state = 'awaiting_analysis'. Refuse to open a
+  // doomed player and surface the error instead. This replaces the old,
+  // buggy client-side capabilities-cache preflight.
+  const decision = state.activePlaybackSession.decision;
+  if (decision.analysis_state === 'awaiting_analysis') {
     state.playbackError = {
-      code: 'transcode_executable_missing',
-      message: capabilityError ?? 'Transcoding is required but FFmpeg is not available on the server.',
+      code: 'media_not_analyzed',
+      message: decision.reason || 'This media has not been analyzed yet. Set the ffprobe path in Settings and re-probe media info.',
       action: 'open_settings',
     };
-    state.error = 'Transcoding requires FFmpeg, which the server could not find. Set its path in Settings.';
+    state.error = state.playbackError.message;
     render();
-    // The player overlay is rendered on top of the page banner, so we must also
-    // toggle the in-player error class directly (the player shell is mounted by
-    // the render() above). Mirrors what setPlayerError() does post-mount.
+    // The player overlay covers the page banner, so toggle the in-player error
+    // class directly (the shell is mounted by the render() above).
     document.querySelector<HTMLElement>('.media-player-shell')?.classList.remove('is-media-loading');
     document.querySelector<HTMLElement>('.media-player-shell')?.classList.add('has-media-error');
     return;

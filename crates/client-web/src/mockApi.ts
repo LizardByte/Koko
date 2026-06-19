@@ -1127,6 +1127,7 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
   if (!item.playable) {
     return {
       item_id: itemId,
+      analysis_state: 'analyzed',
       can_direct_play: false,
       transcode_required: false,
       video_transcode_required: false,
@@ -1140,6 +1141,7 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
   const canDirectPlay = item.container === 'mp4' || item.container === 'mp3' || item.container === 'flac';
   return {
     item_id: itemId,
+    analysis_state: 'analyzed',
     can_direct_play: canDirectPlay,
     transcode_required: !canDirectPlay,
     video_transcode_required: !canDirectPlay && item.media_kind === 'video',

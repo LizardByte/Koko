@@ -246,6 +246,16 @@ pub fn probe_version(path: &std::path::Path) -> Option<String> {
         .filter(|line| !line.is_empty())
 }
 
+/// Public accessor for the platform well-known directory list, for discovery.
+pub fn well_known_dirs_public() -> Vec<PathBuf> {
+    WELL_KNOWN_DIRS.clone()
+}
+
+/// Public accessor for the executability check, for discovery.
+pub fn is_executable_public(path: &std::path::Path) -> bool {
+    is_executable(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -27,7 +27,7 @@ use serde::Serialize;
 use strsim::normalized_levenshtein;
 
 // local imports
-use crate::auth::UserGuard;
+use crate::auth::{AdminGuard, UserGuard};
 use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
@@ -107,7 +107,6 @@ impl<'r> Responder<'r, 'static> for SessionStream {
 
 /// The structured transcode error as exposed to clients (owned strings, so it
 /// serializes cleanly and matches the client `TranscodeErrorBody` type).
-#[allow(dead_code)] // constructed by get_session_status in the next task
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct SessionTranscodeError {
     /// Stable machine code.
@@ -130,12 +129,44 @@ impl From<crate::transcode::TranscodeErrorBody> for SessionTranscodeError {
 
 /// Status of a playback session's transcode, returned to the client so it can
 /// recover a structured error when the `<video>` element stalls.
-#[allow(dead_code)] // constructed by get_session_status in the next task
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct SessionStatusResponse {
     /// A transcode error for this session, if any. `None` while the session is
     /// healthy or (in this phase) when only a successful spawn has occurred.
     pub error: Option<SessionTranscodeError>,
+}
+
+/// Validation result for a single binary (the configured path or a candidate).
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct BinaryProbe {
+    /// The resolved absolute path, if the binary was found.
+    pub resolved_path: Option<String>,
+    /// First line of `ffmpeg -version` / `ffprobe -version`, when available.
+    pub version: Option<String>,
+    /// Why the binary is unavailable, when applicable.
+    pub error: Option<String>,
+}
+
+/// One directory discovered to contain ffmpeg and/or ffprobe.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ToolCandidate {
+    /// The directory path (serialized as a string).
+    pub directory: String,
+    /// ffmpeg probe result; `None` if absent in this directory.
+    pub ffmpeg: Option<BinaryProbe>,
+    /// ffprobe probe result; `None` if absent in this directory.
+    pub ffprobe: Option<BinaryProbe>,
+}
+
+/// Result of the on-demand transcoding-tools discovery call.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ToolDiscoveryResponse {
+    /// Validation of the user's currently-configured ffmpeg path.
+    pub configured_ffmpeg: BinaryProbe,
+    /// Validation of the user's currently-configured ffprobe path.
+    pub configured_ffprobe: BinaryProbe,
+    /// One entry per directory containing at least one of ffmpeg/ffprobe.
+    pub candidates: Vec<ToolCandidate>,
 }
 
 pub struct RangedFile {
@@ -3012,6 +3043,132 @@ pub async fn get_server_capabilities(
         api_versions: vec!["v1".into()],
         transcoding,
     }))
+}
+
+/// Probe a single configured path/name for a binary, returning its resolved
+/// path + version or an error describing where we looked.
+fn probe_configured(
+    configured: &str,
+    binary_name: &str,
+) -> BinaryProbe {
+    use crate::ffmpeg_resolve::{self, ResolvedBinary};
+    match ffmpeg_resolve::resolve_binary(configured, binary_name) {
+        ResolvedBinary::Found { resolved_path, .. } => {
+            let version = ffmpeg_resolve::probe_version(&resolved_path);
+            BinaryProbe {
+                resolved_path: Some(resolved_path.display().to_string()),
+                version,
+                error: None,
+            }
+        }
+        ResolvedBinary::Missing { checked_paths, .. } => {
+            let checked = checked_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            BinaryProbe {
+                resolved_path: None,
+                version: None,
+                error: Some(format!("Not found. Checked: [{checked}]")),
+            }
+        }
+    }
+}
+
+/// Probe a single directory for a binary (for the candidates list).
+fn probe_in_dir(
+    dir: &std::path::Path,
+    binary_name: &str,
+) -> Option<BinaryProbe> {
+    let candidate = dir.join(binary_name);
+    if crate::ffmpeg_resolve::is_executable_public(&candidate) {
+        let version = crate::ffmpeg_resolve::probe_version(&candidate);
+        Some(BinaryProbe {
+            resolved_path: Some(candidate.display().to_string()),
+            version,
+            error: None,
+        })
+    } else {
+        None
+    }
+}
+
+/// Discover ffmpeg/ffprobe candidates and validate the configured paths.
+///
+/// On-demand from the settings page. Searches PATH + well-known locations and
+/// also validates the user's currently-configured paths. Read-only.
+#[openapi(tag = "Media")]
+#[post("/api/v1/system/tools/discover")]
+pub async fn discover_transcoding_tools(
+    _admin_guard: AdminGuard
+) -> Result<Json<ToolDiscoveryResponse>, Status> {
+    let settings = current_settings();
+    let configured_ffmpeg = probe_configured(&settings.ffmpeg.ffmpeg_path, "ffmpeg");
+    let configured_ffprobe = probe_configured(&settings.ffmpeg.ffprobe_path, "ffprobe");
+
+    // Collect candidate directories from PATH + well-known, de-duplicated, in order.
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if let Some(s) = dir.to_str() {
+                if seen.insert(s.to_string()) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    for dir in crate::ffmpeg_resolve::well_known_dirs_public() {
+        if let Some(s) = dir.to_str() {
+            if seen.insert(s.to_string()) {
+                dirs.push(dir);
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        let ffmpeg = probe_in_dir(&dir, "ffmpeg");
+        let ffprobe = probe_in_dir(&dir, "ffprobe");
+        if ffmpeg.is_some() || ffprobe.is_some() {
+            candidates.push(ToolCandidate {
+                directory: dir.display().to_string(),
+                ffmpeg,
+                ffprobe,
+            });
+        }
+    }
+
+    Ok(Json(ToolDiscoveryResponse {
+        configured_ffmpeg,
+        configured_ffprobe,
+        candidates,
+    }))
+}
+
+/// Return the transcode status for a playback session.
+///
+/// Used by the client to recover a structured error when the `<video>` element
+/// stalls. Returns `{ error: null }` for a healthy session.
+#[openapi(tag = "Media")]
+#[get("/api/v1/sessions/<session_id>/status")]
+pub async fn get_session_status(session_id: String) -> Result<Json<SessionStatusResponse>, Status> {
+    let session_known = ACTIVE_PLAYBACK_SESSIONS
+        .read()
+        .await
+        .contains_key(&session_id);
+    let error = ACTIVE_SESSION_ERRORS
+        .read()
+        .await
+        .get(&session_id)
+        .cloned()
+        .map(SessionTranscodeError::from);
+    if !session_known && error.is_none() {
+        return Err(Status::NotFound);
+    }
+    Ok(Json(SessionStatusResponse { error }))
 }
 
 /// Trigger a full catalog scan and return the updated summary for one library.

@@ -1,9 +1,7 @@
 # B6 Proposal — browse-detail (collections / categories / playlists)
 
-Status: **proposal, awaiting decision.** The Svelte port currently has three
-dead `goto('/collections/:id')` callsites (HomeContent collection-card,
-HomeContent search-result collection row, HomeFeature Open button) that 404.
-This document compares options for making them work, then recommends one.
+Status: **decision made — Option A (real SvelteKit routes, no store).** See
+"Decision" at the bottom. The investigation below documents why.
 
 ## How vanilla does it
 
@@ -98,5 +96,74 @@ without navigating), upgrading A → C is additive.
    `goto(browseDetailPath('collection', id))`.
 6. Wire the Categories/Playlists tab cards (currently empty-states) to
    navigate via `browseDetailPath('category'|'playlist', …)`.
+
+---
+
+## Investigation: why does vanilla have the `browseFilter` store field?
+
+**Answer: it doesn't, in practice. The store branch is dead code.**
+
+A full grep of `crates/client-web/src/` for `state.browseFilter` assignments
+shows it is **only ever set to `undefined`** (5 sites: eventBindings.ts:619,
+639, 695 and app.ts:273, 856). It is **never assigned a real value**. So:
+
+- `renderBrowseFilterDetail()` (homeView.ts:113)
+  `state.route.page === 'browse-detail' ? browseFilterForRoute() : state.browseFilter`
+  always takes the `browseFilterForRoute()` branch (route-driven) on a
+  browse-detail route, and always returns the empty-state otherwise (because
+  `state.browseFilter` is always `undefined`).
+- The `state.browseFilter` reads at homeView.ts:797,804,825,917 and
+  selectors.ts:235 are therefore unreachable.
+
+Conclusion: the "hybrid" in Option C is illusory. Vanilla's store field is a
+vestigial fallback (likely from an earlier in-memory-filtering design) that
+was never wired up. **Option A (real routes) is a complete, faithful port —
+there is nothing the store adds.**
+
+## Can a SvelteKit feature replace the manual `browseFilter`?
+
+**Yes — and we need no store state at all.** `browseFilterForRoute()`
+(homeView.ts:69-110) is a **pure derivation** from two inputs:
+
+1. The route (`route.kind` + `route.key`, optionally `libraryId`) — these map
+   directly to SvelteKit's `page.params`, read in a `+page.ts` `load` or
+   `$app/state`'s `page` in the component.
+2. Existing catalog data:
+   - `collectionSummaries()` → in the port this is `catalog.home?.collections`
+     (already in the `catalog` store; vanilla selectors.ts:165-167 is just
+     `state.home?.collections ?? []`).
+   - `categorySummaries()` → **not yet ported** (the Categories tab is a stub).
+     Vanilla derives it from `state.libraryItems` grouped by genre
+     (selectors.ts:135-163). This is the one piece of new selector work.
+
+So the idiomatic SvelteKit implementation is:
+
+- **No `browseFilter` store field.** Delete `BrowseFilter` state entirely from
+  the catalog store plan; it was never going to hold anything.
+- A `BrowseDetail.svelte` component that reads `kind`/`key`/`libraryId` from
+  `page.params` and derives its data from `catalog` (collections are already
+  there; categories via a new `categorySummaries()` selector).
+- Route files: `src/routes/items/[kind]/[key]/+page.svelte` and the
+  library-scoped `src/routes/libraries/[id]/items/[kind]/[key]/+page.svelte`.
+  A `+page.ts` `load` can validate `kind ∈ {collections,categories,playlists}`
+  and 404 otherwise.
+- `browseDetailPath()` helper for the card `goto()` calls.
+
+## Decision
+
+**Option A — real SvelteKit routes, no store.**
+
+Rationale:
+- Vanilla is route-driven in practice (the store is dead code, verified).
+- Route-driven gives bookmarkable URLs, back/forward, deep links — the UX
+  vanilla actually ships.
+- SvelteKit's `page.params` + `load` make the route inputs idiomatic; no
+  manual filter state to keep in sync.
+- Zero new store fields; the only new logic is a `categorySummaries` selector
+  (needed for the Categories tab regardless).
+
+Scheduled for Phase 6. Prerequisite: port `categorySummaries()` (also unblocks
+the Categories home tab, currently a stub).
+
 
 Falls within Phase 6 (cross-cutting). No playback, no settings dependency.

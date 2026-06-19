@@ -1,8 +1,8 @@
 <script module>
-  // ItemHero stories. Reads the `item` store + libraries; each story picks a
+  // SectionHero stories. Reads the `item` store + libraries; each story picks a
   // preset that seeds the item store with a different variant. We forward the
   // store item to the component's `itemValue` prop to mirror the route wiring
-  // (items/[id]/+page.svelte passes item.item to ItemHero).
+  // (items/[id]/+page.svelte passes item.item to SectionHero)
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import SectionHero from './SectionHero.svelte';
   import { item as itemStore } from '$lib/stores';

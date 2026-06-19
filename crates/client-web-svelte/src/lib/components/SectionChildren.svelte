@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ItemChildren — replaces renderSelectedItemChildrenSection()
+  // SectionChildren — replaces renderSelectedItemChildrenSection()
   // (../client-web/src/app/itemPersonView.ts:941-957). Seasons for shows,
   // episodes for seasons, contained items otherwise.
   import MediaCard from './MediaCard.svelte';
@@ -31,7 +31,7 @@
 
 <style>
   /*
-   * Component-owned (ItemChildren-only). The base .item-grid is shared
+   * Component-owned (SectionChildren-only). The base .item-grid is shared
    * (app.css); the season-episodes variant narrows the columns for episode
    * thumbnails. Values mirror vanilla style.css:1601-1616.
    */

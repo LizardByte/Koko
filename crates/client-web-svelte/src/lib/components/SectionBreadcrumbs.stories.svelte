@@ -1,5 +1,5 @@
 <script module lang="ts">
-  // ItemBreadcrumbs stories. Fully props-driven: navigation is injected via
+  // SectionBreadcrumbs stories. Fully props-driven: navigation is injected via
   // `onnavigate` (no $app/navigation dependency in the story). Hierarchy is
   // exercised via the show→season→episode fixture below.
   import { defineMeta } from '@storybook/addon-svelte-csf';

@@ -1,5 +1,5 @@
 <script module>
-  // ItemPeople stories. Reads the `metadata` prop; people come from the first
+  // SectionPeople stories. Reads the `metadata` prop; people come from the first
   // metadata match's `people` array (populated in mockMetadata). The component
   // renders nothing when there are zero people (no empty-state in vanilla),
   // so the "No People" story is intentionally blank — that's the faithful

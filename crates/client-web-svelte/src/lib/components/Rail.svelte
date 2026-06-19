@@ -17,8 +17,11 @@
 
   const mock = $derived(isMockApi());
 
-  // Which nav target is active — derived from the current path.
-  const onHome = $derived(page.url.pathname === '/' || page.url.pathname.startsWith('/libraries'));
+  // Which nav target is active — derived from the current path. Home is
+  // active only on the all-libraries home ('/'); a specific library's page
+  // lights up that library's button instead (vanilla app.ts:396 likewise
+  // gates Home on activeLibraryId() being undefined).
+  const onHome = $derived(page.url.pathname === '/');
   const onSettings = $derived(page.url.pathname.startsWith('/settings'));
   const activeLibraryId = $derived(
     page.url.pathname.startsWith('/libraries/') ? Number(page.url.pathname.split('/')[2]) : undefined,

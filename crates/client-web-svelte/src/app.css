@@ -899,7 +899,14 @@ legend {
 
 .media-card:hover:not(:disabled) .media-card-art {
   transform: translateY(-2px);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.42);
+  /*
+   * Colored brand lift shadow. box-shadow follows the poster's own 18px
+   * border-radius so the shadow reads as the poster tile rising. (A
+   * flat-bottomed "card" shadow would require distorting the poster's own
+   * corners or a wrapper element; not worth the complexity — the rounded
+   * shadow is the poster's natural silhouette.)
+   */
+  box-shadow: 0 16px 32px rgba(93, 123, 255, 0.42);
 }
 
 .media-card:focus-visible {

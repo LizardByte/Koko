@@ -16,6 +16,7 @@
 
 - **Formatting:** always `cargo +nightly fmt` (per `AGENTS.md`). Run after every code change.
 - **Testing:** pure logic → inline `#[cfg(test)] mod tests` (pattern: `crates/server/src/media.rs`); HTTP routes → integration tests in `crates/server/tests/test_web/routes/` using `create_test_client` + `make_request` (pattern: `tests/test_web/routes/settings.rs`). The project uses `#[rocket::async_test]` for async integration tests and `#[test]` for inline.
+- **Package name:** the server crate is `koko` (not `koko-server`). Use `cargo test -p koko ...` and `cargo build -p koko`. The test binary is `main` (`cargo test -p koko --test main ...`).
 - **Route style:** `#[openapi(tag = "Media")]` + snake_case fn, registered in `crates/server/src/web/routes/mod.rs` `api_routes()` via `openapi_get_routes!`. Admin routes take `_admin_guard: AdminGuard` (`crates/server/src/auth.rs:90`).
 - **Type style:** response types derive `(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)` with a doc comment per field (pattern: `BinaryCapability` at `media.rs:115`).
 - **Commits:** one logical change per commit, frequent. This plan uses `feat:`/`test:`/`refactor:` prefixes.
@@ -256,7 +257,7 @@ mod tests {
 
 - [ ] **Step 4: Run the tests to verify they fail (compile error)**
 
-Run: `cargo test -p koko-server --lib ffmpeg_resolve 2>&1 | head -30`
+Run: `cargo test -p koko --lib ffmpeg_resolve 2>&1 | head -30`
 Expected: FAIL — the tests reference `resolve_binary`, which is not yet defined. (The `#[cfg(unix)]` shims also need `tempfile`, added in Step 1.)
 
 - [ ] **Step 5: Write the minimal implementation**
@@ -404,7 +405,7 @@ mod tests {
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `cargo test -p koko-server --lib ffmpeg_resolve 2>&1 | tail -20`
+Run: `cargo test -p koko --lib ffmpeg_resolve 2>&1 | tail -20`
 Expected: PASS — all `ffmpeg_resolve::tests::*` pass. On Windows the two `#[cfg(unix)]` tests are skipped.
 
 - [ ] **Step 7: Format and commit**
@@ -451,7 +452,7 @@ In `ffmpeg_resolve.rs` test module, add (Unix-only, uses a shim that prints a ve
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p koko-server --lib ffmpeg_resolve::tests::probe_version 2>&1 | tail -10`
+Run: `cargo test -p koko --lib ffmpeg_resolve::tests::probe_version 2>&1 | tail -10`
 Expected: FAIL — `probe_version` undefined.
 
 - [ ] **Step 3: Implement `probe_version`**
@@ -477,7 +478,7 @@ pub fn probe_version(path: &std::path::Path) -> Option<String> {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p koko-server --lib ffmpeg_resolve::tests::probe_version 2>&1 | tail -10`
+Run: `cargo test -p koko --lib ffmpeg_resolve::tests::probe_version 2>&1 | tail -10`
 Expected: PASS.
 
 - [ ] **Step 5: Refactor `detect_binary` to delegate to the resolver**
@@ -549,7 +550,7 @@ Search for other `detect_binary(` call sites and fix them similarly: `grep -n "d
 
 - [ ] **Step 6: Build and run the existing media tests**
 
-Run: `cargo test -p koko-server --lib 2>&1 | tail -20`
+Run: `cargo test -p koko --lib 2>&1 | tail -20`
 Expected: PASS — existing `media::tests` still pass (they don't touch `detect_binary`, but the build must succeed).
 
 - [ ] **Step 7: Format and commit**
@@ -613,7 +614,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p koko-server --lib transcode::tests 2>&1 | tail -15`
+Run: `cargo test -p koko --lib transcode::tests 2>&1 | tail -15`
 Expected: FAIL — `SpawnTranscodeError`, `TranscodeErrorBody`, `map_transcode_error` undefined.
 
 - [ ] **Step 3: Add the types and mapper**
@@ -702,7 +703,7 @@ pub fn map_transcode_error(error: SpawnTranscodeError) -> (Status, TranscodeErro
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p koko-server --lib transcode::tests 2>&1 | tail -15`
+Run: `cargo test -p koko --lib transcode::tests 2>&1 | tail -15`
 Expected: PASS — all three mapper tests pass.
 
 - [ ] **Step 5: Format and commit**
@@ -767,7 +768,7 @@ Apply the equivalent change to `spawn_transcode` (`:184`) — same resolver bloc
 
 - [ ] **Step 2: Build to verify the signatures compile**
 
-Run: `cargo build -p koko-server 2>&1 | tail -20`
+Run: `cargo build -p koko 2>&1 | tail -20`
 Expected: the build fails at the call site in `media.rs` (`get_session_stream` still expects `std::io::Error`). That's the next task. Note: this task intentionally leaves the build red at the route; Task 5 fixes it. Do NOT commit yet.
 
 ---
@@ -866,7 +867,7 @@ If `body.clone()` complains (TranscodeErrorBody must be `Clone`): ensure `#[deri
 
 - [ ] **Step 3: Build to confirm the whole server compiles**
 
-Run: `cargo build -p koko-server 2>&1 | tail -20`
+Run: `cargo build -p koko 2>&1 | tail -20`
 Expected: PASS (green again after Task 4's intentional red).
 
 - [ ] **Step 4: Format and commit (Tasks 4 + 5 together)**
@@ -1089,7 +1090,7 @@ In `crates/server/src/web/routes/mod.rs`, add to `api_routes()` (the `openapi_ge
 
 - [ ] **Step 5: Build to confirm compilation**
 
-Run: `cargo build -p koko-server 2>&1 | tail -20`
+Run: `cargo build -p koko 2>&1 | tail -20`
 Expected: PASS. Fix any `AdminGuard`/`current_settings` import errors (the file already imports `crate::auth::AdminGuard`? If not, add `use crate::auth::AdminGuard;` near `use crate::auth::UserGuard;` at `media.rs:51`).
 
 - [ ] **Step 6: Format and commit**
@@ -1168,7 +1169,7 @@ async fn test_session_status_unknown_session_is_404() {
 
 - [ ] **Step 3: Run the new tests**
 
-Run: `cargo test -p koko-server --test main test_web::routes::tools 2>&1 | tail -20`
+Run: `cargo test -p koko --test main test_web::routes::tools 2>&1 | tail -20`
 Expected: PASS. (The discover test asserts auth rejection, which holds regardless of whether ffmpeg is installed — hermetic. The status test asserts 404 for an unknown session.)
 
 - [ ] **Step 4: Format and commit**
@@ -1254,7 +1255,7 @@ In `crates/server/src/transcode.rs` test module (created in Task 3), add:
 
 - [ ] **Step 2: Run the tests**
 
-Run: `cargo test -p koko-server --lib transcode::tests 2>&1 | tail -20`
+Run: `cargo test -p koko --lib transcode::tests 2>&1 | tail -20`
 Expected: PASS — all four arg-generation tests pass, confirming the path-quoting-is-fine invariant (spec §1.1).
 
 - [ ] **Step 3: Format and commit**
@@ -1309,10 +1310,10 @@ In `ffmpeg_resolve.rs` test module, add:
 
 - [ ] **Step 3: Verify default (flag OFF) and opt-in (flag ON) behavior**
 
-Run (default, must not run the gated test): `cargo test -p koko-server --lib ffmpeg_resolve 2>&1 | grep real_ffmpeg`
+Run (default, must not run the gated test): `cargo test -p koko --lib ffmpeg_resolve 2>&1 | grep real_ffmpeg`
 Expected: no output (test excluded).
 
-Run (opt-in, requires local ffmpeg): `cargo test -p koko-server --lib ffmpeg_resolve --features real-ffmpeg-tests real_ffmpeg 2>&1 | tail -10`
+Run (opt-in, requires local ffmpeg): `cargo test -p koko --lib ffmpeg_resolve --features real-ffmpeg-tests real_ffmpeg 2>&1 | tail -10`
 Expected: PASS if ffmpeg is installed locally; otherwise a clear panic listing checked paths. (Locally the developer decides.)
 
 - [ ] **Step 4: Format and commit**
@@ -1740,7 +1741,7 @@ git commit -m "feat(client): Detect ffmpeg button with directory-paired radio pi
 
 - [ ] **Step 1: Full server test suite**
 
-Run: `cargo test -p koko-server 2>&1 | tail -30`
+Run: `cargo test -p koko 2>&1 | tail -30`
 Expected: PASS — all existing tests plus the new `ffmpeg_resolve`, `transcode::tests`, and `tools` integration tests. (Existing tests must not regress; the `detect_binary` signature change is the main risk — verify all call sites were updated in Task 2 Step 5.)
 
 - [ ] **Step 2: Full client type-check/build**
@@ -1750,7 +1751,7 @@ Expected: PASS.
 
 - [ ] **Step 3: Clippy (if the project uses it)**
 
-Run: `cargo clippy -p koko-server --all-targets 2>&1 | tail -30`
+Run: `cargo clippy -p koko --all-targets 2>&1 | tail -30`
 Expected: no new warnings from the added code. Fix any the plan's code introduced (common: unused imports, needless `clone`).
 
 - [ ] **Step 4: Format the whole tree**

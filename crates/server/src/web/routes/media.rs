@@ -145,6 +145,9 @@ pub struct BinaryProbe {
     pub version: Option<String>,
     /// Why the binary is unavailable, when applicable.
     pub error: Option<String>,
+    /// Transcoding-relevant encoders this ffmpeg supports (only for ffmpeg;
+    /// `None` for ffprobe or when not probed). Empty if probed but none matched.
+    pub encoders: Option<Vec<String>>,
 }
 
 /// One directory discovered to contain ffmpeg and/or ffprobe.
@@ -3059,6 +3062,12 @@ fn probe_configured(
                 resolved_path: Some(resolved_path.display().to_string()),
                 version,
                 error: None,
+                // Only ffmpeg exposes encoders; ffprobe has no encoders.
+                encoders: if binary_name == "ffmpeg" {
+                    Some(crate::ffmpeg_resolve::probe_encoders(&resolved_path))
+                } else {
+                    None
+                },
             }
         }
         ResolvedBinary::Missing { checked_paths, .. } => {
@@ -3071,6 +3080,7 @@ fn probe_configured(
                 resolved_path: None,
                 version: None,
                 error: Some(format!("Not found. Checked: [{checked}]")),
+                encoders: None,
             }
         }
     }
@@ -3088,6 +3098,11 @@ fn probe_in_dir(
             resolved_path: Some(candidate.display().to_string()),
             version,
             error: None,
+            encoders: if binary_name == "ffmpeg" {
+                Some(crate::ffmpeg_resolve::probe_encoders(&candidate))
+            } else {
+                None
+            },
         })
     } else {
         None

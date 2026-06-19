@@ -615,6 +615,8 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
   state.isPlayerOpen = true;
   state.activeAudioStreamIndex = undefined;
   state.isAudioTrackMenuOpen = false;
+  // Clear any stale playback error from a previous attempt.
+  state.playbackError = undefined;
   render();
 
   if (previousSession) {
@@ -627,6 +629,24 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
     item_id: item.id,
     client_profile: getWebClientProfile(),
   });
+
+  // Preflight: if this item needs transcoding but ffmpeg is unavailable on the
+  // server, don't attach a doomed stream — surface the error now instead of a
+  // black screen. This is the deterministic, timer-free detection for issue 2.
+  const ffmpegAvailable = state.capabilities?.transcoding.ffmpeg.available === true;
+  const needsTranscode = state.activePlaybackSession.decision.transcode_required;
+  if (needsTranscode && !ffmpegAvailable) {
+    const capabilityError = state.capabilities?.transcoding.ffmpeg.error;
+    state.playbackError = {
+      code: 'transcode_executable_missing',
+      message: capabilityError ?? 'Transcoding is required but FFmpeg is not available on the server.',
+      action: 'open_settings',
+    };
+    state.error = 'Transcoding requires FFmpeg, which the server could not find. Set its path in Settings.';
+    render();
+    return;
+  }
+
   render();
 }
 

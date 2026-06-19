@@ -54,11 +54,30 @@
     item.missing_since ? `Missing from disk since ${formatTimestamp(item.missing_since)}` : 'Missing from disk',
   );
 
-  // Metadata badges (pending / unmatched). Mirrors metadataBadgeMarkup.
+  // Metadata badges (pending / unmatched). Mirrors metadataBadgeMarkup
+  // (homeView.ts:297-314): a single status span whose classes depend on state.
   const isUnmatched = $derived(item.has_metadata === false);
   const isMetadataLoading = $derived(item.metadata_refresh_state === 'pending');
   const hasMetadataBadges = $derived(isUnmatched || isMetadataLoading);
   const hasMultipleMetaBadges = $derived(isUnmatched && isMetadataLoading);
+  // Title/aria + class string mirror vanilla's conditional string build.
+  const metadataStatusLabel = $derived(
+    isMetadataLoading
+      ? isUnmatched
+        ? 'Matching metadata'
+        : 'Refreshing metadata'
+      : 'Metadata is not linked yet',
+  );
+  const metadataStatusClass = $derived(
+    [
+      'media-card-status',
+      isUnmatched ? 'is-unmatched' : '',
+      isMetadataLoading ? 'is-loading' : '',
+      hasMultipleMetaBadges ? 'has-multiple' : 'icon-only',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
 
   // Playback badges: progress donut + watched checkmark.
   const progressPercent = $derived(playbackProgressPercent(item));
@@ -107,23 +126,17 @@
       <span class="media-card-dynamic-badges">
         {#if hasMetadataBadges}
           <span class="media-card-state-badges">
-            {#if hasMultipleMetaBadges}
-              <span class="media-card-status is-unmatched is-loading has-multiple" title="Matching metadata" aria-label="Matching metadata">
-                <span class="status-warning-icon status-icon"><Icon name="triangle-alert" /></span>
-              </span>
-            {:else if isUnmatched}
-              <span class="media-card-status is-unmatched icon-only" title="Metadata is not linked yet" aria-label="Metadata is not linked yet">
-                <span class="status-warning-icon status-icon"><Icon name="triangle-alert" /></span>
-                <span>Unmatched</span>
-              </span>
-            {:else if isMetadataLoading}
-              <span class="media-card-status is-loading icon-only" title="Refreshing metadata" aria-label="Refreshing metadata">
+            <span class={metadataStatusClass} title={metadataStatusLabel} aria-label={metadataStatusLabel}>
+              {#if isUnmatched}
+                <span class="status-warning-icon"><span class="status-icon"><Icon name="triangle-alert" /></span></span>
+              {/if}
+              {#if isMetadataLoading}
                 <!-- Vanilla adds is-spinner-visible via a global IntersectionObserver
                      (spinners.ts); the Svelte port doesn't replicate that observer yet,
                      so we add the class directly so the spinner animates. -->
                 <span class="loading-spinner is-spinner-visible"></span>
-              </span>
-            {/if}
+              {/if}
+            </span>
           </span>
         {/if}
         {#if hasPlaybackBadges}

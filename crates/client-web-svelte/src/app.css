@@ -899,6 +899,9 @@ legend {
   background-repeat: no-repeat;
   background-size: cover;
   border: 1px solid rgba(255, 255, 255, 0.08);
+  /* Vanilla omits overflow:hidden (it has no absolutely-positioned children).
+     The mock-mode gradient fallback is one, so clip to the rounded corners. */
+  overflow: hidden;
 }
 
 .media-card-art.episode {

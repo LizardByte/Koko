@@ -154,6 +154,10 @@
    * (.media-card, .media-card-art, .media-card-kind-row, .media-card-status *,
    * .media-card-progress, .status-icon, .card-icon, etc.) lives in app.css,
    * mirroring vanilla style.css:927-1141 — see PORTING_GUIDELINES.md.
+   *
+   * Clipping: the parent .media-card-art has overflow:hidden (a documented
+   * Svelte-port delta — vanilla omits it) so this absolute fallback can't
+   * bleed past the rounded corners.
    */
   .media-card-art-fallback {
     position: absolute;

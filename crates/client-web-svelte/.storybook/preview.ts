@@ -1,6 +1,6 @@
 import type { Preview } from '@storybook/sveltekit';
 import '../src/app.css'; // design tokens + shared rules — components depend on these
-import WithStores from './decorators/WithStores.svelte';
+import { withStores } from './decorators/withStores';
 
 const preview: Preview = {
   parameters: {
@@ -24,8 +24,8 @@ const preview: Preview = {
     },
   },
   // Seed stores + mock $app/state around every story. Stories select a fixture
-  // preset via args.preset (default 'empty'); see decorators/WithStores.svelte.
-  decorators: [WithStores],
+  // preset via args.preset (default 'empty'); see decorators/withStores.ts.
+  decorators: [withStores],
 };
 
 export default preview;

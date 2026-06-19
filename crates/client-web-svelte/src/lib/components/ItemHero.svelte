@@ -38,7 +38,7 @@
   // BadgeMarkup (homeView.ts:330-382): watch count + label, progress %, and
   // the missing-since timestamp for the warning tag.
   const watchCount = $derived(itemValue.watch_count ?? 0);
-  const watchedLabel = $derived(watchCount <= 1 ? 'Watched' : `Watched ${watchCount}x`);
+  const watchedLabel = $derived(watchCount === 1 ? 'Watched' : `Watched ${watchCount}x`);
   const watchedTitle = $derived(
     itemValue.last_watched_at
       ? `Last watched ${formatTimestamp(itemValue.last_watched_at)}`

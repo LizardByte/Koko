@@ -56,9 +56,12 @@
 
   // Metadata badges (pending / unmatched). Mirrors metadataBadgeMarkup
   // (homeView.ts:297-314): a single status span whose classes depend on state.
-  // Vanilla uses the falsy `!item.has_metadata` (so undefined → unmatched);
-  // `=== false` would miss items where the field is absent (e.g. mock tracks).
-  const isUnmatched = $derived(!item.has_metadata);
+  // Vanilla uses the falsy `!item.has_metadata` (so undefined → unmatched).
+  // We use the stricter `!== true` — behaviorally identical for the valid
+  // domain (boolean | undefined) but won't misread a hypothetical 0/''/null
+  // as matched. has_metadata?: boolean is optional, so absent means the item
+  // hasn't been linked yet.
+  const isUnmatched = $derived(item.has_metadata !== true);
   const isMetadataLoading = $derived(item.metadata_refresh_state === 'pending');
   const hasMetadataBadges = $derived(isUnmatched || isMetadataLoading);
   const hasMultipleMetaBadges = $derived(isUnmatched && isMetadataLoading);
@@ -81,9 +84,14 @@
       .join(' '),
   );
 
-  // Playback badges: progress donut + watched checkmark.
+  // Playback badges: progress donut + watched checkmark. Mirrors
+  // playbackStatusBadgeMarkup (homeView.ts:344-365) — the card watched badge
+  // keys off watch_count > 0 (NOT playback_completed), and the title carries
+  // the count ("Watched" / "Watched N times").
   const progressPercent = $derived(playbackProgressPercent(item));
-  const isWatched = $derived(item.playback_completed === true);
+  const watchCount = $derived(item.watch_count ?? 0);
+  const isWatched = $derived(watchCount > 0);
+  const watchedLabel = $derived(watchCount === 1 ? 'Watched' : `Watched ${watchCount} times`);
   const hasPlaybackBadges = $derived(progressPercent !== undefined || isWatched);
 
   // In mock mode, artwork URLs are placeholders; render a gradient fallback
@@ -147,7 +155,7 @@
               <span class="media-card-progress" style="--watch-progress: {progressPercent}%"></span>
             {/if}
             {#if isWatched}
-              <span class="media-card-status is-watched icon-only" title="Watched" aria-label="Watched">
+              <span class="media-card-status is-watched icon-only" title={watchedLabel} aria-label={watchedLabel}>
                 <span class="status-icon"><Icon name="circle-check" /></span>
               </span>
             {/if}

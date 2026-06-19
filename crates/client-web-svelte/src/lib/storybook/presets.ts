@@ -67,7 +67,19 @@ export function applyPreset(preset: Preset): void {
       const home = mockHome();
       libraries.libraries = mockLibraries();
       catalog.home = home;
-      catalog.libraryItems = home.shelves.flatMap((s) => s.items);
+      // libraryItems is a unique-id list in the real app (one row per item
+      // from /libraries/:id/items). Home shelves can legitimately reference the
+      // same item across rows (e.g. a show in both 'recently_added' and
+      // 'recommended'), so dedupe by id when flattening to avoid duplicate
+      // each-block keys in BrowseDetail/category grids.
+      const seen = new Set<number>();
+      catalog.libraryItems = home.shelves
+        .flatMap((s) => s.items)
+        .filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
       auth.bootstrap = loggedInBootstrap;
       return;
     }

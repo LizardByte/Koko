@@ -23,10 +23,10 @@
   const metadata = mockMetadata();
 </script>
 
-<Story name="Linked" args={{ preset: 'home' }}>
+<Story name="Linked" args={{ preset: 'home' }} asChild>
   <ItemSupport {item} {metadata} />
 </Story>
 
-<Story name="Unlinked" args={{ preset: 'home' }}>
+<Story name="Unlinked" args={{ preset: 'home' }} asChild>
   <ItemSupport {item} metadata={undefined} />
 </Story>

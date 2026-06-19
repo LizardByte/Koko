@@ -24,14 +24,14 @@
   const many = Array.from({ length: 14 }, (_, i) => movieSummary({ id: 101 + i, display_title: `Mock Movie ${i + 1}` }));
 </script>
 
-<Story name="Many Items" args={{ preset: 'home', title: 'Recently added', id: 'recently_added', rowCountId: 'recently_added' }}>
+<Story name="Many Items" args={{ preset: 'home', title: 'Recently added', id: 'recently_added', rowCountId: 'recently_added' }} asChild>
   <Shelf title="Recently added" items={many} id="recently_added" rowCountId="recently_added" />
 </Story>
 
-<Story name="Few Items" args={{ preset: 'home', title: 'Continue watching', id: 'continue_watching', rowCountId: 'continue_watching' }}>
+<Story name="Few Items" args={{ preset: 'home', title: 'Continue watching', id: 'continue_watching', rowCountId: 'continue_watching' }} asChild>
   <Shelf title="Continue watching" items={few} id="continue_watching" rowCountId="continue_watching" />
 </Story>
 
-<Story name="Empty" args={{ preset: 'home', title: 'Recommended', id: 'recommended', rowCountId: 'recommended' }}>
+<Story name="Empty" args={{ preset: 'home', title: 'Recommended', id: 'recommended', rowCountId: 'recommended' }} asChild>
   <Shelf title="Recommended" items={[]} id="recommended" rowCountId="recommended" />
 </Story>

@@ -36,10 +36,10 @@
   };
 </script>
 
-<Story name="Episode In Show" args={{ preset: 'empty' }}>
+<Story name="Episode In Show" args={{ preset: 'empty' }} asChild>
   <ItemBreadcrumbs item={episodeInHierarchy} />
 </Story>
 
-<Story name="No Hierarchy" args={{ preset: 'empty' }}>
+<Story name="No Hierarchy" args={{ preset: 'empty' }} asChild>
   <ItemBreadcrumbs item={movieDetail()} />
 </Story>

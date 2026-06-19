@@ -251,7 +251,10 @@ export function mockHome(): MediaHome {
       {
         id: 'continue_watching',
         title: 'Continue watching',
-        items: [{ ...movie, playback_position_ms: 1_260_000, playback_completed: false }],
+        // Distinct id + title so this in-progress movie doesn't collide with
+        // the canonical movie (id 101) in 'recently_added' when shelves are
+        // flattened into libraryItems for BrowseDetail resolution.
+        items: [{ ...movie, id: 401, display_title: 'Mock Movie (continued)', playback_position_ms: 1_260_000, playback_completed: false }],
       },
       {
         id: 'recently_added',

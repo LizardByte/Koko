@@ -21,14 +21,14 @@
   });
 </script>
 
-<Story name="Home Active" args={{ preset: 'home', route: '/' }}>
+<Story name="Home Active" args={{ preset: 'home', route: '/' }} asChild>
   <Rail />
 </Story>
 
-<Story name="Library Active" args={{ preset: 'home', route: '/libraries/2' }}>
+<Story name="Library Active" args={{ preset: 'home', route: '/libraries/2' }} asChild>
   <Rail />
 </Story>
 
-<Story name="Collapsed" args={{ preset: 'home', route: '/items/101' }}>
+<Story name="Collapsed" args={{ preset: 'home', route: '/items/101' }} asChild>
   <Rail collapsed={true} />
 </Story>

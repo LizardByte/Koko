@@ -129,9 +129,17 @@
           class:is-active={activeGroupId === group.root.id}
           data-person-credit-card
           data-person-credit-id={group.root.id}
+          role="button"
           tabindex="0"
+          aria-label="Show seasons for {group.root.display_title}"
           onmouseover={() => activateGroup(group.root.id)}
           onfocus={() => activateGroup(group.root.id)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              activateGroup(group.root.id);
+            }
+          }}
         >
           <MediaCard item={group.root} />
         </article>
@@ -158,9 +166,17 @@
                   class:is-active={activeSeasonId === seasonGroup.season.id}
                   data-person-season-credit-card
                   data-person-season-credit-id={seasonGroup.season.id}
+                  role="button"
                   tabindex="0"
+                  aria-label="Show episodes for {seasonGroup.season.display_title}"
                   onmouseover={() => activateSeason(seasonGroup.season.id)}
                   onfocus={() => activateSeason(seasonGroup.season.id)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      activateSeason(seasonGroup.season.id);
+                    }
+                  }}
                 >
                   <MediaCard item={seasonGroup.season} />
                 </article>

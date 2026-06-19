@@ -22,15 +22,15 @@
   });
 </script>
 
-<Story name="Login" args={{ preset: 'requires-login' }}>
+<Story name="Login" args={{ preset: 'requires-login' }} asChild>
   <LoginScreen />
 </Story>
 
-<Story name="Welcome (First User)" args={{ preset: 'requires-setup' }}>
+<Story name="Welcome (First User)" args={{ preset: 'requires-setup' }} asChild>
   <WelcomeScreen />
 </Story>
 
-<Story name="Auth Shell" args={{ preset: 'empty' }}>
+<Story name="Auth Shell" args={{ preset: 'empty' }} asChild>
   <AuthShell title="Loading Koko" description="Checking server state and account access.">
     <p class="muted">Shell content goes here.</p>
   </AuthShell>

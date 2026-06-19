@@ -23,18 +23,18 @@
   });
 </script>
 
-<Story name="Movie" args={{ preset: 'item-movie' }}>
+<Story name="Movie" args={{ preset: 'item-movie' }} asChild>
   {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
 </Story>
 
-<Story name="Show" args={{ preset: 'item-show' }}>
+<Story name="Show" args={{ preset: 'item-show' }} asChild>
   {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
 </Story>
 
-<Story name="Missing" args={{ preset: 'item-missing' }}>
+<Story name="Missing" args={{ preset: 'item-missing' }} asChild>
   {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
 </Story>
 
-<Story name="Watched" args={{ preset: 'item-watched' }}>
+<Story name="Watched" args={{ preset: 'item-watched' }} asChild>
   {#if itemStore.item}<ItemHero itemValue={itemStore.item} />{/if}
 </Story>

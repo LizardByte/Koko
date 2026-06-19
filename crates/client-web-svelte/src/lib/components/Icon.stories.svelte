@@ -23,7 +23,7 @@
   const names = Object.keys(ICONS).sort();
 </script>
 
-<Story name="Gallery" args={{ preset: 'empty' }}>
+<Story name="Gallery" args={{ preset: 'empty' }} asChild>
   <div class="icon-grid">
     {#each names as name (name)}
       <figure>
@@ -34,7 +34,7 @@
   </div>
 </Story>
 
-<Story name="Single" args={{ preset: 'empty' }}>
+<Story name="Single" args={{ preset: 'empty' }} asChild>
   <div class="single-frame">
     <Icon name="house" size={48} />
   </div>

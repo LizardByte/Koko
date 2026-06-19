@@ -22,10 +22,10 @@
   const extras = mockExtras();
 </script>
 
-<Story name="Populated" args={{ preset: 'empty' }}>
+<Story name="Populated" args={{ preset: 'empty' }} asChild>
   <ItemExtras {extras} />
 </Story>
 
-<Story name="Empty" args={{ preset: 'empty' }}>
+<Story name="Empty" args={{ preset: 'empty' }} asChild>
   <ItemExtras extras={[]} />
 </Story>

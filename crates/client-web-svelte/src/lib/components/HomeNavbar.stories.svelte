@@ -22,10 +22,10 @@
   });
 </script>
 
-<Story name="All Libraries" args={{ preset: 'home', route: '/' }}>
+<Story name="All Libraries" args={{ preset: 'home', route: '/' }} asChild>
   <HomeNavbar />
 </Story>
 
-<Story name="Active Library" args={{ preset: 'home', route: '/libraries/2' }}>
+<Story name="Active Library" args={{ preset: 'home', route: '/libraries/2' }} asChild>
   <HomeNavbar />
 </Story>

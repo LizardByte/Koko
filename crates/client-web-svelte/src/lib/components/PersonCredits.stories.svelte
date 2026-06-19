@@ -21,6 +21,6 @@
   });
 </script>
 
-<Story name="Empty" args={{ preset: 'empty' }}>
+<Story name="Empty" args={{ preset: 'empty' }} asChild>
   <PersonCredits credits={[]} />
 </Story>

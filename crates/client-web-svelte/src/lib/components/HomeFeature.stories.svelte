@@ -34,10 +34,10 @@
   };
 </script>
 
-<Story name="Item" args={{ preset: 'home' }}>
+<Story name="Item" args={{ preset: 'home' }} asChild>
   <HomeFeature item={movieSummary()} />
 </Story>
 
-<Story name="Collection" args={{ preset: 'home' }}>
+<Story name="Collection" args={{ preset: 'home' }} asChild>
   <HomeFeature collection={collection} />
 </Story>

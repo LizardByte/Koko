@@ -43,7 +43,7 @@ import {
   selectedItemDefaultMetadataYear,
   selectedItemExtras,
 } from './itemPersonView';
-import { buildSettingsFromForm } from './settingsView';
+import { buildSettingsFromForm, renderDiscoverResults } from './settingsView';
 import { setButtonBusy } from './ui';
 import {
   addLibrary,
@@ -52,6 +52,7 @@ import {
   createUser,
   deleteLibrary,
   deleteMissingItems,
+  discoverTranscodingTools,
   getItemMetadata,
   getLogs,
   getUsers,
@@ -531,6 +532,38 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     button.addEventListener('click', () => {
       navigateTo('/settings');
     });
+  });
+
+  document.querySelector<HTMLButtonElement>('#detect-ffmpeg')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const resultsContainer = document.querySelector<HTMLElement>('#ffmpeg-discover-results');
+    const ffmpegInput = document.querySelector<HTMLInputElement>('input[name="ffmpeg_path"]');
+    const ffprobeInput = document.querySelector<HTMLInputElement>('input[name="ffprobe_path"]');
+    if (!resultsContainer || !ffmpegInput || !ffprobeInput) {
+      return;
+    }
+    setButtonBusy(button, true);
+    try {
+      const discovery = await discoverTranscodingTools();
+      resultsContainer.innerHTML = renderDiscoverResults(discovery);
+      resultsContainer.hidden = false;
+      resultsContainer.querySelectorAll<HTMLInputElement>('input[name="ffmpeg-discover-choice"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          if (radio.value === 'manual' || radio.value === 'current') {
+            return; // leave the text inputs as-is
+          }
+          // A directory: set both inputs to <dir>/ffmpeg and <dir>/ffprobe.
+          const dir = radio.value;
+          ffmpegInput.value = `${dir}/ffmpeg`;
+          ffprobeInput.value = `${dir}/ffprobe`;
+        });
+      });
+    } catch (error) {
+      resultsContainer.hidden = false;
+      resultsContainer.innerHTML = `<p class="muted">Detection failed: ${escapeHtml(error instanceof Error ? error.message : 'unknown error')}</p>`;
+    } finally {
+      setButtonBusy(button, false);
+    }
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {

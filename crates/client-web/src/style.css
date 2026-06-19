@@ -668,6 +668,27 @@ legend {
   color: #ffd7d7;
 }
 
+.ffmpeg-discover {
+  margin-top: 0.5rem;
+}
+
+.ffmpeg-discover-results {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ffmpeg-discover-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ffmpeg-discover-option.is-disabled {
+  opacity: 0.5;
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;

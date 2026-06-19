@@ -7,6 +7,7 @@ import {
   deletePlaybackSession,
   getArtworkUrl,
   getItem,
+  getSessionStatus,
   getSessionStreamUrl,
   getWebClientProfile,
   resolveApiUrl,
@@ -1350,6 +1351,23 @@ export function bindPlayerProgress(): void {
   player.addEventListener('error', () => {
     setPlayerError();
     console.error('Media playback failed', player.error);
+    const sessionId = state.activePlaybackSession?.session_id;
+    if (!sessionId) {
+      return;
+    }
+    // Best-effort: recover a structured error from the per-session store. This
+    // is a cheap map lookup on the server, not a transcode spawn. It only helps
+    // when the browser actually fires `error` (HTTP failures are unreliable).
+    void getSessionStatus(sessionId)
+      .then((status) => {
+        if (status.error) {
+          state.playbackError = status.error;
+          render();
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch session status after playback error', error);
+      });
   });
   player.addEventListener('loadedmetadata', () => {
     applyInitialDirectSeek();

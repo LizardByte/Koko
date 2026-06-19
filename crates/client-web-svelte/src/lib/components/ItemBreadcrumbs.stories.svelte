@@ -1,6 +1,7 @@
 <script module lang="ts">
-  // ItemBreadcrumbs stories. Reads $app/navigation (goto, mocked) + an item
-  // prop. Hierarchy is exercised via the show→season→episode fixture below.
+  // ItemBreadcrumbs stories. Fully props-driven: navigation is injected via
+  // `onnavigate` (no $app/navigation dependency in the story). Hierarchy is
+  // exercised via the show→season→episode fixture below.
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import ItemBreadcrumbs from './ItemBreadcrumbs.svelte';
   import { movieDetail } from '$lib/storybook/fixtures';
@@ -16,11 +17,14 @@
       docs: {
         description: {
           component:
-            'Hierarchy breadcrumb trail (Show / Season / current item). Empty when the item has no ancestors.',
+            'Hierarchy breadcrumb trail (Show / Season / current item). Empty when the item has no ancestors. Fully props-driven — `onnavigate` is injected so Storybook/tests avoid mocking $app/navigation.',
         },
       },
     },
   });
+
+  // No-op navigator — the story demonstrates the prop without needing $app/nav.
+  const noopNavigate = (_id: number) => {};
 
   const episodeInHierarchy: MediaItemDetail = {
     ...movieDetail({
@@ -37,9 +41,9 @@
 </script>
 
 <Story name="Episode In Show" args={{ preset: 'empty' }} asChild>
-  <ItemBreadcrumbs item={episodeInHierarchy} />
+  <ItemBreadcrumbs item={episodeInHierarchy} onnavigate={noopNavigate} />
 </Story>
 
 <Story name="No Hierarchy" args={{ preset: 'empty' }} asChild>
-  <ItemBreadcrumbs item={movieDetail()} />
+  <ItemBreadcrumbs item={movieDetail()} onnavigate={noopNavigate} />
 </Story>

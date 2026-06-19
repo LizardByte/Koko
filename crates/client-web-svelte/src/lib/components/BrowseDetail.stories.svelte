@@ -16,7 +16,13 @@
       docs: {
         description: {
           component:
-            'Collection/category/playlist detail (hero + item grid). Resolves data from the catalog store + route params. Routed at /items/<kind>/<key> and /libraries/:id/items/<kind>/<key>.',
+            'Collection/category/playlist detail (hero + item grid). Resolves data from the catalog store + route params. Routed at /items/<kind>/<key> and /libraries/:id/items/<kind>/<key>.\n\n' +
+            '> ⚠️ **Store-driven component.** BrowseDetail takes only `kind`/`key`/`libraryId` props — ' +
+            'all its data (collections, library items, loading state) comes from the `catalog` store, ' +
+            'seeded by the `preset` arg (see `.storybook/decorators/withStores.ts`). That’s why the ' +
+            'controls panel shows only those three props: switch the `preset` arg to drive different ' +
+            'fixture data. **TODO:** thread collection + items + loading as props so this can be ' +
+            'previewed with arbitrary data without store seeding.',
         },
       },
     },

@@ -27,6 +27,23 @@ export type Preset =
   | 'requires-login'
   | 'requires-setup';
 
+// Single source of truth for the preset values — consumed by the Storybook
+// global argTypes.preset control (see .storybook/preview.ts) so the controls
+// panel renders a dropdown instead of a free-text field. `satisfies` keeps it
+// in sync with the union: adding a preset above without adding it here is a
+// type error.
+export const PRESETS = [
+  'empty',
+  'home',
+  'item-movie',
+  'item-show',
+  'item-missing',
+  'item-watched',
+  'auth-logged-in',
+  'requires-login',
+  'requires-setup',
+] as const satisfies readonly Preset[];
+
 /** Reset all store singletons to a clean baseline (call between stories). */
 export function resetStores(): void {
   catalog.home = undefined;

@@ -2,6 +2,7 @@ import type { Preview } from '@storybook/sveltekit';
 import { themes, ensure } from 'storybook/theming';
 import '../src/app.css'; // design tokens + shared rules — components depend on these
 import { withStores } from './decorators/withStores';
+import { PRESETS } from '$lib/storybook/presets';
 
 // The Koko client is dark-only. Force the docs page to the dark theme too —
 // the manager's `addons.setConfig({ theme: themes.dark })` (see manager.ts)
@@ -32,6 +33,24 @@ const preview: Preview = {
       // 'error' - fail CI on a11y violations
       // 'off' - skip a11y checks entirely
       test: 'todo',
+    },
+  },
+  // Global argTypes — apply to every story. `preset` drives the store-seeding
+  // decorator (withStores.ts); making it a select dropdown prevents typos and
+  // shows the available fixture bundles. `route` simulates the current path
+  // for components reading $app/state.
+  argTypes: {
+    preset: {
+      control: { type: 'select' },
+      options: [...PRESETS],
+      description:
+        'Store fixture bundle applied by the withStores decorator (see src/lib/storybook/presets.ts). Seeds catalog/item/libraries/auth/ui stores for the story.',
+      table: { category: 'Storybook' },
+    },
+    route: {
+      control: 'text',
+      description: 'Simulated $app/state pathname for components reading the current route.',
+      table: { category: 'Storybook' },
     },
   },
   // Seed stores + mock $app/state around every story. Stories select a fixture

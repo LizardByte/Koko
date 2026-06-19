@@ -10,7 +10,7 @@
   import { applyPreset, resetStores, type Preset } from '$lib/storybook/presets';
   import { setPage } from '$lib/storybook/mockAppState.svelte';
 
-  let { preset = 'empty', route, children }: { preset?: Preset; route?: string; children: Snippet } = $props();
+  let { preset = 'empty', route, children }: { preset?: Preset; route?: string; children?: Snippet } = $props();
 
   // (Re)apply whenever the preset/route args change.
   $effect(() => {
@@ -24,4 +24,4 @@
   });
 </script>
 
-{@render children()}
+{@render children?.()}

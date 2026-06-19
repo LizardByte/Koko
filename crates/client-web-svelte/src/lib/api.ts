@@ -1,23 +1,11 @@
-// Data layer for the Svelte PoC.
-//
-// Mirrors the vanilla client's contract (../client-web/src/api.ts) for the
-// catalog/auth/home/logs endpoints. For a full migration the vanilla api.ts
-// + mockApi.ts would be copied wholesale; here we port the subset the PoC's
-// views actually use, with the same types and the same VITE_USE_MOCK_API
-// toggle so the dev workflow carries over verbatim.
+// Data layer for the Svelte client — full-fidelity port of
+// ../client-web/src/api.ts. Types, request shapes, URL builders, and the
+// VITE_USE_MOCK_API toggle all mirror the vanilla client. The mock dispatch
+// layer lives in ./mockApi.ts.
 
 // ---------------------------------------------------------------------------
-// Types (copied from ../client-web/src/api.ts)
+// Auth / bootstrap
 // ---------------------------------------------------------------------------
-
-export interface ServerCapabilities {
-  app_name: string;
-  version: string;
-  server_url: string;
-  https_enabled: boolean;
-  libraries_configured: number;
-  api_versions: string[];
-}
 
 export interface BootstrapUser {
   id: number;
@@ -33,27 +21,129 @@ export interface AppBootstrapResponse {
   current_user?: BootstrapUser;
 }
 
+export interface ProfileImageUploadRequest {
+  mime_type: string;
+  data_base64: string;
+}
+
 export interface LoginRequest {
   username: string;
   password: string;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  password: string;
+  pin?: string;
+  admin: boolean;
+  birthday?: string;
+  profile_image_upload?: ProfileImageUploadRequest;
+  preferred_metadata_languages?: string[];
+}
+
+export interface UpdateUserRequest {
+  username: string;
+  admin: boolean;
+  birthday?: string;
+  profile_image_upload?: ProfileImageUploadRequest;
+  remove_profile_image?: boolean;
+  preferred_metadata_languages?: string[];
 }
 
 export interface TokenResponse {
   token: string;
 }
 
+// ---------------------------------------------------------------------------
+// System / capabilities
+// ---------------------------------------------------------------------------
+
+export interface ServerCapabilities {
+  app_name: string;
+  version: string;
+  server_url: string;
+  https_enabled: boolean;
+  libraries_configured: number;
+  api_versions: string[];
+  transcoding: {
+    ffmpeg: { available: boolean; version?: string; error?: string };
+    ffprobe: { available: boolean; version?: string; error?: string };
+  };
+}
+
+export interface SystemActivity {
+  id: string;
+  category: string;
+  scope: string;
+  source: string;
+  state: string;
+  label: string;
+  provider_id?: string;
+  library_id?: number;
+  root_item_id?: number;
+  item_ids: number[];
+  total_items: number;
+  completed_items: number;
+  failed_items: number;
+  queued_at: number;
+  started_at?: number;
+  updated_at: number;
+}
+
+export interface SystemActivitiesResponse {
+  generated_at: number;
+  activities: SystemActivity[];
+}
+
+// ---------------------------------------------------------------------------
+// Libraries
+// ---------------------------------------------------------------------------
+
 export interface MediaLibrary {
   id: number;
   name: string;
   path: string;
+  paths: string[];
+  recursive: boolean;
   kind: string;
+  scanner: string;
+  metadata_providers: string[];
+  metadata_language_mode: 'auto' | 'manual';
+  metadata_languages: string[];
   status: string;
+  scan_revision: number;
+  last_scanned_at?: number;
   total_files: number;
   video_files: number;
   audio_files: number;
   image_files: number;
   book_files: number;
+  other_files: number;
+  metadata_refresh_total: number;
+  metadata_refresh_pending: number;
+  metadata_refresh_completed: number;
+  metadata_refresh_failed: number;
+  missing_files: number;
+  missing_items: number;
+  error?: string;
 }
+
+export interface MediaLibrarySettings {
+  name: string;
+  path: string;
+  paths: string[];
+  recursive: boolean;
+  kind: string;
+  scanner: string;
+  metadata_providers: string[];
+  metadata_language_mode: 'auto' | 'manual';
+  metadata_languages: string[];
+  allowed_user_ids: number[];
+}
+
+// ---------------------------------------------------------------------------
+// Items
+// ---------------------------------------------------------------------------
 
 export interface MediaItemSummary {
   id: number;
@@ -68,17 +158,37 @@ export interface MediaItemSummary {
   playable: boolean;
   child_count: number;
   available_season_count?: number | null;
+  season_number?: number;
+  episode_number?: number;
   duration_ms?: number;
+  width?: number;
+  height?: number;
   genres: string[];
   overview?: string;
   backdrop_url?: string;
   logo_url?: string;
   has_metadata?: boolean;
+  metadata_refresh_state?: string;
+  metadata_refresh_error?: string;
   artwork_updated_at?: number;
+  modified_at?: number;
   playback_position_ms?: number;
   playback_duration_ms?: number;
   playback_completed?: boolean;
   watch_count?: number;
+  last_watched_at?: number | null;
+  missing_since?: number | null;
+  hierarchy?: MediaItemSummary[];
+}
+
+export interface MediaPlaybackTarget {
+  item_id: number;
+  start_ms: number;
+  label: string;
+  display_title: string;
+  season_number?: number;
+  episode_number?: number;
+  resume: boolean;
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
@@ -87,15 +197,23 @@ export interface MediaItemDetail extends MediaItemSummary {
   bit_rate?: number;
   video_codec?: string;
   audio_codec?: string;
+  metadata_json?: string;
+  metadata_updated_at?: number;
   poster_url?: string;
   backdrop_url?: string;
+  theme_song_url?: string;
   tagline?: string;
   overview?: string;
   release_year?: number;
   logo_url?: string;
   rating?: number;
   content_rating?: string;
+  linked_media_type?: string;
+  trailer_title?: string;
+  trailer_url?: string;
   extras: MediaItemExtra[];
+  playback_target?: MediaPlaybackTarget | null;
+  restart_playback_target?: MediaPlaybackTarget | null;
   audio_tracks: MediaAudioTrack[];
   subtitle_tracks: MediaSubtitleTrack[];
   hierarchy: MediaItemSummary[];
@@ -138,6 +256,8 @@ export interface MediaCollectionSummary {
   name: string;
   overview?: string;
   artwork_url?: string;
+  backdrop_url?: string;
+  theme_song_url?: string;
   item_ids: number[];
   item_count: number;
 }
@@ -148,6 +268,136 @@ export interface MediaHome {
   collections: MediaCollectionSummary[];
 }
 
+export interface MediaPlaylistSearchSummary {
+  id: string;
+  name: string;
+  overview?: string;
+  item_count: number;
+}
+
+export type MediaSearchResult =
+  | { result_type: 'item'; item: MediaItemSummary }
+  | { result_type: 'collection'; collection: MediaCollectionSummary }
+  | { result_type: 'person'; person: MetadataPersonSummary }
+  | { result_type: 'playlist'; playlist: MediaPlaylistSearchSummary };
+
+// ---------------------------------------------------------------------------
+// Metadata
+// ---------------------------------------------------------------------------
+
+export interface MetadataProviderStatus {
+  id: string;
+  display_name: string;
+  description: string;
+  supported_kinds: string[];
+  requires_api_key: boolean;
+  implemented: boolean;
+  role: 'primary' | 'secondary';
+  extends_provider_ids: string[];
+  enabled: boolean;
+  configured: boolean;
+  language: string;
+  attribution_text: string;
+  attribution_url: string;
+  logo_light_url?: string;
+  logo_dark_url?: string;
+}
+
+export interface MetadataProviderSettings {
+  id: string;
+  enabled: boolean;
+  api_key?: string | null;
+  api_key_secret_ref?: string;
+  api_key_configured?: boolean;
+  clear_api_key?: boolean;
+  language: string;
+  rate_limit_per_second: number;
+  retry_attempts: number;
+  retry_backoff_ms: number;
+}
+
+export interface ItemMetadataPerson {
+  id: number;
+  person_id: number;
+  external_id?: string;
+  locale_key?: string;
+  name: string;
+  role?: string;
+  department?: string;
+  character_name?: string;
+  profile_url?: string;
+  image_url?: string;
+  cached_image_path?: string;
+  sort_order: number;
+}
+
+export interface ItemMetadataMatch {
+  id: number;
+  provider_id: string;
+  external_id: string;
+  title?: string;
+  overview?: string;
+  artwork_url?: string;
+  backdrop_url?: string;
+  release_year?: number;
+  media_type?: string;
+  relation_kind: string;
+  match_state: string;
+  logo_url?: string;
+  cached_logo_path?: string;
+  genres: string[];
+  people: ItemMetadataPerson[];
+  rating?: number;
+  content_rating?: string;
+  trailer_title?: string;
+  trailer_url?: string;
+  theme_song_url?: string;
+  locale_key: string;
+  provider_locale_key?: string;
+  cached_artwork_path?: string;
+  cached_backdrop_path?: string;
+  refresh_state?: string;
+  last_refreshed_at?: number;
+  next_refresh_at?: number;
+  refresh_error?: string;
+  updated_at?: number;
+}
+
+export interface ItemMetadataResponse {
+  item_id: number;
+  providers: MetadataProviderStatus[];
+  matches: ItemMetadataMatch[];
+}
+
+export interface MetadataSearchResult {
+  provider_id: string;
+  external_id: string;
+  media_type: string;
+  title: string;
+  overview?: string;
+  artwork_url?: string;
+  backdrop_url?: string;
+  release_year?: number;
+  score?: number;
+}
+
+export interface MetadataSearchOptions {
+  query?: string;
+  providers?: string[];
+  year?: string;
+  language?: string;
+}
+
+export interface LinkMetadataRequest {
+  provider_id: string;
+  external_id: string;
+  media_type: string;
+}
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
 export interface MetadataPersonSummary {
   id: number;
   provider_id: string;
@@ -156,8 +406,161 @@ export interface MetadataPersonSummary {
   name: string;
   known_for: string[];
   biography?: string;
+  gender?: string;
+  birthday?: string;
+  deathday?: string;
+  birth_place?: string;
+  profile_url?: string;
   image_url?: string;
+  cached_image_path?: string;
   updated_at?: number;
+}
+
+export interface MetadataPersonCreditSummary {
+  id: number;
+  metadata_link_id: number;
+  media_item_id: number;
+  role?: string;
+  department?: string;
+  character_name?: string;
+  sort_order: number;
+}
+
+export interface MetadataPersonItemCredit {
+  credit: MetadataPersonCreditSummary;
+  item: MediaItemSummary;
+  hierarchy: MediaItemSummary[];
+}
+
+export interface MetadataPersonResponse {
+  person: MetadataPersonSummary;
+  credits: MetadataPersonItemCredit[];
+}
+
+// ---------------------------------------------------------------------------
+// Playback
+// ---------------------------------------------------------------------------
+
+export interface PlaybackDecision {
+  item_id: number;
+  can_direct_play: boolean;
+  transcode_required: boolean;
+  reason: string;
+  stream_url?: string;
+  mime_type?: string;
+  transcode_container?: string;
+  transcode_video_codec?: string;
+  transcode_audio_codec?: string;
+  video_transcode_required: boolean;
+  audio_transcode_required: boolean;
+  source_video_codec?: string;
+  source_audio_codec?: string;
+  source_container?: string;
+}
+
+export interface ClientProfile {
+  client_type: string;
+  client_name: string;
+  supported_containers: string[];
+  supported_video_codecs: string[];
+  supported_audio_codecs: string[];
+  supported_subtitle_formats: string[];
+  max_video_width: number;
+  max_video_height: number;
+  max_bitrate_kbps: number;
+  supports_adaptive_streaming: boolean;
+  prefer_hls: boolean;
+}
+
+export interface CreateSessionRequest {
+  item_id: number;
+  client_profile: ClientProfile;
+}
+
+export interface PlaybackSession {
+  session_id: string;
+  item_id: number;
+  user_id?: number;
+  client_profile: ClientProfile;
+  decision: PlaybackDecision;
+  created_at: number;
+  audio_stream_index?: number;
+}
+
+export interface PlaybackProgressRequest {
+  position_ms: number;
+  duration_ms?: number;
+  completed: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Settings / scheduled tasks / logs
+// ---------------------------------------------------------------------------
+
+export type ScheduledTaskWeekday =
+  | 'monday'
+  | 'tuesday'
+  | 'wednesday'
+  | 'thursday'
+  | 'friday'
+  | 'saturday'
+  | 'sunday';
+
+export type ScheduledTaskId = 'metadata_refresh' | 'trash_cleanup' | 'database_maintenance';
+
+export interface SettingsSnapshot {
+  general: { data_dir: string };
+  media: {
+    libraries: MediaLibrarySettings[];
+    missing_item_auto_delete_days?: number | null;
+  };
+  metadata: {
+    providers: MetadataProviderSettings[];
+    refresh_interval_days?: number | null;
+  };
+  scheduled_tasks: {
+    enabled: boolean;
+    window: { start_time: string; stop_time: string; weekdays: ScheduledTaskWeekday[] };
+    metadata_refresh: { enabled: boolean };
+    trash_cleanup: {
+      enabled: boolean;
+      missing_item_auto_delete_days?: number | null;
+      interval_days: number;
+    };
+    database_maintenance: { enabled: boolean; interval_days: number };
+  };
+  server: {
+    use_https: boolean;
+    address: string;
+    port: number;
+    cert_path: string;
+    key_path: string;
+    use_custom_certs: boolean;
+  };
+  ffmpeg: { ffmpeg_path: string; ffprobe_path: string };
+}
+
+export interface SettingsResponse {
+  settings: SettingsSnapshot;
+  settings_path: string;
+}
+
+export interface ScheduledTaskRunResponse {
+  task_id: ScheduledTaskId;
+  started: boolean;
+  message: string;
+}
+
+export interface MetadataCacheClearResponse {
+  removed_files: number;
+}
+
+export interface MissingItemsCleanupResponse {
+  library_id: number;
+  deleted_files: number;
+  deleted_items: number;
+  removed_collection_items: number;
+  library: MediaLibrary;
 }
 
 export interface LogEntry {
@@ -194,36 +597,57 @@ export const EMPTY_LOG_FILTERS: LogFilters = {
 // Mock toggle + transport
 // ---------------------------------------------------------------------------
 
+export type ApiMode = 'live' | 'mock';
+
 export const AUTH_TOKEN_STORAGE_KEY = 'koko-client-web-auth-token';
+const API_BASE_STORAGE_KEY = 'koko-client-web-api-base';
 
 // Same toggle as the vanilla client. `vite dev --mode mock` loads .env.mock.
-const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === 'true';
+const ENV_USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === 'true';
+
+// activeApiMode is module state so the dev-mode silent fallback (see
+// requestJson) can flip the whole session to mock after a live failure, and a
+// live success can flip it back — matching the vanilla client's behavior.
+let activeApiMode: ApiMode = ENV_USE_MOCK_API ? 'mock' : 'live';
 
 export function isMockApi(): boolean {
-  return USE_MOCK_API;
+  return activeApiMode === 'mock';
 }
 
-function resolveApiBase(): string {
+export function getApiMode(): ApiMode {
+  return activeApiMode;
+}
+
+export function getStoredApiBase(): string {
   const fromEnv = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
   if (fromEnv) {
     return fromEnv;
   }
+  const stored = globalThis.localStorage?.getItem(API_BASE_STORAGE_KEY)?.trim();
+  if (stored) {
+    return stored;
+  }
   return globalThis.location.origin;
 }
 
-export function getStoredAuthToken(): string | null {
-  return globalThis.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+export function getStoredAuthToken(): string | undefined {
+  return globalThis.localStorage?.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() || undefined;
 }
 
 export function setStoredAuthToken(token: string): void {
-  globalThis.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+  globalThis.localStorage?.setItem(AUTH_TOKEN_STORAGE_KEY, token.trim());
 }
 
 export function clearStoredAuthToken(): void {
-  globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  globalThis.localStorage?.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
 
 async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // Mock-first: if the env flag is set, always serve mock.
+  if (activeApiMode === 'mock') {
+    return (await import('./mockApi')).dispatch<T>(method, path, body);
+  }
+
   const headers: Record<string, string> = {};
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -232,14 +656,38 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  const response = await fetch(resolveApiBase() + path, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+
+  let response: Response;
+  try {
+    response = await fetch(getStoredApiBase() + path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    // Dev-mode silent fallback: a network failure flips the session to mock so
+    // the app keeps working without a backend. Matches the vanilla client.
+    if (import.meta.env.DEV) {
+      activeApiMode = 'mock';
+      return (await import('./mockApi')).dispatch<T>(method, path, body);
+    }
+    throw err;
+  }
+
   if (!response.ok) {
+    if (response.status === 401) {
+      clearStoredAuthToken();
+    }
+    if (import.meta.env.DEV) {
+      activeApiMode = 'mock';
+      return (await import('./mockApi')).dispatch<T>(method, path, body);
+    }
     throw new Error(`${method} ${path} failed: ${response.status} ${response.statusText}`);
   }
+
+  // A live success re-asserts live mode (can flip back from a prior fallback).
+  activeApiMode = 'live';
+
   if (response.status === 204) {
     return undefined as T;
   }
@@ -247,7 +695,7 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
 }
 
 // ---------------------------------------------------------------------------
-// URL helpers (mirror ../client-web/src/api.ts)
+// URL builders (synchronous, non-fetch)
 // ---------------------------------------------------------------------------
 
 export function resolveApiUrl(path: string): string {
@@ -255,74 +703,135 @@ export function resolveApiUrl(path: string): string {
     return path;
   }
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${resolveApiBase()}${normalized}`;
+  return `${getStoredApiBase()}${normalized}`;
 }
 
-export function getArtworkUrl(
-  itemId: number,
-  kind: 'poster' | 'backdrop' | 'logo' = 'poster',
-  revision?: number,
-): string {
-  if (USE_MOCK_API) {
-    // The mock has no real artwork endpoint; return a deterministic placeholder
-    // so cards render with a visible gradient + title instead of a broken img.
-    return `mock://artwork/${itemId}/${kind}`;
-  }
+export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'logo' = 'poster', revision?: number): string {
   const params = new URLSearchParams({ kind });
   if (typeof revision === 'number') {
     params.set('rev', String(revision));
   }
-  return `${resolveApiBase()}/api/v1/items/${itemId}/artwork?${params.toString()}`;
+  if (isMockApi()) {
+    // The vanilla client serves real (broken) artwork URLs in mock mode; the
+    // browser shows broken-image. For the Svelte port we render a deterministic
+    // placeholder via the MediaCard's gradient fallback, so this value is only
+    // hit by <img> tags that lack a fallback — same broken-img behavior as
+    // vanilla, which is the faithful outcome.
+    return `mock://artwork/${itemId}/${kind}`;
+  }
+  return `${getStoredApiBase()}/api/v1/items/${itemId}/artwork?${params.toString()}`;
+}
+
+export function getStreamUrl(itemId: number): string {
+  return `${getStoredApiBase()}/api/v1/items/${itemId}/stream`;
+}
+
+export function getSessionStreamUrl(sessionId: string, startMs?: number, audioStreamIndex?: number): string {
+  const params = new URLSearchParams();
+  if (typeof startMs === 'number') {
+    params.set('start_ms', String(startMs));
+  }
+  if (typeof audioStreamIndex === 'number') {
+    params.set('audio_stream_index', String(audioStreamIndex));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return `${getStoredApiBase()}/api/v1/sessions/${sessionId}/stream${suffix}`;
+}
+
+export function getPersonImageUrl(personId: number): string {
+  return `${getStoredApiBase()}/api/v1/people/${personId}/image`;
 }
 
 // ---------------------------------------------------------------------------
 // API surface
 // ---------------------------------------------------------------------------
 
-export function getAppBootstrap(): Promise<AppBootstrapResponse> {
-  if (USE_MOCK_API) {
-    return Promise.resolve(getMockBootstrap());
-  }
-  return requestJson<AppBootstrapResponse>('GET', '/api/v1/bootstrap');
-}
+// System / bootstrap
+export const getCapabilities = (): Promise<ServerCapabilities> =>
+  requestJson('GET', '/api/v1/system/capabilities');
+export const getAppBootstrap = (): Promise<AppBootstrapResponse> =>
+  requestJson('GET', '/api/v1/bootstrap');
+export const loginUser = (request: LoginRequest): Promise<TokenResponse> =>
+  requestJson('POST', '/login', request);
+export const createUser = (request: CreateUserRequest): Promise<string> =>
+  requestJson('POST', '/create_user', request);
+export const getUsers = (): Promise<BootstrapUser[]> => requestJson('GET', '/api/v1/users');
+export const updateUser = (userId: number, request: UpdateUserRequest): Promise<BootstrapUser> =>
+  requestJson('PUT', `/api/v1/users/${userId}`, request);
 
-export function loginUser(request: LoginRequest): Promise<TokenResponse> {
-  if (USE_MOCK_API) {
-    return loginMockUser(request);
-  }
-  return requestJson<TokenResponse>('POST', '/login', request);
-}
-
-export function getLibraries(): Promise<MediaLibrary[]> {
-  if (USE_MOCK_API) {
-    return Promise.resolve(getMockLibraries());
-  }
-  return requestJson<MediaLibrary[]>('GET', '/api/v1/libraries');
-}
-
-export function getHome(libraryId?: number): Promise<MediaHome> {
-  if (USE_MOCK_API) {
-    return Promise.resolve(getMockHome(libraryId));
-  }
+// Catalog
+export const getLibraries = (): Promise<MediaLibrary[]> => requestJson('GET', '/api/v1/libraries');
+export const getHome = (libraryId?: number): Promise<MediaHome> => {
   const suffix = typeof libraryId === 'number' ? `?library_id=${libraryId}` : '';
-  return requestJson<MediaHome>('GET', `/api/v1/home${suffix}`);
-}
+  return requestJson('GET', `/api/v1/home${suffix}`);
+};
+export const getItems = (libraryId?: number): Promise<MediaItemSummary[]> => {
+  const suffix = typeof libraryId === 'number' ? `?library_id=${libraryId}` : '';
+  return requestJson('GET', `/api/v1/items${suffix}`);
+};
+export const getItem = (itemId: number): Promise<MediaItemDetail> =>
+  requestJson('GET', `/api/v1/items/${itemId}`);
+export const getPerson = (personId: number): Promise<MetadataPersonResponse> =>
+  requestJson('GET', `/api/v1/people/${personId}`);
 
-export function getItem(itemId: number): Promise<MediaItemDetail> {
-  if (USE_MOCK_API) {
-    return Promise.resolve(getMockItem(itemId));
+// Search — the vanilla client appends a synthetic Playlists result client-side
+// when the query is a substring of 'playlists'. Reproduce that here.
+export async function searchItems(query: string): Promise<MediaSearchResult[]> {
+  const params = new URLSearchParams({ query });
+  const results = await requestJson<MediaSearchResult[]>('GET', `/api/v1/search?${params.toString()}`);
+  if (query.trim().toLowerCase() && 'playlists'.includes(query.trim().toLowerCase())) {
+    return [
+      ...results,
+      { result_type: 'playlist', playlist: { id: 'Playlists', name: 'Playlists', item_count: 0 } },
+    ];
   }
-  return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
+  return results;
 }
 
-export function getPerson(personId: number): Promise<{ person: MetadataPersonSummary }> {
-  if (USE_MOCK_API) {
-    return Promise.resolve({ person: getMockPerson(personId) });
-  }
-  return requestJson<{ person: MetadataPersonSummary }>('GET', `/api/v1/people/${personId}`);
+// Metadata
+export const getMetadataProviders = (): Promise<MetadataProviderStatus[]> =>
+  requestJson('GET', '/api/v1/metadata/providers');
+export const getItemMetadata = (itemId: number): Promise<ItemMetadataResponse> =>
+  requestJson('GET', `/api/v1/items/${itemId}/metadata`);
+export function searchItemMetadata(
+  itemId: number,
+  options?: string | MetadataSearchOptions,
+): Promise<MetadataSearchResult[]> {
+  const opts: MetadataSearchOptions =
+    typeof options === 'string' ? { query: options } : options ?? {};
+  const params = new URLSearchParams();
+  if (opts.query) params.set('query', opts.query);
+  if (opts.providers?.length) params.set('providers', opts.providers.join(','));
+  if (opts.year) params.set('year', opts.year);
+  if (opts.language) params.set('language', opts.language);
+  return requestJson('GET', `/api/v1/items/${itemId}/metadata/search?${params.toString()}`);
 }
+export const linkItemMetadata = (itemId: number, request: LinkMetadataRequest): Promise<ItemMetadataMatch> =>
+  requestJson('POST', `/api/v1/items/${itemId}/metadata/link`, request);
+export const refreshItemMetadata = (itemId: number): Promise<ItemMetadataMatch> =>
+  requestJson('POST', `/api/v1/items/${itemId}/metadata/refresh`);
+export const refreshLibraryMetadata = (libraryId: number): Promise<MediaLibrary> =>
+  requestJson('POST', `/api/v1/libraries/${libraryId}/metadata/refresh`);
+export const scanLibrary = (libraryId: number): Promise<MediaLibrary> =>
+  requestJson('POST', `/api/v1/libraries/${libraryId}/scan`);
+export const deleteMissingItems = (libraryId: number): Promise<MissingItemsCleanupResponse> =>
+  requestJson('DELETE', `/api/v1/libraries/${libraryId}/missing`);
 
-export async function getLogs(filters?: {
+// Playback
+export const getPlaybackDecision = (itemId: number): Promise<PlaybackDecision> =>
+  requestJson('GET', `/api/v1/items/${itemId}/playback`);
+export const createPlaybackSession = (request: CreateSessionRequest): Promise<PlaybackSession> =>
+  requestJson('POST', '/api/v1/sessions', request);
+export const deletePlaybackSession = (sessionId: string): Promise<void> =>
+  requestJson('DELETE', `/api/v1/sessions/${sessionId}`);
+export const updatePlaybackProgress = (
+  itemId: number,
+  request: PlaybackProgressRequest,
+): Promise<void> => requestJson('POST', `/api/v1/items/${itemId}/progress`, request);
+
+// Settings / logs / scheduled tasks
+export const getSettings = (): Promise<SettingsResponse> => requestJson('GET', '/api/v1/settings');
+export function getLogs(filters?: {
   level?: string;
   module?: string;
   search?: string;
@@ -330,316 +839,58 @@ export async function getLogs(filters?: {
   until?: string;
   limit?: number;
 }): Promise<LogEntriesResponse> {
-  if (USE_MOCK_API) {
-    return getMockLogs(
-      filters?.level,
-      filters?.module,
-      filters?.search,
-      filters?.since,
-      filters?.until,
-      filters?.limit ?? 200,
-    );
-  }
   const params = new URLSearchParams();
-  if (filters?.level?.trim()) {
-    params.set('level', filters.level.trim());
-  }
-  if (filters?.module?.trim()) {
-    params.set('module', filters.module.trim());
-  }
-  if (filters?.search?.trim()) {
-    params.set('search', filters.search.trim());
-  }
-  if (filters?.since?.trim()) {
-    params.set('since', filters.since.trim());
-  }
-  if (filters?.until?.trim()) {
-    params.set('until', filters.until.trim());
-  }
+  if (filters?.level?.trim()) params.set('level', filters.level.trim());
+  if (filters?.module?.trim()) params.set('module', filters.module.trim());
+  if (filters?.search?.trim()) params.set('search', filters.search.trim());
+  if (filters?.since?.trim()) params.set('since', filters.since.trim());
+  if (filters?.until?.trim()) params.set('until', filters.until.trim());
   if (typeof filters?.limit === 'number' && Number.isFinite(filters.limit)) {
     params.set('limit', String(filters.limit));
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  return requestJson<LogEntriesResponse>('GET', `/api/v1/settings/logs${suffix}`);
+  return requestJson('GET', `/api/v1/settings/logs${suffix}`);
 }
+export const updateSettings = (settings: SettingsSnapshot): Promise<SettingsResponse> =>
+  requestJson('PUT', '/api/v1/settings', settings);
+export const clearMetadataCache = (): Promise<MetadataCacheClearResponse> =>
+  requestJson('POST', '/api/v1/settings/metadata-cache/clear');
+export const runScheduledTask = (taskId: ScheduledTaskId): Promise<ScheduledTaskRunResponse> =>
+  requestJson('POST', `/api/v1/scheduled-tasks/${taskId}/run`);
+export const addLibrary = (library: MediaLibrarySettings): Promise<SettingsResponse> =>
+  requestJson('POST', '/api/v1/settings/libraries', { library });
+export const deleteLibrary = (libraryIndex: number): Promise<SettingsResponse> =>
+  requestJson('DELETE', `/api/v1/settings/libraries/${libraryIndex}`);
+export const getSystemActivities = (): Promise<SystemActivitiesResponse> =>
+  requestJson('GET', '/api/v1/system/activities');
 
 // ---------------------------------------------------------------------------
-// Mock implementation (subset of ../client-web/src/mockApi.ts)
+// Browser capability probe (port of getWebClientProfile from vanilla api.ts)
 // ---------------------------------------------------------------------------
 
-const MOCK_LIBRARIES: MediaLibrary[] = [
-  {
-    id: 1,
-    name: 'Movies',
-    path: '/media/movies',
-    kind: 'movie',
-    status: 'ready',
-    total_files: 1284,
-    video_files: 842,
-    audio_files: 0,
-    image_files: 442,
-    book_files: 0,
-  },
-  {
-    id: 2,
-    name: 'TV Shows',
-    path: '/media/tv',
-    kind: 'show',
-    status: 'ready',
-    total_files: 9821,
-    video_files: 3120,
-    audio_files: 0,
-    image_files: 6701,
-    book_files: 0,
-  },
-  {
-    id: 3,
-    name: 'Music',
-    path: '/media/music',
-    kind: 'album',
-    status: 'scanning',
-    total_files: 21450,
-    video_files: 0,
-    audio_files: 19840,
-    image_files: 1610,
-    book_files: 0,
-  },
-];
-
-function mockItem(
-  id: number,
-  libraryId: number,
-  itemType: string,
-  title: string,
-  partial: Partial<MediaItemSummary> = {},
-): MediaItemSummary {
+export function getWebClientProfile(): ClientProfile {
+  const video = document.createElement('video');
+  const audio = document.createElement('audio');
+  const canVideo = (type: string) => video.canPlayType(type) !== '';
+  const canAudio = (type: string) => audio.canPlayType(type) !== '';
+  const supportedVideoCodecs = ['h264', 'hevc', 'av1', 'vp8', 'vp9'].filter((codec) =>
+    canVideo(`video/mp4; codecs="${codec === 'h264' ? 'avc1' : codec === 'hevc' ? 'hev1' : codec}"`),
+  );
+  const supportedAudioCodecs = ['mp3', 'aac', 'vorbis', 'opus', 'wav', 'flac'].filter((codec) =>
+    canAudio(codec === 'wav' ? 'audio/wav' : `audio/${codec}`),
+  );
+  const clientName = `Koko Web (${navigator.userAgent.split(' ').slice(-1)[0]})`;
   return {
-    id,
-    library_id: libraryId,
-    item_type: itemType,
-    display_title: title,
-    relative_path: `${itemType}-${id}`,
-    media_kind: itemType === 'movie' || itemType === 'episode' ? 'video' : itemType === 'album' ? 'audio' : 'container',
-    playable: itemType === 'movie' || itemType === 'episode' || itemType === 'track',
-    child_count: 0,
-    genres: [],
-    has_metadata: true,
-    ...partial,
-  };
-}
-
-const MOCK_ITEMS: MediaItemSummary[] = [
-  mockItem(101, 1, 'movie', 'The Phantom Stellar', {
-    display_subtitle: '2024',
-    genres: ['Science Fiction', 'Adventure'],
-    overview: 'A lone pilot navigates a dying star system in search of a habitable world.',
-    backdrop_url: '',
-    duration_ms: 7_284_000,
-  }),
-  mockItem(102, 1, 'movie', 'Coastline Confidential', {
-    display_subtitle: '2023',
-    genres: ['Thriller', 'Mystery'],
-    overview: 'A retired inspector is pulled back for one last case on the rainy coast.',
-    duration_ms: 6_412_000,
-  }),
-  mockItem(103, 1, 'movie', 'The Lantern Keeper', {
-    display_subtitle: '2022',
-    genres: ['Drama'],
-    overview: 'On a remote island, a keeper tends a light that must never go out.',
-    duration_ms: 5_980_000,
-  }),
-  mockItem(104, 1, 'movie', 'Neon Vermilion', {
-    display_subtitle: '2025',
-    genres: ['Action', 'Cyberpunk'],
-    overview: 'In a rain-soaked megacity, a courier carries a package everyone wants.',
-    duration_ms: 7_010_000,
-  }),
-  mockItem(201, 2, 'show', 'Mock Show', {
-    display_subtitle: '5 seasons',
-    child_count: 5,
-    genres: ['Comedy', 'Drama'],
-    overview: 'The everyday chaos of a family running a small-town diner.',
-    available_season_count: 5,
-  }),
-  mockItem(202, 2, 'show', 'The Silent Frequency', {
-    display_subtitle: '3 seasons',
-    child_count: 3,
-    genres: ['Mystery', 'Science Fiction'],
-    overview: 'A radio operator picks up a signal that should not exist.',
-    available_season_count: 3,
-  }),
-  mockItem(203, 2, 'show', 'Paper Cities', {
-    display_subtitle: '2 seasons',
-    child_count: 2,
-    genres: ['Drama'],
-    overview: 'An architect rediscovers the towns she once designed.',
-    available_season_count: 2,
-  }),
-  mockItem(301, 3, 'album', 'Midnight Cartography', {
-    display_subtitle: 'Vela Sound',
-    child_count: 11,
-    genres: ['Electronic'],
-    overview: 'Ambient electronic mapping the terrain of sleepless nights.',
-  }),
-  mockItem(302, 3, 'album', 'Tin Roof Hymns', {
-    display_subtitle: 'The Saltlick Choir',
-    child_count: 9,
-    genres: ['Folk'],
-    overview: 'Acoustic folk recorded in a single barn session.',
-  }),
-];
-
-export function getMockLibraries(): MediaLibrary[] {
-  return structuredClone(MOCK_LIBRARIES);
-}
-
-export function getMockBootstrap(): AppBootstrapResponse {
-  return {
-    has_users: true,
-    current_user: {
-      id: 1,
-      username: 'admin',
-      admin: true,
-      preferred_metadata_languages: ['en'],
-      profile_image_url: '',
-    },
-  };
-}
-
-export function loginMockUser(request: LoginRequest): Promise<TokenResponse> {
-  // Mock credentials match the vanilla client's seeded mock user.
-  if (request.username === 'admin' && request.password === 'adminpass') {
-    return Promise.resolve({ token: 'mock-jwt-token-admin' });
-  }
-  return Promise.reject(new Error('Invalid username or password'));
-}
-
-export function getMockHome(_libraryId?: number): MediaHome {
-  const movies = MOCK_ITEMS.filter((i) => i.library_id === 1);
-  const shows = MOCK_ITEMS.filter((i) => i.library_id === 2);
-  const albums = MOCK_ITEMS.filter((i) => i.library_id === 3);
-  return {
-    shelves: [
-      { id: 'continue', title: 'Continue Watching', items: [movies[0], movies[3]] },
-      { id: 'recent-movies', title: 'Recently Added Movies', items: movies },
-      { id: 'recent-shows', title: 'Popular Shows', items: shows },
-      { id: 'recent-albums', title: 'New Music', items: albums },
-    ],
-    collections: [
-      {
-        id: 'col-action',
-        provider_id: 'mock',
-        external_id: 'action-night',
-        name: 'Action Night',
-        overview: 'Explosions, chases, and high stakes.',
-        item_ids: [104, 101],
-        item_count: 2,
-      },
-    ],
-  };
-}
-
-export function getMockItem(itemId: number): MediaItemDetail {
-  const summary = MOCK_ITEMS.find((i) => i.id === itemId) ?? MOCK_ITEMS[0];
-  return {
-    ...summary,
-    tagline: summary.genres[0] ? `A ${summary.genres[0].toLowerCase()} story.` : undefined,
-    poster_url: '',
-    backdrop_url: '',
-    overview: summary.overview ?? 'No overview available.',
-    release_year: summary.display_subtitle ? Number(summary.display_subtitle) : undefined,
-    rating: 7.4 + (itemId % 3) * 0.6,
-    content_rating: summary.item_type === 'movie' ? 'PG-13' : 'TV-14',
-    audio_tracks: [
-      { index: 0, label: 'English (5.1)', codec: 'aac', language: 'en', default: true },
-    ],
-    subtitle_tracks: [
-      { index: 0, label: 'English', format: 'vtt', url: `mock://subtitles/${itemId}/en.vtt` },
-    ],
-    extras: [],
-    hierarchy: [],
-    children:
-      summary.item_type === 'show'
-        ? Array.from({ length: summary.available_season_count ?? 1 }, (_, idx) =>
-            mockItem(itemId * 100 + idx, summary.library_id, 'season', `Season ${idx + 1}`, {
-              parent_id: itemId,
-              display_subtitle: `${idx + 1} season`,
-              child_count: 10,
-            }),
-          )
-        : [],
-  };
-}
-
-export function getMockPerson(personId: number): MetadataPersonSummary {
-  return {
-    id: personId,
-    provider_id: 'mock',
-    locale_key: 'en',
-    name: personId === 1 ? 'Alex Rivera' : 'Jordan Hale',
-    known_for: ['The Phantom Stellar', 'Coastline Confidential'],
-    biography:
-      'A versatile performer whose work spans independent cinema and large-scale productions.',
-    image_url: '',
-    updated_at: Date.now(),
-  };
-}
-
-export function getMockLogs(
-  level?: string,
-  moduleFilter?: string,
-  search?: string,
-  since?: string,
-  until?: string,
-  limit = 200,
-): LogEntriesResponse {
-  const sinceTime = since ? new Date(since).getTime() : Number.NaN;
-  const untilTime = until ? new Date(until).getTime() : Number.NaN;
-  const entries: LogEntry[] = [
-    {
-      timestamp: '2026-04-22T09:12:35.853-04:00',
-      level: 'INFO',
-      module: 'koko::web::routes::media',
-      source_file_path: 'src/web/routes/media.rs',
-      line_number: 540,
-      message:
-        'Completed TMDB metadata refresh for media item 201 "Mock Show" (show) in library 2 [Mock Show]',
-    },
-    {
-      timestamp: '2026-04-22T09:12:00.810-04:00',
-      level: 'WARN',
-      module: 'koko::web::routes::media',
-      source_file_path: 'src/web/routes/media.rs',
-      line_number: 589,
-      message:
-        'Failed to fetch refreshed TMDB metadata snapshot for media item 417 "Season 1" (season) in library 2 [The Simpsons/Season 1] using target tv:456:season:1 (tv_season): TMDB season lookup failed with status 404 Not Found',
-    },
-    {
-      timestamp: '2026-04-22T09:10:49.079-04:00',
-      level: 'DEBUG',
-      module: 'reqwest::connect',
-      source_file_path: 'src/connect.rs',
-      line_number: 118,
-      message: 'starting new connection: https://api.themoviedb.org/',
-    },
-  ].filter((entry) => {
-    const levelMatches = level ? entry.level.toLowerCase() === level.toLowerCase() : true;
-    const moduleMatches = moduleFilter
-      ? entry.module.toLowerCase().includes(moduleFilter.toLowerCase())
-      : true;
-    const searchMatches = search
-      ? `${entry.message} ${entry.module} ${entry.source_file_path}`
-          .toLowerCase()
-          .includes(search.toLowerCase())
-      : true;
-    const timestamp = new Date(entry.timestamp).getTime();
-    const sinceMatches = Number.isNaN(sinceTime) || timestamp >= sinceTime;
-    const untilMatches = Number.isNaN(untilTime) || timestamp <= untilTime;
-    return levelMatches && moduleMatches && searchMatches && sinceMatches && untilMatches;
-  });
-
-  return {
-    log_path: 'C:/Users/Mock/AppData/Local/Koko/data/koko.log',
-    entries: entries.slice(0, Math.max(1, limit)),
+    client_type: 'web',
+    client_name: clientName,
+    supported_containers: ['mp4', 'webm', 'mkv', 'mp3', 'flac', 'wav', 'ogg'],
+    supported_video_codecs: supportedVideoCodecs,
+    supported_audio_codecs: supportedAudioCodecs,
+    supported_subtitle_formats: ['vtt'],
+    max_video_width: 0,
+    max_video_height: 0,
+    max_bitrate_kbps: 0,
+    supports_adaptive_streaming: false,
+    prefer_hls: false,
   };
 }

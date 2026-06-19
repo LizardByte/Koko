@@ -1,10 +1,15 @@
 <script lang="ts">
   // SupportMetadata — Panel B of SectionSupport: "Link metadata" / "Metadata".
   // Shows the primary provider match summary (tags, overview, attribution) or
-  // an empty-state when nothing is linked. Self-contained; derives the primary
-  // match + provider internally from the metadata prop.
+  // an empty-state when nothing is linked. For movies/shows, also renders a
+  // "Force refresh" button + the interactive MetadataSearchPanel (search +
+  // manual link). Seasons/episodes show the inherited-metadata empty-state.
   // Replaces the right panel of renderSelectedItemSupportGrid()
   // (../client-web/src/app/itemPersonView.ts:990-1033).
+  import Button from './Button.svelte';
+  import MetadataSearchPanel from './MetadataSearchPanel.svelte';
+  import { item as itemStore, ui } from '$lib/stores';
+  import { canManuallyLinkMetadata } from '$lib/selectors';
   import type { MediaItemDetail, ItemMetadataResponse } from '$lib/api';
 
   type Props = { item: MediaItemDetail; metadata: ItemMetadataResponse | undefined };
@@ -17,10 +22,31 @@
   const provider = $derived(
     primaryMatch ? metadata?.providers.find((entry) => entry.id === primaryMatch.provider_id) : undefined,
   );
+  const supportsManualLinking = $derived(canManuallyLinkMetadata(item));
+  const isRefreshing = $derived(primaryMatch?.refresh_state === 'pending');
+
+  async function forceRefresh() {
+    try {
+      await itemStore.refreshMetadata(item.id);
+    } catch (err) {
+      ui.setError(err instanceof Error ? err.message : 'Failed to refresh media metadata.');
+    }
+  }
 </script>
 
 <div class="panel page-panel detail-card">
-  <div class="section-heading"><h3>{item.item_type === 'movie' || item.item_type === 'show' ? 'Link metadata' : 'Metadata'}</h3></div>
+  <div class="section-heading section-heading-actions">
+    <div><h3>{supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3></div>
+    {#if supportsManualLinking}
+      <Button
+        variant="secondary"
+        label={isRefreshing ? 'Refreshing metadata' : 'Force refresh metadata'}
+        icon="refresh-cw"
+        busy={isRefreshing}
+        onclick={forceRefresh}
+      />
+    {/if}
+  </div>
   {#if primaryMatch}
     <div class="linked-metadata-summary">
       <div class="hero-meta-row">
@@ -37,6 +63,12 @@
     </div>
   {:else}
     <div class="empty-state tight">No metadata is linked to this item yet.</div>
+  {/if}
+
+  {#if supportsManualLinking}
+    <MetadataSearchPanel itemValue={item} {metadata} />
+  {:else}
+    <div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>
   {/if}
 </div>
 

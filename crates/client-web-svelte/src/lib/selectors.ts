@@ -46,6 +46,60 @@ export function canManuallyLinkMetadata(item: MediaItemDetail): boolean {
   return item.item_type === 'movie' || item.item_type === 'show';
 }
 
+// --- Metadata search default-value helpers ---
+// Mirror vanilla itemPersonView.ts:73-124. Used to pre-fill the metadata
+// search form (query/year/language/providers) with sensible defaults.
+
+import type { MetadataProviderStatus } from './api';
+
+/**
+ * Metadata providers eligible for manual linking on this item: configured,
+ * implemented, non-secondary, and supporting the item's library kind.
+ * Mirrors vanilla selectedItemMetadataProviderOptions (itemPersonView.ts:73-80).
+ */
+export function metadataProviderOptions(
+  metadata: ItemMetadataResponse | undefined,
+  libraryKind: string | undefined,
+): MetadataProviderStatus[] {
+  const providers = metadata?.providers ?? [];
+  return providers
+    .filter((p) => p.role !== 'secondary')
+    .filter((p) => p.configured && p.implemented)
+    .filter((p) => !libraryKind || p.supported_kinds.includes(libraryKind));
+}
+
+/** Default search query: the item's display_title, or the first match's title. */
+export function defaultMetadataSearchTitle(
+  item: MediaItemDetail,
+  metadata: ItemMetadataResponse | undefined,
+): string {
+  return item.display_title.trim() || metadata?.matches[0]?.title?.trim() || '';
+}
+
+/** Default search year: the item's release_year, or the first match's. */
+export function defaultMetadataSearchYear(
+  item: MediaItemDetail,
+  metadata: ItemMetadataResponse | undefined,
+): string {
+  const year = item.release_year ?? metadata?.matches[0]?.release_year;
+  return typeof year === 'number' ? String(year) : '';
+}
+
+/** Default search language: the first provider's locale, or 'en'. */
+export function defaultMetadataSearchLanguage(
+  metadata: ItemMetadataResponse | undefined,
+): string {
+  return metadata?.matches[0]?.locale_key?.split('-')[0] || 'en';
+}
+
+/** The providers to pre-check in the search form (all eligible by default). */
+export function defaultMetadataSearchProviderIds(
+  metadata: ItemMetadataResponse | undefined,
+  libraryKind: string | undefined,
+): string[] {
+  return metadataProviderOptions(metadata, libraryKind).map((p) => p.id);
+}
+
 /** The cast/people for the item, from the first metadata match's people array. */
 export function selectedItemPeople(metadata: ItemMetadataResponse | undefined): ItemMetadataPerson[] {
   const people = metadata?.matches[0]?.people ?? [];

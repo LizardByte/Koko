@@ -696,6 +696,52 @@ legend {
   color: #9ab1d1;
 }
 
+/* Metadata search panel — mirrors vanilla style.css:1874-1994. */
+.metadata-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
+.metadata-search-card {
+  display: flex;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.metadata-search-poster {
+  width: 56px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.metadata-search-card p {
+  margin: 0.35rem 0 0;
+}
+
+.metadata-match-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.metadata-search-card > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.metadata-provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
 .shelf-row,
 .people-row,
 .extras-row {

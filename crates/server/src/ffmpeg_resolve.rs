@@ -246,6 +246,69 @@ pub fn probe_version(path: &std::path::Path) -> Option<String> {
         .filter(|line| !line.is_empty())
 }
 
+/// Encoders relevant to media transcoding that we surface in the discovery UI.
+/// Anything else ffmpeg reports is ignored to keep the display focused.
+const RELEVANT_ENCODERS: &[&str] = &[
+    "libx264",
+    "libx265",
+    "libvpx-vp9",
+    "libvpx",
+    "libsvtav1",
+    "libopus",
+    "libmp3lame",
+    "aac",
+];
+
+/// Run `ffmpeg -hide_banner -encoders` and return the subset of
+/// [`RELEVANT_ENCODERS`] that this build supports, preserving the allow-list
+/// order. Empty if the binary can't be probed. Only called during the on-demand
+/// Detect action, so the one ffmpeg invocation is acceptable.
+pub fn probe_encoders(path: &std::path::Path) -> Vec<String> {
+    let output = match std::process::Command::new(path)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    // Encoder data rows look like: ` V....D libx264   ... (codec h264)`.
+    // Collect the encoder names that appear, then filter to the allow-list in
+    // a stable order so the UI is deterministic.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let present: std::collections::HashSet<&str> =
+        stdout.lines().filter_map(parse_encoder_name).collect();
+    RELEVANT_ENCODERS
+        .iter()
+        .filter(|name| present.contains(**name))
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Extract the encoder name from a `-encoders` data row. Rows begin with a
+/// 6-char flags column (` V....D `, ` A..... `, etc.) followed by the name.
+/// Legend rows like ` V..... = Video` are rejected because the "name" starts
+/// with `=` rather than a letter.
+fn parse_encoder_name(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix(' ')?;
+    // The flags column is exactly 6 chars (type + 5 flag dots/letters).
+    let flags = rest.get(0..6)?;
+    if !matches!(flags.as_bytes()[0], b'V' | b'A' | b'S') {
+        return None;
+    }
+    let after_flags = rest.get(6..)?;
+    let name = after_flags.trim_start();
+    // Real encoder names start with a letter; legend rows yield `=` here.
+    let first = name.as_bytes().first()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let end = name.find(char::is_whitespace).unwrap_or(name.len());
+    if end == 0 {
+        return None;
+    }
+    Some(&name[..end])
+}
+
 /// Public accessor for the platform well-known directory list, for discovery.
 pub fn well_known_dirs_public() -> Vec<PathBuf> {
     WELL_KNOWN_DIRS.clone()
@@ -433,6 +496,67 @@ mod tests {
     #[test]
     fn probe_version_returns_none_for_missing_binary() {
         assert!(probe_version(std::path::Path::new("/definitely/does/not/exist/ffmpeg")).is_none());
+    }
+
+    #[test]
+    fn parse_encoder_name_extracts_from_data_row() {
+        assert_eq!(
+            parse_encoder_name(" V....D libx264              libx264 H.264 (codec h264)"),
+            Some("libx264")
+        );
+        assert_eq!(
+            parse_encoder_name(" A....D aac                  AAC (Advanced Audio Coding)"),
+            Some("aac")
+        );
+    }
+
+    #[test]
+    fn parse_encoder_name_rejects_legend_and_blank() {
+        assert_eq!(parse_encoder_name(" V..... = Video"), None);
+        assert_eq!(parse_encoder_name("Encoders:"), None);
+        assert_eq!(parse_encoder_name(""), None);
+        assert_eq!(parse_encoder_name("not a row"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_encoders_returns_relevant_subset_in_allow_list_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("ffmpeg");
+        // A shim that emits a few -encoders rows mixing relevant + irrelevant names.
+        // Recognized: libx264, libx265, aac. Irrelevant/ignored: foo, alias_pix.
+        // Order in output is intentionally not allow-list order.
+        let script = "#!/bin/sh\n\
+            echo ' V....D libx265              H.265 (codec hevc)'\n\
+            echo ' V....D alias_pix           Alias PIX (codec alias_pix)'\n\
+            echo ' V....D libx264              H.264 (codec h264)'\n\
+            echo ' V....D foo                 not relevant (codec foo)'\n\
+            echo ' A....D aac                 AAC (codec aac)'\n\
+            exit 0\n";
+        std::fs::write(&shim, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&shim).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&shim, perms).unwrap();
+
+        let encoders = probe_encoders(&shim);
+        // Subset of the allow-list, in allow-list order (libx264 before libx265
+        // even though libx265 appeared first in the output).
+        assert_eq!(
+            encoders,
+            vec![
+                "libx264".to_string(),
+                "libx265".to_string(),
+                "aac".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_encoders_returns_empty_for_missing_binary() {
+        assert!(
+            probe_encoders(std::path::Path::new("/definitely/does/not/exist/ffmpeg")).is_empty()
+        );
     }
 
     /// Smoke test that only runs when invoked with `--features real-ffmpeg-tests`

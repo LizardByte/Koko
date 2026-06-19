@@ -3346,6 +3346,7 @@ dependencies = [
  "sha2 0.11.0",
  "strsim 0.11.1",
  "tao",
+ "tempfile",
  "tmdb_client",
  "tokio",
  "tray-icon",

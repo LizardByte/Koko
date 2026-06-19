@@ -45,3 +45,4 @@ crates/client-web/dist/
 
 # git worktrees
 .worktrees/
+artifacts

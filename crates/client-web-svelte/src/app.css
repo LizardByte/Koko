@@ -1281,14 +1281,27 @@ legend {
   }
 
   .library-rail {
+    grid-column: auto;
+    grid-row: auto;
+    height: auto;
+    max-width: none;
     flex-direction: row;
+    align-items: center;
     overflow: auto;
     border-right: 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  .library-rail-top,
+  .library-rail-bottom {
+    flex-direction: row;
+    align-items: center;
+    min-height: auto;
+  }
+
   .rail-nav {
     flex-direction: row;
+    overflow: visible;
   }
 
   .rail-button {
@@ -1296,6 +1309,10 @@ legend {
   }
 
   .main-shell {
+    grid-column: auto;
+    grid-row: auto;
+    height: auto;
+    overflow: visible;
     padding: 0.9rem;
   }
 

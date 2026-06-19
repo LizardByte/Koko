@@ -31,11 +31,10 @@
     }
   });
 
-  // The rail collapses on item/person pages (matches isRailCollapsed in
-  // app.ts:312-314).
-  const railCollapsed = $derived(
-    page.url.pathname.startsWith('/items/') || page.url.pathname.startsWith('/people/'),
-  );
+  // The rail collapses to 88px on item pages (matches isRailCollapsed in
+  // app.ts:312-314 — note vanilla gates on route.page === 'item' only, NOT
+  // person pages, so the person page keeps the full-width rail).
+  const railCollapsed = $derived(page.url.pathname.startsWith('/items/'));
 
   // Page backdrop: real backdrop comes from the page (item/home). For now the
   // CSS var defaults to none; pages set it via inline style on .page-backdrop.

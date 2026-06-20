@@ -8,6 +8,8 @@ import { item } from '$lib/stores/item.svelte';
 import { libraries } from '$lib/stores/libraries.svelte';
 import { auth } from '$lib/stores/auth.svelte';
 import { ui } from '$lib/stores/ui.svelte';
+import { settings } from '$lib/stores/settings.svelte';
+import { activities } from '$lib/stores/activities.svelte';
 import {
   mockHome,
   mockLibraries,
@@ -25,7 +27,8 @@ export type Preset =
   | 'item-watched'
   | 'auth-logged-in'
   | 'requires-login'
-  | 'requires-setup';
+  | 'requires-setup'
+  | 'settings';
 
 // Single source of truth for the preset values — consumed by the Storybook
 // global argTypes.preset control (see .storybook/preview.ts) so the controls
@@ -42,6 +45,7 @@ export const PRESETS = [
   'auth-logged-in',
   'requires-login',
   'requires-setup',
+  'settings',
 ] as const satisfies readonly Preset[];
 
 /** Reset all store singletons to a clean baseline (call between stories). */
@@ -68,6 +72,12 @@ export function resetStores(): void {
   auth.users = [];
   auth.loading = false;
   ui.error = undefined;
+  settings.response = undefined;
+  settings.metadataProviders = [];
+  settings.loading = false;
+  activities.systemActivities = undefined;
+  activities.logsResponse = undefined;
+  activities.dashboardItems = [];
 }
 
 /** Apply a named preset to the store singletons. */
@@ -142,5 +152,19 @@ export function applyPreset(preset: Preset): void {
       // no users yet → WelcomeScreen shows.
       auth.bootstrap = { has_users: false };
       return;
+    case 'settings': {
+      // Load settings + activities + users from the mock API (async — the
+      // stores fetch their own data). Seed libraries + auth synchronously so
+      // the shell renders immediately.
+      libraries.libraries = mockLibraries();
+      auth.bootstrap = loggedInBootstrap;
+      auth.users = [mockUser(), mockUser({ id: 2, username: 'viewer', admin: false })];
+      // Kick off async loads (mock API resolves synchronously-ish in Storybook).
+      settings.load().catch(() => {});
+      activities.loadActivities().catch(() => {});
+      activities.loadDashboard().catch(() => {});
+      activities.loadLogs().catch(() => {});
+      return;
+    }
   }
 }

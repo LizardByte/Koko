@@ -1217,6 +1217,139 @@ legend {
   background: #d8ffe9;
 }
 
+/* --- Settings page layout (vanilla style.css) --- */
+
+.page-navbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.page-navbar-subtitle {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.page-navbar-meta {
+  font-size: 0.82rem;
+}
+
+.settings-page-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.settings-library-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-library-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.settings-library-actions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-library-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+/* Provider settings cards */
+
+.provider-settings-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.provider-settings-logo {
+  width: 2.75rem;
+  height: 2.75rem;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.provider-option-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+/* Activity progress bars (dashboard) */
+
+.activity-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.activity-progress-bar {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.activity-progress-fill {
+  display: block;
+  width: var(--activity-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5d7bff 0%, #8bf3ca 100%);
+}
+
+.settings-system-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.settings-system-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(8, 11, 18, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-system-activity-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.9rem;
+  align-items: start;
+}
+
 /* --- Table (data-table — used by logs, libraries, dashboard) --- */
 
 .table-shell {

@@ -44,6 +44,7 @@
         language: language.trim() || undefined,
         providers: selectedProviderIds.length ? selectedProviderIds : undefined,
       });
+      ui.clearError();
     } catch (err) {
       ui.setError(err instanceof Error ? err.message : 'Failed to search metadata.');
     }
@@ -56,6 +57,7 @@
         external_id: result.external_id,
         media_type: result.media_type,
       });
+      ui.clearError();
     } catch (err) {
       ui.setError(err instanceof Error ? err.message : 'Failed to link metadata.');
     }

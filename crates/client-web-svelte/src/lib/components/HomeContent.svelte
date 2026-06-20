@@ -8,7 +8,7 @@
   import Shelf from '$lib/components/Shelf.svelte';
   import MediaCard from '$lib/components/MediaCard.svelte';
   import Icon from '$lib/components/Icon.svelte';
-  import { catalog, libraries, ui } from '$lib/stores';
+  import { catalog, libraries, ui, activities } from '$lib/stores';
   import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '$lib/api';
   import { humanizeItemType, formatChildCount } from '$lib/ui';
   import { browseDetailPath } from '$lib/paths';
@@ -48,6 +48,19 @@
       .loadHome(libraryId)
       .then(() => ui.clearError())
       .catch((err) => ui.setError(err instanceof Error ? err.message : String(err)));
+  });
+
+  // Re-fetch home data when a metadata-refresh or library-scan activity
+  // updates (Phase 6.5d). Mirrors vanilla refreshPendingMetadataData's home-
+  // page branch (app.ts:772-807). Activities are updated by the layout poll.
+  $effect(() => {
+    const acts = activities.systemActivities?.activities ?? [];
+    const hasActive = acts.some(
+      (a) => (a.category === 'metadata_refresh' || a.category === 'library_scan') && a.state !== 'completed' && a.state !== 'failed',
+    );
+    if (hasActive) {
+      catalog.loadHome(libraryId).catch(() => {});
+    }
   });
 
   const shelves = $derived((catalog.home?.shelves ?? []).filter((shelf) => shelf.items.length > 0));

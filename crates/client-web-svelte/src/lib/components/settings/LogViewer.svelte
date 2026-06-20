@@ -13,6 +13,16 @@
     }
   });
 
+  // Re-fetch logs when activities update (Phase 6.5d — vanilla's else-branch
+  // poll re-fetches logs on settings pages, app.ts:808-831).
+  $effect(() => {
+    // Reading systemActivities makes this re-run when the poll updates them.
+    activities.systemActivities;
+    if (activities.logsResponse) {
+      activities.loadLogs().catch(() => {});
+    }
+  });
+
   // Local filter form state (applied on submit, not live).
   let fLevel = $state('');
   let fModule = $state('');

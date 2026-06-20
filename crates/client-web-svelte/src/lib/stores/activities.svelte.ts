@@ -3,9 +3,11 @@ import {
   getSystemActivities,
   getLogs,
   getLibraries,
+  getItems,
   type SystemActivitiesResponse,
   type LogEntriesResponse,
   type LogFilters,
+  type MediaItemSummary,
   EMPTY_LOG_FILTERS,
 } from '$lib/api';
 import { libraries } from './libraries.svelte';
@@ -15,6 +17,17 @@ class ActivitiesStore {
   logsResponse = $state<LogEntriesResponse | undefined>(undefined);
   logFilters = $state<LogFilters>({ ...EMPTY_LOG_FILTERS });
   loading = $state(false);
+
+  // Dashboard state (Phase 5 Step 6). dashboardItems = all items via getItems();
+  // metadataDashboardFilters = the filter form state.
+  dashboardItems = $state<MediaItemSummary[]>([]);
+  dashboardLoading = $state(false);
+  metadataDashboardFilters = $state<{ libraryId: string; itemType: string; refreshState: string; search: string }>({
+    libraryId: '',
+    itemType: '',
+    refreshState: '',
+    search: '',
+  });
 
   async loadActivities() {
     this.systemActivities = await getSystemActivities();
@@ -42,6 +55,25 @@ class ActivitiesStore {
 
   clearLogFilters() {
     this.logFilters = { ...EMPTY_LOG_FILTERS };
+  }
+
+  // --- Dashboard (Phase 5 Step 6) ---
+
+  async loadDashboard() {
+    this.dashboardLoading = true;
+    try {
+      this.dashboardItems = await getItems();
+    } finally {
+      this.dashboardLoading = false;
+    }
+  }
+
+  setDashboardFilters(filters: { libraryId: string; itemType: string; refreshState: string; search: string }) {
+    this.metadataDashboardFilters = { ...filters };
+  }
+
+  clearDashboardFilters() {
+    this.metadataDashboardFilters = { libraryId: '', itemType: '', refreshState: '', search: '' };
   }
 
   // --- Auto-refresh polling (Phase 6.5d) ---

@@ -14,6 +14,7 @@ import type {
   MediaItemExtra,
   MediaItemSummary,
   MediaLibrary,
+  MetadataPersonResponse,
 } from '$lib/api';
 
 // --- Items (MediaItemSummary shape — what cards/shelves render) ---
@@ -289,6 +290,58 @@ export function mockUser(overrides: Partial<BootstrapUser> = {}): BootstrapUser 
     username: 'admin',
     admin: true,
     preferred_metadata_languages: ['en-US'],
+    ...overrides,
+  };
+}
+
+// --- Person (for PersonHero stories) ---
+
+export function mockPerson(
+  overrides: Partial<MetadataPersonResponse> = {},
+): MetadataPersonResponse {
+  return {
+    person: {
+      id: 501,
+      provider_id: 'tmdb',
+      external_id: 'ada-lovelace',
+      locale_key: 'en-US',
+      name: 'Ada Lovelace',
+      known_for: ['The Analytical Engine', 'Notes on the Engine'],
+      biography:
+        'Augusta Ada King-Noel, Countess of Lovelace was an English mathematician and writer, chiefly known for her work on Charles Babbage\'s proposed mechanical general-purpose computer, the Analytical Engine.',
+      gender: 'Female',
+      birthday: '1815-12-10',
+      deathday: '1852-11-27',
+      birth_place: 'London, England',
+      profile_url: 'https://example.com/ada-lovelace',
+      cached_image_path: undefined,
+    },
+    credits: [
+      {
+        credit: {
+          id: 1,
+          metadata_link_id: 1,
+          media_item_id: 101,
+          role: 'Acting',
+          character_name: 'The Architect',
+          sort_order: 0,
+        },
+        item: movieSummary(),
+        hierarchy: [],
+      },
+      {
+        credit: {
+          id: 2,
+          metadata_link_id: 2,
+          media_item_id: 201,
+          role: 'Acting',
+          character_name: 'The Visionary',
+          sort_order: 1,
+        },
+        item: showSummary(),
+        hierarchy: [],
+      },
+    ],
     ...overrides,
   };
 }

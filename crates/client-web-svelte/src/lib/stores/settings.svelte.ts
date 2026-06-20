@@ -6,10 +6,12 @@ import {
   deleteLibrary,
   clearMetadataCache,
   getMetadataProviders,
+  runScheduledTask,
   type SettingsResponse,
   type SettingsSnapshot,
   type MediaLibrarySettings,
   type MetadataProviderStatus,
+  type ScheduledTaskId,
 } from '$lib/api';
 
 class SettingsStore {
@@ -53,6 +55,12 @@ class SettingsStore {
 
   async clearMetadataCache() {
     await clearMetadataCache();
+  }
+
+  async runTask(taskId: ScheduledTaskId) {
+    await runScheduledTask(taskId);
+    // Re-load to reflect any state changes from the task starting.
+    await this.load();
   }
 }
 

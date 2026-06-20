@@ -2,7 +2,7 @@
 // replacing the selector functions in ../client-web/src/app/selectors.ts and
 // itemPersonView.ts. These take explicit arguments (not the global state
 // singleton) so they're testable and Svelte-friendly.
-import { getArtworkUrl, resolveApiUrl, type MediaCollectionSummary, type MediaItemDetail, type MediaItemSummary, type ItemMetadataResponse } from './api';
+import { getArtworkUrl, resolveApiUrl, type MediaCollectionSummary, type MediaItemDetail, type MediaItemSummary, type ItemMetadataResponse, type MediaLibrarySettings, type MediaLibrary } from './api';
 import { libraries } from './stores/libraries.svelte';
 import type { ItemMetadataPerson } from './api';
 
@@ -44,6 +44,21 @@ export function backNavigationTarget(item: MediaItemDetail): { label: string; pa
 /** Whether the item supports manual metadata linking (movies/shows only). */
 export function canManuallyLinkMetadata(item: MediaItemDetail): boolean {
   return item.item_type === 'movie' || item.item_type === 'show';
+}
+
+/**
+ * Match a settings-library entry to its persisted runtime library by path.
+ * Mirrors persistedLibraryForSettings (../client-web/src/app/selectors.ts:42-50).
+ * Used by the libraries settings page to show scan/refresh/delete-missing
+ * actions + missing-items tags for persisted libraries.
+ */
+export function persistedLibraryForSettings(library: MediaLibrarySettings): MediaLibrary | undefined {
+  const configuredPaths = new Set(
+    [library.path, ...library.paths].map((path) => path.trim()).filter(Boolean),
+  );
+  return libraries.libraries.find((candidate) => {
+    return configuredPaths.has(candidate.path) || candidate.paths.some((path) => configuredPaths.has(path));
+  });
 }
 
 // --- Metadata search default-value helpers ---

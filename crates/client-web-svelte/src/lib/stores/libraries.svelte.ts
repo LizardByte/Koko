@@ -4,6 +4,7 @@ import {
   getLibraries,
   scanLibrary,
   refreshLibraryMetadata,
+  deleteMissingItems,
   type MediaLibrary,
 } from '$lib/api';
 
@@ -32,6 +33,12 @@ class LibrariesStore {
   async refreshMetadata(id: number) {
     const updated = await refreshLibraryMetadata(id);
     this.replace(updated);
+  }
+
+  async deleteMissing(id: number) {
+    await deleteMissingItems(id);
+    // Re-load to get updated missing counts.
+    await this.load();
   }
 
   private replace(updated: MediaLibrary) {

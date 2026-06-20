@@ -5,14 +5,17 @@ import {
   addLibrary,
   deleteLibrary,
   clearMetadataCache,
+  getMetadataProviders,
   type SettingsResponse,
   type SettingsSnapshot,
   type MediaLibrarySettings,
+  type MetadataProviderStatus,
 } from '$lib/api';
 
 class SettingsStore {
   response = $state<SettingsResponse | undefined>(undefined);
   loading = $state(false);
+  metadataProviders = $state<MetadataProviderStatus[]>([]);
 
   get settings(): SettingsSnapshot | undefined {
     return this.response?.settings;
@@ -25,7 +28,12 @@ class SettingsStore {
   async load() {
     this.loading = true;
     try {
-      this.response = await getSettings();
+      const [response, providers] = await Promise.all([
+        getSettings(),
+        getMetadataProviders().catch(() => []),
+      ]);
+      this.response = response;
+      this.metadataProviders = providers;
     } finally {
       this.loading = false;
     }

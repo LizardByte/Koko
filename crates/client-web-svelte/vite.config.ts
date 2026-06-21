@@ -16,21 +16,41 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 4173,
     // Proxy API requests to the Rust server so the dev server can talk to
-    // the real backend without CORS. Set KOKO_API_TARGET to override the
-    // default (https://127.0.0.1:9191 — the Rust server uses HTTPS by default).
-    // The proxy handles TLS termination so the browser sees same-origin HTTP.
+    // the real backend without CORS. Set KOKO_API_TARGET to the Rust server
+    // URL (e.g. https://127.0.0.1:9191).
+    //
+    // /api/* is always proxied (no SvelteKit route conflict).
+    // /login, /logout, /create_user are also SvelteKit page routes — but the
+    // browser navigates to them via GET (SvelteKit), while the API calls are
+    // POST. The proxy's bypass filter only proxies non-GET requests for those
+    // paths, so SvelteKit handles page navigation and the proxy handles API calls.
     proxy: process.env.KOKO_API_TARGET
-      ? Object.fromEntries(
-          ['/api', '/login', '/logout', '/create_user'].map((path) => [
-            path,
-            {
-              target: process.env.KOKO_API_TARGET,
-              changeOrigin: true,
-              // The Rust server uses self-signed certs by default — accept them.
-              secure: false,
-            },
-          ]),
-        )
+      ? {
+          '/api': {
+            target: process.env.KOKO_API_TARGET,
+            changeOrigin: true,
+            secure: false,
+          },
+          '/login': {
+            target: process.env.KOKO_API_TARGET,
+            changeOrigin: true,
+            secure: false,
+            // Only proxy POST (API call), let GET through to SvelteKit.
+            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
+          },
+          '/logout': {
+            target: process.env.KOKO_API_TARGET,
+            changeOrigin: true,
+            secure: false,
+            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
+          },
+          '/create_user': {
+            target: process.env.KOKO_API_TARGET,
+            changeOrigin: true,
+            secure: false,
+            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
+          },
+        }
       : undefined,
   },
   preview: {

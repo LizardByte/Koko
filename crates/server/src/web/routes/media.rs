@@ -165,6 +165,8 @@ pub enum SessionStream {
     Transcode {
         content_type: ContentType,
         stdout: ChildStdout,
+        /// Total duration in seconds (for X-Content-Duration header).
+        content_duration: Option<f64>,
     },
 }
 
@@ -178,10 +180,18 @@ impl<'r> Responder<'r, 'static> for SessionStream {
             SessionStream::Transcode {
                 content_type,
                 stdout,
-            } => Response::build()
-                .header(content_type)
-                .streamed_body(ReaderStream::one(stdout))
-                .ok(),
+                content_duration,
+            } => {
+                let mut builder = Response::build();
+                builder.header(content_type);
+                // X-Content-Duration tells the client the total media duration
+                // so it can pin the progress bar even when the fragmented-MP4
+                // stream doesn't carry a fixed total in its moov atom.
+                if let Some(duration) = content_duration {
+                    builder.raw_header("X-Content-Duration", format!("{:.3}", duration));
+                }
+                builder.streamed_body(ReaderStream::one(stdout)).ok()
+            }
         }
     }
 }
@@ -3571,11 +3581,15 @@ pub async fn get_session_stream(
         .unwrap_or_else(|| "mp4".into());
     let output_path = session_dir.join(format!("output.{}", container));
 
-    let source_path = db
-        .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
+    let (source_path, item_duration_ms) = db
+        .run(move |conn| {
+            let path = crate::media::resolve_media_item_source_path(conn, session.item_id)?;
+            let duration = crate::media::resolve_media_item_duration_ms(conn, session.item_id)?;
+            Ok::<_, diesel::result::Error>((path, duration))
+        })
         .await
-        .map_err(|_| Status::InternalServerError)?
-        .ok_or(Status::NotFound)?;
+        .map_err(|_| Status::InternalServerError)?;
+    let source_path = source_path.ok_or(Status::NotFound)?;
 
     let alternate_audio_stream_selected = selected_audio_stream_index.unwrap_or_default() > 0;
     let video_codec =
@@ -3614,6 +3628,7 @@ pub async fn get_session_stream(
         },
         start_time_ms: start_ms.filter(|value| *value > 0),
         audio_stream_index: selected_audio_stream_index,
+        duration_ms: item_duration_ms,
     };
 
     stop_active_transcode(&session_id).await;
@@ -3646,6 +3661,7 @@ pub async fn get_session_stream(
             Ok(SessionStream::Transcode {
                 content_type: ContentType::MP4,
                 stdout,
+                content_duration: item_duration_ms.map(|ms| ms as f64 / 1000.0),
             })
         }
         Err(e) => {

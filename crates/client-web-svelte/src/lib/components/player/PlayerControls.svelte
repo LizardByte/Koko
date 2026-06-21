@@ -19,12 +19,14 @@
     isVideo = true,
     audioTracks = [],
     onseek,
+    onseekTo,
     onplaypause,
     onclose,
   }: {
     isVideo?: boolean;
     audioTracks?: MediaAudioTrack[];
     onseek?: (seconds: number) => void;
+    onseekTo?: (seconds: number) => void;
     onplaypause?: () => void;
     onclose?: () => void;
   } = $props();
@@ -88,9 +90,9 @@
   function onProgressChange() {
     isScrubbing = false;
     const duration = playback.duration;
-    if (duration > 0 && onseek) {
+    if (duration > 0 && onseekTo) {
       const targetSeconds = (Number(progressValue) / 1000) * duration;
-      onseek(targetSeconds - playback.currentTime); // relative seek
+      onseekTo(targetSeconds);
     }
     showControls();
   }

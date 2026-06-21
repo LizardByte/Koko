@@ -168,22 +168,45 @@
     };
   });
 
+  // --- Sync store → media element (volume, muted) ---
+
+  $effect(() => {
+    const el = mediaElement;
+    if (!el) return;
+    // Write store values to the element. The element's volumechange event
+    // updates the store (read direction); this $effect handles the write
+    // direction so the volume slider actually controls the audio.
+    el.volume = playback.volume;
+    el.muted = playback.muted;
+  });
+
   // --- Seek handler for controls ---
 
+  /** Relative seek (±seconds) — used by skip buttons + keyboard shortcuts. */
   function seek(deltaSeconds: number) {
     const el = mediaElement;
     if (!el) return;
     if (playback.isTranscoding) {
       // For transcoded streams, update startMs + reload the stream.
       playback.startMs = Math.max(0, Math.floor((el.currentTime + deltaSeconds) * 1000));
-      // Force a session re-creation by toggling the stream URL.
       hasAppliedInitialSeek = false;
-      // The streamUrl derived will change because startMs changed.
-      // We need to reload the media element.
       el.load();
     } else {
       // Direct-play: seek client-side.
       el.currentTime = Math.max(0, el.currentTime + deltaSeconds);
+    }
+  }
+
+  /** Absolute seek (to a specific second) — used by the progress slider. */
+  function seekTo(targetSeconds: number) {
+    const el = mediaElement;
+    if (!el) return;
+    if (playback.isTranscoding) {
+      playback.startMs = Math.max(0, Math.floor(targetSeconds * 1000));
+      hasAppliedInitialSeek = false;
+      el.load();
+    } else {
+      el.currentTime = Math.max(0, Math.min(targetSeconds, el.duration || targetSeconds));
     }
   }
 
@@ -258,6 +281,7 @@
         isVideo={!isAudio}
         {audioTracks}
         onseek={seek}
+        onseekTo={seekTo}
         onplaypause={togglePlayPause}
         onclose={() => playback.close()}
       />

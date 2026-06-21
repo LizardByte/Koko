@@ -35,6 +35,10 @@
   let progressValue = $state(0);
   let isScrubbing = $state(false);
 
+  // Fill percentages for the WebKit slider gradient.
+  const progressFill = $derived(`${progressValue / 10}%`);
+  const volumeFill = $derived(`${(playback.muted ? 0 : playback.volume) * 100}%`);
+
   // Sync slider from playback.currentTime unless scrubbing.
   $effect(() => {
     if (isScrubbing) return;
@@ -181,6 +185,7 @@
       max="1000"
       step="1"
       bind:value={progressValue}
+      style="--slider-fill: {progressFill}"
       aria-label="Playback position"
       aria-valuemin={0}
       aria-valuemax={1000}
@@ -217,6 +222,7 @@
           max="1"
           step="0.01"
           value={playback.muted ? 0 : playback.volume}
+          style="--slider-fill: {volumeFill}"
           aria-label="Volume"
           oninput={(e) => { playback.volume = Number((e.currentTarget as HTMLInputElement).value); playback.muted = playback.volume === 0; }}
         />

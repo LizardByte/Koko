@@ -1927,21 +1927,28 @@ legend {
 
 .player-progress,
 .player-volume {
-  accent-color: #8bf3ca;
   cursor: pointer;
-  /* Reset native range styling so the thumb can reach the true edges (0 and max).
-     Without this, the native thumb's width creates ~10% dead zones at both ends. */
+  /* Reset native range styling so the thumb can reach the true edges. */
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
+  height: 1rem;
 }
 
-/* WebKit track + thumb */
+/* WebKit: track + filled portion via gradient + thumb */
 .player-progress::-webkit-slider-runnable-track,
 .player-volume::-webkit-slider-runnable-track {
   height: 0.4rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.2);
+  /* Filled portion via a CSS variable --slider-fill (0-100%).
+     Set inline via Svelte: style="--slider-fill: 45%" */
+  background: linear-gradient(
+    to right,
+    #8bf3ca 0%,
+    #8bf3ca var(--slider-fill, 0%),
+    rgba(255, 255, 255, 0.2) var(--slider-fill, 0%),
+    rgba(255, 255, 255, 0.2) 100%
+  );
 }
 
 .player-progress::-webkit-slider-thumb,
@@ -1954,14 +1961,22 @@ legend {
   background: #8bf3ca;
   margin-top: -0.3rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  border: 0;
 }
 
-/* Firefox track + thumb */
+/* Firefox */
 .player-progress::-moz-range-track,
 .player-volume::-moz-range-track {
   height: 0.4rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.2);
+}
+
+.player-progress::-moz-range-progress,
+.player-volume::-moz-range-progress {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: #8bf3ca;
 }
 
 .player-progress::-moz-range-thumb,

@@ -37,12 +37,17 @@
     const media = el;
 
     function onTimeUpdate() {
-      playback.currentTime = media.currentTime;
+      // For transcoded streams, the element's currentTime is relative to the
+      // stream start (0-based from start_ms). Add the base offset so the
+      // displayed position reflects the true position in the media.
+      // Mirrors vanilla's playbackBaseOffsetSeconds (playbackController.ts:1027).
+      const baseOffset = playback.isTranscoding ? playback.startMs / 1000 : 0;
+      playback.currentTime = baseOffset + media.currentTime;
       // Progress reporting (Opportunity D) — every 15s boundary.
       if (playback.item) {
         playback.reportProgress(
           playback.item.id,
-          media.currentTime,
+          baseOffset + media.currentTime,
           playback.item.duration_ms,
         );
       }
@@ -202,10 +207,16 @@
     const el = mediaElement;
     if (!el) return;
     if (playback.isTranscoding) {
+      // For transcoded streams, seek by reloading the stream with a new
+      // start_ms. The server starts from the target position; the element's
+      // currentTime resets to 0 (relative). The base offset in onTimeUpdate
+      // compensates so the displayed position is correct.
       playback.startMs = Math.max(0, Math.floor(targetSeconds * 1000));
-      hasAppliedInitialSeek = false;
+      playback.currentTime = targetSeconds; // optimistic update for the slider
+      hasAppliedInitialSeek = true; // don't seek again on metadata load
       el.load();
     } else {
+      // Direct-play: seek client-side.
       el.currentTime = Math.max(0, Math.min(targetSeconds, el.duration || targetSeconds));
     }
   }

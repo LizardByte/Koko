@@ -79,9 +79,11 @@
     }
     function onPlaying() {
       playback.isLoading = false;
+      playback.hasError = false; // clear stale errors when playback succeeds
     }
     function onCanPlay() {
       playback.isLoading = false;
+      playback.hasError = false; // clear stale errors when stream is ready
       applyInitialSeek();
     }
     function onLoadedMetadata() {

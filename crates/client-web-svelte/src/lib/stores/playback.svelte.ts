@@ -177,6 +177,7 @@ class PlaybackStore {
     this.activeAudioStreamIndex = streamIndex;
     this.startMs = Math.floor(this.currentTime * 1000);
     this.isLoading = true;
+    this.hasError = false; // clear any stale error from the previous stream
 
     // Re-create the session with the new audio track.
     if (this.session) {

@@ -139,12 +139,17 @@
     showControls();
   }
 
-  // The active audio track index. When no explicit override is set, use the
-  // track marked as default in the file (not always index 0).
+  // The active audio track, as an ARRAY index (0-based position in audioTracks).
+  // The template compares this against the {#each} loop index.
   const activeAudioIndex = $derived.by(() => {
-    if (playback.activeAudioStreamIndex !== undefined) return playback.activeAudioStreamIndex;
-    const defaultTrack = audioTracks.find((t) => t.default);
-    return defaultTrack ? audioTracks.indexOf(defaultTrack) : 0;
+    // If an explicit stream index was set (user switched), find its array position.
+    if (playback.activeAudioStreamIndex !== undefined) {
+      const pos = audioTracks.findIndex((t) => t.index === playback.activeAudioStreamIndex);
+      if (pos >= 0) return pos;
+    }
+    // Otherwise use the track marked 'default' in the container.
+    const defaultPos = audioTracks.findIndex((t) => t.default);
+    return defaultPos >= 0 ? defaultPos : 0;
   });
 </script>
 

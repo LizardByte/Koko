@@ -665,26 +665,15 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
-    // Dev-mode fallback: a network failure flips the session to mock so the
-    // app keeps working without a backend. In production, the error is thrown.
-    // WARN so the developer knows WHY mock data appeared (a silent fallback
-    // here caused debugging confusion before).
-    if (import.meta.env.DEV) {
-      console.warn(`[Koko] API ${method} ${path} failed (network error), falling back to mock mode. Check KOKO_API_TARGET / server status.`, err);
-      activeApiMode = 'mock';
-      return (await import('./mockApi')).dispatch<T>(method, path, body);
-    }
+    // Network failure — throw (no silent mock fallback). The caller surfaces
+    // the error via ui.setError(). Mock mode is Storybook-only, gated by
+    // VITE_USE_MOCK_API at the top of this file.
     throw err;
   }
 
   if (!response.ok) {
     if (response.status === 401) {
       clearStoredAuthToken();
-    }
-    if (import.meta.env.DEV) {
-      console.warn(`[Koko] API ${method} ${path} returned ${response.status}, falling back to mock mode.`);
-      activeApiMode = 'mock';
-      return (await import('./mockApi')).dispatch<T>(method, path, body);
     }
     throw new Error(`${method} ${path} failed: ${response.status} ${response.statusText}`);
   }

@@ -17,16 +17,20 @@ export default defineConfig({
     port: 4173,
     // Proxy API requests to the Rust server so the dev server can talk to
     // the real backend without CORS. Set KOKO_API_TARGET to override the
-    // default (http://127.0.0.1:3000). Without this, you must either build +
-    // serve from the Rust server (same-origin) or set VITE_API_BASE_URL +
-    // configure CORS on the server.
+    // default (https://127.0.0.1:9191 — the Rust server uses HTTPS by default).
+    // The proxy handles TLS termination so the browser sees same-origin HTTP.
     proxy: process.env.KOKO_API_TARGET
-      ? {
-          '/api': { target: process.env.KOKO_API_TARGET, changeOrigin: true },
-          '/login': { target: process.env.KOKO_API_TARGET, changeOrigin: true },
-          '/logout': { target: process.env.KOKO_API_TARGET, changeOrigin: true },
-          '/create_user': { target: process.env.KOKO_API_TARGET, changeOrigin: true },
-        }
+      ? Object.fromEntries(
+          ['/api', '/login', '/logout', '/create_user'].map((path) => [
+            path,
+            {
+              target: process.env.KOKO_API_TARGET,
+              changeOrigin: true,
+              // The Rust server uses self-signed certs by default — accept them.
+              secure: false,
+            },
+          ]),
+        )
       : undefined,
   },
   preview: {

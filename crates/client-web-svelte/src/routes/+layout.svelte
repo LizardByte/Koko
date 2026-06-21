@@ -12,6 +12,7 @@
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
   import PlayerOverlay from '$lib/components/player/PlayerOverlay.svelte';
+  import { spatialNavigation } from '$lib/actions/spatialNavigation';
   import KokoLogo from '$lib/assets/Koko.svg';
 
   let { children } = $props();
@@ -135,7 +136,7 @@
 {:else if onLoginRoute && !auth.isLoggedIn}
   <LoginScreen />
 {:else if auth.isLoggedIn}
-  <div class="app-shell" class:rail-collapsed={railCollapsed}>
+  <div class="app-shell" class:rail-collapsed={railCollapsed} use:spatialNavigation>
     <div class="page-backdrop"></div>
     <Rail collapsed={railCollapsed} />
     <div class="main-shell">

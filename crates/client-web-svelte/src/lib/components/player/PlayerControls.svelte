@@ -112,6 +112,18 @@
     showControls();
   }
 
+  function volumeUp() {
+    playback.volume = Math.min(1, playback.volume + 0.1);
+    playback.muted = playback.volume === 0;
+    showControls();
+  }
+
+  function volumeDown() {
+    playback.volume = Math.max(0, playback.volume - 0.1);
+    playback.muted = playback.volume === 0;
+    showControls();
+  }
+
   function toggleFullscreen() {
     const shell = document.querySelector('.player-shell');
     if (document.fullscreenElement) {
@@ -169,6 +181,8 @@
     onMute: toggleMute,
     onFullscreen: toggleFullscreen,
     onClose: () => onclose?.(),
+    onVolumeUp: volumeUp,
+    onVolumeDown: volumeDown,
   }}
   tabindex="-1"
   role="region"

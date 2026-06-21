@@ -3,6 +3,21 @@
  *
  * Ported from ../client-web/src/style.css (the vanilla single-file stylesheet)
  * with per-component rules moved into the components that own them. This file
+ *
+ * --- Spatial navigation focus indicator (gamepad/remote) ---
+ * Shows a clear green outline on the focused element when navigating with
+ * a gamepad or arrow keys. Suppressed when the mouse is used.
+ */
+.is-spatial-focus {
+  outline: 3px solid #8bf3ca;
+  outline-offset: 4px;
+  border-radius: 4px;
+  z-index: 10;
+  position: relative;
+}
+
+/*
+ * Koko web client (Svelte 5) — shared design-system styles (continued).
  * keeps only: design tokens, global element rules, cross-component utilities,
  * and the app-shell/library-rail/main-shell/page-backdrop layout.
  *

@@ -76,6 +76,23 @@
     timer = setTimeout(tick, 1500);
     return () => clearTimeout(timer);
   });
+
+  // Never-scanned library polling (Phase 7 minor gap). When any library has
+  // status 'never_scanned', poll every 1800ms to detect when the initial scan
+  // starts. Mirrors vanilla shouldAutoRefreshLibraries (app.ts:172-175).
+  $effect(() => {
+    if (!auth.isLoggedIn || !activities.shouldPollLibraries) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      libraries.load().finally(() => {
+        if (activities.shouldPollLibraries) {
+          timer = setTimeout(tick, 1800);
+        }
+      });
+    };
+    timer = setTimeout(tick, 1800);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 {#if auth.loading}

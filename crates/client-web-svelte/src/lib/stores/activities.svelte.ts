@@ -101,6 +101,15 @@ class ActivitiesStore {
   }
 
   /**
+   * Whether any library has never been scanned (status === 'never_scanned').
+   * Triggers a separate 1800ms polling loop that re-fetches libraries until
+   * the initial scan starts. Mirrors shouldAutoRefreshLibraries (app.ts:172-175).
+   */
+  get shouldPollLibraries(): boolean {
+    return libraries.libraries.some((lib) => lib.status === 'never_scanned');
+  }
+
+  /**
    * One poll tick: re-fetch activities + libraries. Page-specific data
    * (item/home) is re-fetched by the stores that own it when their inputs
    * change reactively, so we only need the global bundle here. Called by the

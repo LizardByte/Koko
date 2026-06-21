@@ -8,6 +8,7 @@ import {
   getUsers,
   updateUser,
   clearStoredAuthToken,
+  setStoredAuthToken,
   type AppBootstrapResponse,
   type BootstrapUser,
   type LoginRequest,
@@ -53,12 +54,14 @@ class AuthStore {
   }
 
   async login(request: LoginRequest): Promise<void> {
-    await loginUser(request);
+    const { token } = await loginUser(request);
+    setStoredAuthToken(token);
     await this.init();
   }
 
   async createUser(request: CreateUserRequest): Promise<void> {
-    await createUser(request);
+    const token = await createUser(request);
+    setStoredAuthToken(token);
     await this.init();
   }
 

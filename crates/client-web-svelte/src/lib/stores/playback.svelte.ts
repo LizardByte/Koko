@@ -69,7 +69,9 @@ class PlaybackStore {
       this.activeAudioStreamIndex !== undefined && this.activeAudioStreamIndex > 0;
     const isRemuxingForAudio =
       isAudioStreamOverride && !this.session.decision.transcode_required;
-    const streamStartMs = isRemuxingForAudio ? this.startMs : 0;
+    // Pass startMs for both transcoded and remuxed streams. For direct-play
+    // (no transcode, no audio override), startMs is 0 (client-side seek handles it).
+    const streamStartMs = (this.isTranscoding || isRemuxingForAudio) ? this.startMs : 0;
     return getSessionStreamUrl(
       this.session.session_id,
       streamStartMs,

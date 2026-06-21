@@ -139,7 +139,13 @@
     showControls();
   }
 
-  const activeAudioIndex = $derived(playback.activeAudioStreamIndex ?? 0);
+  // The active audio track index. When no explicit override is set, use the
+  // track marked as default in the file (not always index 0).
+  const activeAudioIndex = $derived.by(() => {
+    if (playback.activeAudioStreamIndex !== undefined) return playback.activeAudioStreamIndex;
+    const defaultTrack = audioTracks.find((t) => t.default);
+    return defaultTrack ? audioTracks.indexOf(defaultTrack) : 0;
+  });
 </script>
 
 <svelte:window onmousemove={showControls} />

@@ -22,9 +22,9 @@
   }
 
   function select(index: number) {
-    if (index !== activeIndex) {
-      onselect(index);
-    }
+    // Always call onselect, even if it's the "active" index — the displayed
+    // active index may not match what's actually playing (default track mismatch).
+    onselect(index);
     isOpen = false;
   }
 </script>

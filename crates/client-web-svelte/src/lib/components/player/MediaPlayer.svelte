@@ -207,14 +207,11 @@
     const el = mediaElement;
     if (!el) return;
     if (playback.isTranscoding) {
-      // For transcoded streams, seek by reloading the stream with a new
-      // start_ms. The server starts from the target position; the element's
-      // currentTime resets to 0 (relative). The base offset in onTimeUpdate
-      // compensates so the displayed position is correct.
+      // Update startMs → streamUrl derived changes → src attribute changes →
+      // browser reloads the stream from the new position.
       playback.startMs = Math.max(0, Math.floor(targetSeconds * 1000));
       playback.currentTime = targetSeconds; // optimistic update for the slider
-      hasAppliedInitialSeek = true; // don't seek again on metadata load
-      el.load();
+      hasAppliedInitialSeek = true; // don't re-seek on metadata load
     } else {
       // Direct-play: seek client-side.
       el.currentTime = Math.max(0, Math.min(targetSeconds, el.duration || targetSeconds));

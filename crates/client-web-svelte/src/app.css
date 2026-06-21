@@ -122,7 +122,7 @@ button:disabled {
   stroke-width: 2.1;
 }
 
-input,
+input:not([type='range']),
 select,
 textarea {
   width: 100%;

@@ -9,6 +9,7 @@
   // Shown only for movies/shows (canManuallyLinkMetadata); seasons/episodes
   // show the "inherited metadata" empty-state instead (handled by parent).
   import Button from './Button.svelte';
+  import { untrack } from 'svelte';
   import { item as itemStore, ui } from '$lib/stores';
   import { resolveApiUrl, type MediaItemDetail, type ItemMetadataResponse, type MetadataSearchResult } from '$lib/api';
   import {
@@ -28,11 +29,12 @@
 
   // Form state — pre-filled with defaults from the current item/metadata.
   // These capture the initial values intentionally (the form shouldn't reset
-  // when the user is mid-typing). Untracked reads avoid the Svelte warning.
-  const initialTitle = defaultMetadataSearchTitle(itemValue, metadata);
-  const initialYear = defaultMetadataSearchYear(itemValue, metadata);
-  const initialLanguage = defaultMetadataSearchLanguage(metadata);
-  const initialProviderIds = defaultMetadataSearchProviderIds(metadata, library?.kind);
+  // when the user is mid-typing). untrack avoids the state_referenced_locally
+  // warning by explicitly opting out of reactivity for the initial values.
+  const initialTitle = untrack(() => defaultMetadataSearchTitle(itemValue, metadata));
+  const initialYear = untrack(() => defaultMetadataSearchYear(itemValue, metadata));
+  const initialLanguage = untrack(() => defaultMetadataSearchLanguage(metadata));
+  const initialProviderIds = untrack(() => defaultMetadataSearchProviderIds(metadata, library?.kind));
 
   let query = $state(initialTitle);
   let year = $state(initialYear);

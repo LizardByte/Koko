@@ -124,7 +124,7 @@
   {:else}
     <div class="person-credit-grid" bind:this={grid}>
       {#each groups as group (group.root.id)}
-        <article
+        <div
           class="person-credit-card"
           class:is-active={activeGroupId === group.root.id}
           data-person-credit-card
@@ -142,7 +142,7 @@
           }}
         >
           <MediaCard item={group.root} />
-        </article>
+        </div>
         {#if group.seasons.length}
           <div
             class="person-credit-tray person-season-tray"
@@ -161,7 +161,7 @@
             </div>
             <div class="person-season-credit-grid">
               {#each group.seasons as seasonGroup (seasonGroup.season.id)}
-                <article
+                <div
                   class="person-season-credit-card"
                   class:is-active={activeSeasonId === seasonGroup.season.id}
                   data-person-season-credit-card
@@ -179,7 +179,7 @@
                   }}
                 >
                   <MediaCard item={seasonGroup.season} />
-                </article>
+                </div>
                 {#if seasonGroup.episodes.length}
                   <div
                     class="person-credit-tray person-episode-tray"

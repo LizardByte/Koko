@@ -250,12 +250,15 @@
         <video
           bind:this={mediaElement}
           autoplay
- preload="metadata"
+          preload="metadata"
           playsinline
           src={streamUrl}
           poster={posterUrl}
         >
-          {#each subtitleTracks as track (track.index)}
+          <!-- a11y: Svelte requires a static captions track element.
+               When subtitles are available, the first one is also kind=captions. -->
+          <track kind="captions" label={subtitleTracks[0]?.label ?? 'Captions'} src={subtitleTracks[0] ? resolveApiUrl(subtitleTracks[0].url) : undefined} />
+          {#each subtitleTracks.slice(1) as track (track.index)}
             <track kind="subtitles" label={track.label} src={resolveApiUrl(track.url)} />
           {/each}
         </video>

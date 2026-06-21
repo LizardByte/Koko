@@ -22,6 +22,14 @@ export function formatDuration(ms?: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+/** Formats a position in seconds as a media timestamp (e.g. "1:23:45"). */
+export function formatMediaTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return '0:00';
+  }
+  return formatDuration(Math.floor(seconds * 1000));
+}
+
 export function formatBitRate(bitsPerSecond?: number): string {
   if (typeof bitsPerSecond !== 'number' || !Number.isFinite(bitsPerSecond) || bitsPerSecond <= 0) {
     return 'Unknown';

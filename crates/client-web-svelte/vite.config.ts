@@ -15,40 +15,19 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 4173,
-    // Proxy API requests to the Rust server so the dev server can talk to
-    // the real backend without CORS. Set KOKO_API_TARGET to the Rust server
-    // URL (e.g. https://127.0.0.1:9191).
+    // Proxy to the Rust server via a subpath. All requests to /proxy/* are
+    // forwarded to KOKO_API_TARGET (e.g. https://127.0.0.1:9191), with the
+    // /proxy prefix stripped. The client sets VITE_API_BASE_URL=/proxy so
+    // all API calls go through this proxy — no CORS, no route conflicts.
     //
-    // /api/* is always proxied (no SvelteKit route conflict).
-    // /login, /logout, /create_user are also SvelteKit page routes — but the
-    // browser navigates to them via GET (SvelteKit), while the API calls are
-    // POST. The proxy's bypass filter only proxies non-GET requests for those
-    // paths, so SvelteKit handles page navigation and the proxy handles API calls.
+    // Usage: KOKO_API_TARGET=https://127.0.0.1:9191 npm run dev
     proxy: process.env.KOKO_API_TARGET
       ? {
-          '/api': {
+          '/proxy': {
             target: process.env.KOKO_API_TARGET,
             changeOrigin: true,
             secure: false,
-          },
-          '/login': {
-            target: process.env.KOKO_API_TARGET,
-            changeOrigin: true,
-            secure: false,
-            // Only proxy POST (API call), let GET through to SvelteKit.
-            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
-          },
-          '/logout': {
-            target: process.env.KOKO_API_TARGET,
-            changeOrigin: true,
-            secure: false,
-            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
-          },
-          '/create_user': {
-            target: process.env.KOKO_API_TARGET,
-            changeOrigin: true,
-            secure: false,
-            bypass: (req) => (req.method === 'GET' ? req.url : undefined),
+            rewrite: (path) => path.replace(/^\/proxy/, ''),
           },
         }
       : undefined,

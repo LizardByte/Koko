@@ -4,12 +4,14 @@
   // setup/login; otherwise renders the rail + page backdrop + current page.
   import '../app.css';
   import { onMount } from 'svelte';
+  import { beforeNavigate } from '$app/navigation';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { auth, ui, libraries, activities } from '$lib/stores';
+  import { auth, ui, libraries, activities, playback } from '$lib/stores';
   import Rail from '$lib/components/Rail.svelte';
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
+  import PlayerOverlay from '$lib/components/player/PlayerOverlay.svelte';
   import KokoLogo from '$lib/assets/Koko.svg';
 
   let { children } = $props();
@@ -93,6 +95,22 @@
     timer = setTimeout(tick, 1800);
     return () => clearTimeout(timer);
   });
+
+  // Opportunity H: intercept back-button when the player overlay is open.
+  // When the user pressed back (popstate) and a player state was pushed,
+  // close the player instead of navigating away.
+  beforeNavigate(({ type }) => {
+    if (type === 'leave') return;
+    // If the player is open and this is a popstate (back button), close it.
+    if (playback.isOpen && type === 'popstate') {
+      if (playback.mode === 'media') {
+        playback.close();
+      } else if (playback.mode === 'trailer') {
+        playback.closeTrailer();
+      }
+      // Don't cancel — let the back navigation proceed (it undoes our pushState).
+    }
+  });
 </script>
 
 {#if auth.loading}
@@ -129,6 +147,8 @@
       </div>
     </div>
   </div>
+  <!-- Player overlay — rendered above the app shell when playback is active -->
+  <PlayerOverlay />
 {:else}
   <!-- Fallback during auth transitions. -->
   <div class="auth-shell">

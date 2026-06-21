@@ -6,7 +6,9 @@
   // playback controller.
   import MediaExtraCard from './MediaExtraCard.svelte';
   import { type MediaItemExtra } from '$lib/api';
-  import { ui } from '$lib/stores';
+  import { playback } from '$lib/stores';
+  import { mediaExtraToTrailerOption } from '$lib/mediaExtras';
+  import { extractYouTubeVideoId } from '$lib/youtube';
 
   type Props = { extras: MediaItemExtra[] };
   let { extras }: Props = $props();
@@ -14,7 +16,16 @@
   const visible = $derived(extras.filter((extra) => extra.url));
 
   function play(extra: MediaItemExtra) {
-    ui.setError(`Playing "${extra.title ?? extra.extra_type}" is not yet implemented (playbackController spike).`);
+    // If the extra is a YouTube URL, open it in the trailer overlay.
+    // Otherwise, it's a direct media file — for now, still surface as not
+    // implemented (requires a session for the extra's item).
+    if (extra.url && extractYouTubeVideoId(extra.url)) {
+      playback.openTrailer(mediaExtraToTrailerOption(extra));
+    } else {
+      // Non-YouTube extras would need their own playback session.
+      // For now, open as a trailer (direct URL playback via the overlay).
+      playback.openTrailer(mediaExtraToTrailerOption(extra));
+    }
   }
 </script>
 

@@ -10,7 +10,8 @@
     backNavigationTarget,
   } from '$lib/selectors';
   import { resumablePlaybackPositionMs } from '$lib/playbackProgress';
-  import { libraries, item, ui } from '$lib/stores';
+  import { libraries, item, playback } from '$lib/stores';
+  import { currentTrailerOptions, currentThemeSongTarget, themeSongSourceFromUrl } from '$lib/mediaTargets';
   import type { MediaItemDetail, MediaPlaybackTarget } from '$lib/api';
 
   type Props = { itemValue: MediaItemDetail };
@@ -23,7 +24,7 @@
   const restartTarget = $derived(
     itemValue.playable ? undefined : itemValue.restart_playback_target ?? undefined,
   );
-  const hasTrailer = $derived(Boolean(itemValue.trailer_url));
+  const hasTrailer = $derived(Boolean(itemValue.trailer_url) || (itemValue.extras ?? []).some((e) => e.extra_type === 'trailer' && e.url));
   const hasThemeSong = $derived(Boolean(itemValue.theme_song_url));
 
   function back() {
@@ -36,17 +37,24 @@
     }
   }
 
-  function play(_startMs: number) {
-    ui.setError(`Playback of "${itemValue.display_title}" is not yet implemented (playbackController spike).`);
+  function play(startMs: number) {
+    playback.start(itemValue, startMs);
   }
   function playTarget(target: MediaPlaybackTarget) {
-    ui.setError(`Playback target "${target.label}" is not yet implemented (playbackController spike).`);
+    playback.start(itemValue, target.start_ms);
   }
   function playTrailer() {
-    ui.setError(`Trailer playback is not yet implemented (playbackController spike).`);
+    const options = currentTrailerOptions(itemValue);
+    if (options[0]) {
+      playback.openTrailer(options[0]);
+    }
   }
   function playThemeSong() {
-    ui.setError(`Theme song playback is not yet implemented (playbackController spike).`);
+    const target = currentThemeSongTarget(itemValue);
+    if (target) {
+      const source = themeSongSourceFromUrl(target.url, target.title);
+      playback.playThemeSong(source);
+    }
   }
 
   function formatResumeLabel(ms: number): string {

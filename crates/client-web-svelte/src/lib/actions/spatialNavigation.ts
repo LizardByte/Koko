@@ -117,14 +117,14 @@ function moveFocus(direction: Direction): void {
     // Nothing focused — focus the first visible element.
     const first = getVisibleFocusable()[0];
     first?.focus();
-    first?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    first?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     return;
   }
 
   const target = findSpatialTarget(current, direction);
   if (target) {
     target.focus();
-    target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     markSpatialFocus(target);
   }
 }

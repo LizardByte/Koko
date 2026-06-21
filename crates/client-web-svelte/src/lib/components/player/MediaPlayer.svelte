@@ -48,9 +48,16 @@
       }
     }
     function onDurationChange() {
-      playback.duration = Number.isFinite(media.duration) && media.duration > 0
-        ? media.duration
-        : (playback.item?.duration_ms ?? 0) / 1000;
+      // Pin duration from item metadata when available — mirrors vanilla's
+      // playbackDurationSeconds() (playbackController.ts:1033-1041) which
+      // prefers sourceDurationSeconds over player.duration. During transcoding,
+      // the fragmented-MP4 stream reports a growing per-fragment duration (no
+      // fixed total in the moov atom), so the element's duration is wrong.
+      // Only fall back to media.duration when item metadata is unknown.
+      const metaDuration = (playback.item?.duration_ms ?? 0) / 1000;
+      playback.duration = metaDuration > 0
+        ? metaDuration
+        : (Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0);
     }
     function onPlay() {
       playback.isPlaying = true;

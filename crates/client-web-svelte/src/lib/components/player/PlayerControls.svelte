@@ -142,12 +142,17 @@
   // The active audio track, as an ARRAY index (0-based position in audioTracks).
   // The template compares this against the {#each} loop index.
   const activeAudioIndex = $derived.by(() => {
-    // If an explicit stream index was set (user switched), find its array position.
+    // If the user explicitly switched, use their choice.
     if (playback.activeAudioStreamIndex !== undefined) {
       const pos = audioTracks.findIndex((t) => t.index === playback.activeAudioStreamIndex);
       if (pos >= 0) return pos;
     }
-    // Otherwise use the track marked 'default' in the container.
+    // The server's session decides the initial audio stream — use that.
+    if (playback.session?.audio_stream_index !== undefined) {
+      const pos = audioTracks.findIndex((t) => t.index === playback.session!.audio_stream_index);
+      if (pos >= 0) return pos;
+    }
+    // Fallback: the track marked 'default' in the container.
     const defaultPos = audioTracks.findIndex((t) => t.default);
     return defaultPos >= 0 ? defaultPos : 0;
   });

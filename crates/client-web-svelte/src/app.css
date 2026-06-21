@@ -1929,6 +1929,49 @@ legend {
 .player-volume {
   accent-color: #8bf3ca;
   cursor: pointer;
+  /* Reset native range styling so the thumb can reach the true edges (0 and max).
+     Without this, the native thumb's width creates ~10% dead zones at both ends. */
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+/* WebKit track + thumb */
+.player-progress::-webkit-slider-runnable-track,
+.player-volume::-webkit-slider-runnable-track {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.player-progress::-webkit-slider-thumb,
+.player-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: #8bf3ca;
+  margin-top: -0.3rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Firefox track + thumb */
+.player-progress::-moz-range-track,
+.player-volume::-moz-range-track {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.player-progress::-moz-range-thumb,
+.player-volume::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  border-radius: 50%;
+  background: #8bf3ca;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .player-progress {

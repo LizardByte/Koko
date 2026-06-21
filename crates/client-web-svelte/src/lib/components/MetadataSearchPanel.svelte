@@ -26,11 +26,18 @@
   const library = $derived(libraries.byId(itemValue.library_id));
   const providers = $derived(metadataProviderOptions(metadata, library?.kind));
 
-  // Form state — pre-filled with defaults, editable by the user.
-  let query = $state(defaultMetadataSearchTitle(itemValue, metadata));
-  let year = $state(defaultMetadataSearchYear(itemValue, metadata));
-  let language = $state(defaultMetadataSearchLanguage(metadata));
-  let selectedProviderIds = $state<string[]>(defaultMetadataSearchProviderIds(metadata, library?.kind));
+  // Form state — pre-filled with defaults from the current item/metadata.
+  // These capture the initial values intentionally (the form shouldn't reset
+  // when the user is mid-typing). Untracked reads avoid the Svelte warning.
+  const initialTitle = defaultMetadataSearchTitle(itemValue, metadata);
+  const initialYear = defaultMetadataSearchYear(itemValue, metadata);
+  const initialLanguage = defaultMetadataSearchLanguage(metadata);
+  const initialProviderIds = defaultMetadataSearchProviderIds(metadata, library?.kind);
+
+  let query = $state(initialTitle);
+  let year = $state(initialYear);
+  let language = $state(initialLanguage);
+  let selectedProviderIds = $state<string[]>(initialProviderIds);
 
   const results = $derived<MetadataSearchResult[]>(itemStore.metadataSearchResults);
   const searching = $derived(itemStore.metadataSearching);

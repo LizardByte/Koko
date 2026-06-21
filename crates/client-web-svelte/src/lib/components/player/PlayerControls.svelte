@@ -88,12 +88,18 @@
   }
 
   function onProgressChange() {
-    isScrubbing = false;
+    // Keep isScrubbing true during the seek — the $effect that syncs
+    // progressValue from currentTime skips while scrubbing, so it won't
+    // snap back to the old position. Reset after the seek completes
+    // (next tick gives the timeupdate event time to fire with the new position).
     const duration = playback.duration;
     if (duration > 0 && onseekTo) {
       const targetSeconds = (Number(progressValue) / 1000) * duration;
       onseekTo(targetSeconds);
     }
+    // Defer clearing isScrubbing so the $effect doesn't snap back before
+    // the media element's seek completes.
+    setTimeout(() => { isScrubbing = false; }, 100);
     showControls();
   }
 

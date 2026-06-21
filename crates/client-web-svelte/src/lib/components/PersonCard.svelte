@@ -48,8 +48,10 @@
 
 <style>
   /* Card-specific: width + gap to match vanilla .person-card (style.css:1819).
-     The shell provides the transparent button + tile wrapper. */
-  .person-card:global(.card-surface) {
+     Applied to the CardSurface root via the class prop. Using :global because
+     CardSurface renders the root button (the class is on a child component's
+     element, not in this component's template). */
+  :global(.person-card.card-surface) {
     width: 142px;
     gap: 0.5rem;
   }

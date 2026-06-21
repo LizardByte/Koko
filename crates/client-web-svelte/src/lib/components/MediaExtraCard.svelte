@@ -50,7 +50,7 @@
   /* Card-specific layout overrides for the shell root. The shell provides the
      transparent button + tile wrapper; here we fix the width + gap to match
      vanilla .media-extra-card (style.css:1745). */
-  .media-extra-card:global(.card-surface) {
+  :global(.media-extra-card.card-surface) {
     width: 244px;
   }
 

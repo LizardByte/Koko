@@ -60,6 +60,7 @@ const STANDARD_LAYOUT: GamepadLayout = {
  *   0,1 = left stick (X, Y)
  *   2 = right stick X
  *   3,4 = L2/R2 analog triggers (only negative, -1 to 0)
+ *   5 = right stick Y
  *   9 = D-pad hat (neutral = 3.286)
  */
 const BITDO_PRO_3_LAYOUT: GamepadLayout = {
@@ -71,7 +72,7 @@ const BITDO_PRO_3_LAYOUT: GamepadLayout = {
   hatAxis: 9,   // D-pad on hat axis 9
   hatNeutral: 3.286, // Neutral value is NOT 0!
   leftStick: [0, 1],
-  rightStick: [2, 3], // TODO: verify right-stick Y after probe
+  rightStick: [2, 5], // Right stick Y is axis 5, NOT 3 (axis 3 = L2 trigger)
 };
 
 /** Known device layouts, matched by the gamepad ID string. */

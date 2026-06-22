@@ -35,7 +35,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
-  MACOSX_DEPLOYMENT_TARGET: 14.2
+  MACOSX_DEPLOYMENT_TARGET: "14.2"
 
 jobs:
   build_dmg:

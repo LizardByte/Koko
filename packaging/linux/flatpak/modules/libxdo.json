@@ -1,5 +1,5 @@
 {
-  "name": "xdotool",
+  "name": "libxdo",
   "buildsystem": "simple",
   "build-commands": [
     "make libxdo.so libxdo.so.4 libxdo.pc PREFIX=\"${FLATPAK_DEST}\" WITHOUT_RPATH_FIX=1",

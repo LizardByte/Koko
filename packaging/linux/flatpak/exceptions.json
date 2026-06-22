@@ -3,6 +3,7 @@
     "appid-url-not-reachable",
     "appstream-screenshots-not-mirrored-in-ostree",
     "metainfo-missing-screenshots",
+    "finish-args-host-ro-filesystem-access",
     "finish-args-home-filesystem-access"
   ]
 }

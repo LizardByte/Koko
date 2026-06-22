@@ -16,6 +16,7 @@ separate-locales: false
 
 finish-args:
   - --filesystem=home
+  - --filesystem=host:ro
   - --share=network
   - --share=ipc
   - --socket=fallback-x11
@@ -33,7 +34,8 @@ cleanup:
 
 modules:
   - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
-  - modules/xdotool.json
+  # Required by the Linux tray/menu stack through the muda crate.
+  - modules/libxdo.json
 
   - name: koko
     buildsystem: simple
@@ -69,6 +71,10 @@ modules:
         install -Dm0644
         packaging/linux/flatpak/dev.lizardbyte.app.Koko.metainfo.xml
         /app/share/metainfo/dev.lizardbyte.app.Koko.metainfo.xml
+    run-tests: true
+    test-rule: ""
+    test-commands:
+      - cargo test --offline --locked --workspace --lib --bins --release
     sources:
       - type: git
         url: "@GITHUB_CLONE_URL@"

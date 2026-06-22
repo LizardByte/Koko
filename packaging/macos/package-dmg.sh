@@ -22,6 +22,9 @@ Options:
   --output-dir PATH     Directory for the generated DMG. Default: artifacts.
   --sign                Sign the app bundle and DMG with APPLE_CODESIGN_IDENTITY.
   -h, --help            Show this help text.
+
+Environment:
+  MACOSX_DEPLOYMENT_TARGET  Minimum macOS version to write into Info.plist.
 EOF
 }
 
@@ -116,6 +119,12 @@ if [[ -z "${bundle_version}" ]]; then
   bundle_version="0"
 fi
 
+minimum_system_version="${MACOSX_DEPLOYMENT_TARGET:-}"
+if [[ -z "${minimum_system_version}" ]]; then
+  echo "MACOSX_DEPLOYMENT_TARGET must be set to write LSMinimumSystemVersion." >&2
+  exit 1
+fi
+
 package_dir="${work_dir}/${target}"
 app_dir="${package_dir}/${app_name}.app"
 contents_dir="${app_dir}/Contents"
@@ -172,7 +181,7 @@ cat > "${contents_dir}/Info.plist" <<EOF
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.entertainment</string>
   <key>LSMinimumSystemVersion</key>
-  <string>14.2</string>
+  <string>${minimum_system_version}</string>
   <key>LSUIElement</key>
   <true/>
   <key>NSLocalNetworkUsageDescription</key>

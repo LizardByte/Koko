@@ -103,9 +103,11 @@ export const playerShortcuts: Action<HTMLElement, PlayerShortcutHandlers> = (nod
         }
       }
 
-      // Left stick
+      // Left stick — seek (X axis only)
       const sx = gamepad.axes[layout.leftStick[0]] ?? 0;
-      const sy = gamepad.axes[layout.leftStick[1]] ?? 0;
+      // Right stick — volume (Y axis only)
+      const rsy = gamepad.axes[layout.rightStick[1]] ?? 0;
+
       const stickActive = (name: string, value: number) => {
         const key = `${gid}:${name}`;
         return activeInputs.has(key)
@@ -143,10 +145,15 @@ export const playerShortcuts: Action<HTMLElement, PlayerShortcutHandlers> = (nod
 
       edgeTrigger('play', confirm, () => handlers?.onPlayPause());
       edgeTrigger('close', cancel, () => handlers?.onClose());
+      // D-pad left/right + left stick X → seek
       dirTrigger('seekLeft', seekLeft || (sx < 0 && stickActive('seekLeft', sx)), () => handlers?.onSeek(-1));
       dirTrigger('seekRight', seekRight || (sx > 0 && stickActive('seekRight', sx)), () => handlers?.onSeek(1));
-      dirTrigger('volUp', volUp || (sy < 0 && stickActive('volUp', sy)), () => handlers?.onVolumeUp?.());
-      dirTrigger('volDown', volDown || (sy > 0 && stickActive('volDown', sy)), () => handlers?.onVolumeDown?.());
+      // D-pad up/down → volume
+      dirTrigger('volUp', volUp, () => handlers?.onVolumeUp?.());
+      dirTrigger('volDown', volDown, () => handlers?.onVolumeDown?.());
+      // Right stick Y → volume (primary volume control)
+      dirTrigger('rstick_volUp', rsy < 0 && stickActive('rstick_volUp', rsy), () => handlers?.onVolumeUp?.());
+      dirTrigger('rstick_volDown', rsy > 0 && stickActive('rstick_volDown', rsy), () => handlers?.onVolumeDown?.());
     }
     rafId = requestAnimationFrame(pollGamepad);
   }

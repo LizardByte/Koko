@@ -26,8 +26,8 @@
   const playerControls = [
     { action: 'Play / Pause', gamepad: 'A button', keys: 'Space / K' },
     { action: 'Close player', gamepad: 'B button', keys: 'Escape' },
-    { action: 'Seek (back / forward)', gamepad: 'D-pad left / right', keys: 'Arrow Left / Right' },
-    { action: 'Volume (up / down)', gamepad: 'D-pad up / down', keys: 'Arrow Up / Down' },
+    { action: 'Seek (back / forward)', gamepad: 'D-pad / Left stick ← →', keys: '← →' },
+    { action: 'Volume (up / down)', gamepad: 'D-pad ↑ ↓  or  Right stick ↑ ↓', keys: '↑ ↓' },
     { action: 'Mute', gamepad: '—', keys: 'M' },
     { action: 'Fullscreen', gamepad: '—', keys: 'F' },
     { action: 'Show this help', gamepad: 'Select / Back', keys: '?' },

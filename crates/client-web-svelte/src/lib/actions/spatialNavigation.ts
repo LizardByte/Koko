@@ -25,9 +25,10 @@ const STICK_ACTIVATE = 0.7;
 const STICK_RELEASE = 0.35;
 
 // Repeat delay for held directional input (ms). After the initial trigger,
-// holding a direction re-triggers after this delay. Prevents rapid-fire.
-const REPEAT_DELAY = 250;
-const REPEAT_INITIAL_DELAY = 400;
+// holding a direction re-triggers after this delay. These are deliberately
+// slow so the user can see each focus step.
+const REPEAT_DELAY = 350;
+const REPEAT_INITIAL_DELAY = 500;
 
 const FOCUSABLE_SELECTOR =
   'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -189,36 +190,27 @@ function pollGamepads() {
     //   Up=-1, UpRight=-0.714, Right=-0.429, DownRight=-0.143,
     //   Down=0.143, DownLeft=0.429, Left=0.714, UpLeft=1, Neutral=0
     // The controller may wrap past 1 (probe saw 3.28) — treat >1.5 as Up.
-    // Cardinal detection: accept the 4 cardinals + their diagonals (round to nearest).
+    // IMPORTANT: neutral is 0. We must NOT map 0 to any direction.
+    // Use tight ranges around each position, leaving a gap around neutral.
     let hatUp = false, hatDown = false, hatLeft = false, hatRight = false;
     const hatValue = gamepad.axes[9];
-    if (hatValue !== undefined && Math.abs(hatValue) > 0.05) {
-      // Map each diagonal to its two cardinals. Threshold at the midpoint between
-      // each hat position (±1/14 ≈ ±0.071 from each position).
-      if (hatValue < -0.857 || hatValue > 1.5) {
-        // Up (or UpLeft/UpRight which also include up component)
-        hatUp = true;
-        if (hatValue < -0.857 && hatValue <= -0.857) hatUp = true;
-      }
-      // Use ranges centered on each hat position (width = 2/14 ≈ 0.143)
-      // Up: -1 ± 0.071 → [-1.071, -0.929]
-      // UpRight: -0.714 ± 0.071 → [-0.786, -0.643]
-      // Right: -0.429 ± 0.071 → [-0.500, -0.357]
-      // DownRight: -0.143 ± 0.071 → [-0.214, -0.071]
-      // Down: 0.143 ± 0.071 → [0.071, 0.214]
-      // DownLeft: 0.429 ± 0.071 → [0.357, 0.500]
-      // Left: 0.714 ± 0.071 → [0.643, 0.786]
-      // UpLeft: 1.0 ± 0.071 → [0.929, 1.071]
-
-      // Simpler approach: nearest-cardinal mapping
-      // Up: value <= -0.786 or > 1.5 (wrapped)
-      // Right: -0.786 < value <= -0.286
-      // Down: -0.286 < value <= 0.286
-      // Left: 0.286 < value <= 1.5
-      if (hatValue <= -0.786 || hatValue > 1.5) hatUp = true;
-      if (hatValue > -0.786 && hatValue <= -0.286) hatRight = true;
-      if (hatValue > -0.286 && hatValue <= 0.286) hatDown = true;
-      if (hatValue > 0.286 && hatValue <= 1.5) hatLeft = true;
+    if (hatValue !== undefined && Math.abs(hatValue) > 0.1) {
+      // Up: -1.0 (also covers wrap > 1.5)
+      if (hatValue <= -0.85 || hatValue > 1.5) hatUp = true;
+      // UpRight: -0.714
+      if (hatValue <= -0.6 && hatValue > -0.85) { hatUp = true; hatRight = true; }
+      // Right: -0.429
+      if (hatValue <= -0.3 && hatValue > -0.6) hatRight = true;
+      // DownRight: -0.143
+      if (hatValue <= -0.1 && hatValue > -0.3) { hatDown = true; hatRight = true; }
+      // Down: 0.143
+      if (hatValue >= 0.1 && hatValue < 0.3) hatDown = true;
+      // DownLeft: 0.429
+      if (hatValue >= 0.3 && hatValue < 0.6) { hatDown = true; hatLeft = true; }
+      // Left: 0.714
+      if (hatValue >= 0.6 && hatValue < 0.85) hatLeft = true;
+      // UpLeft: 1.0
+      if (hatValue >= 0.85 && hatValue <= 1.5) { hatUp = true; hatLeft = true; }
     }
 
     const up = dpadUp || hatUp;

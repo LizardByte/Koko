@@ -50,9 +50,9 @@
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     // Reading these makes the effect re-run on any interaction/state change.
-    playback.isPlaying;
-    playback.currentTime;
-    isScrubbing;
+    void playback.isPlaying;
+    void playback.currentTime;
+    void isScrubbing;
 
     playback.controlsVisible = true;
     if (hideTimer) clearTimeout(hideTimer);

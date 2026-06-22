@@ -658,18 +658,11 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
   }
 
   let response: Response;
-  try {
-    response = await fetch(getStoredApiBase() + path, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch (err) {
-    // Network failure — throw (no silent mock fallback). The caller surfaces
-    // the error via ui.setError(). Mock mode is Storybook-only, gated by
-    // VITE_USE_MOCK_API at the top of this file.
-    throw err;
-  }
+  response = await fetch(getStoredApiBase() + path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
 
   if (!response.ok) {
     if (response.status === 401) {

@@ -17,7 +17,7 @@
   // poll re-fetches logs on settings pages, app.ts:808-831).
   $effect(() => {
     // Reading systemActivities makes this re-run when the poll updates them.
-    activities.systemActivities;
+    void activities.systemActivities;
     if (activities.logsResponse) {
       activities.loadLogs().catch(() => {});
     }

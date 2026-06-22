@@ -20,7 +20,7 @@
     route?: unknown;
   } = $props();
 
-  const names = Object.keys(ICONS).sort();
+  const names = Object.keys(ICONS).toSorted();
 </script>
 
 <div class="icon-grid" style="color: {color}; opacity: {alpha}">

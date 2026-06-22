@@ -3,32 +3,32 @@
 //
 // Reset between stories is handled by resetStores() to prevent state bleed.
 
-import { catalog } from '$lib/stores/catalog.svelte';
-import { item } from '$lib/stores/item.svelte';
-import { libraries } from '$lib/stores/libraries.svelte';
-import { auth } from '$lib/stores/auth.svelte';
-import { ui } from '$lib/stores/ui.svelte';
-import { settings } from '$lib/stores/settings.svelte';
-import { activities } from '$lib/stores/activities.svelte';
+import { catalog } from "$lib/stores/catalog.svelte";
+import { item } from "$lib/stores/item.svelte";
+import { libraries } from "$lib/stores/libraries.svelte";
+import { auth } from "$lib/stores/auth.svelte";
+import { ui } from "$lib/stores/ui.svelte";
+import { settings } from "$lib/stores/settings.svelte";
+import { activities } from "$lib/stores/activities.svelte";
 import {
   mockHome,
   mockLibraries,
   mockUser,
   movieDetail,
   movieSummary,
-} from './fixtures';
+} from "./fixtures";
 
 export type Preset =
-  | 'empty'
-  | 'home'
-  | 'item-movie'
-  | 'item-show'
-  | 'item-missing'
-  | 'item-watched'
-  | 'auth-logged-in'
-  | 'requires-login'
-  | 'requires-setup'
-  | 'settings';
+  | "empty"
+  | "home"
+  | "item-movie"
+  | "item-show"
+  | "item-missing"
+  | "item-watched"
+  | "auth-logged-in"
+  | "requires-login"
+  | "requires-setup"
+  | "settings";
 
 // Single source of truth for the preset values — consumed by the Storybook
 // global argTypes.preset control (see .storybook/preview.ts) so the controls
@@ -36,16 +36,16 @@ export type Preset =
 // in sync with the union: adding a preset above without adding it here is a
 // type error.
 export const PRESETS = [
-  'empty',
-  'home',
-  'item-movie',
-  'item-show',
-  'item-missing',
-  'item-watched',
-  'auth-logged-in',
-  'requires-login',
-  'requires-setup',
-  'settings',
+  "empty",
+  "home",
+  "item-movie",
+  "item-show",
+  "item-missing",
+  "item-watched",
+  "auth-logged-in",
+  "requires-login",
+  "requires-setup",
+  "settings",
 ] as const satisfies readonly Preset[];
 
 /** Reset all store singletons to a clean baseline (call between stories). */
@@ -53,9 +53,9 @@ export function resetStores(): void {
   catalog.home = undefined;
   catalog.libraryItems = [];
   catalog.libraryItemsLoading = false;
-  catalog.searchQuery = '';
+  catalog.searchQuery = "";
   catalog.searchResults = [];
-  catalog.homeTab = 'recommended';
+  catalog.homeTab = "recommended";
   catalog.activeLibraryId = undefined;
   catalog.homePreviewItemId = undefined;
   catalog.homePreviewCollectionId = undefined;
@@ -88,9 +88,9 @@ export function applyPreset(preset: Preset): void {
     current_user: mockUser(),
   };
   switch (preset) {
-    case 'empty':
+    case "empty":
       return;
-    case 'home': {
+    case "home": {
       const home = mockHome();
       libraries.libraries = mockLibraries();
       catalog.home = home;
@@ -110,55 +110,62 @@ export function applyPreset(preset: Preset): void {
       auth.bootstrap = loggedInBootstrap;
       return;
     }
-    case 'item-movie':
+    case "item-movie":
       libraries.libraries = mockLibraries();
       item.item = movieDetail();
       auth.bootstrap = loggedInBootstrap;
       return;
-    case 'item-show':
+    case "item-show":
       libraries.libraries = mockLibraries();
       item.item = movieDetail({
-        ...movieSummary({ id: 201, item_type: 'show', display_title: 'Mock Show' }),
+        ...movieSummary({
+          id: 201,
+          item_type: "show",
+          display_title: "Mock Show",
+        }),
         child_count: 2,
       });
       auth.bootstrap = loggedInBootstrap;
       return;
-    case 'item-missing':
+    case "item-missing":
       libraries.libraries = mockLibraries();
       item.item = movieDetail({
         missing_since: 1_760_000_000,
-        display_title: 'Missing Movie',
+        display_title: "Missing Movie",
       });
       auth.bootstrap = loggedInBootstrap;
       return;
-    case 'item-watched':
+    case "item-watched":
       libraries.libraries = mockLibraries();
       item.item = movieDetail({
         playback_completed: true,
         watch_count: 3,
         last_watched_at: 1_760_900_000,
-        display_title: 'Watched Movie',
+        display_title: "Watched Movie",
       });
       auth.bootstrap = loggedInBootstrap;
       return;
-    case 'auth-logged-in':
+    case "auth-logged-in":
       auth.bootstrap = loggedInBootstrap;
       return;
-    case 'requires-login':
+    case "requires-login":
       // has_users true, no current_user → LoginScreen shows.
       auth.bootstrap = { has_users: true };
       return;
-    case 'requires-setup':
+    case "requires-setup":
       // no users yet → WelcomeScreen shows.
       auth.bootstrap = { has_users: false };
       return;
-    case 'settings': {
+    case "settings": {
       // Load settings + activities + users from the mock API (async — the
       // stores fetch their own data). Seed libraries + auth synchronously so
       // the shell renders immediately.
       libraries.libraries = mockLibraries();
       auth.bootstrap = loggedInBootstrap;
-      auth.users = [mockUser(), mockUser({ id: 2, username: 'viewer', admin: false })];
+      auth.users = [
+        mockUser(),
+        mockUser({ id: 2, username: "viewer", admin: false }),
+      ];
       // Kick off async loads (mock API resolves synchronously-ish in Storybook).
       settings.load().catch(() => {});
       activities.loadActivities().catch(() => {});

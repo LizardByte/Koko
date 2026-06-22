@@ -118,7 +118,7 @@ export function defaultMetadataSearchProviderIds(
 /** The cast/people for the item, from the first metadata match's people array. */
 export function selectedItemPeople(metadata: ItemMetadataResponse | undefined): ItemMetadataPerson[] {
   const people = metadata?.matches[0]?.people ?? [];
-  return [...people].sort((a, b) => a.sort_order - b.sort_order);
+  return [...people].toSorted((a, b) => a.sort_order - b.sort_order);
 }
 
 /** Technical fact rows for the hero fact list. */
@@ -249,7 +249,7 @@ export function categorySummaries(libraryItems: MediaItemSummary[]): CategorySum
 
   return [...categories.entries()]
     .map(([genre, items]) => ({ genre, count: items.size, items: [...items.values()] }))
-    .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre));
+    .toSorted((left, right) => right.count - left.count || left.genre.localeCompare(right.genre));
 }
 
 /** Items belonging to a collection (top-level items whose id is in item_ids). */

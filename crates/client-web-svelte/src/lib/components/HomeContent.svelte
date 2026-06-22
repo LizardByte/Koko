@@ -44,7 +44,7 @@
 
   // Reload home when the library prop changes.
   $effect(() => {
-    libraryId;
+    void libraryId;
     catalog
       .loadHome(libraryId)
       .then(() => ui.clearError())

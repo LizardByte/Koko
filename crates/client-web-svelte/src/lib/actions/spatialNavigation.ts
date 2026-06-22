@@ -86,7 +86,9 @@ function moveFocus(direction: Direction): void {
 
 function activateFocused(): void {
   const el = document.activeElement as HTMLElement | null;
-  el?.matches('button, a[href], input, select, textarea, [role="button"]') && el.click();
+  if (el?.matches('button, a[href], input, select, textarea, [role="button"]')) {
+    el.click();
+  }
 }
 
 function switchTab(direction: 'left' | 'right'): void {

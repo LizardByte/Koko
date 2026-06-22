@@ -79,7 +79,7 @@
   const sortedItems = $derived.by(() => {
     const items = [...filteredItems];
     const dir = sortDir === 'asc' ? 1 : -1;
-    items.sort((a, b) => {
+    items.toSorted((a, b) => {
       switch (sortColumn) {
         case 'title': return dir * a.display_title.localeCompare(b.display_title);
         case 'type': return dir * a.item_type.localeCompare(b.item_type);
@@ -131,7 +131,7 @@
     return type.charAt(0).toUpperCase() + type.slice(1).replace(/_/g, ' ');
   }
 
-  const itemTypes = $derived([...new Set(activities.dashboardItems.map((i) => i.item_type))].sort());
+  const itemTypes = $derived([...new Set(activities.dashboardItems.map((i) => i.item_type))].toSorted());
 </script>
 
 <section class="panel page-panel metadata-dashboard-panel">

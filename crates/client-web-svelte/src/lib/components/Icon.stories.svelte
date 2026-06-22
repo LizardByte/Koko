@@ -32,7 +32,7 @@
     },
   });
 
-  const names = Object.keys(ICONS).sort();
+  const names = Object.keys(ICONS).toSorted();
 </script>
 
 <Story name="Gallery" asChild>

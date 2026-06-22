@@ -1116,7 +1116,7 @@ export function getMockHome(libraryId?: number): MediaHome {
       item.playback_position_ms > 0 &&
       !item.playback_completed,
   );
-  const recentlyAdded = [...filtered].sort((a, b) => (b.modified_at ?? 0) - (a.modified_at ?? 0));
+  const recentlyAdded = [...filtered].toSorted((a, b) => (b.modified_at ?? 0) - (a.modified_at ?? 0));
   const continueIds = new Set(continueWatching.map((item) => item.id));
   const recommended = filtered.filter((item) => !continueIds.has(item.id));
   return {

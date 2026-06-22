@@ -42,3 +42,4 @@ crates/client-web/dist/
 
 # dev temp files
 .dev/
+.worktrees

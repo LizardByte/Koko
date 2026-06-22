@@ -178,26 +178,47 @@ function pollGamepads() {
     const gid = gamepad.index;
 
     // --- D-pad detection ---
-    // Try standard buttons first (12-15), then hat axis (8BitDo).
+    // Try standard buttons first (12-15), then hat axis (8BitDo Pro 3 etc.).
     const dpadUp = Boolean(gamepad.buttons[12]?.pressed);
     const dpadDown = Boolean(gamepad.buttons[13]?.pressed);
     const dpadLeft = Boolean(gamepad.buttons[14]?.pressed);
     const dpadRight = Boolean(gamepad.buttons[15]?.pressed);
 
-    // Hat axis fallback: check if axes 9 (or 8) behaves like a D-pad hat.
-    // The 8BitDo Pro 3 reports D-pad on axis 9 with values like:
-    // up=-1, upleft=-0.71, left=-0.43, downleft=0.14, down=0.43...
-    // We use thresholds to detect 4 cardinal directions.
+    // Hat axis: the 8BitDo Pro 3 reports D-pad on axis 9 as an 8-position hat.
+    // Standard hat values (divisions of 1/7):
+    //   Up=-1, UpRight=-0.714, Right=-0.429, DownRight=-0.143,
+    //   Down=0.143, DownLeft=0.429, Left=0.714, UpLeft=1, Neutral=0
+    // The controller may wrap past 1 (probe saw 3.28) — treat >1.5 as Up.
+    // Cardinal detection: accept the 4 cardinals + their diagonals (round to nearest).
     let hatUp = false, hatDown = false, hatLeft = false, hatRight = false;
     const hatValue = gamepad.axes[9];
     if (hatValue !== undefined && Math.abs(hatValue) > 0.05) {
-      // Neutral is typically 0 or a specific value. Map the 8-position hat.
-      if (hatValue < -0.85 || (hatValue > 0.85 && hatValue <= 1)) hatUp = true;
-      if (hatValue > 0.28 && hatValue < 0.57) hatDown = true;
-      if (hatValue > -0.57 && hatValue < -0.28) hatLeft = true;
-      if (hatValue > 0.05 && hatValue < 0.28) hatRight = true;
-      // Handle the wrap-around case (max was 3.28 in probe)
-      if (hatValue > 1.5) hatUp = true; // wrapped up
+      // Map each diagonal to its two cardinals. Threshold at the midpoint between
+      // each hat position (±1/14 ≈ ±0.071 from each position).
+      if (hatValue < -0.857 || hatValue > 1.5) {
+        // Up (or UpLeft/UpRight which also include up component)
+        hatUp = true;
+        if (hatValue < -0.857 && hatValue <= -0.857) hatUp = true;
+      }
+      // Use ranges centered on each hat position (width = 2/14 ≈ 0.143)
+      // Up: -1 ± 0.071 → [-1.071, -0.929]
+      // UpRight: -0.714 ± 0.071 → [-0.786, -0.643]
+      // Right: -0.429 ± 0.071 → [-0.500, -0.357]
+      // DownRight: -0.143 ± 0.071 → [-0.214, -0.071]
+      // Down: 0.143 ± 0.071 → [0.071, 0.214]
+      // DownLeft: 0.429 ± 0.071 → [0.357, 0.500]
+      // Left: 0.714 ± 0.071 → [0.643, 0.786]
+      // UpLeft: 1.0 ± 0.071 → [0.929, 1.071]
+
+      // Simpler approach: nearest-cardinal mapping
+      // Up: value <= -0.786 or > 1.5 (wrapped)
+      // Right: -0.786 < value <= -0.286
+      // Down: -0.286 < value <= 0.286
+      // Left: 0.286 < value <= 1.5
+      if (hatValue <= -0.786 || hatValue > 1.5) hatUp = true;
+      if (hatValue > -0.786 && hatValue <= -0.286) hatRight = true;
+      if (hatValue > -0.286 && hatValue <= 0.286) hatDown = true;
+      if (hatValue > 0.286 && hatValue <= 1.5) hatLeft = true;
     }
 
     const up = dpadUp || hatUp;

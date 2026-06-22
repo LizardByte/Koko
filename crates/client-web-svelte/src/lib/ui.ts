@@ -6,9 +6,7 @@
 import type { MediaItemSummary } from "./api";
 import { formatDuration } from "./format";
 
-export type AppIconName = string;
-
-export function selectedLibraryIcon(kind?: string): AppIconName {
+export function selectedLibraryIcon(kind?: string): string {
   switch (kind) {
     case "mixed":
       return "layout-grid";
@@ -47,8 +45,8 @@ export function humanizeItemType(itemType: string): string {
       return "Book";
     default:
       return itemType
-        .replace(/_/g, " ")
-        .replace(/\b\w/g, (character) => character.toUpperCase());
+        .replaceAll("_", " ")
+        .replaceAll(/\b\w/g, (character) => character.toUpperCase());
   }
 }
 
@@ -81,7 +79,7 @@ export function libraryStatusLabel(status: string): string {
     case "empty_path":
       return "No folder";
     default:
-      return status.replace(/_/g, " ");
+      return status.replaceAll("_", " ");
   }
 }
 

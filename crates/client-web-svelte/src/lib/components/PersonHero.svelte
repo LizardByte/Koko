@@ -57,7 +57,7 @@
     <div class="detail-actions">
       <Button variant="secondary" label="Back" icon="arrow-left" onclick={onBack} />
       {#if summary.profile_url}
-        <a class="button-link secondary-button" href={summary.profile_url} target="_blank" rel="noreferrer">Provider page</a>
+        <Button variant="secondary" label="Provider page" href={summary.profile_url} target="_blank" rel="noreferrer" />
       {/if}
     </div>
   </div>
@@ -79,16 +79,6 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-
-  .button-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 2.4rem;
-    padding: 0.65rem 1rem;
-    border-radius: 999px;
-    text-decoration: none;
   }
 
   @media (max-width: 960px) {

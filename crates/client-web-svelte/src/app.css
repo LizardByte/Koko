@@ -122,25 +122,12 @@ button:disabled {
   box-shadow: none;
 }
 
-/* Button variant affordances — kept global because plain <button> elements
-   (not just the Button component) opt into these via class, mirroring the
-   .icon-only modifier below. See PORTING_GUIDELINES.md. */
-.secondary-button {
-  background: var(--surface-4);
-  box-shadow: none;
-  color: var(--color-text-secondary);
-}
-
-.secondary-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
-}
-
-.danger-button {
-  background: rgba(255, 107, 107, 0.14);
-  box-shadow: none;
-  color: var(--color-danger);
-}
+/* Button variant classes (.secondary-button / .danger-button / .button-link)
+   are scoped to Button.svelte — that's the sole emitter. SonarCloud's CSS
+   analyzer skips .svelte files, so the false-positive contrast warnings that
+   fired here are gone. Only the bare element `button {}` reset + the
+   `.icon-only` sizing modifier (used by bespoke <button> affordances that
+   aren't part of the design system) stay global. */
 
 .icon-only {
   width: 2.35rem;
@@ -1388,7 +1375,7 @@ legend {
 .log-entries-table .log-entry-message {
   margin: 0;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   color: inherit;
   background: transparent;
   border: none;
@@ -1403,7 +1390,7 @@ legend {
 
 .log-entry-message {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   font-family: 'Cascadia Mono', 'Fira Code', Consolas, monospace;
   font-size: 0.86rem;
   line-height: 1.5;
@@ -1573,6 +1560,10 @@ legend {
 
 .theme-song-iframe,
 .theme-song-layer {
+  /* Offscreen-but-rendered: the YouTube iframe must stay in the render tree
+     to keep audio playing (display:none pauses it), but should be invisible
+     and non-interactive. position:fixed escapes any overflow:hidden parent
+     that would clip or scroll it. This is a deliberate, audio-only pattern. */
   position: fixed;
   right: -8px;
   bottom: -8px;

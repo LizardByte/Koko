@@ -1,9 +1,17 @@
 <script lang="ts">
-  // Button — replaces renderButtonContent() (../client-web/src/app/ui.ts:60-71).
-  // Reproduces the vanilla client's `.button-content` / `.button-icon` markup,
-  // with optional icon at start or end. Children snippet allows custom content
-  // when a plain label isn't enough.
+  // Button — the design-system button. Renders a <button> by default, or an
+  // <a> when `href` is provided (so external links can share the same visual
+  // variants without a separate "button-link" affordance). Replaces
+  // renderButtonContent() (../client-web/src/app/ui.ts:60-71) + the
+  // vanilla `.button-link` class.
+  //
+  // Variant classes (.secondary-button / .danger-button / .button-link) live
+  // in ./button.css — co-located with their only emitter. SonarCloud's CSS
+  // analyzer does not scan .svelte files, so moving them out of app.css
+  // eliminates the false-positive contrast warnings. The bare `button {}`
+  // element reset stays global.
   import Icon from './Icon.svelte';
+  import './button.css';
   import type { Snippet } from 'svelte';
 
   type Props = {
@@ -17,6 +25,12 @@
     id?: string;
     class?: string;
     title?: string;
+    /** When set, renders an <a> with this href instead of a <button>. */
+    href?: string;
+    /** Anchor target (only used with href). */
+    target?: string;
+    /** Anchor rel (only used with href). */
+    rel?: string;
     onclick?: (event: MouseEvent) => void;
     children?: Snippet;
     [key: `data-${string}`]: string | undefined;
@@ -33,6 +47,9 @@
     id,
     class: className = '',
     title,
+    href,
+    target,
+    rel,
     onclick,
     children,
     ...rest
@@ -46,60 +63,43 @@
   const variantClass = $derived(VARIANT_CLASS[variant]);
 </script>
 
-<button
-  {type}
-  {id}
-  {title}
-  {disabled}
-  class="{variantClass} {className}"
-  class:is-busy={busy}
-  aria-busy={busy}
-  {onclick}
-  {...rest}
->
-  {#if icon}
-    <span class="button-content" class:icon-end={iconPosition === 'end'}>
-      <span class="button-icon"><Icon name={icon} size={16} strokeWidth={2.1} /></span>
-      {#if children}{@render children()}{:else if label}<span>{label}</span>{/if}
-    </span>
-  {:else if children}
-    {@render children()}
-  {:else}
-    {label}
-  {/if}
-</button>
-
-<!--
-  Busy spinner — component-scoped so the centering fix lives with the button,
-  not in global app.css. Vanilla's style.css:83-98 has the same rule but its
-  ::after spinner lacks centering (renders off-center to the right); we add
-  `inset: 0; margin: auto` here so the spinner is centered. This is a
-  documented delta — the global `button.is-busy` rule was removed from app.css.
-  `@keyframes spin` stays global in app.css (shared with .loading-spinner).
--->
-<style>
-  .is-busy {
-    position: relative;
-    color: transparent;
-    pointer-events: none;
-  }
-
-  .is-busy::after {
-    content: '';
-    position: absolute;
-    /* Center the fixed-size spinner within the button. Vanilla omits this,
-       leaving it off-center to the right. */
-    inset: 0;
-    margin: auto;
-    width: 1rem;
-    height: 1rem;
-    border-radius: 999px;
-    border: 2px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #fff;
-    animation: spin 0.85s linear infinite;
-  }
-
-  /* Variant classes (.secondary-button / .danger-button) stay global in
-     app.css — they're plain-<button> affordances any element can opt into,
-     not Button-owned. Only the is-busy spinner is truly Button-scoped. */
-</style>
+{#if href}
+  <a
+    {href}
+    {id}
+    {title}
+    {target}
+    {rel}
+    class="button-link {variantClass} {className}"
+    aria-busy={busy}
+    aria-disabled={disabled || undefined}
+    role={disabled ? 'link' : undefined}
+    tabindex={disabled ? -1 : undefined}
+    {onclick}
+    {...rest}
+  >
+    {#if icon}
+      <span class="button-icon"><Icon name={icon} /></span>
+    {/if}
+    {#if label}<span class="button-label">{label}</span>{/if}
+    {#if children}{@render children()}{/if}
+  </a>
+{:else}
+  <button
+    {type}
+    {id}
+    {title}
+    {disabled}
+    class="{variantClass} {className}"
+    class:is-busy={busy}
+    aria-busy={busy}
+    {onclick}
+    {...rest}
+  >
+    {#if icon}
+      <span class="button-icon"><Icon name={icon} /></span>
+    {/if}
+    {#if label}<span class="button-label">{label}</span>{/if}
+    {#if children}{@render children()}{/if}
+  </button>
+{/if}

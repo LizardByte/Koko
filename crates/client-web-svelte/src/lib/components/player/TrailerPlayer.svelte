@@ -6,6 +6,7 @@
   // Replaces vanilla renderTrailerOverlay + bindTrailerPlayer (~400 lines)
   // with ~80 lines of reactive Svelte.
   import Icon from '../Icon.svelte';
+  import Button from '../Button.svelte';
   import YouTubeIframe from './YouTubeIframe.svelte';
   import { playback } from '$lib/stores';
   import { noop } from '$lib/constants';
@@ -143,9 +144,7 @@
         </div>
         <div class="player-top-actions">
           {#if externalUrl}
-            <a class="button-link secondary-button" href={externalUrl} target="_blank" rel="noreferrer">
-              <span class="button-content"><span class="button-icon"><Icon name="arrow-right" size={16} /></span>Open on YouTube</span>
-            </a>
+            <Button variant="secondary" icon="arrow-right" label="Open on YouTube" href={externalUrl} target="_blank" rel="noreferrer" />
           {/if}
           <button type="button" class="player-icon-button" title="Close trailer" aria-label="Close trailer" onclick={() => playback.closeTrailer()}>
             <Icon name="x" size={20} />

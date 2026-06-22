@@ -9,6 +9,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import type { Snippet } from 'svelte';
+  import Button from '../Button.svelte';
   import { settings } from '$lib/stores';
 
   let { children }: { children: Snippet } = $props();
@@ -46,14 +47,12 @@
 
 <nav class="settings-section-nav panel page-panel" aria-label="Settings sections">
   {#each sections as section (section.id)}
-    <button
-      type="button"
-      class="secondary-button"
-      class:active={activeSection === section.id}
+    <Button
+      variant="secondary"
+      class={activeSection === section.id ? 'active' : ''}
+      label={section.label}
       onclick={() => goto(section.path)}
-    >
-      {section.label}
-    </button>
+    />
   {/each}
 </nav>
 

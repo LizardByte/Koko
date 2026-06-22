@@ -20,10 +20,19 @@ const FOCUSABLE_SELECTOR =
 
 // --- Spatial focus engine ---
 
+/**
+ * True when an element is actually visible (laid out + not display:none /
+ * visibility:hidden / opacity:0). Uses Element.checkVisibility() — the
+ * modern API that correctly handles position:fixed (which the older
+ * offsetParent !== null check falsely reported as hidden). Deliberate
+ * improvement over vanilla.
+ */
+function isVisible(el: HTMLElement): boolean {
+  return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+}
+
 function getVisibleFocusable(): HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (el) => el.offsetParent !== null && el.getBoundingClientRect().width > 0,
-  );
+  return Array.from(document.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(isVisible);
 }
 
 /**
@@ -100,6 +109,14 @@ function activateFocused(): void {
   }
 }
 
+/** Wrap an index around [0, count) by step, cycling at the edges. */
+function wrapTabIndex(index: number, count: number, step: number): number {
+  const next = index + step;
+  if (next < 0) return count - 1;
+  if (next >= count) return 0;
+  return next;
+}
+
 function switchTab(direction: 'left' | 'right'): void {
   // Context-aware tab switching. Find the tab group relevant to the current page.
   // Priority: browse tabs (home) > settings section nav > sidebar rail.
@@ -110,7 +127,7 @@ function switchTab(direction: 'left' | 'right'): void {
 
   for (const selector of tabSelectors) {
     const tabs = Array.from(document.querySelectorAll<HTMLElement>(selector))
-      .filter((el) => el.offsetParent !== null);
+      .filter(isVisible);
     if (tabs.length === 0) continue;
 
     const current = document.activeElement as HTMLElement | null;
@@ -123,13 +140,7 @@ function switchTab(direction: 'left' | 'right'): void {
       startIdx = Math.max(active, 0);
     }
 
-    function wrapIndex(index: number, count: number, step: number): number {
-      const next = index + step;
-      if (next < 0) return count - 1;
-      if (next >= count) return 0;
-      return next;
-    }
-    const next = wrapIndex(startIdx, tabs.length, direction === 'left' ? -1 : 1);
+    const next = wrapTabIndex(startIdx, tabs.length, direction === 'left' ? -1 : 1);
 
     tabs[next]?.click();
     return; // First matching tab group wins.
@@ -287,13 +298,13 @@ function onMouseMove() { clearSpatialFocus(); }
 
 export const spatialNavigation: Action<HTMLElement> = (node) => {
   node.addEventListener('keydown', onKeydown);
-  window.addEventListener('mousemove', onMouseMove, { passive: true });
+  globalThis.addEventListener('mousemove', onMouseMove, { passive: true });
   rafId = requestAnimationFrame(pollGamepads);
 
   return {
     destroy() {
       node.removeEventListener('keydown', onKeydown);
-      window.removeEventListener('mousemove', onMouseMove);
+      globalThis.removeEventListener('mousemove', onMouseMove);
       cancelAnimationFrame(rafId);
       clearSpatialFocus();
     },

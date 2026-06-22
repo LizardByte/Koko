@@ -2,10 +2,9 @@
 // replacing the selector functions in ../client-web/src/app/selectors.ts and
 // itemPersonView.ts. These take explicit arguments (not the global state
 // singleton) so they're testable and Svelte-friendly.
-import { getArtworkUrl, resolveApiUrl, type MediaCollectionSummary, type MediaItemDetail, type MediaItemSummary, type ItemMetadataResponse, type MediaLibrarySettings, type MediaLibrary } from './api';
+import { getArtworkUrl, resolveApiUrl, type MediaCollectionSummary, type MediaItemDetail, type MediaItemSummary, type ItemMetadataResponse, type MediaLibrarySettings, type MediaLibrary, type ItemMetadataPerson, type MetadataProviderStatus } from './api';
 import { libraries } from './stores/libraries.svelte';
 import { humanizeItemType } from './ui';
-import type { ItemMetadataPerson } from './api';
 
 /** The item page's backdrop URL, or undefined when the item has none. */
 export function pageBackdropUrlForItem(
@@ -59,8 +58,6 @@ export function persistedLibraryForSettings(library: MediaLibrarySettings): Medi
 // --- Metadata search default-value helpers ---
 // Mirror vanilla itemPersonView.ts:73-124. Used to pre-fill the metadata
 // search form (query/year/language/providers) with sensible defaults.
-
-import type { MetadataProviderStatus } from './api';
 
 /**
  * Metadata providers eligible for manual linking on this item: configured,

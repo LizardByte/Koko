@@ -278,7 +278,7 @@ class PlaybackStore {
 
   // --- Escalating seek (pure logic, used by playerShortcuts action + buttons) ---
 
-  private _seekState = { lastDirection: 0, lastAt: 0, stepIndex: 0 };
+  private readonly _seekState = { lastDirection: 0, lastAt: 0, stepIndex: 0 };
 
   /**
    * Returns the seek step for the given direction, escalating if repeated

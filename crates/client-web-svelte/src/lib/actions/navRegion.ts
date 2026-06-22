@@ -116,10 +116,28 @@ function focusAndScroll(el: HTMLElement | null | undefined): el is HTMLElement {
   return true;
 }
 
-/** First focusable descendant of a container (mirrors original querySelector —
-    no visibility filter, so position:fixed focusables aren't skipped). */
+/**
+ * True when an element is actually visible (laid out + not display:none /
+ * visibility:hidden / opacity:0). Uses Element.checkVisibility() — the
+ * modern API that correctly handles position:fixed (which the older
+ * offsetParent !== null check falsely reported as hidden). Deliberate
+ * improvement over vanilla.
+ */
+function isVisible(el: HTMLElement): boolean {
+  return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+}
+
+/**
+ * First *visible* focusable descendant of a container.
+ *
+ * Uses isVisible() (checkVisibility) so position:fixed focusables aren't
+ * skipped (unlike offsetParent) and hidden ones aren't returned (unlike
+ * vanilla's bare querySelector). Deliberate improvement over vanilla.
+ */
 function firstFocusableIn(container: HTMLElement): HTMLElement | undefined {
-  return container.querySelector<HTMLElement>(FOCUSABLE_QUERY) ?? undefined;
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_QUERY)).find(
+    (el) => el.checkVisibility({ checkOpacity: false, checkVisibilityCSS: true }),
+  );
 }
 
 /** Handle the nothing-focused case: focus the first region's entry or first focusable. */
@@ -180,7 +198,7 @@ export function navigateList(
     container.querySelectorAll<HTMLElement>(
       'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
     ),
-  ).filter((el) => el.offsetParent !== null);
+  ).filter(isVisible);
   if (focusable.length === 0) return false;
 
   const idx = focusable.indexOf(current);
@@ -223,7 +241,7 @@ export function navigateShelfRow(
 
   const cards = Array.from(
     row.querySelectorAll<HTMLElement>('.media-card:not(:disabled)'),
-  ).filter((el) => el.offsetParent !== null);
+  ).filter(isVisible);
   if (cards.length === 0) return false;
 
   const idx = cards.indexOf(current);
@@ -280,7 +298,7 @@ export function navigateShelfRow(
 export function firstCardOfFirstShelf(container: HTMLElement): HTMLElement | undefined {
   const shelfRows = container.querySelectorAll<HTMLElement>('[data-shelf-row], .shelf-row');
   for (const row of shelfRows) {
-    if (row.offsetParent === null) continue;
+    if (!isVisible(row)) continue;
     const card = row.querySelector<HTMLElement>('.media-card:not(:disabled)');
     if (card) return card;
   }

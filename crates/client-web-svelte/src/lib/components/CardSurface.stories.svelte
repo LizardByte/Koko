@@ -2,6 +2,12 @@
   // CardSurface stories — documents the shared card shell + its config knobs
   // (tileRadius, aspectRatio, bordered, hover). Leaf cards (PersonCard,
   // MediaExtraCard) build on this; MediaCard keeps its own markup.
+  //
+  // Note: these are static visual examples. CardSurface requires `art`/`body`
+  // snippets which can't be sourced from Storybook args, so the controlled
+  // props (tileRadius/aspectRatio/bordered/hover) are hardcoded per story
+  // rather than wired to addon controls. The argTypes are declared for
+  // documentation (Props table) but intentionally have no live controls.
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import CardSurface from './CardSurface.svelte';
 
@@ -9,26 +15,17 @@
     title: 'Components/CardSurface',
     tags: ['autodocs'],
     args: { preset: 'empty' },
-    argTypes: {
-      tileRadius: { control: { type: 'number', min: 0, max: 32, step: 1 } },
-      aspectRatio: {
-        control: { type: 'select' },
-        options: ['2 / 3', '16 / 9', '1 / 1', '3 / 4'],
-      },
-      bordered: { control: 'boolean' },
-      hover: { control: { type: 'radio' }, options: ['none', 'tile'] },
-    },
     parameters: {
       docs: {
         description: {
-            component: 'Shared card shell: a transparent <button> root + a rounded, overflow-clipped tile wrapper. Used by PersonCard + MediaExtraCard; MediaCard keeps its own (global CSS coupling). Card-wide bugs (corner bleed, hover leak) are fixed here in one place. Configure via tileRadius, aspectRatio, bordered, hover.',
+          component: 'Shared card shell: a transparent <button> root + a rounded, overflow-clipped tile wrapper. Used by PersonCard + MediaExtraCard; MediaCard keeps its own (global CSS coupling). Card-wide bugs (corner bleed, hover leak) are fixed here in one place. Configure via tileRadius, aspectRatio, bordered, hover.',
         },
       },
     },
   });
 </script>
 
-<Story name="Poster (2/3, bordered)" args={{ preset: 'empty', tileRadius: 18, aspectRatio: '2 / 3', bordered: true, hover: 'tile' }}>
+<Story name="Poster (2/3, bordered)" args={{ preset: 'empty' }} asChild>
   <div style="width: 200px;">
     <CardSurface tileRadius={18} aspectRatio="2 / 3" bordered hover="tile" label="Example">
       {#snippet art()}
@@ -36,13 +33,13 @@
       {/snippet}
       {#snippet body()}
         <span style="font-weight:700;">Title</span>
-        <span style="color:var(--muted);font-size:0.8rem;">Subtitle</span>
+        <span style="color:var(--color-text-muted);font-size:0.8rem;">Subtitle</span>
       {/snippet}
     </CardSurface>
   </div>
 </Story>
 
-<Story name="Backdrop (16/9)" args={{ preset: 'empty', tileRadius: 8, aspectRatio: '16 / 9', bordered: true, hover: 'none' }}>
+<Story name="Backdrop (16/9)" args={{ preset: 'empty' }} asChild>
   <div style="width: 244px;">
     <CardSurface tileRadius={8} aspectRatio="16 / 9" bordered label="Example">
       {#snippet art()}
@@ -55,7 +52,7 @@
   </div>
 </Story>
 
-<Story name="Square Avatar (1/1, no border)" args={{ preset: 'empty', tileRadius: 12, aspectRatio: '1 / 1', bordered: false, hover: 'none' }}>
+<Story name="Square Avatar (1/1, no border)" args={{ preset: 'empty' }} asChild>
   <div style="width: 120px;">
     <CardSurface tileRadius={12} aspectRatio="1 / 1" label="Example">
       {#snippet art()}

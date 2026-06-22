@@ -119,7 +119,7 @@
   function navigateShelves(direction: 'up' | 'down', current: HTMLElement): boolean {
     const allShelves = Array.from(
       contentRegion?.querySelectorAll<HTMLElement>('.shelf') ?? [],
-    ).filter((s) => s.offsetParent !== null);
+    ).filter((s) => s.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
     if (allShelves.length === 0) return false;
 
     const currentShelf = allShelves.find((s) => s.contains(current)) ?? allShelves[0];

@@ -5,6 +5,7 @@
   // (Clear search), and the per-library scan + refresh-metadata action buttons
   // (only shown when a library is active).
   import Icon from './Icon.svelte';
+  import Button from './Button.svelte';
   import { HOME_TABS } from '$lib';
   import { catalog, libraries, ui } from '$lib/stores';
   import { navRegion, navigateList } from '$lib/actions/navRegion';
@@ -141,22 +142,20 @@
       {/if}
     </form>
     {#if activeLibrary}
-      <button
-        type="button"
-        class="icon-button secondary-button"
+      <Button
+        variant="secondary"
+        class="icon-button"
+        icon="folder-sync"
         title="Scan library"
         onclick={scanActiveLibrary}
-      >
-        <Icon name="folder-sync" size={18} />
-      </button>
-      <button
-        type="button"
-        class="icon-button secondary-button"
+      />
+      <Button
+        variant="secondary"
+        class="icon-button"
+        icon="database-zap"
         title="Refresh metadata"
         onclick={refreshActiveLibraryMetadata}
-      >
-        <Icon name="database-zap" size={18} />
-      </button>
+      />
     {/if}
   </div>
 </header>

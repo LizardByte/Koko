@@ -1555,7 +1555,7 @@ export function runMockScheduledTask(taskId: ScheduledTaskId): ScheduledTaskRunR
   return {
     task_id: taskId,
     started: true,
-    message: `${taskId.replace(/_/g, ' ')} started`,
+    message: `${taskId.replaceAll('_', ' ')} started`,
   };
 }
 

@@ -14,37 +14,36 @@ export type InputCallback = (input: GamepadInput, gamepad: Gamepad, layout: Game
 
 const DEADZONE = 0.12;
 
+/** Read a button state from a (possibly out-of-range) index. */
+function btn(gamepad: Gamepad, index: number): boolean {
+  return Boolean(gamepad.buttons[index]?.pressed);
+}
+
+/** Read the D-pad state from buttons or hat axis (layout-aware). */
+function readDpad(gamepad: Gamepad, layout: GamepadLayout): { up: boolean; down: boolean; left: boolean; right: boolean } {
+  if (layout.dpadButtons) {
+    return {
+      up: btn(gamepad, layout.dpadButtons.up),
+      down: btn(gamepad, layout.dpadButtons.down),
+      left: btn(gamepad, layout.dpadButtons.left),
+      right: btn(gamepad, layout.dpadButtons.right),
+    };
+  }
+  if (layout.hatAxis !== undefined) {
+    const hatValue = gamepad.axes[layout.hatAxis];
+    if (hatValue !== undefined) {
+      return parseHat(hatValue, layout.hatNeutral ?? 0);
+    }
+  }
+  return { up: false, down: false, left: false, right: false };
+}
+
 /**
  * Read a single gamepad and normalize its input into a GamepadInput.
  * Pure function — no side effects, no DOM. Testable.
  */
 export function readGamepad(gamepad: Gamepad, layout: GamepadLayout): GamepadInput {
-  // D-pad
-  let dpadUp = false, dpadDown = false, dpadLeft = false, dpadRight = false;
-
-  if (layout.dpadButtons) {
-    dpadUp = Boolean(gamepad.buttons[layout.dpadButtons.up]?.pressed);
-    dpadDown = Boolean(gamepad.buttons[layout.dpadButtons.down]?.pressed);
-    dpadLeft = Boolean(gamepad.buttons[layout.dpadButtons.left]?.pressed);
-    dpadRight = Boolean(gamepad.buttons[layout.dpadButtons.right]?.pressed);
-  } else if (layout.hatAxis !== undefined) {
-    const hatValue = gamepad.axes[layout.hatAxis];
-    if (hatValue !== undefined) {
-      const hat = parseHat(hatValue, layout.hatNeutral ?? 0);
-      dpadUp = hat.up;
-      dpadDown = hat.down;
-      dpadLeft = hat.left;
-      dpadRight = hat.right;
-    }
-  }
-
-  // Buttons
-  const confirm = Boolean(gamepad.buttons[layout.confirm]?.pressed);
-  const cancel = Boolean(gamepad.buttons[layout.cancel]?.pressed);
-  const lBumper = Boolean(gamepad.buttons[layout.lBumper]?.pressed);
-  const rBumper = Boolean(gamepad.buttons[layout.rBumper]?.pressed);
-  const select = Boolean(gamepad.buttons[layout.select]?.pressed);
-  const start = Boolean(gamepad.buttons[layout.start]?.pressed);
+  const dpad = readDpad(gamepad, layout);
 
   // Sticks
   const [lsx, lsy] = applyDeadzone(
@@ -58,17 +57,17 @@ export function readGamepad(gamepad: Gamepad, layout: GamepadLayout): GamepadInp
     DEADZONE,
   );
 
-  // Raw buttons for extensibility
-  const rawButtons = gamepad.buttons.map((b) => b.pressed);
-
   return {
-    dpadUp, dpadDown, dpadLeft, dpadRight,
-    confirm, cancel,
-    lBumper, rBumper,
-    select, start,
+    dpadUp: dpad.up, dpadDown: dpad.down, dpadLeft: dpad.left, dpadRight: dpad.right,
+    confirm: btn(gamepad, layout.confirm),
+    cancel: btn(gamepad, layout.cancel),
+    lBumper: btn(gamepad, layout.lBumper),
+    rBumper: btn(gamepad, layout.rBumper),
+    select: btn(gamepad, layout.select),
+    start: btn(gamepad, layout.start),
     leftStickX: lsx, leftStickY: lsy,
     rightStickX: rsx, rightStickY: rsy,
-    rawButtons,
+    rawButtons: gamepad.buttons.map((b) => b.pressed),
   };
 }
 

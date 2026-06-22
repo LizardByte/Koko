@@ -12,12 +12,14 @@
   import BrowseListingGrid from './BrowseListingGrid.svelte';
   import { goto } from '$app/navigation';
   import { catalog } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import {
     categorySummaries,
     itemsForCollection,
     pageBackdropUrlForCollection,
   } from '$lib/selectors';
   import { homeBrowsePath, type BrowseListingKind } from '$lib/paths';
+  import type { MediaItemSummary } from '$lib/api';
 
   type Props = {
     kind: BrowseListingKind;
@@ -29,7 +31,7 @@
   // Ensure library items are loaded for category/collection resolution.
   $effect(() => {
     if (catalog.libraryItems.length === 0 && !catalog.libraryItemsLoading) {
-      catalog.loadLibraryItems(libraryId).catch(() => {});
+      catalog.loadLibraryItems(libraryId).catch(noop);
     }
   });
 
@@ -50,33 +52,37 @@
   );
 
   // Items to render in the grid.
-  const items = $derived(
-    kind === 'collection' && collection
-      ? itemsForCollection(collection, catalog.libraryItems)
-      : kind === 'category' && category
-        ? category.items
-        : [],
-  );
+  function resolveItems(): MediaItemSummary[] {
+    if (kind === 'collection' && collection) {
+      return itemsForCollection(collection, catalog.libraryItems);
+    }
+    if (kind === 'category' && category) return category.items;
+    return [];
+  }
+  const items = $derived(resolveItems());
 
   // Hero copy.
-  const eyebrow = $derived(
-    kind === 'collection' ? 'Collection' : kind === 'category' ? 'Genre' : 'Playlist',
-  );
-  const title = $derived(
-    kind === 'collection'
-      ? collection?.name ?? decodedKey
-      : kind === 'category'
-        ? decodedKey
-        : decodedKey,
-  );
-  const overview = $derived(
-    kind === 'collection'
-      ? collection?.overview ?? `${items.length} title${items.length === 1 ? '' : 's'} in this collection.`
-      : kind === 'category'
-        ? category?.items.slice(0, 5).map((item) => item.display_title).join(' · ') ||
-          'No titles are currently linked to this genre.'
-        : 'No playlist items are available yet.',
-  );
+  const EYEBROW_BY_KIND: Record<BrowseListingKind, string> = {
+    collection: 'Collection',
+    category: 'Genre',
+    playlist: 'Playlist',
+  };
+  const eyebrow = $derived(EYEBROW_BY_KIND[kind]);
+  const title = $derived(kind === 'collection' ? collection?.name ?? decodedKey : decodedKey);
+  function resolveOverview(): string {
+    if (kind === 'collection') {
+      const suffix = items.length === 1 ? '' : 's';
+      return collection?.overview ?? `${items.length} title${suffix} in this collection.`;
+    }
+    if (kind === 'category') {
+      return (
+        category?.items.slice(0, 5).map((item) => item.display_title).join(' · ') ||
+        'No titles are currently linked to this genre.'
+      );
+    }
+    return 'No playlist items are available yet.';
+  }
+  const overview = $derived(resolveOverview());
   const heroBackdropUrl = $derived(
     kind === 'collection' ? pageBackdropUrlForCollection(collection) : undefined,
   );

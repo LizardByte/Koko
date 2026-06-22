@@ -13,7 +13,7 @@
  * @returns Filtered [x, y] with deadzone applied.
  */
 export function applyDeadzone(x: number, y: number, deadzone = 0.12): [number, number] {
-  const magnitude = Math.sqrt(x * x + y * y);
+  const magnitude = Math.hypot(x, y);
   if (magnitude < deadzone) {
     return [0, 0];
   }

@@ -98,3 +98,38 @@
     </button>
   </div>
 </section>
+
+<style>
+  /* Shelf scroll-button UI — scoped here because Shelf is the sole owner of
+     the scroll affordance. Uses :global because the classes are applied to
+     plain <button> elements and the parent .shelf-row-shell.no-scroll variant
+     is also authored in this component's template. */
+  :global(.shelf-scroll-button) {
+    width: 2.3rem;
+    height: 2.3rem;
+    padding: 0;
+    border-radius: 999px;
+    display: inline-grid;
+    place-items: center;
+    background: var(--surface-4);
+    box-shadow: none;
+    color: #dfe9ff;
+    flex: 0 0 auto;
+  }
+
+  :global(.shelf-scroll-button.is-scroll-hidden) {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  /* Hide the scroll buttons entirely when the shelf fits without scrolling. */
+  :global(.shelf-row-shell.no-scroll .shelf-scroll-button) {
+    display: none;
+  }
+
+  :global(.shelf-scroll-button:hover),
+  :global(.shelf-scroll-button:focus-visible) {
+    background: var(--color-active-green);
+    color: var(--color-bg-inverted);
+  }
+</style>

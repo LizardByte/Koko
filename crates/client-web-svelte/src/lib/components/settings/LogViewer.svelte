@@ -6,10 +6,11 @@
   import { onMount } from 'svelte';
   import Button from '../Button.svelte';
   import { activities, ui } from '$lib/stores';
+  import { noop } from '$lib/constants';
 
   onMount(() => {
     if (!activities.logsResponse && !activities.loading) {
-      activities.loadLogs().catch(() => {});
+      activities.loadLogs().catch(noop);
     }
   });
 
@@ -19,7 +20,7 @@
     // Reading systemActivities makes this re-run when the poll updates them.
     void activities.systemActivities;
     if (activities.logsResponse) {
-      activities.loadLogs().catch(() => {});
+      activities.loadLogs().catch(noop);
     }
   });
 

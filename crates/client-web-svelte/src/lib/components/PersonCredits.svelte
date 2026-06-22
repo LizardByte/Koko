@@ -27,6 +27,36 @@
   // Bucket credits by root show, then by season — mirrors personCreditGroups.
   const groups = $derived<CreditGroup[]>(buildGroups(credits));
 
+  /** Bucket one root's credits into seasons + direct episodes. */
+  function bucketRootCredits(bucket: MetadataPersonItemCredit[]): {
+    seasons: SeasonGroup[];
+    directEpisodes: MetadataPersonItemCredit[];
+  } {
+    const seasons: SeasonGroup[] = [];
+    const directEpisodes: MetadataPersonItemCredit[] = [];
+    const bySeason = new Map<number, MetadataPersonItemCredit[]>();
+    for (const credit of bucket) {
+      if (credit.item.item_type === 'season') {
+        // A season-level credit: becomes its own group with no episodes yet.
+        bySeason.set(credit.item.id, []);
+      } else if (credit.item.item_type === 'episode' && credit.item.parent_id) {
+        const seasonBucket = bySeason.get(credit.item.parent_id) ?? [];
+        seasonBucket.push(credit);
+        bySeason.set(credit.item.parent_id, seasonBucket);
+      } else {
+        directEpisodes.push(credit);
+      }
+    }
+    for (const [seasonId, episodes] of bySeason) {
+      const firstEpisode = episodes[0];
+      const season = firstEpisode?.item.hierarchy?.find((entry) => entry.id === seasonId)
+        ?? bucket.find((credit) => credit.item.id === seasonId)?.item;
+      if (season) seasons.push({ season, episodes });
+    }
+    seasons.sort((a, b) => (a.season.season_number ?? 0) - (b.season.season_number ?? 0));
+    return { seasons, directEpisodes };
+  }
+
   function buildGroups(allCredits: MetadataPersonItemCredit[]): CreditGroup[] {
     const byRoot = new Map<number, MetadataPersonItemCredit[]>();
     for (const credit of allCredits) {
@@ -38,30 +68,7 @@
     const result: CreditGroup[] = [];
     for (const [rootId, bucket] of byRoot) {
       const root = bucket[0].item.hierarchy?.find((entry) => entry.id === rootId) ?? bucket[0].item;
-      const seasons: SeasonGroup[] = [];
-      const directEpisodes: MetadataPersonItemCredit[] = [];
-      const bySeason = new Map<number, MetadataPersonItemCredit[]>();
-      for (const credit of bucket) {
-        if (credit.item.item_type === 'season') {
-          // A season-level credit: becomes its own group with no episodes yet.
-          bySeason.set(credit.item.id, []);
-        } else if (credit.item.item_type === 'episode' && credit.item.parent_id) {
-          const seasonBucket = bySeason.get(credit.item.parent_id) ?? [];
-          seasonBucket.push(credit);
-          bySeason.set(credit.item.parent_id, seasonBucket);
-        } else {
-          directEpisodes.push(credit);
-        }
-      }
-      for (const [seasonId, episodes] of bySeason) {
-        const firstEpisode = episodes[0];
-        const season = firstEpisode?.item.hierarchy?.find((entry) => entry.id === seasonId)
-          ?? bucket.find((credit) => credit.item.id === seasonId)?.item;
-        if (season) {
-          seasons.push({ season, episodes });
-        }
-      }
-      seasons.sort((a, b) => (a.season.season_number ?? 0) - (b.season.season_number ?? 0));
+      const { seasons, directEpisodes } = bucketRootCredits(bucket);
       result.push({ root, seasons, directEpisodes });
     }
     result.sort((a, b) => a.root.display_title.localeCompare(b.root.display_title));

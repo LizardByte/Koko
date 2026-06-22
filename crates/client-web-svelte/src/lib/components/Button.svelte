@@ -38,9 +38,12 @@
     ...rest
   }: Props = $props();
 
-  const variantClass = $derived(
-    variant === 'secondary' ? 'secondary-button' : variant === 'danger' ? 'danger-button' : '',
-  );
+  const VARIANT_CLASS: Record<NonNullable<Props['variant']>, string> = {
+    primary: '',
+    secondary: 'secondary-button',
+    danger: 'danger-button',
+  };
+  const variantClass = $derived(VARIANT_CLASS[variant]);
 </script>
 
 <button
@@ -95,4 +98,8 @@
     border-top-color: #fff;
     animation: spin 0.85s linear infinite;
   }
+
+  /* Variant classes (.secondary-button / .danger-button) stay global in
+     app.css — they're plain-<button> affordances any element can opt into,
+     not Button-owned. Only the is-busy spinner is truly Button-scoped. */
 </style>

@@ -4,6 +4,7 @@
 // singleton) so they're testable and Svelte-friendly.
 import { getArtworkUrl, resolveApiUrl, type MediaCollectionSummary, type MediaItemDetail, type MediaItemSummary, type ItemMetadataResponse, type MediaLibrarySettings, type MediaLibrary } from './api';
 import { libraries } from './stores/libraries.svelte';
+import { humanizeItemType } from './ui';
 import type { ItemMetadataPerson } from './api';
 
 /** The item page's backdrop URL, or undefined when the item has none. */
@@ -21,24 +22,18 @@ export function pageBackdropUrlForCollection(
   return url ? resolveApiUrl(url) : undefined;
 }
 
-/** "Back to <parent>" label — Back to library / season / show. */
+/**
+ * "Back to <parent>" label — Back to library / season / show.
+ * Mirrors vanilla selectors.ts:56-71: parent wins, else "Back to library".
+ * parentId is only set when navigating to a parent item (not a library);
+ * the consumer falls back to its library lookup when undefined.
+ */
 export function backNavigationTarget(item: MediaItemDetail): { label: string; parentId?: number } {
-  const parent = item.hierarchy[item.hierarchy.length - 1];
+  const parent = item.hierarchy.at(-1);
   if (!parent) {
-    return { label: 'Back to library', parentId: item.library_id ? undefined : undefined };
+    return { label: 'Back to library' };
   }
-  const typeLabel =
-    parent.item_type === 'show'
-      ? 'show'
-      : parent.item_type === 'season'
-        ? 'season'
-        : parent.item_type === 'movie'
-          ? 'library'
-          : 'library';
-  if (typeLabel === 'library') {
-    return { label: 'Back to library', parentId: parent.id };
-  }
-  return { label: `Back to ${typeLabel}`, parentId: parent.id };
+  return { label: `Back to ${humanizeItemType(parent.item_type).toLowerCase()}`, parentId: parent.id };
 }
 
 /** Whether the item supports manual metadata linking (movies/shows only). */

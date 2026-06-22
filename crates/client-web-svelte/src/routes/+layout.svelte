@@ -8,6 +8,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { auth, ui, libraries, activities, playback } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import Rail from '$lib/components/Rail.svelte';
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
@@ -55,7 +56,7 @@
   // metadata/scan work for the polling predicate).
   $effect(() => {
     if (auth.isLoggedIn && !activities.systemActivities) {
-      activities.loadActivities().catch(() => {});
+      activities.loadActivities().catch(noop);
     }
   });
 

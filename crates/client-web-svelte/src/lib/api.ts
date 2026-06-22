@@ -716,7 +716,7 @@ export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'log
  * never sets it, so it stays a no-op and is tree-shaken from the real bundle.
  */
 export type MockArtworkResolver = (itemId: number, kind: 'poster' | 'backdrop' | 'logo') => string | undefined;
-export let mockArtworkResolver: MockArtworkResolver | undefined;
+let mockArtworkResolver: MockArtworkResolver | undefined;
 export function setMockArtworkResolver(resolver: MockArtworkResolver | undefined): void {
   mockArtworkResolver = resolver;
 }
@@ -839,11 +839,11 @@ export function getLogs(filters?: {
   limit?: number;
 }): Promise<LogEntriesResponse> {
   const params = new URLSearchParams();
-  if (filters?.level?.trim()) params.set('level', filters.level.trim());
-  if (filters?.module?.trim()) params.set('module', filters.module.trim());
-  if (filters?.search?.trim()) params.set('search', filters.search.trim());
-  if (filters?.since?.trim()) params.set('since', filters.since.trim());
-  if (filters?.until?.trim()) params.set('until', filters.until.trim());
+  // Trim-aware string params: set only when non-empty.
+  for (const key of ['level', 'module', 'search', 'since', 'until'] as const) {
+    const value = filters?.[key]?.trim();
+    if (value) params.set(key, value);
+  }
   if (typeof filters?.limit === 'number' && Number.isFinite(filters.limit)) {
     params.set('limit', String(filters.limit));
   }
@@ -872,13 +872,15 @@ export function getWebClientProfile(): ClientProfile {
   const audio = document.createElement('audio');
   const canVideo = (type: string) => video.canPlayType(type) !== '';
   const canAudio = (type: string) => audio.canPlayType(type) !== '';
+  // Codec → MP4 FourCC aliases for canPlayType probing.
+  const CODEC_ALIASES: Record<string, string> = { h264: 'avc1', hevc: 'hev1' };
   const supportedVideoCodecs = ['h264', 'hevc', 'av1', 'vp8', 'vp9'].filter((codec) =>
-    canVideo(`video/mp4; codecs="${codec === 'h264' ? 'avc1' : codec === 'hevc' ? 'hev1' : codec}"`),
+    canVideo(`video/mp4; codecs="${CODEC_ALIASES[codec] ?? codec}"`),
   );
   const supportedAudioCodecs = ['mp3', 'aac', 'vorbis', 'opus', 'wav', 'flac'].filter((codec) =>
     canAudio(codec === 'wav' ? 'audio/wav' : `audio/${codec}`),
   );
-  const clientName = `Koko Web (${navigator.userAgent.split(' ').slice(-1)[0]})`;
+  const clientName = `Koko Web (${navigator.userAgent.split(' ').at(-1)})`;
   return {
     client_type: 'web',
     client_name: clientName,

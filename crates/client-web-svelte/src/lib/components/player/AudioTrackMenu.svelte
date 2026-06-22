@@ -4,6 +4,7 @@
   // audio_stream_index (server remuxes/transcodes).
   import Icon from '../Icon.svelte';
   import type { MediaAudioTrack } from '$lib/api';
+  import './player.css';
 
   let {
     audioTracks,

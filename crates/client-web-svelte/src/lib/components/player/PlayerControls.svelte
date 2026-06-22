@@ -11,9 +11,11 @@
   import Icon from '../Icon.svelte';
   import AudioTrackMenu from './AudioTrackMenu.svelte';
   import { playback } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import { formatMediaTime } from '$lib/format';
   import { playerShortcuts } from '$lib/actions/playerShortcuts';
   import type { MediaAudioTrack } from '$lib/api';
+  import './player.css';
 
   let {
     isVideo = true,
@@ -127,9 +129,9 @@
   function toggleFullscreen() {
     const shell = document.querySelector('.player-shell');
     if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
+      document.exitFullscreen().catch(noop);
     } else {
-      shell?.requestFullscreen?.().catch(() => {});
+      shell?.requestFullscreen?.().catch(noop);
     }
     showControls();
   }
@@ -166,7 +168,7 @@
     }
     // Fallback: the track marked 'default' in the container.
     const defaultPos = audioTracks.findIndex((t) => t.default);
-    return defaultPos >= 0 ? defaultPos : 0;
+    return Math.max(defaultPos, 0);
   });
 </script>
 
@@ -271,3 +273,30 @@
     </div>
   </div>
 </div>
+
+<style>
+  /* Player badge — sole consumer is PlayerControls (the streaming-mode
+     indicator). Uses :global so the class can be applied to plain <span>
+     elements without Svelte's scoping hash. */
+  :global(.player-badge) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.25rem;
+    padding: 0 0.8rem;
+    border-radius: 999px;
+    background: var(--surface-5);
+    color: var(--color-text-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+    backdrop-filter: blur(16px);
+  }
+
+  :global(.player-badge.is-direct) {
+    color: var(--color-success);
+  }
+
+  :global(.player-badge.is-transcoding) {
+    color: var(--color-transcoding);
+  }
+</style>

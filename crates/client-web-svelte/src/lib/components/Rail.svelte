@@ -158,12 +158,44 @@
    * (mirroring vanilla style.css:464-491) — see PORTING_GUIDELINES.md.
    * The scoped `strong` rule below has no vanilla counterpart (the rail
    * user-card label styling is rail-specific glue).
+   *
+   * The rail user-card styles (.rail-user-card + its copy/layout siblings)
+   * were promoted out of app.css — Rail is the sole owner.
    */
   strong {
-    color: #f4f7fb;
+    color: var(--color-text-primary);
     font-size: 0.85rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  :global(.rail-user-card) {
+    display: flex;
+    gap: 0.7rem;
+    align-items: center;
+    padding: 0.85rem 0.9rem;
+    border-radius: 16px;
+    background: var(--surface-2);
+    color: var(--color-text-secondary);
+  }
+
+  :global(.rail-user-card span) {
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+  }
+
+  :global(.rail-user-copy) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  :global(.rail-library-copy) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
   }
 </style>

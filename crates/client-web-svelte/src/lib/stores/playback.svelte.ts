@@ -19,6 +19,7 @@ import {
   type MediaItemDetail,
   type PlaybackSession,
 } from '$lib/api';
+import { noop } from '$lib/constants';
 import { ui } from './ui.svelte';
 import type { TrailerOption, ThemeSongSource } from '$lib/playerTypes';
 
@@ -138,7 +139,7 @@ class PlaybackStore {
   private async beginPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
     // Delete any prior session.
     if (this.session) {
-      deletePlaybackSession(this.session.session_id).catch(() => {});
+      deletePlaybackSession(this.session.session_id).catch(noop);
     }
 
     this.item = item;
@@ -181,7 +182,7 @@ class PlaybackStore {
 
     // Re-create the session with the new audio track.
     if (this.session) {
-      deletePlaybackSession(this.session.session_id).catch(() => {});
+      deletePlaybackSession(this.session.session_id).catch(noop);
     }
 
     try {
@@ -199,7 +200,7 @@ class PlaybackStore {
   /** Close the media player + delete the session. */
   close(): void {
     if (this.session) {
-      deletePlaybackSession(this.session.session_id).catch(() => {});
+      deletePlaybackSession(this.session.session_id).catch(noop);
     }
     this.session = undefined;
     this.item = undefined;
@@ -259,7 +260,7 @@ class PlaybackStore {
       position_ms: positionMs,
       duration_ms: durationMs,
       completed: false,
-    }).catch(() => {});
+    }).catch(noop);
 
     // Save to localStorage for resume prompt (Opportunity I).
     this.saveResumePosition(itemId, positionMs);
@@ -271,7 +272,7 @@ class PlaybackStore {
       position_ms: durationMs ?? 0,
       duration_ms: durationMs,
       completed: true,
-    }).catch(() => {});
+    }).catch(noop);
     this.clearResumePosition(itemId);
   }
 

@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import HomeNavbar from '$lib/components/HomeNavbar.svelte';
+  import { noop } from '$lib/constants';
   import HomeFeature from '$lib/components/HomeFeature.svelte';
   import Shelf from '$lib/components/Shelf.svelte';
   import MediaCard from '$lib/components/MediaCard.svelte';
@@ -60,7 +61,7 @@
       (a) => (a.category === 'metadata_refresh' || a.category === 'library_scan') && a.state !== 'completed' && a.state !== 'failed',
     );
     if (hasActive) {
-      catalog.loadHome(libraryId).catch(() => {});
+      catalog.loadHome(libraryId).catch(noop);
     }
   });
 
@@ -94,13 +95,26 @@
   const libraryItems = $derived(catalog.libraryItems);
   $effect(() => {
     if (catalog.homeTab === 'library' && libraryItems.length === 0 && !catalog.libraryItemsLoading) {
-      catalog.loadLibraryItems(libraryId).catch(() => {});
+      catalog.loadLibraryItems(libraryId).catch(noop);
     }
   });
 
   let contentRegion = $state<HTMLElement | undefined>(undefined);
 
   // Navigate between shelves vertically (up/down).
+  /** Scroll the .main-shell so the target shelf section is fully visible. */
+  function scrollShelfIntoView(targetShelf: HTMLElement): void {
+    const scrollContainer = targetShelf.closest('.main-shell');
+    if (!scrollContainer) return;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const shelfRect = targetShelf.getBoundingClientRect();
+    // Align shelf top with container top so the header is fully visible.
+    const offset = shelfRect.top - containerRect.top;
+    if (offset < 0 || shelfRect.bottom > containerRect.bottom) {
+      scrollContainer.scrollBy({ top: offset - 16, behavior: 'smooth' });
+    }
+  }
+
   // Scrolls the entire shelf section into view (header + row), not just the card.
   function navigateShelves(direction: 'up' | 'down', current: HTMLElement): boolean {
     const allShelves = Array.from(
@@ -112,38 +126,17 @@
     const idx = allShelves.indexOf(currentShelf);
 
     // At the bottom edge → stay (end of content, don't transition to sidebar).
-    if (direction === 'down' && idx >= allShelves.length - 1) {
-      return true; // Handled = stay.
-    }
+    if (direction === 'down' && idx >= allShelves.length - 1) return true;
     // At the top edge → delegate to global engine (→ navbar).
-    if (direction === 'up' && idx <= 0) {
-      return false;
-    }
+    if (direction === 'up' && idx <= 0) return false;
 
     const targetShelf = direction === 'down' ? allShelves[idx + 1] : allShelves[idx - 1];
-    const cardSelector = direction === 'down' ? 'first' : 'last';
+    scrollShelfIntoView(targetShelf);
 
-    // Scroll the page so the target shelf section is fully visible.
-    // Use the scroll container (.main-shell), not the shelf itself.
-    const scrollContainer = targetShelf.closest('.main-shell');
-    if (scrollContainer) {
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const shelfRect = targetShelf.getBoundingClientRect();
-      // Calculate the scroll offset needed to align the shelf top with
-      // the container top (so the header is fully visible).
-      const offset = shelfRect.top - containerRect.top;
-      if (offset < 0 || shelfRect.bottom > containerRect.bottom) {
-        scrollContainer.scrollBy({ top: offset - 16, behavior: 'smooth' });
-      }
-    }
-
-    // Focus the target card.
-    const cards = targetShelf.querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
-    const card = cardSelector === 'first' ? cards[0] : cards[cards.length - 1];
-    if (card) {
-      setTimeout(() => card.focus(), 50);
-    }
-
+    // Focus the first (going down) or last (going up) card.
+    const cards = Array.from(targetShelf.querySelectorAll<HTMLElement>('.media-card:not(:disabled)'));
+    const card = direction === 'down' ? cards.at(0) : cards.at(-1);
+    if (card) setTimeout(() => card.focus(), 50);
     return true;
   }
 </script>

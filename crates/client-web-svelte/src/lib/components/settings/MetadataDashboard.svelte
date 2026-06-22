@@ -8,12 +8,13 @@
   import Button from '../Button.svelte';
   import { goto } from '$app/navigation';
   import { activities, libraries } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import { formatTimestamp } from '$lib/format';
   import type { MediaItemSummary } from '$lib/api';
 
   onMount(() => {
     if (activities.dashboardItems.length === 0 && !activities.dashboardLoading) {
-      activities.loadDashboard().catch(() => {});
+      activities.loadDashboard().catch(noop);
     }
   });
 

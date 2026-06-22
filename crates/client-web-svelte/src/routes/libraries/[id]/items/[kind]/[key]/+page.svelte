@@ -5,22 +5,12 @@
   // vanilla routes.ts:38-46 (libraryBrowseMatch).
   import { page } from '$app/state';
   import BrowseListing from '$lib/components/BrowseListing.svelte';
-  import type { BrowseListingKind } from '$lib/paths';
-
-  const VALID_KINDS: ReadonlySet<string> = new Set(['collections', 'categories', 'playlists']);
+  import { browseKindFromSegment } from '$lib/paths';
 
   const kindParam = $derived(page.params.kind);
   const key = $derived(page.params.key ?? '');
   const libraryId = $derived(Number(page.params.id));
-  const kind = $derived(
-    kindParam && VALID_KINDS.has(kindParam)
-      ? (kindParam === 'collections'
-          ? 'collection'
-          : kindParam === 'categories'
-            ? 'category'
-            : 'playlist') as BrowseListingKind
-      : undefined,
-  );
+  const kind = $derived(browseKindFromSegment(kindParam));
 </script>
 
 <svelte:head><title>{key ? `${decodeURIComponent(key)} — Koko` : 'Koko'}</title></svelte:head>

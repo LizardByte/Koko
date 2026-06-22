@@ -29,17 +29,18 @@
   // semantics). In mock mode these are placeholders, so has-artwork stays off
   // and the hero renders a solid base — matching the vanilla client's
   // broken-image behavior.
-  const backdropUrl = $derived(
-    collection
-      ? collection.backdrop_url
-        ? resolveApiUrl(collection.backdrop_url)
-        : collection.artwork_url
-          ? resolveApiUrl(collection.artwork_url)
-          : undefined
-      : item?.backdrop_url
-        ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at)
-        : undefined,
-  );
+  function resolveBackdropUrl(): string | undefined {
+    if (collection) {
+      if (collection.backdrop_url) return resolveApiUrl(collection.backdrop_url);
+      if (collection.artwork_url) return resolveApiUrl(collection.artwork_url);
+      return undefined;
+    }
+    if (item?.backdrop_url) {
+      return getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at);
+    }
+    return undefined;
+  }
+  const backdropUrl = $derived(resolveBackdropUrl());
   const logoUrl = $derived(item?.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined);
   const libraryName = $derived(item ? libraries.byId(item.library_id)?.name ?? 'your library' : '');
 </script>

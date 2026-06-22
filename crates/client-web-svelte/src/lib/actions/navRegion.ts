@@ -106,29 +106,40 @@ function findAdjacentRegion(
  * Returns true if navigation was handled (focus moved or intentionally
  * stayed), false if nothing happened (no region, no target).
  */
+const FOCUSABLE_QUERY = 'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])';
+
+/** Focus + scroll an element into view in one step. */
+function focusAndScroll(el: HTMLElement | null | undefined): el is HTMLElement {
+  if (!el) return false;
+  el.focus();
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
+
+/** First focusable descendant of a container (mirrors original querySelector —
+    no visibility filter, so position:fixed focusables aren't skipped). */
+function firstFocusableIn(container: HTMLElement): HTMLElement | undefined {
+  return container.querySelector<HTMLElement>(FOCUSABLE_QUERY) ?? undefined;
+}
+
+/** Handle the nothing-focused case: focus the first region's entry or first focusable. */
+function focusInitial(direction: Direction): boolean {
+  const first = regions[0];
+  if (first?.enter?.[direction]) {
+    const el = first.enter[direction]!(direction);
+    if (focusAndScroll(el)) return true;
+  }
+  // Fallback: first focusable in any region.
+  for (const r of regions) {
+    const focusable = firstFocusableIn(r.container);
+    if (focusable && focusAndScroll(focusable)) return true;
+  }
+  return false;
+}
+
 export function navigateDirection(direction: Direction): boolean {
   const current = document.activeElement as HTMLElement | null;
-  if (!current) {
-    // Nothing focused — focus the first focusable in the first region.
-    const first = regions[0];
-    if (first?.enter?.[direction]) {
-      const el = first.enter[direction]!(direction);
-      el?.focus();
-      el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return true;
-    }
-    // Fallback: first focusable in any region.
-    for (const r of regions) {
-      const focusable = r.container.querySelector<HTMLElement>(
-        'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
-      );
-      if (focusable) {
-        focusable.focus();
-        return true;
-      }
-    }
-    return false;
-  }
+  if (!current) return focusInitial(direction);
 
   const region = findRegionForElement(current);
   if (!region) {
@@ -137,32 +148,17 @@ export function navigateDirection(direction: Direction): boolean {
   }
 
   // Let the region try to handle it internally.
-  if (region.navigate(direction, current)) {
-    return true; // Region handled it.
-  }
+  if (region.navigate(direction, current)) return true;
 
   // Region couldn't handle it (edge reached) — transition to adjacent region.
   const adjacent = findAdjacentRegion(region, direction);
   if (adjacent) {
     // Use the adjacent region's entry handler for this direction.
-    const enterHandler = adjacent.enter?.[direction];
-    if (enterHandler) {
-      const target = enterHandler(direction);
-      if (target) {
-        target.focus();
-        target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        return true;
-      }
-    }
+    const target = adjacent.enter?.[direction]?.(direction);
+    if (focusAndScroll(target)) return true;
     // No specific entry handler — focus the first focusable in the region.
-    const focusable = adjacent.container.querySelector<HTMLElement>(
-      'button:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable) {
-      focusable.focus();
-      focusable.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return true;
-    }
+    const focusable = firstFocusableIn(adjacent.container);
+    if (focusable && focusAndScroll(focusable)) return true;
   }
 
   return false; // No adjacent region — stay.
@@ -197,24 +193,17 @@ export function navigateList(
   const isForward = horizontal ? direction === 'right' : direction === 'down';
   const isBackward = horizontal ? direction === 'left' : direction === 'up';
 
-  if (isForward) {
-    if (idx < focusable.length - 1) {
-      focusable[idx + 1]?.focus();
-      focusable[idx + 1]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return true;
-    }
-    return false; // At end.
-  }
+  // Focus the neighbor at offset and return true; false if no neighbor.
+  const focusNeighbor = (offset: number): boolean => {
+    const next = focusable[idx + offset];
+    if (!next) return false;
+    next.focus();
+    next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return true;
+  };
 
-  if (isBackward) {
-    if (idx > 0) {
-      focusable[idx - 1]?.focus();
-      focusable[idx - 1]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      return true;
-    }
-    return false; // At start.
-  }
-
+  if (isForward) return focusNeighbor(1);
+  if (isBackward) return focusNeighbor(-1);
   return false; // Perpendicular direction — not a list navigation.
 }
 

@@ -16,13 +16,12 @@
   };
   let { items, loading, kind }: Props = $props();
 
-  const emptyMessage = $derived(
-    kind === 'collection'
-      ? 'No titles are currently linked to this collection.'
-      : kind === 'category'
-        ? 'No titles are currently linked to this genre.'
-        : 'Playlist creation is planned. Items will appear here when playlists are available.',
-  );
+  const EMPTY_MESSAGES: Record<BrowseListingKind, string> = {
+    collection: 'No titles are currently linked to this collection.',
+    category: 'No titles are currently linked to this genre.',
+    playlist: 'Playlist creation is planned. Items will appear here when playlists are available.',
+  };
+  const emptyMessage = $derived(EMPTY_MESSAGES[kind]);
 </script>
 
 <section class="panel page-panel item-section">

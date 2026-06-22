@@ -6,6 +6,7 @@
   //   - Settings: a "Controls" link (future)
   import Icon from '../Icon.svelte';
   import { playback } from '$lib/stores';
+  import './player.css';
 
   let {
     isOpen = false,

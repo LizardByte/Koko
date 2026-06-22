@@ -8,7 +8,9 @@
   import Icon from '../Icon.svelte';
   import YouTubeIframe from './YouTubeIframe.svelte';
   import { playback } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import { formatMediaTime } from '$lib/format';
+  import './player.css';
   import { extractYouTubeVideoId, buildYouTubeWatchUrl } from '$lib/youtube';
   import type { YouTubePlayer } from '$lib/playerTypes';
   import { YOUTUBE_PLAYER_STATE } from '$lib/playerTypes';
@@ -104,9 +106,9 @@
   function toggleFullscreen() {
     const shell = document.querySelector('.player-shell');
     if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
+      document.exitFullscreen().catch(noop);
     } else {
-      shell?.requestFullscreen?.().catch(() => {});
+      shell?.requestFullscreen?.().catch(noop);
     }
   }
 </script>

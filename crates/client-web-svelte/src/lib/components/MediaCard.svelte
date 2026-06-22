@@ -40,13 +40,12 @@
   const onLibraryHome = $derived(
     page.url.pathname === '/' && catalog.activeLibraryId !== undefined,
   );
-  const secondaryMeta = $derived(
-    isSeasonEpisodeCard
-      ? undefined
-      : onLibraryHome
-        ? humanizeItemType(item.item_type)
-        : `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`,
-  );
+  function resolveSecondaryMeta(): string | undefined {
+    if (isSeasonEpisodeCard) return undefined;
+    if (onLibraryHome) return humanizeItemType(item.item_type);
+    return `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`;
+  }
+  const secondaryMeta = $derived(resolveSecondaryMeta());
 
   // Metric: missing badge if missing_since, else child-count/duration.
   const isMissing = $derived(Boolean(item.missing_since));
@@ -66,13 +65,11 @@
   const hasMetadataBadges = $derived(isUnmatched || isMetadataLoading);
   const hasMultipleMetaBadges = $derived(isUnmatched && isMetadataLoading);
   // Title/aria + class string mirror vanilla's conditional string build.
-  const metadataStatusLabel = $derived(
-    isMetadataLoading
-      ? isUnmatched
-        ? 'Matching metadata'
-        : 'Refreshing metadata'
-      : 'Metadata is not linked yet',
-  );
+  function resolveMetadataStatusLabel(): string {
+    if (!isMetadataLoading) return 'Metadata is not linked yet';
+    return isUnmatched ? 'Matching metadata' : 'Refreshing metadata';
+  }
+  const metadataStatusLabel = $derived(resolveMetadataStatusLabel());
   const metadataStatusClass = $derived(
     [
       'media-card-status',
@@ -174,12 +171,12 @@
 
 <style>
   /*
-   * Only the mock-data artwork fallbacks live here — they have no vanilla
-   * counterpart (vanilla lets mock image URLs break; we render a colored
-   * gradient tile keyed by item id instead). Every other rule the card uses
-   * (.media-card, .media-card-art, .media-card-kind-row, .media-card-status *,
-   * .media-card-progress, .status-icon, .card-icon, etc.) lives in app.css,
-   * mirroring vanilla style.css:927-1141 — see PORTING_GUIDELINES.md.
+   * Mock-data artwork fallbacks (no vanilla counterpart) + the progress donut
+   * (.media-card-progress) — the latter is owned here because MediaCard is its
+   * sole consumer. Every other card rule the card uses (.media-card,
+   * .media-card-art, .media-card-kind-row, .media-card-status *, .status-icon,
+   * .card-icon, etc.) lives in app.css, mirroring vanilla style.css:927-1141 —
+   * see PORTING_GUIDELINES.md.
    *
    * Clipping: the parent .media-card-art has overflow:hidden (a documented
    * Svelte-port delta — vanilla omits it) so this absolute fallback can't
@@ -211,5 +208,31 @@
   }
   .fallback-4 {
     background: linear-gradient(135deg, #ec4899, #8b5cf6);
+  }
+
+  /* Progress donut — sole consumer is MediaCard. The ::before paints the dark
+     disc behind the percentage text; the conic-gradient ring shows watch
+     progress around it. */
+  :global(.media-card-progress) {
+    --watch-progress: 0%;
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 1.96rem;
+    min-width: 1.96rem;
+    height: 1.96rem;
+    border-radius: 999px;
+    background: conic-gradient(var(--color-accent-green) var(--watch-progress), rgba(255, 255, 255, 0.18) 0);
+    color: var(--color-text-primary);
+    font-size: 0.62rem;
+    font-weight: 800;
+  }
+
+  :global(.media-card-progress)::before {
+    content: '';
+    position: absolute;
+    inset: 0.25rem;
+    border-radius: inherit;
+    background: rgba(10, 14, 24, 0.82);
   }
 </style>

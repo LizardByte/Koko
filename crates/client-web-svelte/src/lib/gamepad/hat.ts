@@ -13,6 +13,25 @@ export type HatDirection = {
 const NEUTRAL: HatDirection = { up: false, down: false, left: false, right: false };
 
 /**
+ * Each hat position mapped to its component cardinals. The 8 standard positions
+ * are spaced at 1/7 ≈ 0.143 intervals; the upper bound of each range is exclusive
+ * except the last. Index 0 is the deadzone (handled separately).
+ *
+ * Range order (low → high value): Up, UpRight, Right, DownRight, Down, DownLeft, Left, UpLeft.
+ */
+const HAT_RANGES: Array<{ max: number; dir: HatDirection }> = [
+  { max: -0.85, dir: { up: true, down: false, left: false, right: false } },          // Up
+  { max: -0.6, dir: { up: true, down: false, left: false, right: true } },           // UpRight
+  { max: -0.3, dir: { up: false, down: false, left: false, right: true } },          // Right
+  { max: -0.05, dir: { up: false, down: true, left: false, right: true } },          // DownRight
+  { max: 0.05, dir: NEUTRAL },                                                       // deadzone
+  { max: 0.3, dir: { up: false, down: true, left: false, right: false } },           // Down
+  { max: 0.6, dir: { up: false, down: true, left: true, right: false } },            // DownLeft
+  { max: 0.85, dir: { up: false, down: false, left: true, right: false } },          // Left
+  { max: 1.05, dir: { up: true, down: false, left: true, right: false } },           // UpLeft
+];
+
+/**
  * Parse a hat axis value into cardinal directions.
  *
  * Standard 8-position hat values (divisions of 1/7):
@@ -27,45 +46,16 @@ const NEUTRAL: HatDirection = { up: false, down: false, left: false, right: fals
  * @param threshold How far from neutral before activating (default 0.2)
  */
 export function parseHat(value: number, neutral = 0, threshold = 0.2): HatDirection {
-  // Check distance from neutral. For neutral=0 (most controllers), the hat
-  // already has a natural gap around 0 — we use a tiny threshold (0.05) to
-  // filter noise. For non-zero neutrals (8BitDo = 3.286), the full threshold
-  // is needed to distinguish from the actual hat positions at [-1, 1].
+  // For neutral=0 (most controllers), the hat already has a natural gap around 0
+  // — we use a tiny threshold (0.05) to filter noise. For non-zero neutrals
+  // (8BitDo = 3.286), the full threshold is needed to distinguish from the
+  // actual hat positions at [-1, 1].
   const effectiveThreshold = neutral === 0 ? 0.05 : threshold;
-  if (Math.abs(value - neutral) < effectiveThreshold) {
-    return NEUTRAL;
-  }
-
+  if (Math.abs(value - neutral) < effectiveThreshold) return NEUTRAL;
   // Only map values in the [-1, 1] range (the 8 hat positions).
-  if (value < -1.05 || value > 1.05) {
-    return NEUTRAL;
-  }
-
-  const result: HatDirection = { up: false, down: false, left: false, right: false };
-
-  // Each hat position maps to a tight range. The 8 standard positions are
-  // spaced at 1/7 ≈ 0.143 intervals. We use ±0.07 around each position.
-  // Note: the gap around 0 (between -0.07 and 0.07) is already covered by
-  // the neutral check above for controllers with neutral=0.
-  // Up: -1.0
-  if (value <= -0.85) result.up = true;
-  // UpRight: -0.714
-  else if (value <= -0.6 && value > -0.85) { result.up = true; result.right = true; }
-  // Right: -0.429
-  else if (value <= -0.3 && value > -0.6) result.right = true;
-  // DownRight: -0.143
-  else if (value <= -0.05 && value > -0.3) { result.down = true; result.right = true; }
-  // Down: 0.143
-  else if (value >= 0.05 && value < 0.3) result.down = true;
-  // DownLeft: 0.429
-  else if (value >= 0.3 && value < 0.6) { result.down = true; result.left = true; }
-  // Left: 0.714
-  else if (value >= 0.6 && value < 0.85) result.left = true;
-  // UpLeft: 1.0
-  else if (value >= 0.85 && value <= 1.05) { result.up = true; result.left = true; }
-  // Values in the tiny gap around 0 but outside threshold → no direction.
-
-  return result;
+  if (value < -1.05 || value > 1.05) return NEUTRAL;
+  // Find the first range whose max bound exceeds the value.
+  return HAT_RANGES.find((range) => value <= range.max)?.dir ?? NEUTRAL;
 }
 
 /** True if any direction is active. */
@@ -73,16 +63,16 @@ export function hasHatDirection(hat: HatDirection): boolean {
   return hat.up || hat.down || hat.left || hat.right;
 }
 
-/** Convert a hat direction to a single Direction (preferring the dominant axis). */
+/**
+ * Convert a hat direction to a single Direction (preferring the dominant axis).
+ * Cardinal directions map directly; diagonals prefer horizontal (more common
+ * for list navigation).
+ */
 export function hatToDirection(hat: HatDirection): Direction | undefined {
-  if (hat.up && !hat.left && !hat.right) return 'up';
-  if (hat.down && !hat.left && !hat.right) return 'down';
-  if (hat.left && !hat.up && !hat.down) return 'left';
-  if (hat.right && !hat.up && !hat.down) return 'right';
-  // Diagonal — pick the horizontal (more common for list navigation)
+  if (!hasHatDirection(hat)) return undefined;
+  // Diagonal — prefer horizontal (more common for list navigation).
   if (hat.left) return 'left';
   if (hat.right) return 'right';
   if (hat.up) return 'up';
-  if (hat.down) return 'down';
-  return undefined;
+  return 'down';
 }

@@ -5,6 +5,7 @@
   // the support grid. Loads via the item store on mount + on id change.
   import { page } from '$app/state';
   import { item, ui, activities } from '$lib/stores';
+  import { noop } from '$lib/constants';
   import SectionBreadcrumbs from '$lib/components/SectionBreadcrumbs.svelte';
   import SectionHero from '$lib/components/SectionHero.svelte';
   import SectionPeople from '$lib/components/SectionPeople.svelte';
@@ -44,7 +45,7 @@
         a.state !== 'failed',
     );
     if (hasRelevant && Number.isFinite(itemId)) {
-      item.loadItem(itemId).catch(() => {});
+      item.loadItem(itemId).catch(noop);
     }
   });
 </script>

@@ -26,6 +26,20 @@ function getVisibleFocusable(): HTMLElement[] {
   );
 }
 
+/**
+ * Project a candidate's offset onto the requested direction, returning the
+ * parallel (forward) and perpendicular (sideways) components. Returns null
+ * when the candidate is behind the current element (negative parallel).
+ */
+function projectDirection(dx: number, dy: number, direction: Direction): { parallel: number; perpendicular: number } | null {
+  switch (direction) {
+    case 'right': return dx < 2 ? null : { parallel: dx, perpendicular: Math.abs(dy) };
+    case 'left': return dx > -2 ? null : { parallel: -dx, perpendicular: Math.abs(dy) };
+    case 'down': return dy < 2 ? null : { parallel: dy, perpendicular: Math.abs(dx) };
+    case 'up': return dy > -2 ? null : { parallel: -dy, perpendicular: Math.abs(dx) };
+  }
+}
+
 function findSpatialTarget(current: HTMLElement, direction: Direction): HTMLElement | undefined {
   const focusable = getVisibleFocusable();
   if (focusable.length === 0) return undefined;
@@ -42,14 +56,9 @@ function findSpatialTarget(current: HTMLElement, direction: Direction): HTMLElem
     const dx = rect.left + rect.width / 2 - cx;
     const dy = rect.top + rect.height / 2 - cy;
 
-    let parallel: number;
-    let perpendicular: number;
-    switch (direction) {
-      case 'right': if (dx < 2) continue; parallel = dx; perpendicular = Math.abs(dy); break;
-      case 'left': if (dx > -2) continue; parallel = -dx; perpendicular = Math.abs(dy); break;
-      case 'down': if (dy < 2) continue; parallel = dy; perpendicular = Math.abs(dx); break;
-      case 'up': if (dy > -2) continue; parallel = -dy; perpendicular = Math.abs(dx); break;
-    }
+    const projected = projectDirection(dx, dy, direction);
+    if (!projected) continue;
+    const { parallel, perpendicular } = projected;
 
     const minDim = Math.min(currentRect.width, currentRect.height, rect.width, rect.height);
     if (perpendicular > parallel * 2 && perpendicular > minDim * 1.2) continue;
@@ -111,12 +120,16 @@ function switchTab(direction: 'left' | 'right'): void {
     let startIdx = idx;
     if (idx === -1) {
       const active = tabs.findIndex((t) => t.classList.contains('active'));
-      startIdx = active >= 0 ? active : 0;
+      startIdx = Math.max(active, 0);
     }
 
-    const next = direction === 'left'
-      ? (startIdx > 0 ? startIdx - 1 : tabs.length - 1)
-      : (startIdx < tabs.length - 1 ? startIdx + 1 : 0);
+    function wrapIndex(index: number, count: number, step: number): number {
+      const next = index + step;
+      if (next < 0) return count - 1;
+      if (next >= count) return 0;
+      return next;
+    }
+    const next = wrapIndex(startIdx, tabs.length, direction === 'left' ? -1 : 1);
 
     tabs[next]?.click();
     return; // First matching tab group wins.
@@ -225,12 +238,20 @@ function edgeTrigger(key: string, pressed: boolean, action: () => void) {
 /** Extract the dominant direction from stick values (>0.15 deflection). */
 function dominantDirection(x: number, y: number): Direction | null {
   if (Math.abs(x) < 0.15 && Math.abs(y) < 0.15) return null;
-  return Math.abs(x) > Math.abs(y)
-    ? (x > 0 ? 'right' : 'left')
-    : (y > 0 ? 'down' : 'up');
+  if (Math.abs(x) > Math.abs(y)) {
+    return x > 0 ? 'right' : 'left';
+  }
+  return y > 0 ? 'down' : 'up';
 }
 
 // --- Keyboard handler ---
+
+const ARROW_KEY_DIRECTIONS: Record<string, Direction> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+};
 
 function onKeydown(event: KeyboardEvent) {
   if (playback.isOpen) return;
@@ -238,11 +259,14 @@ function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null;
   if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
 
+  const arrowDir = ARROW_KEY_DIRECTIONS[event.key];
+  if (arrowDir) {
+    event.preventDefault();
+    moveFocus(arrowDir);
+    return;
+  }
+
   switch (event.key) {
-    case 'ArrowUp': event.preventDefault(); moveFocus('up'); break;
-    case 'ArrowDown': event.preventDefault(); moveFocus('down'); break;
-    case 'ArrowLeft': event.preventDefault(); moveFocus('left'); break;
-    case 'ArrowRight': event.preventDefault(); moveFocus('right'); break;
     case 'Enter': {
       const focused = document.activeElement as HTMLElement | null;
       if (focused && !focused.matches('button, a[href]') && focused.matches(FOCUSABLE_SELECTOR)) {

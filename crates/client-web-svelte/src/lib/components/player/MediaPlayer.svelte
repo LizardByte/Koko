@@ -8,6 +8,7 @@
   // with ~120 lines of reactive Svelte.
   import Icon from '../Icon.svelte';
   import { getArtworkUrl, resolveApiUrl } from '$lib/api';
+  import { noop } from '$lib/constants';
   import { playback } from '$lib/stores';
   import PlayerControls from './PlayerControls.svelte';
 
@@ -60,9 +61,11 @@
       // fixed total in the moov atom), so the element's duration is wrong.
       // Only fall back to media.duration when item metadata is unknown.
       const metaDuration = (playback.item?.duration_ms ?? 0) / 1000;
-      playback.duration = metaDuration > 0
-        ? metaDuration
-        : (Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0);
+      if (metaDuration > 0) {
+        playback.duration = metaDuration;
+      } else {
+        playback.duration = Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
+      }
     }
     function onPlay() {
       playback.isPlaying = true;
@@ -224,7 +227,7 @@
     const el = mediaElement;
     if (!el) return;
     if (el.paused) {
-      el.play().catch(() => {});
+      el.play().catch(noop);
     } else {
       el.pause();
     }

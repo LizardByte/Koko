@@ -12,6 +12,19 @@ function browseSegment(kind: BrowseListingKind): string {
 }
 
 /**
+ * Resolve a route kind segment (collections/categories/playlists) to a
+ * BrowseListingKind, or undefined if the segment is unknown. Inverse of
+ * browseSegment; used by both browse-detail routes (items/.../... and
+ * libraries/.../items/.../...) to validate their `kind` param.
+ */
+export function browseKindFromSegment(segment: string | undefined): BrowseListingKind | undefined {
+  if (segment === 'collections') return 'collection';
+  if (segment === 'categories') return 'category';
+  if (segment === 'playlists') return 'playlist';
+  return undefined;
+}
+
+/**
  * Browse-detail URL for a given kind+key, scoped to a library when one is
  * active. Matches vanilla browseDetailPath (homeView.ts:41-52): library-scoped
  * paths live under /libraries/:id/items/<segment>/<key>, library-less under

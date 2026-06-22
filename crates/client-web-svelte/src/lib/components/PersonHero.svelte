@@ -15,13 +15,12 @@
   let { person, onBack }: Props = $props();
 
   const summary = $derived(person.person);
-  const imageUrl = $derived(
-    summary.cached_image_path
-      ? getPersonImageUrl(summary.id)
-      : summary.image_url
-        ? resolveApiUrl(summary.image_url)
-        : undefined,
-  );
+  function resolveImageUrl(): string | undefined {
+    if (summary.cached_image_path) return getPersonImageUrl(summary.id);
+    if (summary.image_url) return resolveApiUrl(summary.image_url);
+    return undefined;
+  }
+  const imageUrl = $derived(resolveImageUrl());
   const ageLabel = $derived(personAgeLabel(summary.birthday, summary.deathday));
   const knownFor = $derived(summary.known_for);
 </script>

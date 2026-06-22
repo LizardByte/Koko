@@ -9,7 +9,7 @@
  * a gamepad or arrow keys. Suppressed when the mouse is used.
  */
 .is-spatial-focus {
-  outline: 3px solid #8bf3ca;
+  outline: 3px solid var(--color-accent-green);
   outline-offset: 4px;
   border-radius: 4px;
   z-index: 10;
@@ -34,8 +34,39 @@
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  background: #0c111d;
-  color: #f4f7fb;
+
+  /* --- Color tokens --- */
+  /* Surfaces */
+  --color-bg-page: #0c111d;
+  --color-bg-inverted: #061018;     /* dark-on-light (active hover text bg) */
+  /* Text */
+  --color-text-primary: #f4f7fb;
+  --color-text-secondary: #dbe7ff;  /* secondary blue tint */
+  --color-text-muted: #9ab1d1;
+  --color-text-subtle: #afc0db;
+  /* Brand */
+  --color-brand-blue: #5d7bff;
+  --color-brand-purple: #7c5cff;
+  --color-accent-green: #8bf3ca;
+  /* Status */
+  --color-success: #aef8d4;
+  --color-warning: #ffd78a;
+  --color-transcoding: #ffdf9b;
+  --color-danger: #ffb9b9;
+  --color-danger-soft: #ffd0d0;
+  --color-active-green: #d8ffe9;     /* active/hover green bg */
+  /* Translucent overlays (rgba on white) */
+  --surface-1: rgba(255, 255, 255, 0.04);  /* empty state bg */
+  --surface-2: rgba(255, 255, 255, 0.05);  /* user card bg */
+  --surface-3: rgba(255, 255, 255, 0.07);  /* tag bg */
+  --surface-4: rgba(255, 255, 255, 0.08);  /* hover bg / secondary button */
+  --surface-5: rgba(255, 255, 255, 0.12);  /* player badge bg */
+  --surface-6: rgba(255, 255, 255, 0.13);  /* player icon button bg */
+  --surface-border-soft: rgba(255, 255, 255, 0.08);
+  --surface-border: rgba(255, 255, 255, 0.1);
+
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
 }
 
 * {
@@ -81,7 +112,7 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 a:focus-visible {
-  outline: 3px solid #8bf3ca;
+  outline: 3px solid var(--color-accent-green);
   outline-offset: 3px;
 }
 
@@ -91,15 +122,24 @@ button:disabled {
   box-shadow: none;
 }
 
+/* Button variant affordances — kept global because plain <button> elements
+   (not just the Button component) opt into these via class, mirroring the
+   .icon-only modifier below. See PORTING_GUIDELINES.md. */
 .secondary-button {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-4);
   box-shadow: none;
-  color: #dbe7ff;
+  color: var(--color-text-secondary);
 }
 
 .secondary-button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.16);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+
+.danger-button {
+  background: rgba(255, 107, 107, 0.14);
+  box-shadow: none;
+  color: var(--color-danger);
 }
 
 .icon-only {
@@ -184,7 +224,7 @@ legend {
 }
 
 .muted {
-  color: #9ab1d1;
+  color: var(--color-text-muted);
 }
 
 .eyebrow,
@@ -232,12 +272,12 @@ legend {
 
 .tag.success {
   background: rgba(66, 214, 158, 0.18);
-  color: #8bf3ca;
+  color: var(--color-accent-green);
 }
 
 .tag.warning {
   background: rgba(255, 191, 84, 0.16);
-  color: #ffd78a;
+  color: var(--color-warning);
 }
 
 .tag.status-tag {
@@ -245,7 +285,7 @@ legend {
 }
 
 .danger-tag {
-  color: #ffd0d0;
+  color: var(--color-danger-soft);
 }
 
 /* Empty state */
@@ -254,7 +294,7 @@ legend {
   padding: 1rem;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.04);
-  color: #afc0db;
+  color: var(--color-text-subtle);
 }
 
 .empty-state.tight {
@@ -440,7 +480,7 @@ legend {
 .brand-block p {
   margin: 0;
   font-size: 0.78rem;
-  color: #9ab1d1;
+  color: var(--color-text-muted);
 }
 
 .brand-mark {
@@ -559,34 +599,9 @@ legend {
   white-space: nowrap;
 }
 
-.rail-user-card {
-  display: flex;
-  gap: 0.7rem;
-  align-items: center;
-  padding: 0.85rem 0.9rem;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #dbe7ff;
-}
-
-.rail-user-card span {
-  color: #9ab1d1;
-  font-size: 0.82rem;
-}
-
-.rail-user-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
-.rail-library-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  min-width: 0;
-}
+/* Note: .rail-user-card, .rail-user-copy, and .rail-library-copy are scoped
+   to Rail.svelte (the sole owner). The collapsed-rail selectors below still
+   reference them by class for the hide-on-collapse layout. */
 
 .user-avatar {
   display: inline-grid;
@@ -596,7 +611,7 @@ legend {
   flex: 0 0 auto;
   border-radius: 999px;
   background: #263f5f;
-  color: #dbe7ff;
+  color: var(--color-text-secondary);
   font-weight: 700;
   overflow: hidden;
 }
@@ -708,7 +723,7 @@ legend {
 .detail-subtitle,
 .muted,
 .metadata-match-meta {
-  color: #9ab1d1;
+  color: var(--color-text-muted);
 }
 
 /* Metadata search panel — mirrors vanilla style.css:1874-1994. */
@@ -825,7 +840,7 @@ legend {
 .hero-description {
   margin: 0.2rem 0 0;
   max-width: 70ch;
-  color: #dbe7ff;
+  color: var(--color-text-secondary);
 }
 
 .detail-summary h2 {
@@ -890,33 +905,10 @@ legend {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.shelf-scroll-button {
-  width: 2.3rem;
-  height: 2.3rem;
-  padding: 0;
-  border-radius: 999px;
-  display: inline-grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: none;
-  color: #dfe9ff;
-  flex: 0 0 auto;
-}
-
-.shelf-scroll-button.is-scroll-hidden {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.shelf-row-shell.no-scroll .shelf-scroll-button {
-  display: none;
-}
-
-.shelf-scroll-button:hover,
-.shelf-scroll-button:focus-visible {
-  background: #d8ffe9;
-  color: #061018;
-}
+/* Note: .shelf-scroll-button, .shelf-row-shell.no-scroll .shelf-scroll-button,
+   and .is-scroll-hidden are scoped to Shelf.svelte — that component owns the
+   scroll UI. The .shelf-row / .shelf-row-shell grid templates stay global
+   (used by Shelf + BrowseListingGrid which both render shelves). */
 
 /* --- Media card (mirrors vanilla style.css:927-1141, 1339-1342) --- */
 
@@ -1101,7 +1093,7 @@ legend {
 
 .media-card-status.is-watched {
   background: rgba(10, 14, 24, 0.58);
-  color: #8bf3ca;
+  color: var(--color-accent-green);
 }
 
 .media-card-status.is-watched .status-icon svg {
@@ -1109,28 +1101,8 @@ legend {
   height: 1.12rem;
 }
 
-.media-card-progress {
-  --watch-progress: 0%;
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 1.96rem;
-  min-width: 1.96rem;
-  height: 1.96rem;
-  border-radius: 999px;
-  background: conic-gradient(#8bf3ca var(--watch-progress), rgba(255, 255, 255, 0.18) 0);
-  color: #f4f7fb;
-  font-size: 0.62rem;
-  font-weight: 800;
-}
-
-.media-card-progress::before {
-  content: '';
-  position: absolute;
-  inset: 0.25rem;
-  border-radius: inherit;
-  background: rgba(10, 14, 24, 0.82);
-}
+/* Note: .media-card-progress (and its ::before donut disc) is scoped to
+   MediaCard.svelte — the sole consumer. */
 
 .status-icon {
   display: inline-flex;
@@ -1215,12 +1187,6 @@ legend {
   flex-wrap: wrap;
 }
 
-.danger-button {
-  background: rgba(255, 107, 107, 0.14);
-  box-shadow: none;
-  color: #ffb9b9;
-}
-
 .settings-section-nav {
   display: flex;
   flex-wrap: wrap;
@@ -1228,8 +1194,8 @@ legend {
 }
 
 .settings-section-nav .secondary-button.active {
-  color: #061018;
-  background: #d8ffe9;
+  color: var(--color-bg-inverted);
+  background: var(--color-active-green);
 }
 
 /* --- Settings page layout (vanilla style.css) --- */
@@ -1621,9 +1587,8 @@ legend {
   display: none;
 }
 
-.danger-tag {
-  color: #ffd0d0;
-}
+/* Note: .danger-tag is defined once near the tag rules above (line ~271).
+   This duplicate was removed — see sonar S4666. */
 
 .player-shell {
   width: min(960px, 100%);
@@ -1741,7 +1706,7 @@ legend {
   gap: 0.25rem;
   pointer-events: none;
   text-align: center;
-  color: #f4f7fb;
+  color: var(--color-text-primary);
 }
 
 .player-error-indicator span {
@@ -1755,7 +1720,7 @@ legend {
 .player-loading-spinner {
   width: 3.2rem;
   height: 3.2rem;
-  color: #8bf3ca;
+  color: var(--color-accent-green);
   border-width: 3px;
   filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.45));
 }
@@ -1842,7 +1807,7 @@ legend {
   background: transparent;
   box-shadow: none;
   text-align: left;
-  color: #f4f7fb;
+  color: var(--color-text-primary);
 }
 
 .player-track-option:hover,
@@ -1851,30 +1816,12 @@ legend {
 }
 
 .player-track-option small {
-  color: #9ab1d1;
+  color: var(--color-text-muted);
 }
 
-.player-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.25rem;
-  padding: 0 0.8rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #f4f7fb;
-  font-size: 0.78rem;
-  font-weight: 700;
-  white-space: nowrap;
-  backdrop-filter: blur(16px);
-}
-
-.player-badge.is-direct {
-  color: #aef8d4;
-}
-
-.player-badge.is-transcoding {
-  color: #ffdf9b;
-}
+/* Note: .player-badge (sole consumer: PlayerControls.svelte) and
+   .player-icon-button (shared by player components) are scoped under
+   lib/components/player/ — see player.css + PlayerControls.svelte. */
 
 .player-bottom-controls {
   left: 0;
@@ -1906,31 +1853,10 @@ legend {
   justify-content: flex-end;
 }
 
-.player-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.55rem;
-  height: 2.55rem;
-  padding: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.13);
-  box-shadow: none;
-  color: #fff;
-  backdrop-filter: blur(14px);
-}
-
-.player-icon-button:hover:not(:disabled),
-.player-icon-button:focus-visible {
-  background: rgba(255, 255, 255, 0.24);
-  box-shadow: none;
-}
-
-.player-primary-button {
-  width: 4.2rem;
-  height: 4.2rem;
-  background: rgba(255, 255, 255, 0.22);
-}
+/* Note: .player-primary-button moved to player.css — co-located with
+   .player-icon-button so the cascade order (primary after icon) is
+   guaranteed. Both selectors are equal specificity; source order must
+   keep primary last to win the width/height/background override. */
 
 .player-time {
   display: inline-flex;
@@ -1973,7 +1899,7 @@ legend {
   width: 1rem;
   height: 1rem;
   border-radius: 50%;
-  background: #8bf3ca;
+  background: var(--color-accent-green);
   margin-top: -0.3rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   border: 0;
@@ -1991,7 +1917,7 @@ legend {
 .player-volume::-moz-range-progress {
   height: 0.4rem;
   border-radius: 999px;
-  background: #8bf3ca;
+  background: var(--color-accent-green);
 }
 
 .player-progress::-moz-range-thumb,
@@ -2000,7 +1926,7 @@ legend {
   height: 1rem;
   border: 0;
   border-radius: 50%;
-  background: #8bf3ca;
+  background: var(--color-accent-green);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 

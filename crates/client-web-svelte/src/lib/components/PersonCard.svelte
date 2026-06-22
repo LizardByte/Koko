@@ -12,13 +12,12 @@
 
   // Image resolution mirrors SectionPeople: prefer the server-cached path,
   // fall back to the provider image_url, else undefined (renders initials).
-  const image = $derived(
-    person.cached_image_path
-      ? getPersonImageUrl(person.person_id)
-      : person.image_url
-        ? resolveApiUrl(person.image_url)
-        : undefined,
-  );
+  function resolveImage(): string | undefined {
+    if (person.cached_image_path) return getPersonImageUrl(person.person_id);
+    if (person.image_url) return resolveApiUrl(person.image_url);
+    return undefined;
+  }
+  const image = $derived(resolveImage());
 </script>
 
 <CardSurface

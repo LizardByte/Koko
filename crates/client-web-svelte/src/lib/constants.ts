@@ -1,5 +1,13 @@
 // Constants — port of ../client-web/src/app/constants.ts.
 
+/**
+ * No-operation function — for fire-and-forget promise rejections and
+ * optional callback defaults. Avoids `no-empty-function` warnings while
+ * remaining an explicit, named "this is intentionally a no-op" marker.
+ */
+// eslint-disable-next-line no-empty-function
+export function noop(): void {}
+
 /** Number of cards rendered initially for lazy home shelves. */
 export const HOME_SHELF_CHUNK_SIZE = 12;
 

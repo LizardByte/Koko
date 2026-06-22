@@ -9,9 +9,12 @@
   type Props = { item: MediaItemDetail };
   let { item }: Props = $props();
 
-  const title = $derived(
-    item.item_type === 'show' ? 'Seasons' : item.item_type === 'season' ? 'Episodes' : 'Contained items',
-  );
+  function childSectionTitle(itemType: string): string {
+    if (itemType === 'show') return 'Seasons';
+    if (itemType === 'season') return 'Episodes';
+    return 'Contained items';
+  }
+  const title = $derived(childSectionTitle(item.item_type));
   const isSeason = $derived(item.item_type === 'season');
 </script>
 

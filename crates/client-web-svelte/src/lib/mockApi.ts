@@ -1630,68 +1630,70 @@ class MockError extends Error {
 }
 
 function parsePath(path: string): URL {
-  return new URL(path, 'http://koko.local');
+  // Base is only used to parse the path/query — it is never fetched.
+  return new URL(path, 'https://koko.local');
 }
+
+/** Match a pathname against an anchored regex; returns capture groups or null. */
+function matchRoute(pathname: string, pattern: RegExp): RegExpMatchArray | null {
+  return pattern.exec(pathname);
+}
+
+/** Static (no-param) GET routes — pathname → handler. */
+const GET_STATIC_ROUTES: Record<string, () => unknown> = {
+  '/api/v1/system/capabilities': getMockCapabilities,
+  '/api/v1/bootstrap': getMockBootstrap,
+  '/api/v1/users': getMockUsers,
+  '/api/v1/libraries': getMockLibraries,
+  '/api/v1/metadata/providers': getMockMetadataProviders,
+  '/api/v1/system/activities': getMockSystemActivities,
+  '/api/v1/settings': getMockSettings,
+};
+
+/** Parameterized GET routes — pathname → (url) handler. */
+const GET_PARAM_ROUTES: Record<string, (url: URL) => unknown> = {
+  '/api/v1/settings/logs': (url) => {
+    const p = url.searchParams;
+    return getMockLogs(
+      p.get('level') ?? undefined,
+      p.get('module') ?? undefined,
+      p.get('search') ?? undefined,
+      p.get('since') ?? undefined,
+      p.get('until') ?? undefined,
+      p.get('limit') ? Number(p.get('limit')) : undefined,
+    );
+  },
+  '/api/v1/home': (url) => getMockHome(paramsNumber(url.searchParams, 'library_id')),
+  '/api/v1/items': (url) => getMockItems(paramsNumber(url.searchParams, 'library_id')),
+  '/api/v1/search': (url) => searchMockItems(url.searchParams.get('query') ?? ''),
+};
 
 function getMockGetResponse(path: string): unknown {
   const url = parsePath(path);
   const pathname = url.pathname;
-  switch (pathname) {
-    case '/api/v1/system/capabilities':
-      return getMockCapabilities();
-    case '/api/v1/bootstrap':
-      return getMockBootstrap();
-    case '/api/v1/users':
-      return getMockUsers();
-    case '/api/v1/libraries':
-      return getMockLibraries();
-    case '/api/v1/metadata/providers':
-      return getMockMetadataProviders();
-    case '/api/v1/system/activities':
-      return getMockSystemActivities();
-    case '/api/v1/settings':
-      return getMockSettings();
-    case '/api/v1/settings/logs': {
-      const params = url.searchParams;
-      return getMockLogs(
-        params.get('level') ?? undefined,
-        params.get('module') ?? undefined,
-        params.get('search') ?? undefined,
-        params.get('since') ?? undefined,
-        params.get('until') ?? undefined,
-        params.get('limit') ? Number(params.get('limit')) : undefined,
-      );
-    }
-    case '/api/v1/home':
-      return getMockHome(
-        paramsNumber(url.searchParams, 'library_id'),
-      );
-    case '/api/v1/items':
-      return getMockItems(paramsNumber(url.searchParams, 'library_id'));
-    case '/api/v1/search':
-      return searchMockItems(url.searchParams.get('query') ?? '');
-  }
 
-  let match: RegExpMatchArray | null;
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/search$/))) {
+  const staticHandler = GET_STATIC_ROUTES[pathname];
+  if (staticHandler) return staticHandler();
+  const paramHandler = GET_PARAM_ROUTES[pathname];
+  if (paramHandler) return paramHandler(url);
+
+  let match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/metadata\/search$/);
+  if (match) {
     return searchMockItemMetadata(
       Number(match[1]),
       url.searchParams.get('query') ?? undefined,
     );
   }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata$/))) {
-    return getMockItemMetadata(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/playback$/))) {
-    return getMockPlayback(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/people\/(\d+)$/))) {
-    return getMockPerson(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)$/))) {
-    return getMockItem(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/stream$/))) {
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/metadata$/);
+  if (match) return getMockItemMetadata(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/playback$/);
+  if (match) return getMockPlayback(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/people\/(\d+)$/);
+  if (match) return getMockPerson(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)$/);
+  if (match) return getMockItem(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/sessions\/([^/]+)\/stream$/);
+  if (match) {
     throw new MockError(501, 'Not Implemented (mock streaming not fully supported)');
   }
   throw new MockError(404, `No mock response is defined for GET ${pathname}`);
@@ -1713,24 +1715,23 @@ function getMockPostResponse(path: string, body: unknown): unknown {
       return createMockPlaybackSession(body as CreateSessionRequest);
   }
 
-  let match: RegExpMatchArray | null;
-  if ((match = pathname.match(/^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/))) {
+  let match = matchRoute(pathname, /^\/api\/v1\/scheduled-tasks\/([^/]+)\/run$/);
+  if (match) {
     return runMockScheduledTask(match[1] as ScheduledTaskId);
   }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/progress$/))) {
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/progress$/);
+  if (match) {
     updateMockPlaybackProgress(Number(match[1]), body as PlaybackProgressRequest);
     return undefined;
   }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/link$/))) {
-    return linkMockItemMetadata(Number(match[1]), body as LinkMetadataRequest);
-  }
-  if ((match = pathname.match(/^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/))) {
-    return refreshMockItemMetadata(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/))) {
-    return refreshMockLibraryMetadata(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/libraries\/(\d+)\/scan$/))) {
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/metadata\/link$/);
+  if (match) return linkMockItemMetadata(Number(match[1]), body as LinkMetadataRequest);
+  match = matchRoute(pathname, /^\/api\/v1\/items\/(\d+)\/metadata\/refresh$/);
+  if (match) return refreshMockItemMetadata(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/libraries\/(\d+)\/metadata\/refresh$/);
+  if (match) return refreshMockLibraryMetadata(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/libraries\/(\d+)\/scan$/);
+  if (match) {
     // Mock treats scan like a metadata refresh.
     return refreshMockLibraryMetadata(Number(match[1]));
   }
@@ -1743,7 +1744,7 @@ function getMockPutResponse(path: string, body: unknown): unknown {
   if (pathname === '/api/v1/settings') {
     return updateMockSettings(body as SettingsSnapshot);
   }
-  const match = pathname.match(/^\/api\/v1\/users\/(\d+)$/);
+  const match = matchRoute(pathname, /^\/api\/v1\/users\/(\d+)$/);
   if (match) {
     return updateMockUser(Number(match[1]), body as UpdateUserRequest);
   }
@@ -1753,16 +1754,12 @@ function getMockPutResponse(path: string, body: unknown): unknown {
 function getMockDeleteResponse(path: string): unknown {
   const url = parsePath(path);
   const pathname = url.pathname;
-  let match: RegExpMatchArray | null;
-  if ((match = pathname.match(/^\/api\/v1\/settings\/libraries\/(\d+)$/))) {
-    return removeMockLibrary(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/libraries\/(\d+)\/missing$/))) {
-    return deleteMockMissingItems(Number(match[1]));
-  }
-  if ((match = pathname.match(/^\/api\/v1\/sessions\/([^/]+)$/))) {
-    return undefined;
-  }
+  let match = matchRoute(pathname, /^\/api\/v1\/settings\/libraries\/(\d+)$/);
+  if (match) return removeMockLibrary(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/libraries\/(\d+)\/missing$/);
+  if (match) return deleteMockMissingItems(Number(match[1]));
+  match = matchRoute(pathname, /^\/api\/v1\/sessions\/([^/]+)$/);
+  if (match) return undefined;
   throw new MockError(404, `No mock response is defined for DELETE ${pathname}`);
 }
 

@@ -91,7 +91,7 @@ strsim = "0.11.1"
 tao = { version = "0.35.0", optional = true }
 tokio = { version = "1.0", features = ["full"] }
 tmdb_client = "1.8.0"
-tray-icon = { version = "0.22.0", optional = true }
+tray-icon = { version = "0.24.0", optional = true }
 tvdb4 = "0.1.0"
 webbrowser = { version = "1.0.3", optional = true }
 # common = { path = "../common" }

@@ -101,6 +101,7 @@
   let contentRegion = $state<HTMLElement | undefined>(undefined);
 
   // Navigate between shelves vertically (up/down).
+  // Scrolls the entire shelf section into view (header + row), not just the card.
   function navigateShelves(direction: 'up' | 'down', current: HTMLElement): boolean {
     const allShelves = Array.from(
       contentRegion?.querySelectorAll<HTMLElement>('.shelf') ?? [],
@@ -110,17 +111,25 @@
     const currentShelf = allShelves.find((s) => s.contains(current)) ?? allShelves[0];
     const idx = allShelves.indexOf(currentShelf);
 
+    const focusShelf = (shelf: HTMLElement, cardSelector: 'first' | 'last') => {
+      // Scroll the entire shelf section into view first (so header is visible).
+      shelf.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      // Then focus the card.
+      const cards = shelf.querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
+      const card = cardSelector === 'first' ? cards[0] : cards[cards.length - 1];
+      if (card) {
+        // Delay focus slightly so scrollIntoView on the shelf doesn't fight
+        // with the card's own scroll position.
+        setTimeout(() => card.focus(), 50);
+      }
+    };
+
     if (direction === 'down' && idx < allShelves.length - 1) {
-      const card = allShelves[idx + 1].querySelector<HTMLElement>('.media-card:not(:disabled)');
-      card?.focus();
-      card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      focusShelf(allShelves[idx + 1], 'first');
       return true;
     }
     if (direction === 'up' && idx > 0) {
-      const cards = allShelves[idx - 1].querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
-      const card = cards[cards.length - 1];
-      card?.focus();
-      card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      focusShelf(allShelves[idx - 1], 'last');
       return true;
     }
     return false;

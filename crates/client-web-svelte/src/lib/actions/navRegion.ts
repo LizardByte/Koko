@@ -240,10 +240,24 @@ export function navigateShelfRow(
   const idx = cards.indexOf(current);
   if (idx === -1) return false;
 
+  /** Fully scroll a card into view within the row (both edges visible). */
+  const scrollCardIntoView = (card: HTMLElement) => {
+    const cardRect = card.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (cardRect.left < rowRect.left) {
+      // Card is clipped on the left — scroll left to reveal it fully.
+      row.scrollBy({ left: cardRect.left - rowRect.left - 8, behavior: 'smooth' });
+    } else if (cardRect.right > rowRect.right) {
+      // Card is clipped on the right — scroll right to reveal it fully.
+      row.scrollBy({ left: cardRect.right - rowRect.right + 8, behavior: 'smooth' });
+    }
+  };
+
   if (direction === 'right') {
     if (idx < cards.length - 1) {
-      cards[idx + 1]?.focus();
-      cards[idx + 1]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const next = cards[idx + 1];
+      next.focus();
+      scrollCardIntoView(next);
       return true;
     }
     // At last card — try scrolling right to reveal more.
@@ -256,8 +270,9 @@ export function navigateShelfRow(
 
   if (direction === 'left') {
     if (idx > 0) {
-      cards[idx - 1]?.focus();
-      cards[idx - 1]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const prev = cards[idx - 1];
+      prev.focus();
+      scrollCardIntoView(prev);
       return true;
     }
     // At first card — try scrolling left.

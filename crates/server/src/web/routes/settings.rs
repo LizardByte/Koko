@@ -1,14 +1,7 @@
 //! Settings and library-management routes.
 
 // lib imports
-use chrono::{
-    DateTime,
-    Local,
-    LocalResult,
-    NaiveDate,
-    NaiveDateTime,
-    TimeZone,
-};
+use chrono::{DateTime, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rocket::delete;
@@ -19,35 +12,19 @@ use rocket::put;
 use rocket::serde::json::Json;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 // local imports
 use crate::config::{
-    MediaLibrarySettings,
-    Settings,
-    current_settings,
-    merge_metadata_provider_secret_state,
-    replace_current_settings,
-    save_database_settings,
-    save_settings,
-    settings_file_path,
-    settings_for_api_response,
-    settings_with_persisted_secrets,
+    MediaLibrarySettings, Settings, current_settings, merge_metadata_provider_secret_state,
+    replace_current_settings, save_database_settings, save_settings, settings_file_path,
+    settings_for_api_response, settings_with_persisted_secrets,
 };
 use crate::db::DbConn;
 use crate::globals;
-use crate::logging::{
-    normalize_display_path,
-    normalize_log_source_path,
-};
+use crate::logging::{normalize_display_path, normalize_log_source_path};
 use crate::media::{
-    add_library_setting,
-    count_persisted_libraries,
-    list_library_settings,
-    remove_library_setting,
+    add_library_setting, count_persisted_libraries, list_library_settings, remove_library_setting,
     replace_library_settings,
 };
 
@@ -403,6 +380,22 @@ pub async fn update_settings(
     let mut runtime_settings = settings_for_database.clone();
     runtime_settings.media.libraries.clear();
     replace_current_settings(runtime_settings);
+
+    // Trigger: if the ffprobe path changed (or may have become newly available),
+    // re-probe any media files that were scanned without ffprobe. The save above
+    // borrows db via db.run(&self); we then move db into the background job
+    // (Rocket's pool keeps the connection checked out until the job finishes,
+    // same pattern as scan_library).
+    let ffprobe_changed =
+        existing_settings.ffmpeg.ffprobe_path != settings_for_database.ffmpeg.ffprobe_path;
+    if ffprobe_changed {
+        let ffmpeg_settings = settings_for_database.ffmpeg.clone();
+        tokio::spawn(async move {
+            crate::web::routes::media::try_spawn_reprobe(db, ffmpeg_settings).await;
+        });
+    } else {
+        drop(db);
+    }
 
     Ok(Json(merged_settings_response(
         settings_for_database,

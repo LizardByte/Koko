@@ -1,5 +1,5 @@
 /** Renders settings sections and converts settings forms into API payloads. */
-import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot } from '../api';
+import type { BinaryProbe, MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot, ToolDiscoveryResponse } from '../api';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
@@ -548,11 +548,28 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
           </div>
         </section>
 
-        <section>
-          <h3>FFmpeg</h3>
+        <section class="panel page-panel ffmpeg-tools-panel">
+          <div class="section-heading section-heading-actions">
+            <div>
+              <h3>FFmpeg</h3>
+              <p class="muted">Transcoding tools detection. Click Detect to scan for installations, then pick a row to fill the paths below.</p>
+            </div>
+            <div class="page-actions">
+              <button id="detect-ffmpeg" class="secondary-button" type="button">${renderButtonContent('Detect ffmpeg', 'search')}</button>
+              <button id="reprobe-media" class="secondary-button" type="button" hidden>${renderButtonContent('Re-probe media info', 'refresh-cw')}</button>
+            </div>
+            <p id="reprobe-status" class="muted" hidden></p>
+          </div>
+          <div id="ffmpeg-discover-results" hidden></div>
           <div class="form-row">
-            <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
-            <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
+            <div>
+              <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
+              <p id="ffmpeg-path-validation" class="ffmpeg-path-validation muted" hidden></p>
+            </div>
+            <div>
+              <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
+              <p id="ffprobe-path-validation" class="ffmpeg-path-validation muted" hidden></p>
+            </div>
           </div>
         </section>
 
@@ -658,6 +675,120 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
     return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
   }
   return '';
+}
+
+/** Short display labels for the curated encoder names. Falls back to the raw name. */
+const ENCODER_LABELS: Record<string, string> = {
+  libx264: 'H.264',
+  libx265: 'H.265',
+  'libvpx-vp9': 'VP9',
+  libvpx: 'VP8',
+  libsvtav1: 'AV1',
+  libopus: 'Opus',
+  libmp3lame: 'MP3',
+  aac: 'AAC',
+};
+
+/** Render a cluster of encoder tags for a resolved ffmpeg probe. */
+function renderEncoderTags(encoders?: string[]): string {
+  if (!encoders || encoders.length === 0) {
+    return '<span class="muted">—</span>';
+  }
+  return `<span class="ffmpeg-tool-encoders">${encoders.map((name) => `<span class="tag">${escapeHtml(ENCODER_LABELS[name] ?? name)}</span>`).join('')}</span>`;
+}
+
+/** Render a version + status cell for one binary probe. */
+function renderBinaryCell(probe?: BinaryProbe): string {
+  if (!probe || !probe.resolved_path) {
+    const reason = probe?.error ?? 'missing';
+    return `<span class="tag warning">missing</span><div class="muted ffmpeg-tool-detail">${escapeHtml(reason)}</div>`;
+  }
+  const version = probe.version ? escapeHtml(probe.version) : 'resolved';
+  return `<span class="tag success">${escapeHtml(version)}</span>`;
+}
+
+interface DiscoverRow {
+  label: string;
+  directory?: string;
+  ffmpeg?: BinaryProbe;
+  ffprobe?: BinaryProbe;
+}
+
+/**
+ * Render the discovered ffmpeg/ffprobe candidates as a table. Each row pairs
+ * both binaries per directory; a `[Use]` button writes `<dir>/ffmpeg` and
+ * `<dir>/ffprobe` into the path fields. Disabled when one binary is missing.
+ * Exported so the event binding can call it after the discovery request.
+ */
+export function renderDiscoverResults(discovery: ToolDiscoveryResponse): string {
+  const rows: DiscoverRow[] = [];
+
+  // Candidate directories.
+  for (const candidate of discovery.candidates) {
+    rows.push({
+      label: candidate.directory,
+      directory: candidate.directory,
+      ffmpeg: candidate.ffmpeg ?? undefined,
+      ffprobe: candidate.ffprobe ?? undefined,
+    });
+  }
+
+  if (rows.length === 0) {
+    return '<div class="empty-state tight">No FFmpeg installations were found. Install ffmpeg/ffprobe or enter their paths manually below.</div>';
+  }
+
+  const bodyRows = rows.map((row) => {
+    const usable = Boolean(row.ffmpeg?.resolved_path) && Boolean(row.ffprobe?.resolved_path);
+    const directory = row.directory ?? '';
+    const action = usable
+      ? `<button class="secondary-button ffmpeg-tool-use" type="button" data-use-directory="${escapeHtml(directory)}">${renderButtonContent('Use', 'circle-check')}</button>`
+      : '<span class="muted">—</span>';
+    return `
+      <tr class="${usable ? '' : 'is-disabled'}">
+        <td><div class="table-title-cell"><strong>${escapeHtml(row.label)}</strong></div></td>
+        <td>${renderBinaryCell(row.ffmpeg)}</td>
+        <td>${renderBinaryCell(row.ffprobe)}</td>
+        <td>${renderEncoderTags(row.ffmpeg?.encoders)}</td>
+        <td>${action}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="table-shell">
+      <table class="data-table ffmpeg-tools-table">
+        <thead>
+          <tr>
+            <th>Directory</th>
+            <th>ffmpeg</th>
+            <th>ffprobe</th>
+            <th>Encoders</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+/**
+ * Render the per-path validation line shown under each manual path field after
+ * a Detect run. Returns empty string when the probe is healthy and unremarkable
+ * only when there is nothing to show (probe missing on a not-yet-detected view).
+ */
+export function renderPathValidation(probe: BinaryProbe | undefined, binaryLabel: string): string {
+  if (!probe) {
+    return '';
+  }
+  if (probe.resolved_path) {
+    const encoders = probe.encoders && probe.encoders.length > 0
+      ? ` · encoders: ${probe.encoders.map((n) => ENCODER_LABELS[n] ?? n).join(', ')}`
+      : '';
+    return `<span class="tag success">found</span> <span class="muted">${escapeHtml(probe.version ?? probe.resolved_path)}${encoders}</span>`;
+  }
+  const reason = probe.error ?? `${binaryLabel} not found`;
+  return `<span class="tag warning">not found</span> <span class="muted">${escapeHtml(reason)}</span>`;
 }
 
 export function renderSettingsPage(): string {

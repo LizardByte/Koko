@@ -668,6 +668,32 @@ legend {
   color: #ffd7d7;
 }
 
+.ffmpeg-tools-panel {
+  padding: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.ffmpeg-tools-table .ffmpeg-tool-detail {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.ffmpeg-tool-encoders {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.ffmpeg-path-validation {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.ffmpeg-tools-table tr.is-disabled {
+  opacity: 0.5;
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;

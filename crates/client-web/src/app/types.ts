@@ -140,6 +140,8 @@ export interface AppState {
   activeTrailer?: TrailerOption;
   expandedTextKeys: Set<string>;
   error?: string;
+  /** Structured playback error driving the in-player overlay and global banner. */
+  playbackError?: { code: string; message: string; action?: string };
   hasDeferredAutoRefreshRender: boolean;
   metadataDashboardFilters: {
     libraryId: string;

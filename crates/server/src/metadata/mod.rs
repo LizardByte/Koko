@@ -2,79 +2,38 @@
 
 // standard imports
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{
-    Hash,
-    Hasher,
-};
-use std::path::{
-    Path,
-    PathBuf,
-};
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // lib imports
 use diesel::{
-    BoolExpressionMethods,
-    ExpressionMethods,
-    JoinOnDsl,
-    OptionalExtension,
-    QueryDsl,
-    RunQueryDsl,
-    SelectableHelper,
-    SqliteConnection,
+    BoolExpressionMethods, ExpressionMethods, JoinOnDsl, OptionalExtension, QueryDsl, RunQueryDsl,
+    SelectableHelper, SqliteConnection,
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
 use schemars::JsonSchema;
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use sha2::{
-    Digest,
-    Sha256,
-};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use strsim::normalized_levenshtein;
 
 mod providers;
-pub use providers::{
-    MetadataProvider,
-    MetadataRegistry,
-};
+pub use providers::{MetadataProvider, MetadataRegistry};
 
 // local imports
 use crate::config::{
-    MediaLibraryKind,
-    MetadataProviderId,
-    MetadataProviderSettings,
-    MetadataSettings,
-    metadata_provider_api_key_configured,
-    resolve_metadata_provider_api_key,
+    MediaLibraryKind, MetadataProviderId, MetadataProviderSettings, MetadataSettings,
+    metadata_provider_api_key_configured, resolve_metadata_provider_api_key,
 };
 use crate::db::configure_sqlite_connection;
 use crate::db::models::{
-    ExternalMedia,
-    ItemMetadataLink,
-    MediaItem,
-    MetadataCollection,
-    MetadataCollectionItem,
-    MetadataExtra,
-    MetadataPerson,
-    MetadataPersonCredit,
-    NewExternalMedia,
-    NewItemMetadataExternalId,
-    NewItemMetadataLink,
-    NewItemMetadataPerson,
-    NewMetadataCollection,
-    NewMetadataCollectionItem,
-    NewMetadataExtra,
-    NewMetadataPerson,
-    NewMetadataPersonCredit,
+    ExternalMedia, ItemMetadataLink, MediaItem, MetadataCollection, MetadataCollectionItem,
+    MetadataExtra, MetadataPerson, MetadataPersonCredit, NewExternalMedia,
+    NewItemMetadataExternalId, NewItemMetadataLink, NewItemMetadataPerson, NewMetadataCollection,
+    NewMetadataCollectionItem, NewMetadataExtra, NewMetadataPerson, NewMetadataPersonCredit,
     NewMetadataPersonExternalId,
 };
 use crate::utils::current_timestamp;

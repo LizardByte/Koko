@@ -1,10 +1,7 @@
 // standard imports
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{
-    AtomicU64,
-    Ordering,
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // lib imports
 use diesel::Connection;
@@ -13,61 +10,28 @@ use diesel::SqliteConnection;
 
 // local imports
 use koko::config::{
-    FfmpegSettings,
-    MediaLibraryKind,
-    MediaLibraryScanner,
-    MediaLibrarySettings,
-    MetadataProviderId,
+    FfmpegSettings, MediaLibraryKind, MediaLibraryScanner, MediaLibrarySettings, MetadataProviderId,
 };
 use koko::db::run_pending_sqlite_migrations;
 use koko::media::{
-    LibraryScanStatus,
-    ShowMetadataDescendantPlan,
-    ShowMetadataEpisodePlan,
-    ShowMetadataSeasonPlan,
-    apply_user_playback_context_to_detail,
-    delete_missing_media_items,
-    get_item_youtube_theme_collection_references,
-    get_item_youtube_theme_provider_references,
-    get_library_files,
-    get_media_home,
-    get_media_home_with_preferred_languages,
-    get_media_item,
-    get_media_item_with_preferred_languages,
-    get_persisted_library_summaries,
-    get_preferred_item_metadata_link,
-    get_user_playback_progress,
-    infer_episode_number,
-    infer_season_number,
-    inspect_libraries,
-    inspect_transcoding_capability,
-    list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates,
-    list_library_settings,
-    list_media_item_children,
-    list_media_items,
-    mark_metadata_match_attempted,
-    remove_library_setting,
-    replace_library_settings,
-    resolve_local_item_artwork_path,
-    resolve_media_item_source_path,
-    search_media_items,
-    sync_library_catalog,
-    upsert_playback_progress,
-    upsert_show_metadata_descendant_items,
+    LibraryScanStatus, ShowMetadataDescendantPlan, ShowMetadataEpisodePlan, ShowMetadataSeasonPlan,
+    apply_user_playback_context_to_detail, delete_missing_media_items,
+    get_item_youtube_theme_collection_references, get_item_youtube_theme_provider_references,
+    get_library_files, get_media_home, get_media_home_with_preferred_languages, get_media_item,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
+    get_preferred_item_metadata_link, get_user_playback_progress, infer_episode_number,
+    infer_season_number, inspect_libraries, inspect_transcoding_capability,
+    list_automatic_metadata_candidates, list_automatic_metadata_refresh_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    mark_metadata_match_attempted, remove_library_setting, replace_library_settings,
+    resolve_local_item_artwork_path, resolve_media_item_source_path, search_media_items,
+    sync_library_catalog, upsert_playback_progress, upsert_show_metadata_descendant_items,
 };
 use koko::metadata::{
-    ArtworkKind,
-    ProviderMetadataCollection,
-    ProviderMetadataDetails,
-    ProviderMetadataExtra,
-    StoredMetadataSnapshot,
-    get_preferred_item_metadata_link_for_languages,
-    get_primary_item_metadata_link,
-    set_item_metadata_refresh_state,
-    upsert_item_metadata_link,
-    upsert_item_metadata_snapshot,
-    upsert_secondary_collection_theme_song_url,
+    ArtworkKind, ProviderMetadataCollection, ProviderMetadataDetails, ProviderMetadataExtra,
+    StoredMetadataSnapshot, get_preferred_item_metadata_link_for_languages,
+    get_primary_item_metadata_link, set_item_metadata_refresh_state, upsert_item_metadata_link,
+    upsert_item_metadata_snapshot, upsert_secondary_collection_theme_song_url,
 };
 
 static MEDIA_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -303,10 +267,13 @@ fn test_movie_library_ignores_sidecar_audio_and_json_files() {
 
 #[test]
 fn test_inspect_transcoding_capability_reports_missing_binary() {
+    // The resolver is literal: it runs exactly what is configured and never
+    // substitutes a binary found elsewhere (smart discovery is the Detect UI's
+    // job). A base name rejected by the security allow-list therefore resolves
+    // to Missing on any machine, regardless of whether ffmpeg is installed.
     let settings = FfmpegSettings {
         ffmpeg_path: "koko-ffmpeg-missing-binary".into(),
         ffprobe_path: "koko-ffprobe-missing-binary".into(),
-        ..FfmpegSettings::default()
     };
 
     let capability = inspect_transcoding_capability(&settings);

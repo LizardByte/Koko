@@ -7,25 +7,14 @@
 
 // standard imports
 use std::sync::Arc;
-use std::sync::atomic::{
-    AtomicBool,
-    AtomicU32,
-    Ordering,
-};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 use tokio::time::timeout;
 
 // local imports
-use koko::config::{
-    Settings,
-    current_settings,
-    replace_current_settings,
-};
-use koko::signal_handler::{
-    ShutdownCoordinator,
-    ShutdownSignal,
-};
+use koko::config::{Settings, current_settings, replace_current_settings};
+use koko::signal_handler::{ShutdownCoordinator, ShutdownSignal};
 use koko::web;
 
 struct TestServerStateGuard {

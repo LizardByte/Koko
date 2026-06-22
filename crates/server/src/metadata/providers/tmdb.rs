@@ -1,52 +1,21 @@
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
-use tmdb_client::models::{
-    EpisodeDetails,
-    MovieDetails,
-    MovieObject,
-    SeasonDetails,
-    TvDetails,
-};
+use tmdb_client::models::{EpisodeDetails, MovieDetails, MovieObject, SeasonDetails, TvDetails};
 
-use crate::config::{
-    MetadataProviderId,
-    MetadataProviderSettings,
-    MetadataSettings,
-};
+use crate::config::{MetadataProviderId, MetadataProviderSettings, MetadataSettings};
 use crate::metadata::{
-    MediaLibraryKind,
-    MetadataItemKind,
-    MetadataProviderDescriptor,
-    MetadataProviderRole,
-    MetadataSearchResult,
-    ProviderDescendantTarget,
-    ProviderExternalId,
-    ProviderMetadataCollection,
-    ProviderMetadataDetails,
-    ProviderMetadataPerson,
-    StoredMetadataSnapshot,
-    cleanup_movie_title,
-    extract_release_year,
-    managed_metadata_asset_dir,
-    metadata_asset_db_path,
-    metadata_response_cache_key,
-    movie_match_score,
-    normalize_external_id_source,
-    parse_movie_name,
-    preferred_image_url_by_format,
-    provider_settings,
-    read_metadata_response_cache_text,
-    show_search_query,
-    try_cache_item_artwork,
-    write_metadata_response_cache_text,
+    MediaLibraryKind, MetadataItemKind, MetadataProviderDescriptor, MetadataProviderRole,
+    MetadataSearchResult, ProviderDescendantTarget, ProviderExternalId, ProviderMetadataCollection,
+    ProviderMetadataDetails, ProviderMetadataPerson, StoredMetadataSnapshot, cleanup_movie_title,
+    extract_release_year, managed_metadata_asset_dir, metadata_asset_db_path,
+    metadata_response_cache_key, movie_match_score, normalize_external_id_source, parse_movie_name,
+    preferred_image_url_by_format, provider_settings, read_metadata_response_cache_text,
+    show_search_query, try_cache_item_artwork, write_metadata_response_cache_text,
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
@@ -1764,16 +1733,9 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        metadata_details,
-        metadata_item_kind,
-        tmdb_logo_url,
-    };
+    use super::{metadata_details, metadata_item_kind, tmdb_logo_url};
     use crate::config::MetadataProviderId;
-    use crate::metadata::{
-        MetadataItemKind,
-        StoredMetadataSnapshot,
-    };
+    use crate::metadata::{MetadataItemKind, StoredMetadataSnapshot};
     use serde_json::json;
 
     #[test]

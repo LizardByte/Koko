@@ -55,6 +55,9 @@ tray = [
     "dep:tray-icon",
     "dep:webbrowser",
 ]
+# Opt-in: run a real-ffmpeg smoke test (requires ffmpeg installed locally).
+# Normal CI runs without this so the suite is hermetic.
+real-ffmpeg-tests = []
 
 [dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
@@ -102,3 +105,4 @@ objc2-core-foundation = { version = "0.3.0", optional = true }
 [dev-dependencies]
 async-std.workspace = true
 rstest.workspace = true
+tempfile = "3.13"

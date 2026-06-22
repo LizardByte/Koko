@@ -42,3 +42,7 @@ crates/client-web/dist/
 
 # dev temp files
 .dev/
+
+# git worktrees
+.worktrees/
+artifacts

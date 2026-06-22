@@ -1,46 +1,25 @@
 //! Media and system discovery routes.
 
 // lib imports
-use std::collections::{
-    HashMap,
-    HashSet,
-};
+use std::collections::{HashMap, HashSet};
 use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::sync::atomic::{
-    AtomicBool,
-    AtomicU64,
-    Ordering,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use once_cell::sync::Lazy;
 use rocket::delete;
 use rocket::fs::NamedFile;
 use rocket::get;
-use rocket::http::{
-    ContentType,
-    Status,
-};
+use rocket::http::{ContentType, Status};
 use rocket::outcome::Outcome;
 use rocket::post;
-use rocket::request::{
-    FromRequest,
-    Request,
-};
+use rocket::request::{FromRequest, Request};
 use rocket::response::stream::ReaderStream;
-use rocket::response::{
-    self,
-    Responder,
-    Response,
-};
+use rocket::response::{self, Responder, Response};
 use rocket::serde::Deserialize;
 use rocket::serde::json::Json;
 use rocket::tokio::fs::File;
-use rocket::tokio::io::{
-    AsyncReadExt,
-    AsyncSeekExt,
-    Take,
-};
+use rocket::tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
 use rocket::tokio::process::ChildStdout;
 use rocket_okapi::openapi;
 use schemars::JsonSchema;
@@ -48,114 +27,54 @@ use serde::Serialize;
 use strsim::normalized_levenshtein;
 
 // local imports
-use crate::auth::UserGuard;
-use crate::config::{
-    MetadataProviderId,
-    Settings,
-    current_settings,
-};
+use crate::auth::{AdminGuard, UserGuard};
+use crate::config::{MetadataProviderId, Settings, current_settings};
 use crate::db::DbConn;
 use crate::db::models::ItemMetadataLink;
 use crate::globals;
 use crate::media::{
-    MediaHome,
-    MediaItemDetail,
-    MediaItemSummary,
-    PersistedLibrarySummary,
-    PersistedMediaFileSummary,
-    PlaybackDecision,
-    ShowMetadataDescendantPlan,
-    ShowMetadataEpisodePlan,
-    ShowMetadataSeasonPlan,
-    TranscodingCapability,
-    apply_user_playback_context_to_detail,
-    delete_missing_media_items,
-    get_item_secondary_provider_references,
-    get_item_youtube_theme_collection_references,
-    get_library_files,
-    get_library_metadata_languages,
-    get_library_metadata_providers,
-    get_media_home_with_preferred_languages,
-    get_media_item,
-    get_media_item_summary,
-    get_media_item_with_preferred_languages,
-    get_persisted_library_summaries,
-    get_playback_decision,
-    get_preferred_item_artwork_metadata_link_for_languages,
-    get_preferred_item_metadata_link,
-    inspect_transcoding_capability,
-    library_exists,
-    list_automatic_metadata_candidates,
-    list_automatic_metadata_refresh_candidates,
-    list_library_settings,
-    list_media_item_children,
-    list_media_items,
-    list_media_items_for_user_with_preferred_languages,
-    mark_metadata_match_attempted,
-    preferred_audio_stream_index,
-    resolve_item_subtitle_path,
-    resolve_item_theme_song_path,
-    resolve_local_item_artwork_path,
-    resolve_media_item_source_path,
+    MediaHome, MediaItemDetail, MediaItemSummary, PersistedLibrarySummary,
+    PersistedMediaFileSummary, PlaybackDecision, ShowMetadataDescendantPlan,
+    ShowMetadataEpisodePlan, ShowMetadataSeasonPlan, TranscodingCapability,
+    apply_user_playback_context_to_detail, delete_missing_media_items,
+    get_item_secondary_provider_references, get_item_youtube_theme_collection_references,
+    get_library_files, get_library_metadata_languages, get_library_metadata_providers,
+    get_media_home_with_preferred_languages, get_media_item, get_media_item_summary,
+    get_media_item_with_preferred_languages, get_persisted_library_summaries,
+    get_playback_decision, get_preferred_item_artwork_metadata_link_for_languages,
+    get_preferred_item_metadata_link, inspect_transcoding_capability, library_exists,
+    list_automatic_metadata_candidates, list_automatic_metadata_refresh_candidates,
+    list_library_settings, list_media_item_children, list_media_items,
+    list_media_items_for_user_with_preferred_languages, mark_metadata_match_attempted,
+    preferred_audio_stream_index, resolve_item_subtitle_path, resolve_item_theme_song_path,
+    resolve_local_item_artwork_path, resolve_media_item_source_path,
     search_media_items_for_user_with_preferred_languages,
-    sync_persisted_library_catalog_for_library,
-    upsert_playback_progress,
-    upsert_show_metadata_descendant_items,
-    user_can_access_library,
+    sync_persisted_library_catalog_for_library, upsert_playback_progress,
+    upsert_show_metadata_descendant_items, user_can_access_library,
 };
 use crate::metadata::{
-    ArtworkKind,
-    DEFAULT_METADATA_LOCALE,
-    ItemMetadataSummary,
-    MetadataCollectionSummary,
-    MetadataPersonCreditSummary,
-    MetadataPersonEnrichmentTarget,
-    MetadataPersonSummary,
-    MetadataProviderRole,
-    MetadataProviderStatus,
-    MetadataSearchResult,
-    MetadataSnapshotFetchOptions,
-    ProviderDescendantTarget,
-    ProviderEpisodeMetadataSnapshotFetch,
-    ProviderMetadataPerson,
-    StoredMetadataSnapshot,
-    expected_artwork_cache_path,
+    ArtworkKind, DEFAULT_METADATA_LOCALE, ItemMetadataSummary, MetadataCollectionSummary,
+    MetadataPersonCreditSummary, MetadataPersonEnrichmentTarget, MetadataPersonSummary,
+    MetadataProviderRole, MetadataProviderStatus, MetadataSearchResult,
+    MetadataSnapshotFetchOptions, ProviderDescendantTarget, ProviderEpisodeMetadataSnapshotFetch,
+    ProviderMetadataPerson, StoredMetadataSnapshot, expected_artwork_cache_path,
     fetch_provider_episode_metadata_snapshot_for_locale_with_options,
     fetch_provider_metadata_snapshot_for_locale_with_options,
     fetch_provider_person_metadata_for_locale,
     fetch_provider_season_metadata_snapshot_for_locale_with_options,
-    fetch_provider_secondary_collection_metadata,
-    fetch_provider_secondary_metadata,
-    get_item_metadata_summaries,
-    get_metadata_person_for_languages,
-    get_metadata_person_locale_peer_ids,
-    get_primary_item_metadata_link,
-    guess_provider_movie_match,
-    guess_provider_show_match,
-    list_due_item_metadata_links,
-    list_metadata_collection_summaries_with_preferred_languages,
-    list_metadata_people_for_library,
-    list_metadata_person_credit_summaries_for_person_ids,
-    list_pending_item_metadata_links,
-    list_provider_statuses,
-    load_provider_show_descendant_targets,
-    managed_metadata_asset_dir,
-    metadata_asset_db_path,
-    normalize_locale_key,
-    persist_item_metadata_assets,
-    persist_metadata_people_assets,
-    provider_locale_key,
-    provider_uses_localized_metadata,
-    resolve_metadata_asset_db_path,
-    search_metadata_people_with_preferred_languages,
-    search_provider,
-    set_item_metadata_refresh_state,
-    sort_item_metadata_summaries_for_languages,
-    try_cache_item_artwork,
-    update_cached_artwork_path,
-    update_metadata_person_details,
-    upsert_item_metadata_link,
-    upsert_item_metadata_snapshot_with_refresh_interval,
+    fetch_provider_secondary_collection_metadata, fetch_provider_secondary_metadata,
+    get_item_metadata_summaries, get_metadata_person_for_languages,
+    get_metadata_person_locale_peer_ids, get_primary_item_metadata_link,
+    guess_provider_movie_match, guess_provider_show_match, list_due_item_metadata_links,
+    list_metadata_collection_summaries_with_preferred_languages, list_metadata_people_for_library,
+    list_metadata_person_credit_summaries_for_person_ids, list_pending_item_metadata_links,
+    list_provider_statuses, load_provider_show_descendant_targets, managed_metadata_asset_dir,
+    metadata_asset_db_path, normalize_locale_key, persist_item_metadata_assets,
+    persist_metadata_people_assets, provider_locale_key, provider_uses_localized_metadata,
+    resolve_metadata_asset_db_path, search_metadata_people_with_preferred_languages,
+    search_provider, set_item_metadata_refresh_state, sort_item_metadata_summaries_for_languages,
+    try_cache_item_artwork, update_cached_artwork_path, update_metadata_person_details,
+    upsert_item_metadata_link, upsert_item_metadata_snapshot_with_refresh_interval,
     upsert_secondary_collection_theme_song_url,
 };
 use crate::utils::current_timestamp;
@@ -184,6 +103,73 @@ impl<'r> Responder<'r, 'static> for SessionStream {
                 .ok(),
         }
     }
+}
+
+/// The structured transcode error as exposed to clients (owned strings, so it
+/// serializes cleanly and matches the client `TranscodeErrorBody` type).
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct SessionTranscodeError {
+    /// Stable machine code.
+    pub code: String,
+    /// Human-readable explanation.
+    pub message: String,
+    /// Optional UI action hint, e.g. `Some("open_settings")`.
+    pub action: Option<String>,
+}
+
+impl From<crate::transcode::TranscodeErrorBody> for SessionTranscodeError {
+    fn from(body: crate::transcode::TranscodeErrorBody) -> Self {
+        Self {
+            code: body.code.to_string(),
+            message: body.message,
+            action: body.action.map(str::to_string),
+        }
+    }
+}
+
+/// Status of a playback session's transcode, returned to the client so it can
+/// recover a structured error when the `<video>` element stalls.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct SessionStatusResponse {
+    /// A transcode error for this session, if any. `None` while the session is
+    /// healthy or (in this phase) when only a successful spawn has occurred.
+    pub error: Option<SessionTranscodeError>,
+}
+
+/// Validation result for a single binary (the configured path or a candidate).
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct BinaryProbe {
+    /// The resolved absolute path, if the binary was found.
+    pub resolved_path: Option<String>,
+    /// First line of `ffmpeg -version` / `ffprobe -version`, when available.
+    pub version: Option<String>,
+    /// Why the binary is unavailable, when applicable.
+    pub error: Option<String>,
+    /// Transcoding-relevant encoders this ffmpeg supports (only for ffmpeg;
+    /// `None` for ffprobe or when not probed). Empty if probed but none matched.
+    pub encoders: Option<Vec<String>>,
+}
+
+/// One directory discovered to contain ffmpeg and/or ffprobe.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ToolCandidate {
+    /// The directory path (serialized as a string).
+    pub directory: String,
+    /// ffmpeg probe result; `None` if absent in this directory.
+    pub ffmpeg: Option<BinaryProbe>,
+    /// ffprobe probe result; `None` if absent in this directory.
+    pub ffprobe: Option<BinaryProbe>,
+}
+
+/// Result of the on-demand transcoding-tools discovery call.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ToolDiscoveryResponse {
+    /// Validation of the user's currently-configured ffmpeg path.
+    pub configured_ffmpeg: BinaryProbe,
+    /// Validation of the user's currently-configured ffprobe path.
+    pub configured_ffprobe: BinaryProbe,
+    /// One entry per directory containing at least one of ffmpeg/ffprobe.
+    pub candidates: Vec<ToolCandidate>,
 }
 
 pub struct RangedFile {
@@ -522,12 +508,35 @@ static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<tokio::sync::RwLock<HashSet<i32>
 static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_MANUAL_CATALOG_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+/// Gate for the ffprobe re-probe job. Shares the scan-gate semantics: a re-probe
+/// and a manual scan cannot run simultaneously (avoids concurrent SQLite writes
+/// and double ffprobe load). Either can start when the other isn't running.
+static ACTIVE_REPROBE_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_TRANSCODE_TASKS: Lazy<
     tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+/// Per-session transcode errors, written by the lifecycle watcher (deferred
+/// phase) and read by [`get_session_status`]. Inert in the current phase:
+/// only spawn-time failures are recorded here.
+static ACTIVE_SESSION_ERRORS: Lazy<
+    tokio::sync::RwLock<HashMap<String, crate::transcode::TranscodeErrorBody>>,
+> = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+
+/// Record a per-session transcode error so the client can recover structured
+/// detail via [`get_session_status`] (the stream response body is unreadable
+/// from a `<video>` src). The lifecycle watcher will also call this.
+async fn record_session_error(
+    session_id: &str,
+    error: crate::transcode::TranscodeErrorBody,
+) {
+    ACTIVE_SESSION_ERRORS
+        .write()
+        .await
+        .insert(session_id.to_string(), error);
+}
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
@@ -549,6 +558,149 @@ fn begin_catalog_scan_execution() -> bool {
 
 fn finish_catalog_scan_execution() {
     ACTIVE_MANUAL_CATALOG_SCAN_RUNNING.store(false, Ordering::SeqCst);
+}
+
+fn begin_reprobe_execution() -> bool {
+    // A re-probe and a manual scan can't run at the same time; both gates must be free.
+    if !begin_catalog_scan_execution() {
+        return false;
+    }
+    if ACTIVE_REPROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        finish_catalog_scan_execution();
+        return false;
+    }
+    true
+}
+
+fn finish_reprobe_execution() {
+    ACTIVE_REPROBE_RUNNING.store(false, Ordering::SeqCst);
+    finish_catalog_scan_execution();
+}
+
+async fn register_reprobe_activity(total_items: usize) -> String {
+    let activity_id = next_system_activity_id();
+    let now = current_timestamp();
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
+        activity_id.clone(),
+        MetadataRefreshActivityRecord {
+            activity: SystemActivity {
+                id: activity_id.clone(),
+                category: "media_reprobe".into(),
+                scope: "system".into(),
+                source: "ffprobe".into(),
+                state: "running".into(),
+                label: "Re-probe media info (ffprobe now available)".into(),
+                provider_id: None,
+                library_id: None,
+                root_item_id: None,
+                item_ids: Vec::new(),
+                total_items: i32::try_from(total_items).unwrap_or(i32::MAX),
+                completed_items: 0,
+                failed_items: 0,
+                queued_at: now,
+                started_at: Some(now),
+                updated_at: now,
+            },
+        },
+    );
+    activity_id
+}
+
+async fn complete_reprobe_activity(
+    activity_id: &str,
+    outcome: &crate::media::ReprobeOutcome,
+) {
+    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
+        record.activity.state = if outcome.failed > 0 && outcome.updated == 0 {
+            "failed".into()
+        } else {
+            "completed".into()
+        };
+        record.activity.completed_items = i32::try_from(outcome.updated).unwrap_or(i32::MAX);
+        record.activity.failed_items = i32::try_from(outcome.failed).unwrap_or(i32::MAX);
+        record.activity.updated_at = current_timestamp();
+    }
+}
+
+/// Whether a re-probe job is currently running.
+pub fn reprobe_in_progress() -> bool {
+    ACTIVE_REPROBE_RUNNING.load(Ordering::SeqCst)
+}
+
+/// Try to start a background ffprobe re-probe if there are unanalyzed media
+/// files and ffprobe is available. Returns true if a job was started, false if
+/// skipped (already running, a scan is running, ffprobe unavailable, or no
+/// candidates). Safe to call from any trigger (startup, settings change, manual).
+///
+/// This is the single entry point for all three re-probe triggers; it owns the
+/// gate, the activity record, and the per-file progress updates.
+pub async fn try_spawn_reprobe(
+    db: DbConn,
+    ffmpeg_settings: crate::config::FfmpegSettings,
+) -> bool {
+    if !begin_reprobe_execution() {
+        log::debug!("Re-probe not started: another scan or re-probe is already running");
+        return false;
+    }
+
+    // ffprobe availability is re-checked inside reprobe_media_files, but we also
+    // check here to avoid a pointless job and a spurious activity record.
+    if !crate::media::inspect_transcoding_capability(&ffmpeg_settings)
+        .ffprobe
+        .available
+    {
+        log::debug!("Re-probe not started: ffprobe is not available");
+        finish_reprobe_execution();
+        return false;
+    }
+
+    tokio::spawn(async move {
+        // Count + reprobe share the single DbConn (it isn't Clone), so both run
+        // inside one db.run closure. The activity is registered after the count
+        // (it needs total_items) and completed after the reprobe.
+        let outcome_with_total = db
+            .run(
+                move |conn| -> Result<(crate::media::ReprobeOutcome, i64), diesel::result::Error> {
+                    let total = crate::media::count_media_files_needing_reprobe(conn)?;
+                    if total == 0 {
+                        return Ok((crate::media::ReprobeOutcome::default(), 0));
+                    }
+                    let outcome =
+                        crate::media::reprobe_media_files(conn, &ffmpeg_settings, |_| {})?;
+                    Ok((outcome, total))
+                },
+            )
+            .await;
+
+        match outcome_with_total {
+            Ok((_outcome, total)) if total == 0 => {
+                log::debug!("Re-probe: no media files needed re-probing");
+            }
+            Ok((outcome, total)) => {
+                log::info!(
+                    "Starting ffprobe re-probe of {} unanalyzed media file(s)",
+                    total
+                );
+                let activity_id =
+                    register_reprobe_activity(usize::try_from(total).unwrap_or(usize::MAX)).await;
+                complete_reprobe_activity(&activity_id, &outcome).await;
+                log::info!(
+                    "ffprobe re-probe complete: inspected={}, updated={}, failed={}",
+                    outcome.inspected,
+                    outcome.updated,
+                    outcome.failed
+                );
+            }
+            Err(error) => {
+                log::error!("ffprobe re-probe failed: {error}");
+            }
+        }
+        finish_reprobe_execution();
+    });
+    true
 }
 
 fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
@@ -2871,12 +3023,7 @@ fn user_preferred_metadata_languages(
     user_id: Option<i32>,
 ) -> Result<Vec<String>, diesel::result::Error> {
     use crate::db::schema::users::dsl as users_dsl;
-    use diesel::{
-        ExpressionMethods,
-        OptionalExtension,
-        QueryDsl,
-        RunQueryDsl,
-    };
+    use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
 
     let Some(user_id) = user_id else {
         return Ok(vec![crate::metadata::DEFAULT_METADATA_LOCALE.to_string()]);
@@ -3045,6 +3192,189 @@ pub async fn get_server_capabilities(
         libraries_configured,
         api_versions: vec!["v1".into()],
         transcoding,
+    }))
+}
+
+/// Probe a single configured path/name for a binary, returning its resolved
+/// path + version or an error describing where we looked.
+fn probe_configured(
+    configured: &str,
+    binary_name: &str,
+) -> BinaryProbe {
+    use crate::ffmpeg_resolve::{self, ResolvedBinary};
+    match ffmpeg_resolve::resolve_binary(configured, binary_name) {
+        ResolvedBinary::Found { resolved_path, .. } => {
+            let version = ffmpeg_resolve::probe_version(&resolved_path);
+            BinaryProbe {
+                resolved_path: Some(resolved_path.display().to_string()),
+                version,
+                error: None,
+                // Only ffmpeg exposes encoders; ffprobe has no encoders.
+                encoders: if binary_name == "ffmpeg" {
+                    Some(crate::ffmpeg_resolve::probe_encoders(&resolved_path))
+                } else {
+                    None
+                },
+            }
+        }
+        ResolvedBinary::Missing { checked_paths, .. } => {
+            let checked = checked_paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            BinaryProbe {
+                resolved_path: None,
+                version: None,
+                error: Some(format!("Not found. Checked: [{checked}]")),
+                encoders: None,
+            }
+        }
+    }
+}
+
+/// Probe a single directory for a binary (for the candidates list).
+fn probe_in_dir(
+    dir: &std::path::Path,
+    binary_name: &str,
+) -> Option<BinaryProbe> {
+    let candidate = dir.join(binary_name);
+    if crate::ffmpeg_resolve::is_executable_public(&candidate) {
+        let version = crate::ffmpeg_resolve::probe_version(&candidate);
+        Some(BinaryProbe {
+            resolved_path: Some(candidate.display().to_string()),
+            version,
+            error: None,
+            encoders: if binary_name == "ffmpeg" {
+                Some(crate::ffmpeg_resolve::probe_encoders(&candidate))
+            } else {
+                None
+            },
+        })
+    } else {
+        None
+    }
+}
+
+/// Discover ffmpeg/ffprobe candidates and validate the configured paths.
+///
+/// On-demand from the settings page. Searches PATH + well-known locations and
+/// also validates the user's currently-configured paths. Read-only.
+#[openapi(tag = "Media")]
+#[post("/api/v1/system/tools/discover")]
+pub async fn discover_transcoding_tools(
+    _admin_guard: AdminGuard
+) -> Result<Json<ToolDiscoveryResponse>, Status> {
+    let settings = current_settings();
+    let configured_ffmpeg = probe_configured(&settings.ffmpeg.ffmpeg_path, "ffmpeg");
+    let configured_ffprobe = probe_configured(&settings.ffmpeg.ffprobe_path, "ffprobe");
+
+    // Collect candidate directories from PATH + well-known, de-duplicated, in order.
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if let Some(s) = dir.to_str() {
+                if seen.insert(s.to_string()) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
+    for dir in crate::ffmpeg_resolve::well_known_dirs_public() {
+        if let Some(s) = dir.to_str() {
+            if seen.insert(s.to_string()) {
+                dirs.push(dir);
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        let ffmpeg = probe_in_dir(&dir, "ffmpeg");
+        let ffprobe = probe_in_dir(&dir, "ffprobe");
+        if ffmpeg.is_some() || ffprobe.is_some() {
+            candidates.push(ToolCandidate {
+                directory: dir.display().to_string(),
+                ffmpeg,
+                ffprobe,
+            });
+        }
+    }
+
+    Ok(Json(ToolDiscoveryResponse {
+        configured_ffmpeg,
+        configured_ffprobe,
+        candidates,
+    }))
+}
+
+/// Return the transcode status for a playback session.
+///
+/// Used by the client to recover a structured error when the `<video>` element
+/// stalls. Returns `{ error: null }` for a healthy session.
+#[openapi(tag = "Media")]
+#[get("/api/v1/sessions/<session_id>/status")]
+pub async fn get_session_status(session_id: String) -> Result<Json<SessionStatusResponse>, Status> {
+    let session_known = ACTIVE_PLAYBACK_SESSIONS
+        .read()
+        .await
+        .contains_key(&session_id);
+    let error = ACTIVE_SESSION_ERRORS
+        .read()
+        .await
+        .get(&session_id)
+        .cloned()
+        .map(SessionTranscodeError::from);
+    if !session_known && error.is_none() {
+        return Err(Status::NotFound);
+    }
+    Ok(Json(SessionStatusResponse { error }))
+}
+
+/// Response describing how many media files still need ffprobe re-analysis.
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct ReprobeStatusResponse {
+    /// Whether a re-probe job is currently running.
+    pub in_progress: bool,
+    /// Count of media files with NULL metadata_json (scanned without ffprobe).
+    pub pending_count: i64,
+}
+
+/// Return whether a ffprobe re-probe is running and how many files await it.
+#[openapi(tag = "Media")]
+#[get("/api/v1/system/tools/reprobe")]
+pub async fn get_reprobe_status(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+) -> Result<Json<ReprobeStatusResponse>, Status> {
+    let pending_count = db
+        .run(move |conn| crate::media::count_media_files_needing_reprobe(conn))
+        .await
+        .map_err(|error| {
+            log::error!("Failed to count media files needing reprobe: {error}");
+            Status::InternalServerError
+        })?;
+    Ok(Json(ReprobeStatusResponse {
+        in_progress: reprobe_in_progress(),
+        pending_count,
+    }))
+}
+
+/// Manually trigger a ffprobe re-probe of all unanalyzed media files. Admin-only.
+#[openapi(tag = "Media")]
+#[post("/api/v1/system/tools/reprobe")]
+pub async fn trigger_reprobe(
+    db: DbConn,
+    _admin_guard: AdminGuard,
+) -> Result<Json<ReprobeStatusResponse>, Status> {
+    let settings = current_settings();
+    try_spawn_reprobe(db, settings.ffmpeg.clone()).await;
+    Ok(Json(ReprobeStatusResponse {
+        in_progress: reprobe_in_progress(),
+        // The count is best-effort here; if the job just started it'll trend to 0.
+        pending_count: 0,
     }))
 }
 
@@ -3649,8 +3979,18 @@ pub async fn get_session_stream(
             })
         }
         Err(e) => {
-            log::error!("Failed to spawn transcode: {}", e);
-            Err(Status::InternalServerError)
+            let (status, body) = crate::transcode::map_transcode_error(e);
+            log::error!(
+                "Failed to spawn transcode for session {}: {} ({} — action: {:?})",
+                session_id,
+                body.message,
+                body.code,
+                body.action
+            );
+            // Persist for the status read, so the client can recover the detail
+            // even though the stream response body is unreadable from a <video> src.
+            record_session_error(&session_id, body).await;
+            Err(status)
         }
     }
 }

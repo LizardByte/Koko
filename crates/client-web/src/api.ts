@@ -53,6 +53,41 @@ export interface ServerCapabilities {
   };
 }
 
+/** Validation result for a single transcoding binary (configured path or candidate). */
+export interface BinaryProbe {
+  resolved_path?: string;
+  version?: string;
+  error?: string;
+  /** Transcoding-relevant encoders this ffmpeg supports (ffmpeg only). */
+  encoders?: string[];
+}
+
+/** One directory discovered to contain ffmpeg and/or ffprobe. */
+export interface ToolCandidate {
+  directory: string;
+  ffmpeg?: BinaryProbe;
+  ffprobe?: BinaryProbe;
+}
+
+/** Result of the on-demand transcoding-tools discovery call. */
+export interface ToolDiscoveryResponse {
+  configured_ffmpeg: BinaryProbe;
+  configured_ffprobe: BinaryProbe;
+  candidates: ToolCandidate[];
+}
+
+/** A structured transcode error recoverable via the session-status endpoint. */
+export interface TranscodeErrorBody {
+  code: string;
+  message: string;
+  action?: string;
+}
+
+/** Status of a playback session's transcode. */
+export interface SessionStatusResponse {
+  error?: TranscodeErrorBody;
+}
+
 export interface BootstrapUser {
   id: number;
   username: string;
@@ -415,8 +450,13 @@ export interface MediaHome {
   collections: MediaCollectionSummary[];
 }
 
+/** Whether the source media has been analyzed by ffprobe. */
+export type PlaybackAnalysisState = 'analyzed' | 'awaiting_analysis';
+
 export interface PlaybackDecision {
   item_id: number;
+  /** Whether the source media was probed; if 'awaiting_analysis', playback is blocked. */
+  analysis_state: PlaybackAnalysisState;
   can_direct_play: boolean;
   transcode_required: boolean;
   reason: string;
@@ -1273,6 +1313,32 @@ export function createPlaybackSession(request: CreateSessionRequest): Promise<Pl
 
 export function deletePlaybackSession(sessionId: string): Promise<void> {
   return requestJson<void>('DELETE', `/api/v1/sessions/${sessionId}`);
+}
+
+/** Discover ffmpeg/ffprobe candidates and validate the configured paths (admin). */
+export function discoverTranscodingTools(): Promise<ToolDiscoveryResponse> {
+  return requestJson<ToolDiscoveryResponse>('POST', '/api/v1/system/tools/discover');
+}
+
+/** Read a playback session's transcode status (cheap map lookup, not a spawn). */
+export function getSessionStatus(sessionId: string): Promise<SessionStatusResponse> {
+  return requestJson<SessionStatusResponse>('GET', `/api/v1/sessions/${encodeURIComponent(sessionId)}/status`);
+}
+
+/** Re-probe status: whether a job is running and how many files await analysis. */
+export interface ReprobeStatusResponse {
+  in_progress: boolean;
+  pending_count: number;
+}
+
+/** Get re-probe status (running? how many files pending ffprobe analysis). */
+export function getReprobeStatus(): Promise<ReprobeStatusResponse> {
+  return requestJson<ReprobeStatusResponse>('GET', '/api/v1/system/tools/reprobe');
+}
+
+/** Manually trigger a ffprobe re-probe of all unanalyzed media files (admin). */
+export function triggerReprobe(): Promise<ReprobeStatusResponse> {
+  return requestJson<ReprobeStatusResponse>('POST', '/api/v1/system/tools/reprobe');
 }
 
 export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'logo' = 'poster', revision?: number): string {

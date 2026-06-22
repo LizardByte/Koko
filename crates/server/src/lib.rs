@@ -9,6 +9,7 @@ pub mod certs;
 pub mod config;
 pub mod db;
 pub mod dependencies;
+pub mod ffmpeg_resolve;
 pub mod globals;
 mod logging;
 pub mod media;

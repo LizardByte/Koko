@@ -7,6 +7,7 @@ import {
   deletePlaybackSession,
   getArtworkUrl,
   getItem,
+  getSessionStatus,
   getSessionStreamUrl,
   getWebClientProfile,
   resolveApiUrl,
@@ -322,8 +323,8 @@ function renderMediaPlayerOverlay(): string {
           <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
         </div>
         <div class="player-error-indicator" aria-live="polite">
-          <strong>Playback could not start</strong>
-          <span>Try another audio track or start playback again.</span>
+          <strong>${escapeHtml(state.playbackError ? 'Playback failed' : 'Playback could not start')}</strong>
+          <span>${escapeHtml(state.playbackError?.message ?? 'Try another audio track or start playback again.')}</span>
         </div>
         <div class="player-idle-hit-area" aria-hidden="true"></div>
         <div class="player-top-controls player-controls">
@@ -615,6 +616,8 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
   state.isPlayerOpen = true;
   state.activeAudioStreamIndex = undefined;
   state.isAudioTrackMenuOpen = false;
+  // Clear any stale playback error from a previous attempt.
+  state.playbackError = undefined;
   render();
 
   if (previousSession) {
@@ -627,6 +630,28 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
     item_id: item.id,
     client_profile: getWebClientProfile(),
   });
+
+  // Server-truth gate: if the source media was never analyzed by ffprobe
+  // (ffprobe was missing during scan), the decision is untrustworthy and the
+  // server returns analysis_state = 'awaiting_analysis'. Refuse to open a
+  // doomed player and surface the error instead. This replaces the old,
+  // buggy client-side capabilities-cache preflight.
+  const decision = state.activePlaybackSession.decision;
+  if (decision.analysis_state === 'awaiting_analysis') {
+    state.playbackError = {
+      code: 'media_not_analyzed',
+      message: decision.reason || 'This media has not been analyzed yet. Set the ffprobe path in Settings and re-probe media info.',
+      action: 'open_settings',
+    };
+    state.error = state.playbackError.message;
+    render();
+    // The player overlay covers the page banner, so toggle the in-player error
+    // class directly (the shell is mounted by the render() above).
+    document.querySelector<HTMLElement>('.media-player-shell')?.classList.remove('is-media-loading');
+    document.querySelector<HTMLElement>('.media-player-shell')?.classList.add('has-media-error');
+    return;
+  }
+
   render();
 }
 
@@ -1330,6 +1355,23 @@ export function bindPlayerProgress(): void {
   player.addEventListener('error', () => {
     setPlayerError();
     console.error('Media playback failed', player.error);
+    const sessionId = state.activePlaybackSession?.session_id;
+    if (!sessionId) {
+      return;
+    }
+    // Best-effort: recover a structured error from the per-session store. This
+    // is a cheap map lookup on the server, not a transcode spawn. It only helps
+    // when the browser actually fires `error` (HTTP failures are unreliable).
+    void getSessionStatus(sessionId)
+      .then((status) => {
+        if (status.error) {
+          state.playbackError = status.error;
+          render();
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch session status after playback error', error);
+      });
   });
   player.addEventListener('loadedmetadata', () => {
     applyInitialDirectSeek();

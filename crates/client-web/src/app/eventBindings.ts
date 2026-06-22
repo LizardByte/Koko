@@ -43,7 +43,7 @@ import {
   selectedItemDefaultMetadataYear,
   selectedItemExtras,
 } from './itemPersonView';
-import { buildSettingsFromForm } from './settingsView';
+import { buildSettingsFromForm, renderDiscoverResults, renderPathValidation } from './settingsView';
 import { setButtonBusy } from './ui';
 import {
   addLibrary,
@@ -52,6 +52,8 @@ import {
   createUser,
   deleteLibrary,
   deleteMissingItems,
+  discoverTranscodingTools,
+  getReprobeStatus,
   getItemMetadata,
   getLogs,
   getUsers,
@@ -71,6 +73,7 @@ import {
   type MediaShelf,
   type ScheduledTaskId,
   type UpdateUserRequest,
+  triggerReprobe,
 } from '../api';
 
 /** Replaces a DOM subtree while preserving any coordinator-level patch behavior. */
@@ -526,6 +529,93 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       }
     });
   });
+
+  document.querySelectorAll<HTMLElement>('[data-action="open-settings"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      navigateTo('/settings');
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('#detect-ffmpeg')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const resultsContainer = document.querySelector<HTMLElement>('#ffmpeg-discover-results');
+    const ffmpegInput = document.querySelector<HTMLInputElement>('input[name="ffmpeg_path"]');
+    const ffprobeInput = document.querySelector<HTMLInputElement>('input[name="ffprobe_path"]');
+    const ffmpegValidation = document.querySelector<HTMLElement>('#ffmpeg-path-validation');
+    const ffprobeValidation = document.querySelector<HTMLElement>('#ffprobe-path-validation');
+    if (!resultsContainer || !ffmpegInput || !ffprobeInput) {
+      return;
+    }
+    setButtonBusy(button, true);
+    try {
+      const discovery = await discoverTranscodingTools();
+      resultsContainer.innerHTML = renderDiscoverResults(discovery);
+      resultsContainer.hidden = false;
+
+      // Per-field validation detail, driven by the configured-path probes.
+      if (ffmpegValidation) {
+        ffmpegValidation.innerHTML = renderPathValidation(discovery.configured_ffmpeg, 'ffmpeg');
+        ffmpegValidation.hidden = !ffmpegValidation.innerHTML;
+      }
+      if (ffprobeValidation) {
+        ffprobeValidation.innerHTML = renderPathValidation(discovery.configured_ffprobe, 'ffprobe');
+        ffprobeValidation.hidden = !ffprobeValidation.innerHTML;
+      }
+
+      // [Use] buttons write <dir>/ffmpeg + <dir>/ffprobe into the path fields.
+      resultsContainer.querySelectorAll<HTMLButtonElement>('[data-use-directory]').forEach((useButton) => {
+        useButton.addEventListener('click', () => {
+          const dir = useButton.dataset.useDirectory;
+          if (!dir) {
+            return;
+          }
+          ffmpegInput.value = `${dir}/ffmpeg`;
+          ffprobeInput.value = `${dir}/ffprobe`;
+        });
+      });
+    } catch (error) {
+      resultsContainer.hidden = false;
+      resultsContainer.innerHTML = `<p class="muted">Detection failed: ${escapeHtml(error instanceof Error ? error.message : 'unknown error')}</p>`;
+    } finally {
+      setButtonBusy(button, false);
+    }
+  });
+
+  // Re-probe media info: show the button when there are unanalyzed files
+  // (ffprobe was missing during scan), and trigger the job on click.
+  const reprobeButton = document.querySelector<HTMLButtonElement>('#reprobe-media');
+  const reprobeStatus = document.querySelector<HTMLElement>('#reprobe-status');
+  if (reprobeButton && reprobeStatus) {
+    getReprobeStatus()
+      .then((status) => {
+        if (status.in_progress) {
+          reprobeStatus.hidden = false;
+          reprobeStatus.textContent = 'Re-probing media info is in progress… (see Dashboard → Activities).';
+        } else if (status.pending_count > 0) {
+          reprobeButton.hidden = false;
+          reprobeStatus.hidden = false;
+          reprobeStatus.textContent = `${status.pending_count} media file(s) were scanned without ffprobe and need re-analysis. Click to re-probe.`;
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to fetch reprobe status', error);
+      });
+
+    reprobeButton.addEventListener('click', async () => {
+      setButtonBusy(reprobeButton, true);
+      try {
+        await triggerReprobe();
+        reprobeStatus.hidden = false;
+        reprobeStatus.textContent = 'Re-probe started. Watch Dashboard → Activities for progress; playback unlocks as files are analyzed.';
+        reprobeButton.hidden = true;
+      } catch (error) {
+        reprobeStatus.hidden = false;
+        reprobeStatus.textContent = `Re-probe failed to start: ${escapeHtml(error instanceof Error ? error.message : 'unknown error')}`;
+      } finally {
+        setButtonBusy(reprobeButton, false);
+      }
+    });
+  }
 
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
     button.addEventListener('click', () => {

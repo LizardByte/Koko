@@ -1,0 +1,91 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+      Name="Koko"
+      Manufacturer="LizardByte"
+      Version="$(var.Version)"
+      UpgradeCode="28905BC1-502E-4F02-BE83-65F6DF8D4A1D"
+      Language="1033"
+      Codepage="1252"
+      InstallerVersion="500"
+      Scope="perMachine">
+    <SummaryInformation
+        Keywords="Installer"
+        Manufacturer="LizardByte"
+        Description="Koko self-hosted media server." />
+
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Setup will now exit." />
+
+    <MediaTemplate EmbedCab="yes" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+    <Property Id="DiskPrompt" Value="Koko Installation" />
+    <Property Id="ARPHELPLINK" Value="https://app.lizardbyte.dev/support" />
+    <Property Id="ARPURLINFOABOUT" Value="https://app.lizardbyte.dev" />
+    <Icon Id="ProductIcon" SourceFile="$(var.CargoTargetDir)\..\assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+
+    <Feature
+        Id="ApplicationFeature"
+        Title="Koko"
+        Description="Installs Koko and its required web client files."
+        Level="1"
+        ConfigurableDirectory="INSTALLFOLDER"
+        AllowAdvertise="no"
+        AllowAbsent="no">
+      <ComponentRef Id="ApplicationExecutable" />
+      <ComponentRef Id="LicenseFile" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <Files Directory="INSTALLFOLDER" Include="$(var.CargoTargetDir)\..\assets\**" Subdirectory="assets" />
+      <Files Directory="INSTALLFOLDER" Include="$(var.CargoTargetDir)\..\crates\client-web\dist\**" Subdirectory="crates\client-web\dist" />
+    </Feature>
+
+    <UI>
+      <ui:WixUI Id="WixUI_FeatureTree" />
+    </UI>
+
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="Koko">
+        <Component Id="ApplicationExecutable" Guid="*">
+          <File
+              Id="KokoExe"
+              Name="koko.exe"
+              Source="$(var.CargoTargetBinDir)\koko.exe"
+              KeyPath="yes" />
+        </Component>
+        <Component Id="LicenseFile" Guid="*">
+          <File
+              Id="KokoLicense"
+              Name="LICENSE"
+              Source="$(var.CargoTargetDir)\..\LICENSE"
+              KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuLizardByteFolder" Name="LizardByte">
+        <Directory Id="ProgramMenuKokoFolder" Name="Koko">
+          <Component Id="StartMenuShortcut" Guid="*">
+            <Shortcut
+                Id="ApplicationStartMenuShortcut"
+                Name="Koko"
+                Description="Koko self-hosted media server"
+                Target="[INSTALLFOLDER]koko.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveProgramMenuKokoFolder" Directory="ProgramMenuKokoFolder" On="uninstall" />
+            <RemoveFolder Id="RemoveProgramMenuLizardByteFolder" Directory="ProgramMenuLizardByteFolder" On="uninstall" />
+            <RegistryValue
+                Root="HKCU"
+                Key="Software\LizardByte\Koko"
+                Name="installed"
+                Type="integer"
+                Value="1"
+                KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>

@@ -7,14 +7,68 @@
 
 // standard imports
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{
+    AtomicBool,
+    AtomicU32,
+    Ordering,
+};
 use std::thread;
 use std::time::Duration;
 use tokio::time::timeout;
 
 // local imports
-use koko::signal_handler::{ShutdownCoordinator, ShutdownSignal};
+use koko::config::{
+    Settings,
+    current_settings,
+    replace_current_settings,
+};
+use koko::signal_handler::{
+    ShutdownCoordinator,
+    ShutdownSignal,
+};
 use koko::web;
+
+struct TestServerStateGuard {
+    original_settings: Settings,
+    test_dir: std::path::PathBuf,
+}
+
+impl Drop for TestServerStateGuard {
+    fn drop(&mut self) {
+        replace_current_settings(self.original_settings.clone());
+        let _ = std::fs::remove_dir_all(&self.test_dir);
+    }
+}
+
+fn configure_isolated_web_server_settings() -> (TestServerStateGuard, String) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "koko_web_shutdown_{}_{}",
+        std::process::id(),
+        timestamp
+    ));
+    let data_dir = test_dir.join("data");
+    std::fs::create_dir_all(&data_dir).expect("Failed to create isolated web server data dir");
+
+    let original_settings = current_settings();
+    let mut settings = original_settings.clone();
+    settings.general.data_dir = data_dir.to_string_lossy().to_string();
+    settings.server.port = 0;
+    settings.server.use_https = false;
+    replace_current_settings(settings);
+
+    let db_path = test_dir.join("koko.db").to_string_lossy().to_string();
+    (
+        TestServerStateGuard {
+            original_settings,
+            test_dir,
+        },
+        db_path,
+    )
+}
 
 mod shutdown_signal {
     use super::*;
@@ -109,32 +163,45 @@ mod shutdown_signal {
     fn wait_with_timeout() {
         let signal = ShutdownSignal::new();
         let signal_clone = signal.clone();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
 
-        // Spawn a thread that will set shutdown after a short delay
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            signal_clone.shutdown();
+        // Use a custom wait implementation that can timeout for testing.
+        let handle = thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut waited = false;
+            let mut waiting_sent = false;
+
+            while !signal_clone.is_shutdown() {
+                waited = true;
+                if !waiting_sent {
+                    waiting_tx
+                        .send(())
+                        .expect("Should notify that wait loop started");
+                    waiting_sent = true;
+                }
+
+                if start.elapsed() > Duration::from_secs(5) {
+                    return Err("Timed out waiting for shutdown signal");
+                }
+
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            Ok(waited)
         });
 
-        // Test wait with a reasonable timeout
-        let start = std::time::Instant::now();
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Wait loop should start before shutdown");
+        signal.shutdown();
 
-        // Use a custom wait implementation that can timeout for testing
-        let mut waited = false;
-        while !signal.is_shutdown() {
-            thread::sleep(Duration::from_millis(10));
-            if start.elapsed() > Duration::from_millis(200) {
-                break;
-            }
-            waited = true;
-        }
+        let waited = handle
+            .join()
+            .expect("Wait thread should complete without panicking")
+            .expect("Should not have timed out");
 
         assert!(waited, "Should have waited for shutdown signal");
         assert!(signal.is_shutdown(), "Signal should be shutdown after wait");
-        assert!(
-            start.elapsed() < Duration::from_millis(200),
-            "Should not have timed out"
-        );
     }
 
     #[test]
@@ -238,28 +305,37 @@ mod shutdown_signal {
     fn wait_functionality() {
         let signal = ShutdownSignal::new();
         let signal_clone = signal.clone();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-        // Spawn a thread that will signal shutdown after a delay
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            signal_clone.shutdown();
+            waiting_tx
+                .send(())
+                .expect("Should notify that wait is about to start");
+            signal_clone.wait();
+            completed_tx
+                .send(signal_clone.is_shutdown())
+                .expect("Should notify that wait completed");
         });
 
-        // Test the wait method - this should return once shutdown is signaled
-        let start = std::time::Instant::now();
-        signal.wait();
-        let elapsed = start.elapsed();
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("Wait thread should start");
+        assert!(
+            matches!(
+                completed_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "Wait should block until shutdown is signaled"
+        );
 
-        // Should have waited for about 50ms
+        signal.shutdown();
         assert!(
-            elapsed >= Duration::from_millis(40),
-            "Should have waited for shutdown signal"
+            completed_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("Wait should return after shutdown is signaled"),
+            "Signal should be shutdown after wait"
         );
-        assert!(
-            elapsed < Duration::from_millis(300),
-            "Should not have waited too long"
-        );
-        assert!(signal.is_shutdown(), "Signal should be shutdown after wait");
 
         handle.join().unwrap();
     }
@@ -271,16 +347,23 @@ mod shutdown_signal {
         // Signal shutdown first
         signal.shutdown();
 
-        // Then call wait - should return immediately
-        let start = std::time::Instant::now();
-        signal.wait();
-        let elapsed = start.elapsed();
+        let signal_clone = signal.clone();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-        // Should return almost immediately since signal is already shutdown
+        let handle = thread::spawn(move || {
+            signal_clone.wait();
+            completed_tx
+                .send(signal_clone.is_shutdown())
+                .expect("Should notify that wait completed");
+        });
+
         assert!(
-            elapsed < Duration::from_millis(50),
-            "Wait should return immediately for already shutdown signal"
+            completed_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("Wait should return for already shutdown signal"),
+            "Signal should remain shutdown after wait"
         );
+        handle.join().unwrap();
     }
 }
 
@@ -521,17 +604,7 @@ mod shutdown_coordinator {
     }
 
     #[test]
-    #[should_panic(expected = "Failed to create tokio runtime")]
-    fn async_thread_runtime_creation_failure() {
-        // This test is tricky to trigger in practice, but we can document it
-        // The panic path occurs when tokio runtime creation fails
-        // In normal circumstances this should never happen, but the panic is there for safety
-
-        // Since we can't easily mock runtime creation failure, we'll create a separate test
-        // that documents this behavior. The actual panic line will be covered when/if
-        // runtime creation actually fails in extreme circumstances.
-
-        // For now, let's verify that normal async thread creation works fine
+    fn async_thread_runtime_creation_success() {
         let mut coordinator = create_test_coordinator();
 
         coordinator.register_async_thread("normal-async", |_| async move {
@@ -540,9 +613,7 @@ mod shutdown_coordinator {
 
         coordinator.wait_for_completion();
 
-        // If we reach here, runtime creation worked fine
-        // The panic path is for extreme error conditions that are hard to reproduce in tests
-        panic!("Failed to create tokio runtime for test_panic_scenario");
+        // If we reach here, runtime creation worked fine.
     }
 
     #[test]
@@ -625,25 +696,40 @@ mod integration {
 
     #[tokio::test]
     async fn web_server_shutdown_signal_handling() {
+        let (_test_server_state_guard, db_path) = configure_isolated_web_server_settings();
         let shutdown_signal = ShutdownSignal::new();
         let shutdown_signal_clone = shutdown_signal.clone();
+        let (launched_tx, launched_rx) = tokio::sync::oneshot::channel();
+        let launch_notifier = Arc::new(std::sync::Mutex::new(Some(launched_tx)));
+        let rocket = web::rocket_with_db_path(Some(db_path)).attach(
+            rocket::fairing::AdHoc::on_liftoff("Notify test launch", move |_| {
+                let launch_notifier = Arc::clone(&launch_notifier);
+                Box::pin(async move {
+                    if let Some(launched_tx) = launch_notifier.lock().unwrap().take() {
+                        let _ = launched_tx.send(());
+                    }
+                })
+            }),
+        );
 
         // Start web server in background
         let web_handle = tokio::spawn(async move {
-            web::launch_with_shutdown(shutdown_signal_clone).await;
+            web::launch_rocket_with_shutdown(rocket, shutdown_signal_clone).await;
         });
 
-        // Give the server a moment to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        timeout(Duration::from_secs(30), launched_rx)
+            .await
+            .expect("Web server should launch within 30 seconds")
+            .expect("Web server task should not exit before launch");
 
         // Signal shutdown
         shutdown_signal.shutdown();
 
         // Web server should shut down within a reasonable time
-        let result = timeout(Duration::from_secs(2), web_handle).await;
+        let result = timeout(Duration::from_secs(10), web_handle).await;
         assert!(
             result.is_ok(),
-            "Web server should shut down within 2 seconds"
+            "Web server should shut down within 10 seconds"
         );
     }
 

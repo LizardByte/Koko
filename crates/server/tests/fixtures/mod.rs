@@ -5,19 +5,21 @@ use std::path::PathBuf;
 // lib imports
 use diesel::Connection;
 use diesel::sqlite::SqliteConnection;
-use diesel_migrations::MigrationHarness;
 use rocket::http::Status;
 use rocket::local::asynchronous::Client;
 use rstest::fixture;
 use serde_json::json;
 
 // local imports
-use koko::db::MIGRATIONS;
+use koko::db::revert_all_sqlite_migrations;
 use koko::globals::CURRENT_ENV;
 use koko::web::rocket;
 
 // test imports
-use crate::test_utils::{TestResponse, make_request};
+use crate::test_utils::{
+    TestResponse,
+    make_request,
+};
 
 pub struct TestDb {
     pub client: Client,
@@ -28,7 +30,7 @@ impl Drop for TestDb {
     fn drop(&mut self) {
         if self.db_path.exists() {
             if let Ok(mut conn) = SqliteConnection::establish(self.db_path.to_str().unwrap()) {
-                let _ = conn.revert_all_migrations(MIGRATIONS);
+                let _ = revert_all_sqlite_migrations(&mut conn);
             }
 
             // Sleep to allow processes to release the database file

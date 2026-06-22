@@ -10,6 +10,7 @@ use crate::test_utils::{
     create_and_login_user,
     create_test_client,
     create_test_user,
+    login_user,
     make_request,
 };
 
@@ -206,10 +207,30 @@ async fn test_jwt_protected_route_with_valid_token() {
 async fn test_admin_route_with_non_admin_user() {
     let client = create_test_client(Some("auth_non_admin")).await;
 
-    // Create and login non-admin user
-    let token = create_and_login_user(&client, "regularuser", "regularpass", false, None)
+    // Create and login a bootstrap admin first so the next user can remain non-admin.
+    let admin_token = create_and_login_user(&client, "bootstrapadmin", "adminpass", true, None)
         .await
-        .expect("Should create and login user successfully");
+        .expect("Should create and login bootstrap admin successfully");
+
+    let create_response = make_request(
+        Some(&client),
+        "post",
+        "/create_user",
+        Some(json!({
+            "username": "regularuser",
+            "password": "regularpass",
+            "admin": false
+        })),
+        Some(format!("Bearer {}", admin_token)),
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    assert_eq!(create_response.body, "User created");
+
+    let token = login_user(&client, "regularuser", "regularpass", Some(Status::Ok))
+        .await
+        .expect("Should login regular user successfully");
 
     // Try to access the admin route
     let auth_header = format!("Bearer {}", token);

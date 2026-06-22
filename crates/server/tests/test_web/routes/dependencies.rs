@@ -1,9 +1,15 @@
 // lib imports
 use rocket::http::Status;
-use rocket::serde::json::{Value, serde_json};
+use rocket::serde::json::{
+    Value,
+    serde_json,
+};
 
 // test imports
-use crate::test_utils::{TestResponse, make_request};
+use crate::test_utils::{
+    TestResponse,
+    make_request,
+};
 
 #[rocket::async_test]
 async fn test_get_dependencies_route() {

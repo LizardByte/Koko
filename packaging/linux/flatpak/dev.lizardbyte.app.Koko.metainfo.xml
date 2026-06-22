@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.lizardbyte.app.Koko</id>
+  <name>Koko</name>
+  <summary>Self-hosted media server</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-LizardByte-Source-Available</project_license>
+  <developer id="dev.lizardbyte">
+    <name>LizardByte</name>
+  </developer>
+  <description>
+    <p>
+      Koko is a self-hosted media server for managing and streaming personal media libraries.
+    </p>
+  </description>
+  <releases>
+    <release version="@BUILD_VERSION@" date="@BUILD_DATE@">
+      <url>https://github.com/LizardByte/Koko/releases/tag/v@BUILD_VERSION@</url>
+      <description>
+        <p>See the changelog on GitHub</p>
+      </description>
+    </release>
+  </releases>
+  <launchable type="desktop-id">dev.lizardbyte.app.Koko.desktop</launchable>
+  <url type="homepage">https://app.lizardbyte.dev</url>
+  <url type="bugtracker">https://app.lizardbyte.dev/support</url>
+  <content_rating type="oars-1.1" />
+</component>

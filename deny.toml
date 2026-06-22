@@ -1,0 +1,43 @@
+[licenses]
+include-dev = true
+unused-allowed-license = "allow"
+
+# cargo-deny's license check is allow-list based: every license not listed here
+# or in a scoped exception is rejected. This intentionally excludes copyleft,
+# proprietary, and custom license terms such as GPL-3.0, AGPL-3.0, LGPL, and
+# non-SPDX "Custom License" or "Proprietary" declarations.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+exceptions = [
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
+
+[[licenses.clarify]]
+crate = "cfg_block"
+expression = "Apache-2.0"
+license-files = [
+    { path = "LICENSE", hash = 0xc9663a1e },
+]
+
+[[licenses.clarify]]
+crate = "dlopen2_derive"
+expression = "MIT"
+license-files = [
+    { path = "LICENSE", hash = 0xea2c3d1e },
+]
+
+[licenses.private]
+ignore = true

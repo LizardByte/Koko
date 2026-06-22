@@ -5,7 +5,7 @@
 // Gamepad: A=play/pause, B=close, left/right=seek, up/down=volume (layout-aware)
 
 import type { Action } from 'svelte/action';
-import { detectLayout } from '$lib/gamepadLayouts';
+import { detectLayout } from '$lib/gamepad';
 
 export type PlayerShortcutHandlers = {
   onPlayPause: () => void;

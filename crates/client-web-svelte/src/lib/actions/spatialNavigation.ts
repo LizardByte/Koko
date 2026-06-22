@@ -15,7 +15,7 @@
 
 import type { Action } from 'svelte/action';
 import { playback, ui } from '$lib/stores';
-import { detectLayout } from '$lib/gamepadLayouts';
+import { detectLayout } from '$lib/gamepad';
 
 type Direction = 'up' | 'down' | 'left' | 'right';
 

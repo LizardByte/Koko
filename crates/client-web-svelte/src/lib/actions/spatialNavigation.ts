@@ -90,14 +90,35 @@ function activateFocused(): void {
 }
 
 function switchTab(direction: 'left' | 'right'): void {
-  const tabs = Array.from(document.querySelectorAll<HTMLElement>(
-    '.library-rail-top .rail-button, .settings-section-nav button, .home-tab',
-  )).filter((el) => el.offsetParent !== null);
-  if (tabs.length === 0) return;
-  const current = document.activeElement as HTMLElement | null;
-  const idx = current ? tabs.indexOf(current) : -1;
-  const next = direction === 'left' ? (idx > 0 ? idx - 1 : tabs.length - 1) : (idx < tabs.length - 1 ? idx + 1 : 0);
-  tabs[next]?.click();
+  // Context-aware tab switching. Find the tab group relevant to the current page.
+  // Priority: browse tabs (home) > settings section nav > sidebar rail.
+  const tabSelectors = [
+    '.browse-tabs .browse-tab-button',      // Home browse tabs
+    '.settings-section-nav button',          // Settings section nav
+  ];
+
+  for (const selector of tabSelectors) {
+    const tabs = Array.from(document.querySelectorAll<HTMLElement>(selector))
+      .filter((el) => el.offsetParent !== null);
+    if (tabs.length === 0) continue;
+
+    const current = document.activeElement as HTMLElement | null;
+    const idx = current ? tabs.indexOf(current) : -1;
+
+    // If the focused element isn't in this tab group, find the active tab.
+    let startIdx = idx;
+    if (idx === -1) {
+      const active = tabs.findIndex((t) => t.classList.contains('active'));
+      startIdx = active >= 0 ? active : 0;
+    }
+
+    const next = direction === 'left'
+      ? (startIdx > 0 ? startIdx - 1 : tabs.length - 1)
+      : (startIdx < tabs.length - 1 ? startIdx + 1 : 0);
+
+    tabs[next]?.click();
+    return; // First matching tab group wins.
+  }
 }
 
 // --- Focus indicator ---

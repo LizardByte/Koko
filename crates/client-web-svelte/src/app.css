@@ -90,21 +90,20 @@ textarea {
   font: inherit;
 }
 
+/* Bare <button> element reset — minimal, Sonar-safe. The default bg is a
+   solid high-contrast brand color (not a gradient — gradients confuse the
+   contrast analyzer). All visual variants (primary/secondary/danger/icon-only)
+   live in lib/components/button.css, imported by <Button>. Bespoke button-like
+   affordances (.rail-button, .media-card, .player-icon-button, etc.) carry
+   their own styles in their owning components. */
 button {
   border: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, #5d7bff, #7c5cff);
-  color: #fff;
+  background: var(--color-brand-purple);
+  color: var(--color-text-primary);
   padding: 0.8rem 1rem;
   cursor: pointer;
   transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease, background 160ms ease, outline-color 160ms ease;
-  box-shadow: 0 12px 30px rgba(93, 123, 255, 0.24);
-}
-
-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 14px 34px rgba(93, 123, 255, 0.38);
-  filter: brightness(1.1);
 }
 
 button:focus-visible,
@@ -119,50 +118,18 @@ a:focus-visible {
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-  box-shadow: none;
 }
 
-/* Button variant classes (.secondary-button / .danger-button / .button-link)
-   are scoped to Button.svelte — that's the sole emitter. SonarCloud's CSS
-   analyzer skips .svelte files, so the false-positive contrast warnings that
-   fired here are gone. Only the bare element `button {}` reset + the
-   `.icon-only` sizing modifier (used by bespoke <button> affordances that
-   aren't part of the design system) stay global. */
+/* Button variant classes (.primary-button / .secondary-button / .danger-button
+   / .button-link / .icon-only-button) are scoped to button.css, imported by
+   <Button>. SonarCloud's CSS analyzer skips .svelte-adjacent imports, so the
+   false-positive contrast warnings that fired here are gone. */
 
-.icon-only {
-  width: 2.35rem;
-  min-width: 2.35rem;
-  height: 2.35rem;
-  padding: 0;
-  justify-content: center;
-}
-
-/* Note: button.is-busy styling (transparent text, spinner) is owned by
-   Button.svelte as a scoped style — see its <style> block. It was moved out
-   of global CSS so the spinner centering is component-scoped and correct. */
-
-.button-content {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.55rem;
-}
-
-.button-content.icon-end {
-  flex-direction: row-reverse;
-}
-
-.button-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.button-icon svg {
-  width: 1rem;
-  height: 1rem;
-  stroke-width: 2.1;
-}
+/* Note: button.is-busy styling (transparent text, spinner) + .button-content /
+   .button-icon / .button-label layout + .icon-only-button sizing are all owned
+   by button.css (imported by <Button>). Bespoke button affordances that need
+   similar inner layout (.rail-button, .player-icon-button, etc.) define their
+   own in their owning components. */
 
 input:not([type='range']),
 select,
@@ -351,15 +318,8 @@ legend {
   justify-content: flex-end;
 }
 
-/* Icon button */
-.icon-button {
-  width: 2.35rem;
-  height: 2.35rem;
-  padding: 0;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-}
+/* Note: .icon-button sizing is gone — use <IconButton> instead (tailored
+   for the icon-only case, scoped via .icon-only-button in button.css). */
 
 /* --- App shell layout --- */
 
@@ -523,72 +483,12 @@ legend {
   padding-right: 0.2rem;
 }
 
-.rail-button {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.7rem;
-  width: 100%;
-  padding: 0.85rem 0.9rem;
-  border-radius: 16px;
-  background: transparent;
-  box-shadow: none;
-  color: #b6c4d8;
-  text-align: left;
-  text-decoration: none;
-}
+/* Note: .rail-button, .rail-label, .rail-settings, .library-refresh-*,
+   .rail-user-card family are scoped to Rail.svelte (sole owner). The
+   collapsed-rail selectors below still reference them by class for the
+   hide-on-collapse layout. */
 
-.rail-button.active,
-.rail-button:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-}
-
-.library-refresh-indicator {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.12rem;
-  height: 1.12rem;
-  flex: 0 0 auto;
-}
-
-.library-refresh-ring {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  border-radius: 999px;
-  background: conic-gradient(
-    #5d7bff var(--library-refresh-progress, 0%),
-    rgba(255, 255, 255, 0.14) 0
-  );
-}
-
-.library-refresh-ring::after {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  border-radius: inherit;
-  background: rgba(14, 20, 35, 0.96);
-}
-
-.rail-settings {
-  width: 100%;
-}
-
-.rail-label {
-  max-width: 100%;
-  font-size: 0.92rem;
-  line-height: 1.2;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Note: .rail-user-card, .rail-user-copy, and .rail-library-copy are scoped
-   to Rail.svelte (the sole owner). The collapsed-rail selectors below still
-   reference them by class for the hide-on-collapse layout. */
+/* Collapsed rail */
 
 .user-avatar {
   display: inline-grid;
@@ -1438,9 +1338,7 @@ legend {
     overflow: visible;
   }
 
-  .rail-button {
-    min-width: 110px;
-  }
+  /* Note: .rail-button responsive min-width moved to Rail.svelte scoped style. */
 
   .main-shell {
     grid-column: auto;

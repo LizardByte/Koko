@@ -1,9 +1,11 @@
 <script module>
-  // Rail stories. Reads the libraries store + $app/state (page) for active
-  // state + auth store for the user card. preset 'home' seeds libraries +
-  // current user; the `route` arg simulates which nav is active.
+  // Rail stories. The libraries list is passed as a prop (read from the store
+  // seeded by preset 'home'); active route comes from $app/state (simulated via
+  // the `route` arg); the user card comes from the auth store. preset 'home'
+  // seeds libraries + current user.
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import Rail from './Rail.svelte';
+  import { libraries } from '$lib/stores';
 
   const { Story } = defineMeta({
     title: 'Fragments/Rail',
@@ -15,9 +17,9 @@
         description: {
           component:
             'Persistent sidebar: brand block, Home + per-library nav (with metadata-refresh rings), user card, Settings, Sign out. Collapses to 88px via the `collapsed` prop (item pages). On viewports ≤ 960px it flips to a horizontal bar; the "Full Vertical" story pins the desktop layout so you can review the sidebar without widening the canvas.\n\n' +
-            '> ⚠️ **Mostly store-driven.** Only `collapsed` is a real prop; the libraries list, ' +
-            'active route, and user card all come from the `libraries` / `auth` stores, seeded via ' +
-            'the `preset` / `route` args (see `.storybook/decorators/withStores.ts`). ' +
+            'The libraries list is a prop (production passes `libraries.libraries` from the store); ' +
+            'active route + user card come from `$app/state` + the `auth` store, seeded via the ' +
+            '`preset` / `route` args (see `.storybook/decorators/withStories.ts`). ' +
             'Switch `route` to change which nav item is active.',
         },
       },
@@ -26,15 +28,15 @@
 </script>
 
 <Story name="Home Active" args={{ preset: 'home', route: '/' }} asChild>
-  <Rail />
+  <Rail libraries={libraries.libraries} />
 </Story>
 
 <Story name="Library Active" args={{ preset: 'home', route: '/libraries/2' }} asChild>
-  <Rail />
+  <Rail libraries={libraries.libraries} />
 </Story>
 
 <Story name="Collapsed" args={{ preset: 'home', route: '/items/101' }} asChild>
-  <Rail collapsed={true} />
+  <Rail libraries={libraries.libraries} collapsed={true} />
 </Story>
 
 <!--
@@ -46,7 +48,7 @@
 -->
 <Story name="Full Vertical" args={{ preset: 'home', route: '/' }} asChild>
   <div class="force-vertical-shell">
-    <Rail />
+    <Rail libraries={libraries.libraries} />
   </div>
 </Story>
 

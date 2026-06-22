@@ -1,35 +1,36 @@
 <script lang="ts">
-  // Button — the design-system button. Renders a <button> by default, or an
-  // <a> when `href` is provided (so external links can share the same visual
-  // variants without a separate "button-link" affordance). Replaces
-  // renderButtonContent() (../client-web/src/app/ui.ts:60-71) + the
-  // vanilla `.button-link` class.
+  // Button — the design-system button with a label and/or icon. Renders a
+  // <button> by default, or an <a> when `href` is provided (so external links
+  // can share the same visual variants without a separate "button-link"
+  // affordance). Replaces renderButtonContent() (../client-web/src/app/ui.ts:
+  // 60-71) + the vanilla `.button-link` class.
   //
-  // Variant classes (.secondary-button / .danger-button / .button-link) live
-  // in ./button.css — co-located with their only emitter. SonarCloud's CSS
-  // analyzer does not scan .svelte files, so moving them out of app.css
-  // eliminates the false-positive contrast warnings. The bare `button {}`
-  // element reset stays global.
+  // For icon-only buttons (no label, fixed square size), use <IconButton>
+  // instead — it's tailored for that case and avoids a Boolean prop here.
+  //
+  // Variant classes (.primary-button / .secondary-button / .danger-button /
+  // .button-link) live in ./button.css — co-located with their only emitter.
+  // SonarCloud's CSS analyzer does not scan .svelte files, so the
+  // false-positive contrast warnings that fired on the global rules are gone.
   import Icon from './Icon.svelte';
   import './button.css';
   import type { Snippet } from 'svelte';
+  import { buttonClasses, type ButtonVariant } from './button-types';
 
   type Props = {
     icon?: string;
     iconPosition?: 'start' | 'end';
+    iconSize?: number;
     label?: string;
-    variant?: 'primary' | 'secondary' | 'danger';
+    variant?: ButtonVariant;
     busy?: boolean;
     disabled?: boolean;
     type?: 'button' | 'submit' | 'reset';
     id?: string;
     class?: string;
     title?: string;
-    /** When set, renders an <a> with this href instead of a <button>. */
     href?: string;
-    /** Anchor target (only used with href). */
     target?: string;
-    /** Anchor rel (only used with href). */
     rel?: string;
     onclick?: (event: MouseEvent) => void;
     children?: Snippet;
@@ -39,6 +40,7 @@
   let {
     icon,
     iconPosition = 'start',
+    iconSize = 18,
     label,
     variant = 'primary',
     busy = false,
@@ -55,12 +57,7 @@
     ...rest
   }: Props = $props();
 
-  const VARIANT_CLASS: Record<NonNullable<Props['variant']>, string> = {
-    primary: '',
-    secondary: 'secondary-button',
-    danger: 'danger-button',
-  };
-  const variantClass = $derived(VARIANT_CLASS[variant]);
+  const classes = $derived(buttonClasses(variant, className));
 </script>
 
 {#if href}
@@ -70,7 +67,7 @@
     {title}
     {target}
     {rel}
-    class="button-link {variantClass} {className}"
+    class="button-link {classes}"
     aria-busy={busy}
     aria-disabled={disabled || undefined}
     role={disabled ? 'link' : undefined}
@@ -78,9 +75,7 @@
     {onclick}
     {...rest}
   >
-    {#if icon}
-      <span class="button-icon"><Icon name={icon} /></span>
-    {/if}
+    {#if icon}<span class="button-icon"><Icon name={icon} size={iconSize} /></span>{/if}
     {#if label}<span class="button-label">{label}</span>{/if}
     {#if children}{@render children()}{/if}
   </a>
@@ -90,15 +85,13 @@
     {id}
     {title}
     {disabled}
-    class="{variantClass} {className}"
+    class={classes}
     class:is-busy={busy}
     aria-busy={busy}
     {onclick}
     {...rest}
   >
-    {#if icon}
-      <span class="button-icon"><Icon name={icon} /></span>
-    {/if}
+    {#if icon}<span class="button-icon"><Icon name={icon} size={iconSize} /></span>{/if}
     {#if label}<span class="button-label">{label}</span>{/if}
     {#if children}{@render children()}{/if}
   </button>

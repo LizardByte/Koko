@@ -6,6 +6,7 @@
   // (secondary providers disabled when their primary isn't enabled).
   // Port of eventBindings.ts:538-553 + syncProviderDependencyOptions (1329).
   import Button from '../Button.svelte';
+  import IconButton from '../IconButton.svelte';
   import { settings, ui } from '$lib/stores';
   import type { SettingsSnapshot, MetadataProviderSettings, MetadataProviderStatus } from '$lib/api';
 
@@ -152,8 +153,8 @@
           {/if}
           {#if isPrimary(provider.id)}
             <div class="provider-option-actions">
-              <Button variant="secondary" class="icon-only" icon="chevron-up" title="Move up" disabled={index === 0} onclick={() => moveProvider(index, 'up')} />
-              <Button variant="secondary" class="icon-only" icon="chevron-down" title="Move down" disabled={index === editingProviders.length - 1} onclick={() => moveProvider(index, 'down')} />
+              <IconButton variant="secondary" icon="chevron-up" label="Move up" disabled={index === 0} onclick={() => moveProvider(index, 'up')} />
+              <IconButton variant="secondary" icon="chevron-down" label="Move down" disabled={index === editingProviders.length - 1} onclick={() => moveProvider(index, 'down')} />
             </div>
           {/if}
         </section>

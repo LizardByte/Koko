@@ -140,7 +140,7 @@
 {:else if auth.isLoggedIn}
   <div class="app-shell" class:rail-collapsed={railCollapsed} use:spatialNavigation>
     <div class="page-backdrop"></div>
-    <Rail collapsed={railCollapsed} />
+    <Rail collapsed={railCollapsed} libraries={libraries.libraries} />
     <div class="main-shell">
       <div class="main-shell-inner">
         {#if ui.error}

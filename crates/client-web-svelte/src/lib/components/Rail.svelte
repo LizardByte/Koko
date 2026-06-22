@@ -4,18 +4,30 @@
   // refresh rings driven by metadata_refresh_pending), user card, Settings,
   // Sign out. Collapses to 88px on item pages (driven by the `collapsed`
   // prop from the layout).
+  //
+  // The libraries list is a prop (not a direct store read) so stories and
+  // tests can pass fixtures without seeding the global store. Production
+  // callers pass `libraries.libraries` from the store; the store is NOT
+  // imported here. Auth + routing remain store reads (truly global app state
+  // that doesn't vary per Rail instance).
   import Icon from './Icon.svelte';
   import UserAvatar from './UserAvatar.svelte';
   import { selectedLibraryIcon } from '$lib/ui';
-  import { auth, libraries } from '$lib/stores';
+  import { auth } from '$lib/stores';
   import { isMockApi } from '$lib/api';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import KokoLogo from '$lib/assets/Koko.svg';
   import { navRegion, navigateList } from '$lib/actions/navRegion';
+  import type { MediaLibrary } from '$lib/api';
 
-  type Props = { collapsed?: boolean };
-  let { collapsed = false }: Props = $props();
+  type Props = {
+    collapsed?: boolean;
+    /** Libraries to show in the nav. Defaults to empty (caller passes the
+     *  store's list in production; stories pass fixtures). */
+    libraries?: MediaLibrary[];
+  };
+  let { collapsed = false, libraries: libraryList = [] }: Props = $props();
 
   const mock = $derived(isMockApi());
 
@@ -29,11 +41,8 @@
     page.url.pathname.startsWith('/libraries/') ? Number(page.url.pathname.split('/')[2]) : undefined,
   );
 
-  function refreshPercent(libraryId: number): number | undefined {
-    const library = libraries.byId(libraryId);
-    if (!library) {
-      return undefined;
-    }
+  /** Refresh ring percent for a library, or undefined when no refresh is active. */
+  function refreshPercent(library: MediaLibrary): number | undefined {
     // Matches vanilla libraryRefreshProgress() (activities.ts:42-60): the ring
     // only shows when there is an active metadata-refresh activity OR the
     // library has both total>0 and pending>0 stored progress. The active-
@@ -101,7 +110,7 @@
         <span class="rail-icon"><Icon name="house" size={18} /></span>
         <span class="rail-label">Home</span>
       </button>
-      {#each libraries.libraries as library (library.id)}
+      {#each libraryList as library (library.id)}
         <button
           type="button"
           class="rail-button"
@@ -112,7 +121,7 @@
           <span class="rail-icon"><Icon name={selectedLibraryIcon(library.kind)} size={18} /></span>
           <span class="rail-library-copy">
             <span class="rail-label">{library.name}</span>
-            {#if refreshPercent(library.id) !== undefined}
+            {#if refreshPercent(library) !== undefined}
               <span
                 class="library-refresh-indicator"
                 title="Metadata refresh progress: {library.metadata_refresh_completed}/{library.metadata_refresh_total}"
@@ -120,7 +129,7 @@
               >
                 <span
                   class="library-refresh-ring"
-                  style="--library-refresh-progress: {refreshPercent(library.id)}%"
+                  style="--library-refresh-progress: {refreshPercent(library)}%"
                 ></span>
               </span>
             {/if}
@@ -153,14 +162,14 @@
 
 <style>
   /*
-   * Component-private rules only. The `.library-refresh-indicator`,
-   * `.library-refresh-ring`, and `.rail-settings` rules live in app.css
-   * (mirroring vanilla style.css:464-491) — see PORTING_GUIDELINES.md.
-   * The scoped `strong` rule below has no vanilla counterpart (the rail
-   * user-card label styling is rail-specific glue).
-   *
-   * The rail user-card styles (.rail-user-card + its copy/layout siblings)
-   * were promoted out of app.css — Rail is the sole owner.
+   * All rail-specific rules are scoped here — Rail is the sole owner of
+   * .rail-button, .rail-label, .rail-settings, .library-refresh-*, and the
+   * .rail-user-card family. Promoted out of app.css so they're co-located
+   * with their only emitter (and SonarCloud's CSS analyzer skips .svelte
+   * files, eliminating false-positive contrast warnings like the one that
+   * fired on .rail-button:hover color:#fff). The collapsed-rail layout
+   * overrides (.library-rail.collapsed …) stay global in app.css since they
+   * target a parent container state.
    */
   strong {
     color: var(--color-text-primary);
@@ -168,6 +177,69 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  :global(.rail-button) {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.85rem 0.9rem;
+    border-radius: 16px;
+    background: transparent;
+    box-shadow: none;
+    color: #b6c4d8;
+    text-align: left;
+    text-decoration: none;
+  }
+
+  :global(.rail-button.active),
+  :global(.rail-button:hover) {
+    background: var(--surface-4);
+    color: var(--color-text-primary);
+  }
+
+  :global(.rail-settings) {
+    width: 100%;
+  }
+
+  :global(.rail-label) {
+    max-width: 100%;
+    font-size: 0.92rem;
+    line-height: 1.2;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.library-refresh-indicator) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.12rem;
+    height: 1.12rem;
+    flex: 0 0 auto;
+  }
+
+  :global(.library-refresh-ring) {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 999px;
+    background: conic-gradient(
+      var(--color-brand-blue) var(--library-refresh-progress, 0%),
+      rgba(255, 255, 255, 0.14) 0
+    );
+  }
+
+  :global(.library-refresh-ring)::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: inherit;
+    background: rgba(14, 20, 35, 0.96);
   }
 
   :global(.rail-user-card) {
@@ -197,5 +269,11 @@
     align-items: center;
     gap: 0.55rem;
     min-width: 0;
+  }
+
+  @media (max-width: 960px) {
+    :global(.rail-button) {
+      min-width: 110px;
+    }
   }
 </style>

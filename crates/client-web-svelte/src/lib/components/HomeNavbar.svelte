@@ -4,8 +4,7 @@
   // a search form whose toggle button flips between submit (Search) and button
   // (Clear search), and the per-library scan + refresh-metadata action buttons
   // (only shown when a library is active).
-  import Icon from './Icon.svelte';
-  import Button from './Button.svelte';
+  import IconButton from './IconButton.svelte';
   import { HOME_TABS } from '$lib';
   import { catalog, libraries, ui } from '$lib/stores';
   import { navRegion, navigateList } from '$lib/actions/navRegion';
@@ -121,39 +120,34 @@
         aria-label="Search"
       />
       {#if catalog.searchQuery}
-        <button
-          type="button"
-          class="icon-button search-toggle-button"
-          title="Clear search"
-          aria-label="Clear search"
+        <IconButton
+          variant="primary"
+          class="search-toggle-button"
+          icon="x"
+          label="Clear search"
           onclick={clearSearch}
-        >
-          <Icon name="x" size={18} />
-        </button>
+        />
       {:else}
-        <button
+        <IconButton
+          variant="primary"
           type="submit"
-          class="icon-button search-toggle-button"
-          title="Search"
-          aria-label="Search"
-        >
-          <Icon name="search" size={18} />
-        </button>
+          class="search-toggle-button"
+          icon="search"
+          label="Search"
+        />
       {/if}
     </form>
     {#if activeLibrary}
-      <Button
+      <IconButton
         variant="secondary"
-        class="icon-button"
         icon="folder-sync"
-        title="Scan library"
+        label="Scan library"
         onclick={scanActiveLibrary}
       />
-      <Button
+      <IconButton
         variant="secondary"
-        class="icon-button"
         icon="database-zap"
-        title="Refresh metadata"
+        label="Refresh metadata"
         onclick={refreshActiveLibraryMetadata}
       />
     {/if}
@@ -236,7 +230,10 @@
     appearance: none;
   }
 
-  .search-toggle-button {
+  /* :global because the class is applied to <IconButton> (a child component),
+     not an element in this component's template — Svelte's scoped styles
+     wouldn't reach it otherwise. */
+  :global(.search-toggle-button) {
     width: 2.75rem;
     height: 2.75rem;
     min-height: 2.75rem;

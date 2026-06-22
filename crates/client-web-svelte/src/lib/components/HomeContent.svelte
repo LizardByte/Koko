@@ -111,28 +111,40 @@
     const currentShelf = allShelves.find((s) => s.contains(current)) ?? allShelves[0];
     const idx = allShelves.indexOf(currentShelf);
 
-    const focusShelf = (shelf: HTMLElement, cardSelector: 'first' | 'last') => {
-      // Scroll the entire shelf section into view first (so header is visible).
-      shelf.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      // Then focus the card.
-      const cards = shelf.querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
-      const card = cardSelector === 'first' ? cards[0] : cards[cards.length - 1];
-      if (card) {
-        // Delay focus slightly so scrollIntoView on the shelf doesn't fight
-        // with the card's own scroll position.
-        setTimeout(() => card.focus(), 50);
-      }
-    };
+    // At the bottom edge → stay (end of content, don't transition to sidebar).
+    if (direction === 'down' && idx >= allShelves.length - 1) {
+      return true; // Handled = stay.
+    }
+    // At the top edge → delegate to global engine (→ navbar).
+    if (direction === 'up' && idx <= 0) {
+      return false;
+    }
 
-    if (direction === 'down' && idx < allShelves.length - 1) {
-      focusShelf(allShelves[idx + 1], 'first');
-      return true;
+    const targetShelf = direction === 'down' ? allShelves[idx + 1] : allShelves[idx - 1];
+    const cardSelector = direction === 'down' ? 'first' : 'last';
+
+    // Scroll the page so the target shelf section is fully visible.
+    // Use the scroll container (.main-shell), not the shelf itself.
+    const scrollContainer = targetShelf.closest('.main-shell');
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const shelfRect = targetShelf.getBoundingClientRect();
+      // Calculate the scroll offset needed to align the shelf top with
+      // the container top (so the header is fully visible).
+      const offset = shelfRect.top - containerRect.top;
+      if (offset < 0 || shelfRect.bottom > containerRect.bottom) {
+        scrollContainer.scrollBy({ top: offset - 16, behavior: 'smooth' });
+      }
     }
-    if (direction === 'up' && idx > 0) {
-      focusShelf(allShelves[idx - 1], 'last');
-      return true;
+
+    // Focus the target card.
+    const cards = targetShelf.querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
+    const card = cardSelector === 'first' ? cards[0] : cards[cards.length - 1];
+    if (card) {
+      setTimeout(() => card.focus(), 50);
     }
-    return false;
+
+    return true;
   }
 </script>
 

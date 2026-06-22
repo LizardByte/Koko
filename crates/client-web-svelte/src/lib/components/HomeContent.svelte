@@ -13,6 +13,7 @@
   import { humanizeItemType, formatChildCount } from '$lib/ui';
   import { browseDetailPath } from '$lib/paths';
   import { categorySummaries } from '$lib/selectors';
+  import { navRegion, navigateShelfRow, navigateList, firstCardOfFirstShelf } from '$lib/actions/navRegion';
 
   type Props = { libraryId?: number };
   let { libraryId }: Props = $props();
@@ -96,13 +97,65 @@
       catalog.loadLibraryItems(libraryId).catch(() => {});
     }
   });
+
+  let contentRegion = $state<HTMLElement | undefined>(undefined);
+
+  // Navigate between shelves vertically (up/down).
+  function navigateShelves(direction: 'up' | 'down', current: HTMLElement): boolean {
+    const allShelves = Array.from(
+      contentRegion?.querySelectorAll<HTMLElement>('.shelf') ?? [],
+    ).filter((s) => s.offsetParent !== null);
+    if (allShelves.length === 0) return false;
+
+    const currentShelf = allShelves.find((s) => s.contains(current)) ?? allShelves[0];
+    const idx = allShelves.indexOf(currentShelf);
+
+    if (direction === 'down' && idx < allShelves.length - 1) {
+      const card = allShelves[idx + 1].querySelector<HTMLElement>('.media-card:not(:disabled)');
+      card?.focus();
+      card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return true;
+    }
+    if (direction === 'up' && idx > 0) {
+      const cards = allShelves[idx - 1].querySelectorAll<HTMLElement>('.media-card:not(:disabled)');
+      const card = cards[cards.length - 1];
+      card?.focus();
+      card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      return true;
+    }
+    return false;
+  }
 </script>
 
 <svelte:head><title>Koko — Home</title></svelte:head>
 
 <HomeNavbar />
 
-<div class="main-shell-inner home-content">
+<div class="main-shell-inner home-content" bind:this={contentRegion} use:navRegion={{
+  name: 'content',
+  navigate: (direction, current) => {
+    // Left/right: navigate within a shelf row (+ scroll).
+    if (direction === 'left' || direction === 'right') {
+      const row = current.closest('[data-shelf-row], .shelf-row') as HTMLElement | null;
+      if (row) {
+        return navigateShelfRow(direction, current, row);
+      }
+      // Not in a shelf (e.g., grid view) — use simple list nav.
+      return navigateList(direction, current, current.closest('.item-grid, .category-grid') ?? contentRegion ?? current.parentElement!, { horizontal: true });
+    }
+    // Up/down: navigate between shelves.
+    if (direction === 'up' || direction === 'down') {
+      return navigateShelves(direction, current);
+    }
+    return false;
+  },
+  enter: {
+    // Entering content from sidebar (left) or navbar (down) → first card of first shelf.
+    left: () => firstCardOfFirstShelf(contentRegion!),
+    right: () => firstCardOfFirstShelf(contentRegion!),
+    down: () => firstCardOfFirstShelf(contentRegion!),
+  },
+}}>
   {#if preview}
     <HomeFeature
       collection={preview.kind === 'collection' ? preview.collection : undefined}

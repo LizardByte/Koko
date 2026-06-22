@@ -13,6 +13,7 @@
 import type { Action } from 'svelte/action';
 import { playback, ui } from '$lib/stores';
 import { readGamepad, detectLayout, applyDeadzone, type Direction } from '$lib/gamepad';
+import { navigateDirection } from './navRegion';
 
 const FOCUSABLE_SELECTOR =
   'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -33,12 +34,7 @@ function findSpatialTarget(current: HTMLElement, direction: Direction): HTMLElem
   const cx = currentRect.left + currentRect.width / 2;
   const cy = currentRect.top + currentRect.height / 2;
 
-  // Find the scroll container of the current element — we want to prefer
-  // staying within the same container when possible (e.g., scrolling through
-  // a shelf before jumping to another section).
-  const currentScrollParent = getScrollParent(current);
-
-  let best: { el: HTMLElement; score: number; sameContainer: boolean } | undefined;
+  let best: { el: HTMLElement; score: number } | undefined;
 
   for (const candidate of focusable) {
     if (candidate === current) continue;
@@ -55,46 +51,21 @@ function findSpatialTarget(current: HTMLElement, direction: Direction): HTMLElem
       case 'up': if (dy > -2) continue; parallel = -dy; perpendicular = Math.abs(dx); break;
     }
 
-    // Determine if this candidate is in the same scroll container.
-    const candidateScrollParent = getScrollParent(candidate);
-    const sameContainer = currentScrollParent !== null && currentScrollParent === candidateScrollParent;
-
-    // If looking in the movement direction within the same container, prefer
-    // same-container elements (stay in the shelf, don't jump out prematurely).
-    // For perpendicular/escape directions (leaving a container), don't penalize
-    // cross-container elements.
-    let score = perpendicular * 2 + parallel;
-    if (sameContainer) score *= 0.5; // Boost same-container candidates
-
     const minDim = Math.min(currentRect.width, currentRect.height, rect.width, rect.height);
     if (perpendicular > parallel * 2 && perpendicular > minDim * 1.2) continue;
 
-    if (!best || score < best.score) {
-      best = { el: candidate, score, sameContainer };
-    }
+    const score = perpendicular * 2 + parallel;
+    if (!best || score < best.score) best = { el: candidate, score };
   }
-
   return best?.el;
 }
 
-/** Find the nearest scrollable ancestor of an element. */
-function getScrollParent(el: HTMLElement): HTMLElement | null {
-  let parent = el.parentElement;
-  while (parent) {
-    const style = getComputedStyle(parent);
-    if (
-      (style.overflowY === 'auto' || style.overflowY === 'scroll' ||
-       style.overflowX === 'auto' || style.overflowX === 'scroll') &&
-      (parent.scrollHeight > parent.clientHeight || parent.scrollWidth > parent.clientWidth)
-    ) {
-      return parent;
-    }
-    parent = parent.parentElement;
-  }
-  return null;
-}
-
 function moveFocus(direction: Direction): void {
+  // Try the declarative region system first (predictable navigation).
+  if (navigateDirection(direction)) {
+    return; // Region handled it.
+  }
+  // Fallback: spatial search for elements outside any region.
   const current = document.activeElement as HTMLElement | null;
   if (!current || !current.matches(FOCUSABLE_SELECTOR)) {
     const first = getVisibleFocusable()[0];
@@ -102,16 +73,7 @@ function moveFocus(direction: Direction): void {
     first?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     return;
   }
-
-  let target = findSpatialTarget(current, direction);
-
-  // Fallback: if no target found (e.g., trapped in sidebar or at end of
-  // shelf), try with relaxed constraints — accept any element in the
-  // general direction, even if far away.
-  if (!target) {
-    target = findSpatialTargetRelaxed(current, direction);
-  }
-
+  const target = findSpatialTarget(current, direction);
   if (target) {
     target.focus();
     target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
@@ -120,35 +82,7 @@ function moveFocus(direction: Direction): void {
 }
 
 /** Relaxed spatial search — accepts any element vaguely in the direction. */
-function findSpatialTargetRelaxed(current: HTMLElement, direction: Direction): HTMLElement | undefined {
-  const focusable = getVisibleFocusable();
-  const currentRect = current.getBoundingClientRect();
-  const cx = currentRect.left + currentRect.width / 2;
-  const cy = currentRect.top + currentRect.height / 2;
 
-  let best: { el: HTMLElement; dist: number } | undefined;
-
-  for (const candidate of focusable) {
-    if (candidate === current) continue;
-    const rect = candidate.getBoundingClientRect();
-    const dx = rect.left + rect.width / 2 - cx;
-    const dy = rect.top + rect.height / 2 - cy;
-
-    // Just check the sign of the movement direction — no perpendicular filter.
-    let dist: number;
-    switch (direction) {
-      case 'right': if (dx < 0) continue; dist = Math.abs(dx) + Math.abs(dy) * 0.5; break;
-      case 'left': if (dx > 0) continue; dist = Math.abs(dx) + Math.abs(dy) * 0.5; break;
-      case 'down': if (dy < 0) continue; dist = Math.abs(dy) + Math.abs(dx) * 0.5; break;
-      case 'up': if (dy > 0) continue; dist = Math.abs(dy) + Math.abs(dx) * 0.5; break;
-    }
-
-    if (!best || dist < best.dist) {
-      best = { el: candidate, dist };
-    }
-  }
-  return best?.el;
-}
 
 function activateFocused(): void {
   const el = document.activeElement as HTMLElement | null;

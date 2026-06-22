@@ -7,6 +7,7 @@
   import Icon from './Icon.svelte';
   import { HOME_TABS } from '$lib';
   import { catalog, libraries, ui } from '$lib/stores';
+  import { navRegion, navigateList } from '$lib/actions/navRegion';
 
   let searchInput = $state('');
   // Debounce timer for live-search-on-type (vanilla eventBindings.ts:572-583
@@ -74,10 +75,28 @@
       }
     }
   }
+  let browseTabs = $state<HTMLElement | undefined>(undefined);
 </script>
 
-<header class="home-navbar">
-  <nav class="browse-tabs" aria-label="Browse views">
+<header class="home-navbar" use:navRegion={{
+  name: 'navbar',
+  navigate: (direction, current) => {
+    if (direction === 'left' || direction === 'right') {
+      return navigateList(direction, current, browseTabs!, { horizontal: true });
+    }
+    // up = stay (top of page), down = delegate (→ content).
+    return false;
+  },
+  enter: {
+    down: () => {
+      // Entering navbar from below → focus active tab.
+      return browseTabs?.querySelector<HTMLElement>('.browse-tab-button.active')
+        ?? browseTabs?.querySelector<HTMLElement>('.browse-tab-button')
+        ?? undefined;
+    },
+  },
+}}>
+  <nav class="browse-tabs" aria-label="Browse views" bind:this={browseTabs}>
     {#each HOME_TABS as tab (tab.id)}
       <button
         type="button"

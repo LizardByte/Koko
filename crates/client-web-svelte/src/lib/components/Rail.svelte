@@ -12,6 +12,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import KokoLogo from '$lib/assets/Koko.svg';
+  import { navRegion, navigateList } from '$lib/actions/navRegion';
 
   type Props = { collapsed?: boolean };
   let { collapsed = false }: Props = $props();
@@ -62,9 +63,28 @@
     auth.logout();
     await goto('/login');
   }
+
+  // Element refs for navigation region.
+  let homeButtonEl = $state<HTMLButtonElement | undefined>(undefined);
+  let navRail = $state<HTMLElement | undefined>(undefined);
 </script>
 
-<aside class="library-rail" class:collapsed>
+<aside class="library-rail" class:collapsed use:navRegion={{
+  name: 'sidebar',
+  navigate: (direction, current) => {
+    // Sidebar is a vertical list — handle up/down internally.
+    if (direction === 'up' || direction === 'down') {
+      return navigateList(direction, current, navRail ?? current.parentElement!);
+    }
+    // Left/right → delegate to global engine (transition to content).
+    return false;
+  },
+  enter: {
+    // When entering sidebar from content (left direction), always go to Home.
+    left: () => homeButtonEl,
+    right: () => homeButtonEl,
+  },
+}}>
   <div class="library-rail-top">
     <div class="brand-block">
       <div class="brand-mark logo-brand-mark">
@@ -76,8 +96,8 @@
       </div>
     </div>
 
-    <nav class="rail-nav">
-      <button type="button" class="rail-button" class:active={onHome} onclick={navHome}>
+    <nav class="rail-nav" bind:this={navRail}>
+      <button type="button" class="rail-button" class:active={onHome} onclick={navHome} bind:this={homeButtonEl}>
         <span class="rail-icon"><Icon name="house" size={18} /></span>
         <span class="rail-label">Home</span>
       </button>

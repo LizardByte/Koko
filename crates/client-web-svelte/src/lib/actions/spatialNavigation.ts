@@ -15,6 +15,7 @@
 
 import type { Action } from 'svelte/action';
 import { playback, ui } from '$lib/stores';
+import { detectLayout } from '$lib/gamepadLayouts';
 
 type Direction = 'up' | 'down' | 'left' | 'right';
 
@@ -177,59 +178,44 @@ function pollGamepads() {
   for (const gamepad of gamepads) {
     if (!gamepad) continue;
     const gid = gamepad.index;
+    const layout = detectLayout(gamepad);
 
     // --- D-pad detection ---
-    // Try standard buttons first (12-15), then hat axis (8BitDo Pro 3 etc.).
-    const dpadUp = Boolean(gamepad.buttons[12]?.pressed);
-    const dpadDown = Boolean(gamepad.buttons[13]?.pressed);
-    const dpadLeft = Boolean(gamepad.buttons[14]?.pressed);
-    const dpadRight = Boolean(gamepad.buttons[15]?.pressed);
+    // Standard layout: D-pad as buttons. 8BitDo etc.: D-pad as hat axis.
+    let up: boolean, down: boolean, left: boolean, right: boolean;
 
-    // Hat axis: the 8BitDo Pro 3 reports D-pad on axis 9 as an 8-position hat.
-    // Standard hat values (divisions of 1/7):
-    //   Up=-1, UpRight=-0.714, Right=-0.429, DownRight=-0.143,
-    //   Down=0.143, DownLeft=0.429, Left=0.714, UpLeft=1, Neutral=0
-    // The controller may wrap past 1 (probe saw 3.28) — treat >1.5 as Up.
-    // IMPORTANT: neutral is 0. We must NOT map 0 to any direction.
-    // Use tight ranges around each position, leaving a gap around neutral.
-    let hatUp = false, hatDown = false, hatLeft = false, hatRight = false;
-    const hatValue = gamepad.axes[9];
-    if (hatValue !== undefined && Math.abs(hatValue) > 0.1) {
-      // Up: -1.0 (also covers wrap > 1.5)
-      if (hatValue <= -0.85 || hatValue > 1.5) hatUp = true;
-      // UpRight: -0.714
-      if (hatValue <= -0.6 && hatValue > -0.85) { hatUp = true; hatRight = true; }
-      // Right: -0.429
-      if (hatValue <= -0.3 && hatValue > -0.6) hatRight = true;
-      // DownRight: -0.143
-      if (hatValue <= -0.1 && hatValue > -0.3) { hatDown = true; hatRight = true; }
-      // Down: 0.143
-      if (hatValue >= 0.1 && hatValue < 0.3) hatDown = true;
-      // DownLeft: 0.429
-      if (hatValue >= 0.3 && hatValue < 0.6) { hatDown = true; hatLeft = true; }
-      // Left: 0.714
-      if (hatValue >= 0.6 && hatValue < 0.85) hatLeft = true;
-      // UpLeft: 1.0
-      if (hatValue >= 0.85 && hatValue <= 1.5) { hatUp = true; hatLeft = true; }
+    if (layout.dpadButtons) {
+      up = Boolean(gamepad.buttons[layout.dpadButtons.up]?.pressed);
+      down = Boolean(gamepad.buttons[layout.dpadButtons.down]?.pressed);
+      left = Boolean(gamepad.buttons[layout.dpadButtons.left]?.pressed);
+      right = Boolean(gamepad.buttons[layout.dpadButtons.right]?.pressed);
+    } else {
+      // Hat axis (e.g., 8BitDo Pro 3 axis 9). 8-position hat with neutral at 0.
+      up = down = left = right = false;
+      const hatAxis = layout.hatAxis ?? 9;
+      const hatValue = gamepad.axes[hatAxis];
+      if (hatValue !== undefined && Math.abs(hatValue) > 0.1) {
+        if (hatValue <= -0.85 || hatValue > 1.5) up = true;
+        if (hatValue <= -0.6 && hatValue > -0.85) { up = true; right = true; }
+        if (hatValue <= -0.3 && hatValue > -0.6) right = true;
+        if (hatValue <= -0.1 && hatValue > -0.3) { down = true; right = true; }
+        if (hatValue >= 0.1 && hatValue < 0.3) down = true;
+        if (hatValue >= 0.3 && hatValue < 0.6) { down = true; left = true; }
+        if (hatValue >= 0.6 && hatValue < 0.85) left = true;
+        if (hatValue >= 0.85 && hatValue <= 1.5) { up = true; left = true; }
+      }
     }
 
-    const up = dpadUp || hatUp;
-    const down = dpadDown || hatDown;
-    const left = dpadLeft || hatLeft;
-    const right = dpadRight || hatRight;
+    // Face buttons — layout-dependent (Nintendo vs Xbox layout).
+    const aButton = Boolean(gamepad.buttons[layout.confirm]?.pressed);
+    const bButton = Boolean(gamepad.buttons[layout.cancel]?.pressed);
+    const lButton = Boolean(gamepad.buttons[layout.lBumper]?.pressed);
+    const rButton = Boolean(gamepad.buttons[layout.rBumper]?.pressed);
+    const selectButton = Boolean(gamepad.buttons[layout.select]?.pressed);
 
-    // Face buttons: A=0, B=1 (may differ on non-standard mapping)
-    const aButton = Boolean(gamepad.buttons[0]?.pressed);
-    const bButton = Boolean(gamepad.buttons[1]?.pressed);
-    // L/R bumpers: 4=L, 5=R (standard); fallback 6/7
-    const lButton = Boolean(gamepad.buttons[4]?.pressed || gamepad.buttons[6]?.pressed);
-    const rButton = Boolean(gamepad.buttons[5]?.pressed || gamepad.buttons[7]?.pressed);
-    // Select/Back = 8, Start = 9, Guide/Home = 16
-    const selectButton = Boolean(gamepad.buttons[8]?.pressed || gamepad.buttons[16]?.pressed);
-
-    // Left stick (axes 0=X, 1=Y) — spatial navigation
-    const leftX = gamepad.axes[0] ?? 0;
-    const leftY = gamepad.axes[1] ?? 0;
+    // Left stick — layout-dependent axes.
+    const leftX = gamepad.axes[layout.leftStick[0]] ?? 0;
+    const leftY = gamepad.axes[layout.leftStick[1]] ?? 0;
 
     const stickActive = (name: string, value: number) => {
       const key = `${gid}:${name}`;

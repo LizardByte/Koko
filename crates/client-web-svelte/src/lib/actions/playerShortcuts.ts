@@ -1,13 +1,11 @@
-// Player keyboard + gamepad shortcuts action (Opportunity E).
+// Player keyboard + gamepad shortcuts action.
 // Usage: <div use:playerShortcuts={{ onPlayPause, onSeek, onMute, onFullscreen, onClose }}>
 //
-// Keyboard: Space/k (play/pause), arrows (seek), m (mute), f (fullscreen), Escape (close)
-// Gamepad: A=play/pause, B=close, left/right=seek (escalating), up/down=volume
-//
-// Gamepad polling runs via rAF only while the player action is mounted
-// (the global spatialNavigation action skips gamepad when player is open).
+// Keyboard: Space/k (play/pause), arrows (seek/volume), m (mute), f (fullscreen), Escape (close)
+// Gamepad: A=play/pause, B=close, left/right=seek, up/down=volume (layout-aware)
 
 import type { Action } from 'svelte/action';
+import { detectLayout } from '$lib/gamepadLayouts';
 
 export type PlayerShortcutHandlers = {
   onPlayPause: () => void;
@@ -19,12 +17,14 @@ export type PlayerShortcutHandlers = {
   onVolumeDown?: () => void;
 };
 
-const STICK_ACTIVATE = 0.4;
-const STICK_RELEASE = 0.25;
+const STICK_ACTIVATE = 0.7;
+const STICK_RELEASE = 0.35;
+const REPEAT_DELAY = 300;
 
 export const playerShortcuts: Action<HTMLElement, PlayerShortcutHandlers> = (node, initialHandlers) => {
   let handlers = initialHandlers;
-  const activeButtons = new Set<string>();
+  const activeInputs = new Set<string>();
+  const lastFireTime: Record<string, number> = {};
   let rafId = 0;
 
   function onKeydown(event: KeyboardEvent) {
@@ -71,41 +71,81 @@ export const playerShortcuts: Action<HTMLElement, PlayerShortcutHandlers> = (nod
 
   function pollGamepad() {
     const gamepads = navigator.getGamepads?.() ?? [];
+    const now = performance.now();
     for (const gamepad of gamepads) {
       if (!gamepad) continue;
+      const layout = detectLayout(gamepad);
+      const gid = gamepad.index;
 
-      const aButton = Boolean(gamepad.buttons[0]?.pressed);
-      const bButton = Boolean(gamepad.buttons[1]?.pressed);
-      const dpadLeft = Boolean(gamepad.buttons[14]?.pressed);
-      const dpadRight = Boolean(gamepad.buttons[15]?.pressed);
-      const dpadUp = Boolean(gamepad.buttons[12]?.pressed);
-      const dpadDown = Boolean(gamepad.buttons[13]?.pressed);
+      const confirm = Boolean(gamepad.buttons[layout.confirm]?.pressed);
+      const cancel = Boolean(gamepad.buttons[layout.cancel]?.pressed);
 
-      const stickX = gamepad.axes[0] ?? 0;
-      const stickY = gamepad.axes[1] ?? 0;
-      const stickActive = (name: string, value: number) =>
-        activeButtons.has(`${gamepad!.index}:${name}`)
-          ? Math.abs(value) < STICK_RELEASE
-          : Math.abs(value) > STICK_ACTIVATE;
+      // D-pad / left stick for seek + volume
+      let seekLeft = false, seekRight = false, volUp = false, volDown = false;
 
-      const actions: Array<[string, boolean, () => void]> = [
-        ['play', aButton, () => handlers?.onPlayPause()],
-        ['close', bButton, () => handlers?.onClose()],
-        ['seekLeft', dpadLeft || (stickX < 0 && stickActive('seekLeft', stickX)), () => handlers?.onSeek(-1)],
-        ['seekRight', dpadRight || (stickX > 0 && stickActive('seekRight', stickX)), () => handlers?.onSeek(1)],
-        ['volUp', dpadUp || (stickY < 0 && stickActive('volUp', stickY)), () => handlers?.onVolumeUp?.()],
-        ['volDown', dpadDown || (stickY > 0 && stickActive('volDown', stickY)), () => handlers?.onVolumeDown?.()],
-      ];
-
-      for (const [name, pressed, action] of actions) {
-        const key = `${gamepad.index}:${name}`;
-        if (pressed && !activeButtons.has(key)) {
-          activeButtons.add(key);
-          action();
-        } else if (!pressed) {
-          activeButtons.delete(key);
+      if (layout.dpadButtons) {
+        seekLeft = Boolean(gamepad.buttons[layout.dpadButtons.left]?.pressed);
+        seekRight = Boolean(gamepad.buttons[layout.dpadButtons.right]?.pressed);
+        volUp = Boolean(gamepad.buttons[layout.dpadButtons.up]?.pressed);
+        volDown = Boolean(gamepad.buttons[layout.dpadButtons.down]?.pressed);
+      } else if (layout.hatAxis !== undefined) {
+        const hat = gamepad.axes[layout.hatAxis];
+        if (hat !== undefined && Math.abs(hat) > 0.1) {
+          if (hat <= -0.85 || hat > 1.5) volUp = true;
+          if (hat <= -0.6 && hat > -0.85) { volUp = true; seekRight = true; }
+          if (hat <= -0.3 && hat > -0.6) seekRight = true;
+          if (hat <= -0.1 && hat > -0.3) { volDown = true; seekRight = true; }
+          if (hat >= 0.1 && hat < 0.3) volDown = true;
+          if (hat >= 0.3 && hat < 0.6) { volDown = true; seekLeft = true; }
+          if (hat >= 0.6 && hat < 0.85) seekLeft = true;
+          if (hat >= 0.85 && hat <= 1.5) { volUp = true; seekLeft = true; }
         }
       }
+
+      // Left stick
+      const sx = gamepad.axes[layout.leftStick[0]] ?? 0;
+      const sy = gamepad.axes[layout.leftStick[1]] ?? 0;
+      const stickActive = (name: string, value: number) => {
+        const key = `${gid}:${name}`;
+        return activeInputs.has(key)
+          ? Math.abs(value) >= STICK_RELEASE
+          : Math.abs(value) > STICK_ACTIVATE;
+      };
+
+      const edgeTrigger = (name: string, pressed: boolean, action: () => void) => {
+        const key = `${gid}:${name}`;
+        if (pressed && !activeInputs.has(key)) {
+          activeInputs.add(key);
+          action();
+        } else if (!pressed) {
+          activeInputs.delete(key);
+        }
+      };
+
+      const dirTrigger = (name: string, pressed: boolean, action: () => void) => {
+        const key = `${gid}:${name}`;
+        if (!pressed) {
+          activeInputs.delete(key);
+          delete lastFireTime[key];
+          return;
+        }
+        const lastFire = lastFireTime[key] ?? 0;
+        if (!activeInputs.has(key)) {
+          activeInputs.add(key);
+          lastFireTime[key] = now;
+          action();
+        } else if (now - lastFire >= REPEAT_DELAY) {
+          lastFireTime[key] = now;
+          action();
+        }
+      };
+
+      edgeTrigger('play', confirm, () => handlers?.onPlayPause());
+      edgeTrigger('close', cancel, () => handlers?.onClose());
+      dirTrigger('seekLeft', seekLeft || (sx < 0 && stickActive('seekLeft', sx)), () => handlers?.onSeek(-1));
+      dirTrigger('seekRight', seekRight || (sx > 0 && stickActive('seekRight', sx)), () => handlers?.onSeek(1));
+      dirTrigger('volUp', volUp || (sy < 0 && stickActive('volUp', sy)), () => handlers?.onVolumeUp?.());
+      dirTrigger('volDown', volDown || (sy > 0 && stickActive('volDown', sy)), () => handlers?.onVolumeDown?.());
     }
     rafId = requestAnimationFrame(pollGamepad);
   }

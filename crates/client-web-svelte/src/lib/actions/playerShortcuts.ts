@@ -89,16 +89,17 @@ export const playerShortcuts: Action<HTMLElement, PlayerShortcutHandlers> = (nod
         volUp = Boolean(gamepad.buttons[layout.dpadButtons.up]?.pressed);
         volDown = Boolean(gamepad.buttons[layout.dpadButtons.down]?.pressed);
       } else if (layout.hatAxis !== undefined) {
+        const hatNeutral = layout.hatNeutral ?? 0;
         const hat = gamepad.axes[layout.hatAxis];
-        if (hat !== undefined && Math.abs(hat) > 0.1) {
-          if (hat <= -0.85 || hat > 1.5) volUp = true;
+        if (hat !== undefined && Math.abs(hat - hatNeutral) > 0.2) {
+          if (hat <= -0.85) volUp = true;
           if (hat <= -0.6 && hat > -0.85) { volUp = true; seekRight = true; }
           if (hat <= -0.3 && hat > -0.6) seekRight = true;
           if (hat <= -0.1 && hat > -0.3) { volDown = true; seekRight = true; }
           if (hat >= 0.1 && hat < 0.3) volDown = true;
           if (hat >= 0.3 && hat < 0.6) { volDown = true; seekLeft = true; }
           if (hat >= 0.6 && hat < 0.85) seekLeft = true;
-          if (hat >= 0.85 && hat <= 1.5) { volUp = true; seekLeft = true; }
+          if (hat >= 0.85 && hat <= 1.1) { volUp = true; seekLeft = true; }
         }
       }
 

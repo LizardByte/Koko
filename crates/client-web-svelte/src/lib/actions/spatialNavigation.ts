@@ -190,19 +190,21 @@ function pollGamepads() {
       left = Boolean(gamepad.buttons[layout.dpadButtons.left]?.pressed);
       right = Boolean(gamepad.buttons[layout.dpadButtons.right]?.pressed);
     } else {
-      // Hat axis (e.g., 8BitDo Pro 3 axis 9). 8-position hat with neutral at 0.
+      // Hat axis (e.g., 8BitDo Pro 3 axis 9). 8-position hat.
+      // The neutral value varies per controller (0 for most, 3.286 for 8BitDo).
       up = down = left = right = false;
       const hatAxis = layout.hatAxis ?? 9;
+      const hatNeutral = layout.hatNeutral ?? 0;
       const hatValue = gamepad.axes[hatAxis];
-      if (hatValue !== undefined && Math.abs(hatValue) > 0.1) {
-        if (hatValue <= -0.85 || hatValue > 1.5) up = true;
+      if (hatValue !== undefined && Math.abs(hatValue - hatNeutral) > 0.2) {
+        if (hatValue <= -0.85) up = true;
         if (hatValue <= -0.6 && hatValue > -0.85) { up = true; right = true; }
         if (hatValue <= -0.3 && hatValue > -0.6) right = true;
         if (hatValue <= -0.1 && hatValue > -0.3) { down = true; right = true; }
         if (hatValue >= 0.1 && hatValue < 0.3) down = true;
         if (hatValue >= 0.3 && hatValue < 0.6) { down = true; left = true; }
         if (hatValue >= 0.6 && hatValue < 0.85) left = true;
-        if (hatValue >= 0.85 && hatValue <= 1.5) { up = true; left = true; }
+        if (hatValue >= 0.85 && hatValue <= 1.1) { up = true; left = true; }
       }
     }
 

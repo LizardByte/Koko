@@ -19,6 +19,8 @@ export type GamepadLayout = {
   dpadButtons?: { up: number; down: number; left: number; right: number };
   /** Hat axis index for D-pad (non-standard controllers). Null if D-pad is buttons. */
   hatAxis?: number;
+  /** Neutral value for the hat axis (0 for most controllers, 3.286 for 8BitDo Pro 3). */
+  hatNeutral?: number;
   /** Left stick axes [x, y]. */
   leftStick: [number, number];
   /** Right stick axes [x, y]. */
@@ -42,12 +44,23 @@ const STANDARD_LAYOUT: GamepadLayout = {
  * Nintendo-style face layout (A=right, B=bottom — swapped from Xbox).
  * D-pad is a hat on axis 9, not buttons. 24 buttons, 10 axes.
  *
+ * Hat axis 9 values (probed):
+ *   Neutral = 3.286 (NOT 0!)
+ *   Up = -1, UpRight = -0.714, Right = -0.429, DownRight = -0.143,
+ *   Down = 0.143, DownLeft = 0.429, Left = 0.714, UpLeft = 1
+ *
  * Probed button order:
  *   0=B(cancel), 1=A(confirm), 2=PR, 3=Y, 4=X,
  *   5=PL, 6=L bumper, 7=R bumper, 8=L2 trigger, 9=R2 trigger,
  *   10=Select, 11=Start, 12=Home(opens macOS Games),
  *   13=L-stick click, 14=R-stick click,
  *   16=L4, 17=R4
+ *
+ * Axis layout:
+ *   0,1 = left stick (X, Y)
+ *   2 = right stick X
+ *   3,4 = L2/R2 analog triggers (only negative, -1 to 0)
+ *   9 = D-pad hat (neutral = 3.286)
  */
 const BITDO_PRO_3_LAYOUT: GamepadLayout = {
   confirm: 1,   // A (right face button in Nintendo layout)
@@ -56,8 +69,9 @@ const BITDO_PRO_3_LAYOUT: GamepadLayout = {
   rBumper: 7,   // R bumper
   select: 10,   // Select/Back
   hatAxis: 9,   // D-pad on hat axis 9
+  hatNeutral: 3.286, // Neutral value is NOT 0!
   leftStick: [0, 1],
-  rightStick: [2, 3],
+  rightStick: [2, 3], // TODO: verify right-stick Y after probe
 };
 
 /** Known device layouts, matched by the gamepad ID string. */

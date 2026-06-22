@@ -4,6 +4,7 @@ class UiStore {
   error = $state<string | undefined>(undefined);
   expandedTextKeys = $state<Set<string>>(new Set());
   isTrailerMenuOpen = $state(false);
+  controlsHelpOpen = $state(false);
 
   setError(message: string | undefined) {
     this.error = message;
@@ -33,6 +34,10 @@ class UiStore {
 
   closeTrailerMenu() {
     this.isTrailerMenuOpen = false;
+  }
+
+  toggleControlsHelp() {
+    this.controlsHelpOpen = !this.controlsHelpOpen;
   }
 }
 

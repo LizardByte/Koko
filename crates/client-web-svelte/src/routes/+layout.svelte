@@ -12,6 +12,7 @@
   import LoginScreen from '$lib/components/LoginScreen.svelte';
   import WelcomeScreen from '$lib/components/WelcomeScreen.svelte';
   import PlayerOverlay from '$lib/components/player/PlayerOverlay.svelte';
+  import ControlsHelp from '$lib/components/player/ControlsHelp.svelte';
   import { spatialNavigation } from '$lib/actions/spatialNavigation';
   import KokoLogo from '$lib/assets/Koko.svg';
 
@@ -150,6 +151,8 @@
   </div>
   <!-- Player overlay — rendered above the app shell when playback is active -->
   <PlayerOverlay />
+  <!-- Controls help — triggered by Select button / "?" key -->
+  <ControlsHelp isOpen={ui.controlsHelpOpen} onclose={() => (ui.controlsHelpOpen = false)} />
 {:else}
   <!-- Fallback during auth transitions. -->
   <div class="auth-shell">

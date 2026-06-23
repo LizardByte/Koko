@@ -42,6 +42,7 @@ async fn test_create_first_user_no_auth_required() {
 #[case("admin", "adminpass456", true, None, "admin user")]
 #[case("userpin", "pass789", false, Some("1234"), "user with PIN")]
 #[case("admin_pin", "adminpass", true, Some("5678"), "admin user with PIN")]
+#[test_attr(rocket::async_test)]
 async fn test_login_with_valid_credentials(
     #[case] username: &str,
     #[case] password: &str,
@@ -65,6 +66,7 @@ async fn test_login_with_valid_credentials(
 #[case("", "", "empty credentials")]
 #[case("user", "", "empty password")]
 #[case("", "password", "empty username")]
+#[test_attr(rocket::async_test)]
 async fn test_login_with_invalid_credentials(
     #[case] username: &str,
     #[case] password: &str,
@@ -98,6 +100,7 @@ async fn test_login_with_invalid_credentials(
 #[case("testuser2", "correctpass", "wrongpass")]
 #[case("admin", "admin123", "notadmin")]
 #[case("user", "mypassword", "yourpassword")]
+#[test_attr(rocket::async_test)]
 async fn test_login_with_wrong_password(
     #[case] username: &str,
     #[case] correct_password: &str,
@@ -139,6 +142,7 @@ async fn test_login_with_wrong_password(
 #[rstest]
 #[case("/jwt_test", "GET")]
 #[case("/admin_test", "GET")]
+#[test_attr(rocket::async_test)]
 async fn test_jwt_protected_routes_without_token(
     #[case] route: &str,
     #[case] method: &str,
@@ -163,6 +167,7 @@ async fn test_jwt_protected_routes_without_token(
 #[case("Bearer ")]
 #[case("invalid_token")]
 #[case("Bearer malformed.jwt.token")]
+#[test_attr(rocket::async_test)]
 async fn test_jwt_protected_routes_with_invalid_token(#[case] auth_header: &str) {
     let client = create_test_client(Some("auth_invalid_token")).await;
 

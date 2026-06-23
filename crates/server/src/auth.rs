@@ -24,7 +24,7 @@ use jsonwebtoken::{
     encode,
 };
 use once_cell::sync::Lazy;
-use rand::Rng;
+use rand::RngExt;
 use rocket::http::Status;
 use rocket::outcome::Outcome;
 use rocket::request::{

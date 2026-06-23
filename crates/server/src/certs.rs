@@ -18,7 +18,7 @@ pub fn ensure_certificates_exist(
     if !Path::new(cert_path.as_str()).exists() || !Path::new(key_path.as_str()).exists() {
         let subject_alt_names = vec!["localhost".to_string()];
 
-        let CertifiedKey { cert, key_pair } =
+        let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(subject_alt_names).unwrap();
 
         // create directory tree if necessary
@@ -29,6 +29,6 @@ pub fn ensure_certificates_exist(
 
         // write the certificate and private key to disk
         fs::write(cert_path, cert.pem()).expect("Failed to write certificate");
-        fs::write(key_path, key_pair.serialize_pem()).expect("Failed to write private key");
+        fs::write(key_path, signing_key.serialize_pem()).expect("Failed to write private key");
     }
 }

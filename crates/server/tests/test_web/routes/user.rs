@@ -21,6 +21,7 @@ const TINY_PNG_BASE64: &str =
 #[case("admin", "password123", true, Some("1234"))]
 #[case("user", "userpass456", false, None)]
 #[case("power-user", "complex!Pass@789", false, Some("9876"))]
+#[test_attr(rocket::async_test)]
 async fn test_create_first_user_scenarios(
     #[case] username: &str,
     #[case] password: &str,

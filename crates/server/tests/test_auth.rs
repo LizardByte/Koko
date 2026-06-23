@@ -5,7 +5,13 @@ use chrono::{
     Duration,
     Utc,
 };
+use jsonwebtoken::{
+    EncodingKey,
+    Header,
+    encode,
+};
 use rstest::rstest;
+use serde_json::json;
 
 // local imports
 use koko::auth::{
@@ -63,6 +69,36 @@ fn test_jwt_token_with_invalid_secret(
 
     // Should fail with wrong secret
     let result = decode_token(&token, wrong_secret);
+    assert!(result.is_err());
+}
+
+#[rstest]
+#[case(json!({ "sub": "test_user" }), "missing exp")]
+#[case(
+    json!({ "sub": "test_user", "exp": "99999999999" }),
+    "malformed exp"
+)]
+#[case(
+    json!({ "sub": "test_user", "exp": Utc::now().timestamp() - 120 }),
+    "expired exp"
+)]
+#[case(
+    json!({ "exp": (Utc::now() + Duration::hours(1)).timestamp() }),
+    "missing sub"
+)]
+fn test_jwt_token_rejects_invalid_required_claims(
+    #[case] claims: serde_json::Value,
+    #[case] _description: &str,
+) {
+    let secret = "test_secret_key";
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_ref()),
+    )
+    .expect("Should create token");
+
+    let result = decode_token(&token, secret);
     assert!(result.is_err());
 }
 

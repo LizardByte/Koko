@@ -15,6 +15,7 @@ use diesel::{
     RunQueryDsl,
 };
 use jsonwebtoken::{
+    Algorithm,
     DecodingKey,
     EncodingKey,
     Header,
@@ -213,10 +214,13 @@ pub fn decode_token(
     token: &str,
     secret: &str,
 ) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_required_spec_claims(&["exp", "sub"]);
+
     decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_ref()),
-        &Validation::default(),
+        &validation,
     )
     .map(|data| data.claims)
 }

@@ -81,7 +81,6 @@ jobs:
           if ($env:INPUT_RELEASE_VERSION) {
             cargo bin cargo-set-version --version
           }
-          cargo bin cargo-wix --version
 
       - name: Update Version
         if: env.INPUT_RELEASE_VERSION != ''
@@ -128,18 +127,48 @@ jobs:
             ".\assets" `
             ".\target\${{ matrix.target }}\release\koko.exe"
 
+      - name: Resolve MSI package version
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $packageVersion = ($metadata.packages | Where-Object { $_.name -eq 'koko' } | Select-Object -First 1).version
+          if (-not $packageVersion) {
+            throw 'Failed to resolve koko package version from cargo metadata'
+          }
+          $msiPackageVersion = cargo msi-version $packageVersion
+          "MSI_PACKAGE_VERSION=$msiPackageVersion" >> $env:GITHUB_ENV
+          "Package version: $packageVersion"
+          "MSI package version: $msiPackageVersion"
+
       - name: Package Windows installer
         shell: pwsh
         run: |
-          cargo bin cargo-wix `
-            --toolset modern `
-            --target ${{ matrix.target }} `
-            --no-build `
-            --target-bin-dir "${{ github.workspace }}\target\${{ matrix.target }}\release" `
-            --package koko `
-            --output "artifacts\koko-${{ matrix.target }}-installer.msi" `
-            --nocapture `
-            crates/server/Cargo.toml
+          $target = '${{ matrix.target }}'
+          $wixArch = switch -Wildcard ($target) {
+            'aarch64-*' { 'arm64'; break }
+            'x86_64-*' { 'x64'; break }
+            default { throw "Unsupported WiX target architecture for $target" }
+          }
+          $cargoTargetDir = Join-Path $env:GITHUB_WORKSPACE 'target'
+          $cargoTargetBinDir = Join-Path $cargoTargetDir "$target\release"
+
+          wix build `
+            -arch $wixArch `
+            -d "Version=$env:MSI_PACKAGE_VERSION" `
+            -d "Platform=$wixArch" `
+            -d "Profile=release" `
+            -d 'TargetEnv=msvc' `
+            -d "TargetTriple=$target" `
+            -d 'CargoProfile=release' `
+            -d 'TargetVendor=pc' `
+            -d "CargoTargetDir=$cargoTargetDir" `
+            -d "CargoTargetBinDir=$cargoTargetBinDir" `
+            -pdbtype none `
+            -culture en-us `
+            -ext WixToolset.UI.wixext `
+            -ext WixToolset.Util.wixext `
+            -o "artifacts\koko-$target-installer.msi" `
+            crates\server\wix\main.wxs
 
       - name: Sign Windows installer
         if: env.INPUT_PUBLISH_RELEASE == 'true' && env.INPUT_AZURE_SIGNING_ACCOUNT != ''

@@ -48,6 +48,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             args.remove(0);
             new_migration(args)
         }
+        "msi-version" => {
+            args.remove(0);
+            msi_version(args)
+        }
         "-h" | "--help" | "help" => {
             print_usage();
             Ok(())
@@ -158,6 +162,75 @@ fn new_migration(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     println!("Revision: {version}");
 
     Ok(())
+}
+
+fn msi_version(args: Vec<String>) -> Result<(), Box<dyn Error>> {
+    let mut version = None;
+
+    for arg in args {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print_msi_version_usage();
+                return Ok(());
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown option `{arg}`").into()),
+            _ if version.is_none() => version = Some(arg),
+            _ => return Err(format!("unexpected extra argument `{arg}`").into()),
+        }
+    }
+
+    let version = version.ok_or("missing version")?;
+    println!("{}", msi_package_version(&version)?);
+
+    Ok(())
+}
+
+fn msi_package_version(version: &str) -> Result<String, Box<dyn Error>> {
+    let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+    if version.is_empty() {
+        return Err("version cannot be empty".into());
+    }
+    if version.contains('-') || version.contains('+') {
+        return Err(
+            "MSI package versions must be derived from a release version without prerelease or \
+             build metadata"
+                .into(),
+        );
+    }
+
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return Err(format!("version `{version}` must have exactly three numeric parts").into());
+    }
+
+    let major = parse_version_part(parts[0], "major")?;
+    let minor = parse_version_part(parts[1], "minor")?;
+    let patch = parse_version_part(parts[2], "patch")?;
+
+    // Match Sunshine's four-field Windows package shape by splitting HHMMSS.
+    // WiX warns when CalVer exceeds MSI ProductVersion limits, but cargo-wix
+    // fails before WiX can build the installer.
+    let build = patch / 100;
+    let revision = patch % 100;
+
+    Ok(format!("{major}.{minor}.{build}.{revision}"))
+}
+
+fn parse_version_part(
+    part: &str,
+    label: &str,
+) -> Result<u64, Box<dyn Error>> {
+    if part.is_empty() {
+        return Err(format!("{label} version part cannot be empty").into());
+    }
+    if part.len() > 1 && part.starts_with('0') {
+        return Err(format!("{label} version part `{part}` must not contain leading zeros").into());
+    }
+    if !part.chars().all(|character| character.is_ascii_digit()) {
+        return Err(format!("{label} version part `{part}` must be numeric").into());
+    }
+
+    Ok(part.parse()?)
 }
 
 fn repo_root() -> Result<PathBuf, Box<dyn Error>> {
@@ -373,6 +446,7 @@ fn run_rustfmt(repo_root: &Path) -> Result<(), Box<dyn Error>> {
 fn print_usage() {
     println!("Usage:");
     println!("  cargo new-migration [name] [--version <hex>] [--no-fmt]");
+    println!("  cargo msi-version <version>");
 }
 
 fn print_new_migration_usage() {
@@ -382,4 +456,48 @@ fn print_new_migration_usage() {
     println!("Examples:");
     println!("  cargo new-migration add_media_flags");
     println!("  cargo new-migration add_media_flags --version facefeed1234");
+}
+
+fn print_msi_version_usage() {
+    println!("Usage:");
+    println!("  cargo msi-version <version>");
+    println!();
+    println!("Examples:");
+    println!("  cargo msi-version 2026.624.125525");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::msi_package_version;
+
+    #[test]
+    fn msi_package_version_splits_calver_time() {
+        assert_eq!(
+            msi_package_version("2026.624.125525").unwrap(),
+            "2026.624.1255.25"
+        );
+    }
+
+    #[test]
+    fn msi_package_version_allows_v_prefix() {
+        assert_eq!(
+            msi_package_version("v2026.622.124200").unwrap(),
+            "2026.622.1242.0"
+        );
+    }
+
+    #[test]
+    fn msi_package_version_handles_workspace_default() {
+        assert_eq!(msi_package_version("0.0.0").unwrap(), "0.0.0.0");
+    }
+
+    #[test]
+    fn msi_package_version_rejects_prerelease_versions() {
+        assert!(msi_package_version("2026.624.125525-beta.1").is_err());
+    }
+
+    #[test]
+    fn msi_package_version_rejects_leading_zeros() {
+        assert!(msi_package_version("2026.0624.125525").is_err());
+    }
 }

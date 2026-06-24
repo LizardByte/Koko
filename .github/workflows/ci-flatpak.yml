@@ -59,20 +59,38 @@ jobs:
 
       - name: Setup Flatpak dependencies
         run: |
+          flatpak_user_install() {
+            local attempt
+            local max_attempts=5
+            local wait_seconds
+
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              if flatpak --user install -y --or-update flathub "$@"; then
+                return 0
+              fi
+
+              if [ "${attempt}" -eq "${max_attempts}" ]; then
+                return 1
+              fi
+
+              wait_seconds=$((attempt * 15))
+              echo "Flatpak install failed; retrying in ${wait_seconds}s (${attempt}/${max_attempts})"
+              sleep "${wait_seconds}"
+            done
+          }
+
           sudo apt-get update -y
           sudo apt-get install -y flatpak
 
-          sudo su "$(whoami)" -c "flatpak --user remote-add --if-not-exists flathub \
+          flatpak --user remote-add --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
-          "
 
-          sudo su "$(whoami)" -c "flatpak --user install -y flathub \
-            org.flatpak.Builder \
-            org.freedesktop.Platform/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
-            org.freedesktop.Sdk/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
-            org.freedesktop.Sdk.Extension.node${NODE_VERSION}/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
-            org.freedesktop.Sdk.Extension.rust-stable/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION} \
-          "
+          flatpak_user_install \
+            "org.flatpak.Builder" \
+            "org.freedesktop.Platform/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION}" \
+            "org.freedesktop.Sdk/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION}" \
+            "org.freedesktop.Sdk.Extension.node${NODE_VERSION}/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION}" \
+            "org.freedesktop.Sdk.Extension.rust-stable/${MATRIX_ARCH}/${FREEDESKTOP_SDK_VERSION}"
 
           flatpak run org.flatpak.Builder --version
 

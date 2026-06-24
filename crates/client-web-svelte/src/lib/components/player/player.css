@@ -1,0 +1,38 @@
+/*
+ * Shared player styles — imported by the player components that share the
+ * `.player-icon-button` affordance (PlayerControls, TrailerPlayer,
+ * ControlsHelp, AudioTrackMenu). Extracted from app.css so player-scoped
+ * rules live with their owners; the global app.css keeps only cross-cutting
+ * tokens and layout.
+ *
+ * Import via: import './player.css'; at the top of each consumer's <script>.
+ */
+
+.player-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.55rem;
+  height: 2.55rem;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--surface-6);
+  box-shadow: none;
+  color: var(--color-text-primary);
+  backdrop-filter: blur(14px);
+}
+
+.player-icon-button:hover:not(:disabled),
+.player-icon-button:focus-visible {
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow: none;
+}
+
+/* Primary play/pause button — must come AFTER .player-icon-button so the
+   equal-specificity override wins (larger size + brighter background).
+   The two classes are applied together: class="player-icon-button player-primary-button". */
+.player-primary-button {
+  width: 4.2rem;
+  height: 4.2rem;
+  background: rgba(255, 255, 255, 0.22);
+}

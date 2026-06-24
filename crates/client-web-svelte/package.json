@@ -1,0 +1,43 @@
+{
+  "name": "koko-client-web-svelte",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "PoC: Svelte 5 SPA port of the Koko web client (logs view only).",
+  "scripts": {
+    "dev": "vite dev",
+    "dev:mock": "vite dev --mode mock",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "lint": "oxlint src/",
+    "lint:ci": "oxlint src/ --format=github",
+    "test": "vitest run",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "devDependencies": {
+    "@chromatic-com/storybook": "^5.2.1",
+    "@storybook/addon-a11y": "^10.4.6",
+    "@storybook/addon-docs": "^10.4.6",
+    "@storybook/addon-svelte-csf": "^5.1.2",
+    "@storybook/addon-vitest": "^10.4.6",
+    "@storybook/sveltekit": "^10.4.6",
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.8.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@vitest/browser-playwright": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.9",
+    "oxlint": "^1.71.0",
+    "playwright": "^1.61.0",
+    "storybook": "^10.4.6",
+    "svelte": "^5.1.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.8.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.21.0"
+  }
+}

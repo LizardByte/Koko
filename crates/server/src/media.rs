@@ -3251,6 +3251,15 @@ pub fn get_playback_decision(
 }
 
 /// Resolve the direct-play source path for a media item.
+/// Returns the media file's probed duration in milliseconds, when known.
+pub fn resolve_media_item_duration_ms(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Option<i64>, diesel::result::Error> {
+    Ok(load_backing_media_file(conn, item_id)?.and_then(|f| f.duration_ms))
+}
+
+/// Resolve the direct-play source path for a media item.
 pub fn resolve_media_item_source_path(
     conn: &mut SqliteConnection,
     item_id: i32,

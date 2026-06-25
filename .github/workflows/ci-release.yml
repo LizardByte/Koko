@@ -17,6 +17,8 @@ on:
     secrets:
       GH_BOT_TOKEN:
         required: true
+      VIRUSTOTAL_API_KEY:
+        required: false
 
 jobs:
   release:
@@ -46,3 +48,4 @@ jobs:
           prerelease: true
           tag: ${{ inputs.release_tag }}
           token: ${{ secrets.GH_BOT_TOKEN }}
+          virustotal_api_key: ${{ secrets.VIRUSTOTAL_API_KEY }}

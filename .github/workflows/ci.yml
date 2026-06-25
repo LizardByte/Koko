@@ -166,3 +166,4 @@ jobs:
       release_tag: ${{ needs.setup_release.outputs.release_tag }}
     secrets:
       GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+      VIRUSTOTAL_API_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}

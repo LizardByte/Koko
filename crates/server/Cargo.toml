@@ -62,7 +62,7 @@ base64 = "=0.22.1"
 bcrypt = "=0.19.2"
 cargo_metadata = "=0.23.1"
 chrono = "=0.4.45"
-config = "=0.15.24"
+config = "=0.15.25"
 diesel = { version = "=2.3.10", features = ["sqlite"] }
 diesel_migrations = "=2.3.2"
 dirs = "=6.0.0"

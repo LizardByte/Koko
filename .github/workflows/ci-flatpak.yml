@@ -112,10 +112,22 @@ jobs:
         env:
           INPUT_RELEASE_COMMIT: ${{ inputs.release_commit }}
           INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+          PR_CLONE_URL: ${{ github.event.pull_request.head.repo.clone_url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY_CLONE_URL: ${{ github.event.repository.clone_url }}
         run: |
           set -euo pipefail
-          build_date="$(git show -s --format=%cs "${INPUT_RELEASE_COMMIT}")"
+          clone_url="${REPOSITORY_CLONE_URL}"
+          commit="${INPUT_RELEASE_COMMIT}"
+
+          if [ "${GITHUB_EVENT_NAME}" == "pull_request" ]; then
+            echo "This is a PR event"
+            clone_url="${PR_CLONE_URL}"
+            commit="${PR_HEAD_SHA}"
+            git fetch --no-tags --depth=1 "${clone_url}" "${commit}"
+          fi
+
+          build_date="$(git show -s --format=%cs "${commit}")"
 
           mkdir -p build artifacts
           cp generated-node-sources.json build/
@@ -128,8 +140,8 @@ jobs:
           sed -i \
             -e "s|@BUILD_DATE@|${build_date}|g" \
             -e "s|@BUILD_VERSION@|${INPUT_RELEASE_VERSION}|g" \
-            -e "s|@GITHUB_CLONE_URL@|${REPOSITORY_CLONE_URL}|g" \
-            -e "s|@GITHUB_COMMIT@|${INPUT_RELEASE_COMMIT}|g" \
+            -e "s|@GITHUB_CLONE_URL@|${clone_url}|g" \
+            -e "s|@GITHUB_COMMIT@|${commit}|g" \
             "build/${APP_ID}.yml"
 
           sed -i \

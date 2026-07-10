@@ -2123,6 +2123,15 @@ legend {
   font-size: 0.84rem;
 }
 
+/* The Message column keeps a fixed minimum width in characters regardless of
+   available viewport space. Since the table sits inside a horizontally
+   scrollable .table-shell, this never clips it; it just guarantees the column
+   is always wide enough to read instead of getting crushed by auto-layout. */
+.log-entries-table .log-message-col {
+  min-width: 70ch;
+  width: 70ch;
+}
+
 .log-filter-row {
   align-items: end;
 }

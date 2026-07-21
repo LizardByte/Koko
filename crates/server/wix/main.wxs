@@ -16,11 +16,12 @@
 
     <MajorUpgrade
         Schedule="afterInstallInitialize"
-        DowngradeErrorMessage="A newer version of [ProductName] is already installed. Setup will now exit." />
+        AllowDowngrades="yes" />
 
     <MediaTemplate EmbedCab="yes" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
     <Property Id="DiskPrompt" Value="Koko Installation" />
+    <Property Id="REINSTALLMODE" Value="amus" />
     <Property Id="ARPHELPLINK" Value="https://app.lizardbyte.dev/support" />
     <Property Id="ARPURLINFOABOUT" Value="https://app.lizardbyte.dev" />
     <Icon Id="ProductIcon" SourceFile="$(var.CargoTargetDir)\..\assets\icon.ico" />

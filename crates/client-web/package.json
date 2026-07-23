@@ -11,7 +11,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "lucide": "1.25.0"
+    "lucide": "1.26.0"
   },
   "devDependencies": {
     "typescript": "7.0.2",

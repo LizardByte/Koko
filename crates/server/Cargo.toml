@@ -89,7 +89,7 @@ serde_yaml = "=0.9.34"
 sha2 = "=0.11.0"
 strsim = "=0.11.1"
 tao = { version = "=0.35.3", optional = true }
-tokio = { version = "=1.53.0", features = ["full"] }
+tokio = { version = "=1.53.1", features = ["full"] }
 tmdb_client = "=1.8.0"
 tray-icon = { version = "=0.24.1", optional = true }
 tvdb4 = "=0.1.0"

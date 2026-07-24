@@ -58,7 +58,7 @@ tray = [
 
 [dependencies]
 # ensure deps are compatible: https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
-base64 = "=0.22.1"
+base64 = "=0.23.0"
 bcrypt = "=0.19.2"
 cargo_metadata = "=0.23.1"
 chrono = "=0.4.45"

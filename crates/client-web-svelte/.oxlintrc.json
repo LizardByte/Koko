@@ -1,0 +1,55 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "rules": {
+    "no-console": "off",
+    "no-explicit-any": "off",
+    "no-underscore-dangle": "off",
+    "no-map-spread": "off",
+    "preserve-caught-error": "off",
+    "consistent-function-scoping": "off",
+    "require-module-specifiers": "off",
+    "no-shadow": "off",
+    "no-unassigned-import": "off",
+
+    "no-cond-assign": ["warn", "always"],
+    "no-empty-function": "warn",
+    "no-mutable-exports": "warn",
+    "no-nested-ternary": "warn",
+    "no-useless-assignment": "warn",
+    "prefer-at": "warn",
+    "prefer-math-min-max": "warn",
+    "prefer-modern-math-apis": "warn",
+    "prefer-optional-chain": "warn",
+    "prefer-regexp-exec": "warn",
+    "complexity": ["warn", { "max": 15 }]
+  },
+  "env": {
+    "builtin": true,
+    "browser": true
+  },
+  "overrides": [
+    {
+      "files": ["*.test.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["*.stories.svelte", "src/lib/storybook/**"],
+      "rules": {
+        "no-empty-function": "off"
+      }
+    }
+  ]
+}

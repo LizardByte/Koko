@@ -63,6 +63,11 @@ pub struct TranscodeSpec {
     pub start_time_ms: Option<i64>,
     /// Zero-based audio stream index among audio streams.
     pub audio_stream_index: Option<usize>,
+    /// Total duration of the source media in milliseconds, when known.
+    /// Used to pass -t to ffmpeg so the fragmented-MP4 carries a proper total
+    /// duration in its moov atom (otherwise the browser sees a growing
+    /// per-fragment duration with no fixed total).
+    pub duration_ms: Option<i64>,
 }
 
 impl TranscodeSpec {
@@ -93,6 +98,20 @@ impl TranscodeSpec {
             let start_sec = start_time as f64 / 1000.0;
             args.push("-ss".into());
             args.push(format!("{:.3}", start_sec));
+        }
+
+        // Cap the output duration so the fragmented-MP4 carries a proper total
+        // duration. Without -t, ffmpeg produces an open-ended stream and the
+        // browser sees a growing per-fragment duration. The remaining duration
+        // = total - start_offset (clamped to > 0).
+        if let Some(total_ms) = self.duration_ms {
+            let start_ms = self.start_time_ms.unwrap_or(0);
+            let remaining_ms = total_ms.saturating_sub(start_ms);
+            if remaining_ms > 0 {
+                let remaining_sec = remaining_ms as f64 / 1000.0;
+                args.push("-t".into());
+                args.push(format!("{:.3}", remaining_sec));
+            }
         }
 
         // Input

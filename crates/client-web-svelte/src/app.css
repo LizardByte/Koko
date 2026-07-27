@@ -1,0 +1,1854 @@
+/*
+ * Koko web client (Svelte 5) — shared design-system styles.
+ *
+ * Ported from ../client-web/src/style.css (the vanilla single-file stylesheet)
+ * with per-component rules moved into the components that own them. This file
+ *
+ * --- Spatial navigation focus indicator (gamepad/remote) ---
+ * Shows a clear green outline on the focused element when navigating with
+ * a gamepad or arrow keys. Suppressed when the mouse is used.
+ */
+.is-spatial-focus {
+  outline: 3px solid var(--color-accent-green);
+  outline-offset: 4px;
+  border-radius: 4px;
+  z-index: 10;
+  position: relative;
+}
+
+/*
+ * Koko web client (Svelte 5) — shared design-system styles (continued).
+ * keeps only: design tokens, global element rules, cross-component utilities,
+ * and the app-shell/library-rail/main-shell/page-backdrop layout.
+ *
+ * Fidelity invariants carried from the vanilla source (DO NOT "fix"):
+ *  - color-scheme: dark is hardcoded. There is no light theme.
+ *  - --muted is referenced by some components but intentionally NEVER defined
+ *    here; it resolves to the inherited foreground color (the current look).
+ *  - No scroll-snap, no custom scrollbars, no prefers-reduced-motion handling.
+ */
+
+:root {
+  --page-backdrop-image: none;
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* --- Color tokens --- */
+  /* Surfaces */
+  --color-bg-page: #0c111d;
+  --color-bg-inverted: #061018;     /* dark-on-light (active hover text bg) */
+  /* Text */
+  --color-text-primary: #f4f7fb;
+  --color-text-secondary: #dbe7ff;  /* secondary blue tint */
+  --color-text-muted: #9ab1d1;
+  --color-text-subtle: #afc0db;
+  /* Brand */
+  --color-brand-blue: #5d7bff;
+  --color-brand-purple: #7c5cff;
+  --color-accent-green: #8bf3ca;
+  /* Status */
+  --color-success: #aef8d4;
+  --color-warning: #ffd78a;
+  --color-transcoding: #ffdf9b;
+  --color-danger: #ffb9b9;
+  --color-danger-soft: #ffd0d0;
+  --color-active-green: #d8ffe9;     /* active/hover green bg */
+  /* Translucent overlays (rgba on white) */
+  --surface-1: rgba(255, 255, 255, 0.04);  /* empty state bg */
+  --surface-2: rgba(255, 255, 255, 0.05);  /* user card bg */
+  --surface-3: rgba(255, 255, 255, 0.07);  /* tag bg */
+  --surface-4: rgba(255, 255, 255, 0.08);  /* hover bg / secondary button */
+  --surface-5: rgba(255, 255, 255, 0.12);  /* player badge bg */
+  --surface-6: rgba(255, 255, 255, 0.13);  /* player icon button bg */
+  --surface-border-soft: rgba(255, 255, 255, 0.08);
+  --surface-border: rgba(255, 255, 255, 0.1);
+
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(89, 124, 255, 0.18), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(67, 214, 158, 0.16), transparent 22%),
+    #0c111d;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Bare <button> element reset — minimal, Sonar-safe. The default bg is a
+   solid high-contrast brand color (not a gradient — gradients confuse the
+   contrast analyzer). All visual variants (primary/secondary/danger/icon-only)
+   live in lib/components/button.css, imported by <Button>. Bespoke button-like
+   affordances (.rail-button, .media-card, .player-icon-button, etc.) carry
+   their own styles in their owning components. */
+button {
+  border: 0;
+  border-radius: 12px;
+  background: var(--color-brand-purple);
+  color: var(--color-text-primary);
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+  transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease, background 160ms ease, outline-color 160ms ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--color-accent-green);
+  outline-offset: 3px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Button variant classes (.primary-button / .secondary-button / .danger-button
+   / .button-link / .icon-only-button) are scoped to button.css, imported by
+   <Button>. SonarCloud's CSS analyzer skips .svelte-adjacent imports, so the
+   false-positive contrast warnings that fired here are gone. */
+
+/* Note: button.is-busy styling (transparent text, spinner) + .button-content /
+   .button-icon / .button-label layout + .icon-only-button sizing are all owned
+   by button.css (imported by <Button>). Bespoke button affordances that need
+   similar inner layout (.rail-button, .player-icon-button, etc.) define their
+   own in their owning components. */
+
+input:not([type='range']),
+select,
+textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  padding: 0.8rem 0.9rem;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 6rem;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+legend {
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Cross-component utilities --- */
+
+.panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(14, 20, 35, 0.82);
+  backdrop-filter: blur(18px);
+  border-radius: 24px;
+}
+
+.page-panel {
+  width: 100%;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.eyebrow,
+.label {
+  display: block;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #86a0c7;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.section-heading h3,
+.shelf-header h3 {
+  margin: 0;
+}
+
+.section-heading-actions {
+  align-items: flex-start;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+.is-disabled {
+  opacity: 0.58;
+}
+
+/* Tags */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tag.success {
+  background: rgba(66, 214, 158, 0.18);
+  color: var(--color-accent-green);
+}
+
+.tag.warning {
+  background: rgba(255, 191, 84, 0.16);
+  color: var(--color-warning);
+}
+
+.tag.status-tag {
+  gap: 0.35rem;
+}
+
+.danger-tag {
+  color: var(--color-danger-soft);
+}
+
+/* Empty state */
+.empty-state,
+.panel-placeholder {
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-subtle);
+}
+
+.empty-state.tight {
+  padding: 0.8rem;
+}
+
+/* Spinner */
+.loading-spinner {
+  width: 1.12rem;
+  height: 1.12rem;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: currentColor;
+  animation: none;
+}
+
+.loading-spinner.is-spinner-visible {
+  animation: spin 0.85s linear infinite;
+}
+
+/* Error panel */
+.error-panel {
+  padding: 1rem 1.2rem;
+  border-color: rgba(255, 132, 132, 0.35);
+  background: rgba(86, 24, 24, 0.38);
+  color: #ffd7d7;
+}
+
+/* Content navbar (settings/personal pages) */
+.content-navbar {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+}
+
+.content-navbar h2 {
+  margin: 0.1rem 0;
+}
+
+.content-navbar-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.content-navbar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.content-navbar-actions-stack {
+  flex-direction: column;
+}
+
+.content-navbar-actions-row {
+  flex-direction: row;
+}
+
+.content-navbar-actions .search-form {
+  justify-content: flex-end;
+}
+
+/* Note: .icon-button sizing is gone — use <IconButton> instead (tailored
+   for the icon-only case, scoped via .icon-only-button in button.css). */
+
+/* --- App shell layout --- */
+
+.app-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+  height: 100vh;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.app-shell.rail-collapsed {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.page-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.page-backdrop::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(78vw, 1280px);
+  height: min(78vh, 900px);
+  transform: scale(1.04);
+  transform-origin: top right;
+  background-image: var(--page-backdrop-image);
+  background-position: top right;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: radial-gradient(ellipse at top right, black 0%, black 38%, transparent 75%);
+  mask-image: radial-gradient(ellipse at top right, black 0%, black 38%, transparent 75%);
+}
+
+.page-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(89, 124, 255, 0.18), transparent 24%),
+    radial-gradient(circle at 100% 100%, rgba(67, 214, 158, 0.16), transparent 22%),
+    linear-gradient(180deg, rgba(12, 17, 29, 0.2) 0%, rgba(12, 17, 29, 0.66) 100%);
+}
+
+.app-shell > :not(.page-backdrop) {
+  position: relative;
+  z-index: 1;
+}
+
+/* --- Library rail --- */
+
+.library-rail {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  padding: 1.2rem 0.9rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 11, 21, 0.92);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.app-shell.rail-collapsed .library-rail {
+  max-width: 88px;
+}
+
+.library-rail-top,
+.library-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.library-rail-top {
+  flex: 1;
+  min-height: 0;
+}
+
+.library-rail-bottom {
+  margin-top: auto;
+  padding-top: 0.2rem;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.brand-block h1 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.brand-block p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.brand-mark {
+  width: 38px;
+  min-width: 38px;
+  flex: 0 0 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+}
+
+.logo-brand-mark {
+  overflow: hidden;
+}
+
+.brand-logo {
+  width: 30px;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.brand-icon,
+.rail-icon,
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-icon svg,
+.rail-icon svg,
+.card-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  stroke-width: 2;
+}
+
+.rail-icon {
+  width: 1.5rem;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+/* Note: .rail-button, .rail-label, .rail-settings, .library-refresh-*,
+   .rail-user-card family are scoped to Rail.svelte (sole owner). The
+   collapsed-rail selectors below still reference them by class for the
+   hide-on-collapse layout. */
+
+/* Collapsed rail */
+
+.user-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #263f5f;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+  overflow: hidden;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.edit-avatar {
+  width: 2.8rem;
+  height: 2.8rem;
+  min-width: 2.8rem;
+}
+
+/* Collapsed rail */
+.library-rail.collapsed .brand-block > div:last-child,
+.library-rail.collapsed .rail-label,
+.library-rail.collapsed .rail-user-card,
+.library-rail.collapsed .rail-library-copy {
+  display: none;
+}
+
+.library-rail.collapsed .brand-block,
+.library-rail.collapsed .rail-button {
+  justify-content: center;
+}
+
+/* --- Main shell --- */
+
+.main-shell {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.2rem 1.4rem;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.main-shell:has(.home-navbar) {
+  padding: 0;
+}
+
+.main-shell:has(.home-navbar) .main-shell-inner {
+  gap: 0;
+}
+
+.main-shell-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* --- Shared section/detail utilities (used by item + settings) --- */
+
+.detail-panel {
+  position: sticky;
+  top: 1.2rem;
+  align-self: start;
+  max-height: calc(100vh - 2.4rem);
+  overflow: auto;
+  padding: 1.2rem;
+}
+
+.detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  padding: 1.1rem;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.item-section {
+  padding: 1.1rem;
+}
+
+.shelf-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.2rem;
+}
+
+.shelf-stack.panel {
+  border-radius: 0;
+}
+
+.shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.shelf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shelf-header span,
+.media-card-meta,
+.detail-subtitle,
+.muted,
+.metadata-match-meta {
+  color: var(--color-text-muted);
+}
+
+/* Metadata search panel — mirrors vanilla style.css:1874-1994. */
+.metadata-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
+.metadata-search-card {
+  display: flex;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.metadata-search-poster {
+  width: 56px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.metadata-search-card p {
+  margin: 0.35rem 0 0;
+}
+
+.metadata-match-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.metadata-search-card > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.metadata-provider-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.shelf-row,
+.people-row,
+.extras-row {
+  display: grid;
+  grid-auto-flow: column;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  align-items: start;
+}
+
+.shelf-row {
+  grid-auto-columns: 184px;
+  gap: 0.9rem;
+}
+
+.people-row {
+  grid-auto-columns: 142px;
+  gap: 0.8rem;
+}
+
+.extras-row {
+  grid-auto-columns: 244px;
+  gap: 0.8rem;
+}
+
+/* --- Item hero shared (ItemHero + PersonHero): mirrors style.css:1377-1412, 1457-1466, 1528-1574 --- */
+
+.detail-art {
+  aspect-ratio: 2 / 3;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(93, 123, 255, 0.9), rgba(27, 37, 62, 0.96));
+  font-size: 2.2rem;
+  font-weight: 800;
+}
+
+.detail-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.hero-tagline {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #d6e5ff;
+}
+
+.hero-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+/* Caller-supplied className on CollapsibleText (ItemHero + PersonHero). */
+.hero-description {
+  margin: 0.2rem 0 0;
+  max-width: 70ch;
+  color: var(--color-text-secondary);
+}
+
+.detail-summary h2 {
+  margin: 0;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.item-hero {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+  min-height: min(58vh, 720px);
+  padding: 1.3rem 0 0.75rem;
+}
+
+.item-poster {
+  width: min(100%, 220px);
+  box-shadow: 0 24px 44px rgba(0, 0, 0, 0.34);
+}
+
+.item-summary {
+  align-self: start;
+  padding: 0.35rem 0 1rem;
+}
+
+.item-summary h2,
+.item-title-fallback {
+  font-size: 3.2rem;
+  line-height: 1.04;
+  margin-top: 0;
+}
+
+.item-title-fallback {
+  max-width: min(780px, 100%);
+  overflow-wrap: anywhere;
+}
+
+/* --- Item grid: shared by HomeContent + ItemChildren (style.css:921-925) --- */
+
+.item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+/* --- Media card family: shared by MediaCard + HomeContent collection cards --- */
+
+.shelf-row-shell {
+  display: grid;
+  grid-template-columns: 2.3rem minmax(0, 1fr) 2.3rem;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.shelf-row-shell.no-scroll {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Note: .shelf-scroll-button, .shelf-row-shell.no-scroll .shelf-scroll-button,
+   and .is-scroll-hidden are scoped to Shelf.svelte — that component owns the
+   scroll UI. The .shelf-row / .shelf-row-shell grid templates stay global
+   (used by Shelf + BrowseListingGrid which both render shelves). */
+
+/* --- Media card (mirrors vanilla style.css:927-1141, 1339-1342) --- */
+
+.media-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: stretch;
+  text-align: left;
+  padding: 0;
+  border-radius: 18px;
+  background: transparent;
+  box-shadow: none;
+}
+
+/*
+ * Media cards are navigation surfaces, not action buttons — suppress the
+ * global button:hover lift/glow (which lights up the text block below the
+ * poster as a mismatched "card" leaking past the poster's rounded corners;
+ * the same bug exists in vanilla). Instead lift the poster tile only, so the
+ * hover reads as one coherent poster element. Documented Svelte-port delta.
+ */
+.media-card:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  filter: none;
+}
+
+.media-card:hover:not(:disabled) .media-card-art {
+  transform: translateY(-2px);
+  /*
+   * Colored brand lift shadow. box-shadow follows the poster's own 18px
+   * border-radius so the shadow reads as the poster tile rising. (A
+   * flat-bottomed "card" shadow would require distorting the poster's own
+   * corners or a wrapper element; not worth the complexity — the rounded
+   * shadow is the poster's natural silhouette.)
+   */
+  box-shadow: 0 16px 32px rgba(93, 123, 255, 0.42);
+}
+
+.media-card:focus-visible {
+  outline-offset: 4px;
+}
+
+.episode-card {
+  gap: 0.45rem;
+}
+
+.media-card-art {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: 18px;
+  padding: 0.9rem;
+  display: block;
+  background: linear-gradient(180deg, rgba(93, 123, 255, 0.8), rgba(22, 31, 54, 0.92));
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* Vanilla omits overflow:hidden (it has no absolutely-positioned children).
+     The mock-mode gradient fallback is one, so clip to the rounded corners. */
+  overflow: hidden;
+}
+
+.media-card-art.episode {
+  aspect-ratio: 16 / 9;
+}
+
+.media-card-art.audio {
+  background: linear-gradient(180deg, rgba(66, 214, 158, 0.78), rgba(17, 44, 40, 0.94));
+}
+
+.media-card.is-missing .media-card-art {
+  border-color: rgba(255, 191, 84, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 191, 84, 0.14);
+}
+
+.media-card-kind-row {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: start;
+  pointer-events: none;
+}
+
+.media-card-dynamic-badges {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  left: 0.85rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+  align-items: end;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.media-card-state-badges,
+.media-card-playback-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.media-card-playback-badges {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.media-card-kind,
+.media-card-duration {
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(10, 14, 24, 0.36);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.media-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 0.72rem;
+}
+
+.media-card-status.icon-only {
+  width: 1.96rem;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  min-height: 1.96rem;
+  justify-content: center;
+  padding: 0;
+}
+
+.media-card-status.has-multiple {
+  min-height: 1.45rem;
+  padding-inline: 0.38rem;
+}
+
+.media-card-status.is-unmatched {
+  padding: 0.24rem 0.34rem;
+  background: rgba(10, 14, 24, 0.52);
+  color: #ffe5b5;
+}
+
+.media-card-status.is-unmatched.icon-only {
+  width: 1.45rem;
+  min-width: 1.45rem;
+  height: 1.45rem;
+  min-height: 1.45rem;
+}
+
+.media-card-status.is-loading {
+  color: #dce6ff;
+}
+
+.media-card-dynamic-badges .media-card-status.is-loading {
+  justify-content: center;
+  background: rgba(10, 14, 24, 0.52);
+}
+
+.media-card-status.is-missing {
+  min-width: 1.45rem;
+  min-height: 1.45rem;
+  padding: 0.24rem 0.42rem;
+  justify-content: center;
+  gap: 0.28rem;
+  background: rgba(10, 14, 24, 0.52);
+  color: #ffd78a;
+  white-space: nowrap;
+}
+
+.media-card-status.is-watched {
+  background: rgba(10, 14, 24, 0.58);
+  color: var(--color-accent-green);
+}
+
+.media-card-status.is-watched .status-icon svg {
+  width: 1.12rem;
+  height: 1.12rem;
+}
+
+/* Note: .media-card-progress (and its ::before donut disc) is scoped to
+   MediaCard.svelte — the sole consumer. */
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.status-icon svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 2.2;
+}
+
+.media-card-status .status-warning-icon {
+  display: inline-flex;
+  color: #ffe5b5;
+}
+
+.media-card-title {
+  font-weight: 700;
+}
+
+.media-card-subtitle {
+  font-size: 0.82rem;
+  color: #d8e5ff;
+}
+
+.shelf-row .media-card {
+  width: 184px;
+}
+
+/* --- Settings shared (used across settings sections) --- */
+
+.settings-form,
+.metadata-search-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.settings-form section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.checkbox-row,
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox-inline input,
+.checkbox-row input {
+  width: auto;
+}
+
+.weekday-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.add-library-form {
+  margin-top: 1rem;
+}
+
+.page-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.settings-section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.settings-section-nav .secondary-button.active {
+  color: var(--color-bg-inverted);
+  background: var(--color-active-green);
+}
+
+/* --- Settings page layout (vanilla style.css) --- */
+
+.page-navbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.page-navbar-subtitle {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.page-navbar-meta {
+  font-size: 0.82rem;
+}
+
+.settings-page-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.settings-library-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-library-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.settings-library-actions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-library-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+/* Provider settings cards */
+
+.provider-settings-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.provider-settings-logo {
+  width: 2.75rem;
+  height: 2.75rem;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.provider-option-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+/* Activity progress bars (dashboard) */
+
+.activity-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.activity-progress-bar {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.activity-progress-fill {
+  display: block;
+  width: var(--activity-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5d7bff 0%, #8bf3ca 100%);
+}
+
+.settings-system-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.settings-system-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(8, 11, 18, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-system-activity-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.9rem;
+  align-items: start;
+}
+
+/* --- Table (data-table — used by logs, libraries, dashboard) --- */
+
+.table-shell {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 780px;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.table-title-cell {
+  font-weight: 600;
+}
+
+/* --- Log entries (the Message-column fix carries here) --- */
+
+.settings-log-panel {
+  padding: 1.2rem;
+}
+
+.log-filter-form {
+  margin-bottom: 1rem;
+}
+
+.log-filter-row {
+  align-items: end;
+}
+
+.log-entries-table .log-entry-message {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.84rem;
+}
+
+.log-entry-source,
+.log-entry-message {
+  margin: 0;
+}
+
+.log-entry-message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: 'Cascadia Mono', 'Fira Code', Consolas, monospace;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: #dbe8ff;
+}
+
+/* The Message column stays a readable width regardless of viewport; the table
+   scrolls horizontally. Carried from the logs Message-column fix. */
+.log-entries-table .log-message-col {
+  min-width: 70ch;
+  width: 70ch;
+}
+
+/* --- Responsive (max-width: 960px) — shell collapses rail to a bar --- */
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .library-rail {
+    grid-column: auto;
+    grid-row: auto;
+    height: auto;
+    max-width: none;
+    flex-direction: row;
+    align-items: center;
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .library-rail-top,
+  .library-rail-bottom {
+    flex-direction: row;
+    align-items: center;
+    min-height: auto;
+  }
+
+  .rail-nav {
+    flex-direction: row;
+    overflow: visible;
+  }
+
+  /* Note: .rail-button responsive min-width moved to Rail.svelte scoped style. */
+
+  .main-shell {
+    grid-column: auto;
+    grid-row: auto;
+    height: auto;
+    overflow: visible;
+    padding: 0.9rem;
+  }
+
+  .form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .content-navbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .content-navbar-actions {
+    align-items: stretch;
+  }
+}
+
+/* ==========================================================================
+   Player overlay — ported from vanilla style.css:2355-2907 + responsive.
+   Shared by MediaPlayer + TrailerPlayer + ThemeSongPlayer.
+   ========================================================================== */
+
+.player-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: #000;
+  z-index: 30;
+}
+
+.trailer-overlay {
+  padding: 0;
+  background: #000;
+}
+
+.player-shell.trailer-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+  overflow: hidden;
+  outline: none;
+}
+
+.trailer-frame-shell {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+.trailer-frame-shell iframe,
+.youtube-iframe-container iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.trailer-youtube-chrome-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.trailer-youtube-chrome-mask::before,
+.trailer-youtube-chrome-mask::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #000;
+}
+
+.trailer-youtube-chrome-mask::before {
+  top: 0;
+  height: clamp(90px, 18vh, 90px);
+}
+
+.trailer-youtube-chrome-mask::after {
+  bottom: 0;
+  height: clamp(90px, 24vh, 90px);
+}
+
+.trailer-shell.is-controls-hidden .trailer-youtube-chrome-mask {
+  opacity: 0;
+}
+
+.trailer-shell .player-top-actions .button-link {
+  background: rgba(18, 18, 20, 0.78);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(18px);
+}
+
+.theme-song-iframe,
+.theme-song-layer {
+  /* Offscreen-but-rendered: the YouTube iframe must stay in the render tree
+     to keep audio playing (display:none pauses it), but should be invisible
+     and non-interactive. position:fixed escapes any overflow:hidden parent
+     that would clip or scroll it. This is a deliberate, audio-only pattern. */
+  position: fixed;
+  right: -8px;
+  bottom: -8px;
+  width: 1px;
+  height: 1px;
+  border: 0;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
+.theme-song-audio {
+  display: none;
+}
+
+/* Note: .danger-tag is defined once near the tag rules above (line ~271).
+   This duplicate was removed — see sonar S4666. */
+
+.player-shell {
+  width: min(960px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(11, 16, 27, 0.96);
+}
+
+.media-player-shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+  overflow: hidden;
+  outline: none;
+}
+
+.media-player-shell video,
+.media-player-shell audio {
+  width: 100%;
+  height: 100%;
+}
+
+.media-player-shell video {
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+
+.media-player-shell audio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.audio-player-shell {
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(180deg, rgba(4, 8, 14, 0.26), rgba(4, 8, 14, 0.9)),
+    #05080f;
+}
+
+.audio-player-backdrop {
+  position: absolute;
+  inset: -3rem;
+  background-image: var(--player-backdrop-image);
+  background-position: center;
+  background-size: cover;
+  filter: blur(36px) saturate(1.18);
+  opacity: 0.34;
+  transform: scale(1.04);
+}
+
+.audio-player-art {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: min(42vh, 360px, 72vw);
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(66, 214, 158, 0.8), rgba(93, 123, 255, 0.72));
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.5);
+}
+
+.audio-player-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.audio-player-art-icon svg {
+  width: 5rem;
+  height: 5rem;
+  stroke-width: 1.4;
+}
+
+.player-idle-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.player-loading-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  place-items: center;
+  pointer-events: none;
+}
+
+.is-media-loading .player-loading-indicator {
+  display: grid;
+}
+
+.player-error-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: none;
+  place-items: center;
+  gap: 0.25rem;
+  pointer-events: none;
+  text-align: center;
+  color: var(--color-text-primary);
+}
+
+.player-error-indicator span {
+  color: #b8c7df;
+}
+
+.has-media-error .player-error-indicator {
+  display: grid;
+}
+
+.player-loading-spinner {
+  width: 3.2rem;
+  height: 3.2rem;
+  color: var(--color-accent-green);
+  border-width: 3px;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.45));
+}
+
+.player-controls {
+  position: absolute;
+  z-index: 3;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.is-controls-hidden .player-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player-top-controls {
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 5rem max(1rem, env(safe-area-inset-left));
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.76), rgba(0, 0, 0, 0));
+}
+
+.is-controls-hidden .player-top-controls {
+  transform: translateY(-0.75rem);
+}
+
+.player-title-block {
+  min-width: 0;
+}
+
+.player-title-block h2 {
+  margin: 0.1rem 0 0;
+  font-size: clamp(1.1rem, 2.3vw, 2rem);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.player-top-actions,
+.player-control-row,
+.player-control-cluster {
+  display: flex;
+  align-items: center;
+}
+
+.player-top-actions,
+.player-control-cluster {
+  gap: 0.6rem;
+}
+
+.player-menu-shell {
+  position: relative;
+}
+
+.player-track-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.65rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 2rem));
+  max-height: min(320px, 50vh);
+  overflow: auto;
+  padding: 0.35rem;
+  border-radius: 8px;
+  background: rgba(10, 14, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px);
+}
+
+.player-track-option {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.12rem;
+  width: 100%;
+  padding: 0.65rem 0.7rem;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  color: var(--color-text-primary);
+}
+
+.player-track-option:hover,
+.player-track-option.active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-track-option small {
+  color: var(--color-text-muted);
+}
+
+/* Note: .player-badge (sole consumer: PlayerControls.svelte) and
+   .player-icon-button (shared by player components) are scoped under
+   lib/components/player/ — see player.css + PlayerControls.svelte. */
+
+.player-bottom-controls {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 5rem max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
+}
+
+.is-controls-hidden .player-bottom-controls {
+  transform: translateY(0.75rem);
+}
+
+.player-control-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 1fr) auto minmax(7.5rem, 1fr);
+  gap: 1rem;
+  width: 100%;
+}
+
+.player-transport-cluster {
+  justify-content: center;
+}
+
+.player-tool-cluster {
+  justify-content: flex-end;
+}
+
+/* Note: .player-primary-button moved to player.css — co-located with
+   .player-icon-button so the cascade order (primary after icon) is
+   guaranteed. Both selectors are equal specificity; source order must
+   keep primary last to win the width/height/background override. */
+
+.player-time {
+  display: inline-flex;
+  gap: 0.35rem;
+  min-width: 7.5rem;
+  color: #eaf1ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.player-progress,
+.player-volume {
+  cursor: pointer;
+  /* Reset native range styling so the thumb can reach the true edges. */
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 1rem;
+}
+
+/* WebKit: track + filled portion via gradient + thumb */
+.player-progress::-webkit-slider-runnable-track,
+.player-volume::-webkit-slider-runnable-track {
+  height: 0.4rem;
+  border-radius: 999px;
+  /* Filled portion via a CSS variable --slider-fill (0-100%).
+     Set inline via Svelte: style="--slider-fill: 45%" */
+  background: linear-gradient(
+    to right,
+    #8bf3ca 0%,
+    #8bf3ca var(--slider-fill, 0%),
+    rgba(255, 255, 255, 0.2) var(--slider-fill, 0%),
+    rgba(255, 255, 255, 0.2) 100%
+  );
+}
+
+.player-progress::-webkit-slider-thumb,
+.player-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--color-accent-green);
+  margin-top: -0.3rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  border: 0;
+}
+
+/* Firefox */
+.player-progress::-moz-range-track,
+.player-volume::-moz-range-track {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.player-progress::-moz-range-progress,
+.player-volume::-moz-range-progress {
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--color-accent-green);
+}
+
+.player-progress::-moz-range-thumb,
+.player-volume::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-accent-green);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.player-progress {
+  width: 100%;
+}
+
+.player-volume {
+  width: min(10vw, 110px);
+  min-width: 72px;
+}
+
+.media-player-shell.is-picture-in-picture {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.media-player-overlay:has(.is-picture-in-picture) {
+  pointer-events: none;
+  background: transparent;
+}
+
+@media (max-width: 960px) {
+  .player-control-row {
+    grid-template-columns: 1fr;
+  }
+
+  .player-time-cluster,
+  .player-transport-cluster,
+  .player-tool-cluster {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+}

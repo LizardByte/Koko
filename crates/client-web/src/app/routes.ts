@@ -6,6 +6,7 @@ export function defaultHomeTab(_route: AppRoute): HomeBrowseTab {
   return 'recommended';
 }
 
+/** Maps a browse URL segment to its route-model kind. */
 function browseKindFromSegment(segment: string): Extract<AppRoute, { page: 'browse-detail' }>['kind'] {
   if (segment === 'collections') {
     return 'collection';
@@ -16,9 +17,18 @@ function browseKindFromSegment(segment: string): Extract<AppRoute, { page: 'brow
   return 'category';
 }
 
+/** Removes trailing slashes while preserving the root path. */
+function normalizePath(pathname: string): string {
+  let end = pathname.length;
+  while (end > 0 && pathname[end - 1] === '/') {
+    end -= 1;
+  }
+  return pathname.slice(0, end) || '/';
+}
+
 /** Converts the current browser path into the web UI's route model. */
 export function parseRoute(): AppRoute {
-  const normalizedPath = globalThis.location.pathname.replace(/\/+$/, '') || '/';
+  const normalizedPath = normalizePath(globalThis.location.pathname);
 
   const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/.exec(normalizedPath);
   if (settingsMatch) {

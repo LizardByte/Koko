@@ -2115,7 +2115,7 @@ legend {
 .log-entries-table .log-entry-message {
   margin: 0;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   color: inherit;
   background: transparent;
   border: none;
@@ -2134,7 +2134,7 @@ legend {
 
 .log-entry-message {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   font-family: 'Cascadia Mono', 'Fira Code', Consolas, monospace;
   font-size: 0.86rem;
   line-height: 1.5;

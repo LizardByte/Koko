@@ -54,8 +54,10 @@ jobs:
         run: |
           uv sync --locked --only-group flatpak \
             --python "${PYTHON_VERSION}" \
+            --no-build \
+            --no-install-project \
             --no-python-downloads \
-            --no-install-project
+            --no-install-package flatpak-node-generator
 
       - name: Setup Flatpak dependencies
         run: |
@@ -95,15 +97,17 @@ jobs:
           flatpak run org.flatpak.Builder --version
 
       - name: Generate Flatpak Node sources
+        env:
+          PYTHONPATH: packaging/linux/flatpak/deps/flatpak-builder-tools/node
         run: |
-          uv run --locked --no-sync python -m flatpak_node_generator \
+          uv run --locked --no-build --no-sync python -m flatpak_node_generator \
             npm crates/client-web/package-lock.json \
             --node-sdk-extension "org.freedesktop.Sdk.Extension.node${NODE_VERSION}//${FREEDESKTOP_SDK_VERSION}" \
             --output generated-node-sources.json
 
       - name: Generate Flatpak Cargo sources
         run: |
-          uv run --locked --no-sync python \
+          uv run --locked --no-build --no-sync python \
             ./packaging/linux/flatpak/deps/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
             Cargo.lock \
             --output generated-cargo-sources.json

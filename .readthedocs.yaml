@@ -9,26 +9,15 @@ build:
   os: ubuntu-lts-latest
   tools:
     rust: latest
+    python: "3.14"
   apt_packages:
     - libayatana-appindicator3-dev
     - libglib2.0-dev
     - libgtk-3-dev
     - libxdo-dev
-  jobs:
-    build:
-      html:
-        - cargo doc --no-deps --workspace --verbose --color always
-        - mkdir -p ${READTHEDOCS_OUTPUT}html
-        - cp -r target/doc/. ${READTHEDOCS_OUTPUT}html/
-        # redirect index.html to html/koko/index.html
-        - |
-          cat <<EOF > ${READTHEDOCS_OUTPUT}html/index.html
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <meta http-equiv="refresh" content="0; url=koko/index.html">
-            </head>
-            <body></body>
-          </html>
-          EOF
-        - ls -alR ${READTHEDOCS_OUTPUT}html
+  commands:
+    - python -m pip install 'lizardbyte-dockle[all] @ https://github.com/LizardByte/dockle/releases/download/v2026.918.203650/lizardbyte_dockle-2026.918.203650-py3-none-any.whl'
+    - python -m dockle check
+    - python -m dockle build
+    - mkdir -p "${READTHEDOCS_OUTPUT}html/"
+    - cp -r _site/. "${READTHEDOCS_OUTPUT}html/"

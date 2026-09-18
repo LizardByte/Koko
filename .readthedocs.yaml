@@ -9,15 +9,26 @@ build:
   os: ubuntu-lts-latest
   tools:
     rust: latest
-    python: "3.14"
+    python: "miniconda-latest"
   apt_packages:
     - libayatana-appindicator3-dev
     - libglib2.0-dev
     - libgtk-3-dev
     - libxdo-dev
   commands:
-    - python -m pip install 'lizardbyte-dockle[all] @ https://github.com/LizardByte/dockle/releases/download/v2026.918.203650/lizardbyte_dockle-2026.918.203650-py3-none-any.whl'
-    - python -m dockle check
-    - python -m dockle build
-    - mkdir -p "${READTHEDOCS_OUTPUT}html/"
-    - cp -r _site/. "${READTHEDOCS_OUTPUT}html/"
+    - |
+      if [ -f readthedocs_build.sh ]; then
+        dockle_dir="."
+      else
+        dockle_dir="./third-party/dockle"
+      fi
+      chmod +x "${dockle_dir}/readthedocs_build.sh"
+      export DOCKLE_DIR="${dockle_dir}"
+      "${dockle_dir}/readthedocs_build.sh"
+
+conda:
+  environment: third-party/dockle/environment.yml
+
+submodules:
+  include: all
+  recursive: true

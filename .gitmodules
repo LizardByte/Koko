@@ -6,3 +6,7 @@
 	path = packaging/linux/flatpak/deps/shared-modules
 	url = https://github.com/flathub/shared-modules.git
 	branch = master
+[submodule "third-party/dockle"]
+	path = third-party/dockle
+	url = https://github.com/LizardByte/dockle.git
+	branch = master

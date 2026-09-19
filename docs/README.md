@@ -1,6 +1,6 @@
 <div align="center">
   <img
-    src="../assets/Koko.svg"
+    src="https://raw.githubusercontent.com/LizardByte/Koko/refs/heads/master/assets/Koko.svg"
     alt="Koko icon"
     width="256"
   />

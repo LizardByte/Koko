@@ -8,8 +8,9 @@ version: 2
 build:
   os: ubuntu-24.04
   tools:
-    rust: latest
+    nodejs: "22"
     python: "miniconda-latest"
+    rust: latest
   apt_packages:
     - libayatana-appindicator3-dev
     - libglib2.0-dev

@@ -17,4 +17,5 @@ name = "api"
 title = "Koko Rust API"
 framework = "rustdoc"
 source = "."
+entry = "koko"
 home = true

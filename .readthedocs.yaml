@@ -9,7 +9,7 @@ build:
   os: ubuntu-24.04
   tools:
     nodejs: "24"
-    python: "miniconda-latest"
+    python: "3.14"
     rust: latest
   apt_packages:
     - libayatana-appindicator3-dev
@@ -29,8 +29,10 @@ build:
           export DOCKLE_DIR="${dockle_dir}"
           "${dockle_dir}/readthedocs_build.sh"
 
-conda:
-  environment: third-party/dockle/environment.yml
+python:
+  install:
+    - method: uv
+      command: sync
 
 submodules:
   include: all

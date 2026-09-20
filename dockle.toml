@@ -19,3 +19,12 @@ framework = "rustdoc"
 source = "."
 entry = "koko"
 home = true
+
+[targets.rustdoc]
+extra_stylesheets = [
+  "https://cdn.jsdelivr.net/npm/@lizardbyte/shared-web@2026.920.12131/dist/crowdin-dockle-css.css",
+]
+extra_javascript = [
+  "https://cdn.jsdelivr.net/npm/@lizardbyte/shared-web@2026.920.12131/dist/crowdin.js",
+  "docs/crowdin.js",
+]

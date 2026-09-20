@@ -1,0 +1,30 @@
+[project]
+name = "Koko"
+version = "0.0.0"
+description = "Self-hosted media server."
+repository = "https://github.com/LizardByte/Koko"
+logo = "assets/Koko.svg"
+favicon = "assets/Koko.svg"
+
+[build]
+output = "_site"
+work = ".dockle"
+strict = true
+clean = true
+
+[[targets]]
+name = "api"
+title = "Koko Rust API"
+framework = "rustdoc"
+source = "."
+entry = "koko"
+home = true
+
+[targets.rustdoc]
+extra_stylesheets = [
+  "https://cdn.jsdelivr.net/npm/@lizardbyte/shared-web@2026.920.12131/dist/crowdin-dockle-css.css",
+]
+extra_javascript = [
+  "https://cdn.jsdelivr.net/npm/@lizardbyte/shared-web@2026.920.12131/dist/crowdin.js",
+  "docs/crowdin.js",
+]

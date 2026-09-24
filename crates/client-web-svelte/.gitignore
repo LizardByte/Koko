@@ -1,0 +1,13 @@
+node_modules/
+/dist/
+/.svelte-kit/
+/build/
+/package
+.env
+.env.*
+!.env.mock
+*.log
+.DS_Store
+
+*storybook.log
+storybook-static

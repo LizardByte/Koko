@@ -269,7 +269,7 @@ export function renderLogViewer(): string {
                   <th>Level</th>
                   <th>Module</th>
                   <th>Source</th>
-                  <th>Message</th>
+                  <th class="log-message-col">Message</th>
                 </tr>
               </thead>
               <tbody>${logEntries.map((entry) => {
@@ -285,7 +285,7 @@ export function renderLogViewer(): string {
                   <td><span class="tag ${levelTagClass}">${escapeHtml(entry.level)}</span></td>
                   <td>${escapeHtml(entry.module)}</td>
                   <td class="muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</td>
-                  <td><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
+                  <td class="log-message-col"><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
                 </tr>
               `;
               }).join('')}</tbody>

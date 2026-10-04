@@ -96,22 +96,6 @@ jobs:
 
           flatpak run org.flatpak.Builder --version
 
-      - name: Generate Flatpak Node sources
-        env:
-          PYTHONPATH: packaging/linux/flatpak/deps/flatpak-builder-tools/node
-        run: |
-          uv run --locked --no-build --no-sync python -m flatpak_node_generator \
-            npm crates/client-web/package-lock.json \
-            --node-sdk-extension "org.freedesktop.Sdk.Extension.node${NODE_VERSION}//${FREEDESKTOP_SDK_VERSION}" \
-            --output generated-node-sources.json
-
-      - name: Generate Flatpak Cargo sources
-        run: |
-          uv run --locked --no-build --no-sync python \
-            ./packaging/linux/flatpak/deps/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
-            Cargo.lock \
-            --output generated-cargo-sources.json
-
       - name: Configure Flatpak manifest
         env:
           INPUT_RELEASE_COMMIT: ${{ inputs.release_commit }}
@@ -134,8 +118,9 @@ jobs:
           build_date="$(git show -s --format=%cs "${commit}")"
 
           mkdir -p build artifacts
-          cp generated-node-sources.json build/
-          cp generated-cargo-sources.json build/
+          # Vendor dependencies from the commit selected for the manifest.
+          git show "${commit}:Cargo.lock" > build/Cargo.lock
+          git show "${commit}:crates/client-web/package-lock.json" > build/package-lock.json
           cp -r packaging/linux/flatpak/deps/shared-modules build/shared-modules
           cp -r packaging/linux/flatpak/modules build/modules
           cp "packaging/linux/flatpak/${APP_ID}.yml" "build/${APP_ID}.yml"
@@ -152,6 +137,22 @@ jobs:
             -e "s|@BUILD_DATE@|${build_date}|g" \
             -e "s|@BUILD_VERSION@|${INPUT_RELEASE_VERSION}|g" \
             "build/${APP_ID}.metainfo.xml"
+
+      - name: Generate Flatpak Node sources
+        env:
+          PYTHONPATH: packaging/linux/flatpak/deps/flatpak-builder-tools/node
+        run: |
+          uv run --locked --no-build --no-sync python -m flatpak_node_generator \
+            npm build/package-lock.json \
+            --node-sdk-extension "org.freedesktop.Sdk.Extension.node${NODE_VERSION}//${FREEDESKTOP_SDK_VERSION}" \
+            --output build/generated-node-sources.json
+
+      - name: Generate Flatpak Cargo sources
+        run: |
+          uv run --locked --no-build --no-sync python \
+            ./packaging/linux/flatpak/deps/flatpak-builder-tools/cargo/flatpak-cargo-generator.py \
+            build/Cargo.lock \
+            --output build/generated-cargo-sources.json
 
       - name: Debug manifest
         working-directory: build

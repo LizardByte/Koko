@@ -550,6 +550,7 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
 
         <section>
           <h3>FFmpeg</h3>
+          <p class="muted">Leave a path blank to use the bundled tool.</p>
           <div class="form-row">
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>

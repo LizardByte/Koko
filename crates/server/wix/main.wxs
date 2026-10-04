@@ -36,6 +36,7 @@
         AllowAdvertise="no"
         AllowAbsent="no">
       <ComponentRef Id="ApplicationExecutable" />
+      <Files Directory="INSTALLFOLDER" Include="$(var.CargoTargetBinDir)\ffmpeg\**" Subdirectory="ffmpeg" />
       <ComponentRef Id="LicenseFile" />
       <ComponentRef Id="StartMenuShortcut" />
       <Files Directory="INSTALLFOLDER" Include="$(var.CargoTargetDir)\..\assets\**" Subdirectory="assets" />

@@ -10,6 +10,9 @@ on:
         required: false
         type: string
 
+env:
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+
 jobs:
   rust:
     strategy:
@@ -112,7 +115,9 @@ jobs:
           apk add --no-cache \
             bash \
             build-base \
+            curl \
             git \
+            jq \
             nodejs \
             npm \
             openssl-dev \
@@ -127,11 +132,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+      - name: Trust Alpine checkout
+        if: contains(matrix.container, 'alpine')
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}/third-party/build-deps"
+
+      - name: Initialize build-deps
+        run: git submodule update --init --depth=1 third-party/build-deps
+
       - name: Install Ubuntu dependencies
         if: matrix.container == '' && contains(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            curl \
+            jq \
             libayatana-appindicator3-dev \
             libdbus-1-dev \
             libgtk-3-dev \
@@ -223,7 +239,27 @@ jobs:
 
       - name: Build
         if: matrix.run == 'build'
-        run: cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release
+        run: |
+          cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release \
+            --message-format=json | tee "${RUNNER_TEMP}/cargo-build.json"
+
+      - name: Bundle shared FFmpeg tools
+        if: matrix.run == 'build'
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          out_dir="$(jq -ber '
+            select(.reason == "build-script-executed" and (.package_id | contains("#koko@"))) | .out_dir
+          ' "${RUNNER_TEMP}/cargo-build.json")"
+          package_dir="$(cat "${out_dir}/ffmpeg-root.txt")"
+          extension=""
+          if [[ "${RUST_TARGET}" == *windows* ]]; then
+            extension=".exe"
+          fi
+          destination="target/${RUST_TARGET}/release/ffmpeg"
+          mkdir -p "${destination}/bin" "${destination}/share"
+          cp "${package_dir}/bin/ffmpeg${extension}" "${package_dir}/bin/ffprobe${extension}" "${destination}/bin/"
+          cp -R "${package_dir}/share/licenses" "${destination}/share/"
 
       - name: Create 7z archive
         if: matrix.run == 'build' && matrix.build_artifact_path == 'artifacts'
@@ -237,7 +273,8 @@ jobs:
 
           7z a "./artifacts/koko-${{ matrix.target }}.7z" \
             "./assets" \
-            "./target/${{ matrix.target }}/release/koko${extension}"
+            "./target/${{ matrix.target }}/release/koko${extension}" \
+            "./target/${{ matrix.target }}/release/ffmpeg"
 
       - name: Prepare build artifact
         if: matrix.run == 'build' && matrix.build_artifact_path == 'build-artifact'
@@ -255,6 +292,7 @@ jobs:
             "target/${{ matrix.target }}/release/koko${extension}" \
             "build-artifact/target/${{ matrix.target }}/release/koko${extension}"
           cp -R "crates/client-web/dist" "build-artifact/crates/client-web/dist"
+          cp -R "target/${{ matrix.target }}/release/ffmpeg" "build-artifact/target/${{ matrix.target }}/release/ffmpeg"
 
       - name: Upload build artifact
         if: matrix.run == 'build'

@@ -25,7 +25,8 @@ Current product direction highlights:
 - The browser UI is targeting a Kodi/Plex-style media-first experience.
 - TheMovieDB is the first planned online metadata source for movies and TV.
 - Metadata providers should stay pluggable so Koko can add more sources over time.
-- Koko currently assumes external `ffmpeg` and `ffprobe` executables by default to keep the licensing path clearer for source-available distribution.
+- Packaged builds include `ffmpeg` and `ffprobe` from LizardByte/build-deps. Explicit executable paths remain configurable.
+- macOS packages require macOS 15.0 or later.
 
 If you are interested in this project, please leave a star and watch the repository for updates.
 
@@ -79,11 +80,6 @@ server:
   key_path: 'key.pem'
   use_custom_certs: false
 
-ffmpeg:
-  strategy: 'external_binaries'
-  ffmpeg_path: 'ffmpeg'
-  ffprobe_path: 'ffprobe'
-
 metadata:
   providers:
     - id: 'tmdb'
@@ -91,6 +87,23 @@ metadata:
       api_key: ''
       language: 'en-US'
 ```
+
+Local `cargo build`, `cargo run`, and `cargo test` prepare `ffmpeg` and `ffprobe` automatically from
+the release tag matching the current `third-party/build-deps` submodule commit. Initialize that submodule
+with `git submodule update --init third-party/build-deps`. Git, curl, and tar must be available on `PATH`.
+Downloads are cached in Cargo's build output directory; CI bundles tools from that same package.
+To update the dependency, check out a different published release tag in the submodule.
+
+Packaged builds resolve omitted FFmpeg paths from `ffmpeg/bin` beside the Koko executable. Local builds
+also search the package prepared by Cargo. Explicit `ffmpeg_path` and `ffprobe_path` settings take precedence.
+
+Set `KOKO_FFMPEG_ROOT` to an extracted build-deps package's `ffmpeg` directory to use locally built tools.
+For an offline build, use that override or set `CARGO_NET_OFFLINE=true` with an already cached package.
+Set `KOKO_SKIP_FFMPEG_DOWNLOAD=1` to use tools supplied separately through settings or `PATH`.
+
+Flatpak uses `packaging/linux/flatpak/modules/ffmpeg.json`, matching Sunshine's downloads and extraction
+into `/app/ffmpeg`. Its launcher adds `/app/ffmpeg/bin` to `PATH`, and its offline build skips Cargo's download.
+The shared update workflow advances the build-deps submodule and refreshes the Flatpak module together.
 
 ## 📝 TODO
 This list is not all-inclusive, and just meant to be a very high level for the initial design.

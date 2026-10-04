@@ -35,7 +35,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
-  MACOSX_DEPLOYMENT_TARGET: "14.2"
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
 
 jobs:
   build_dmg:
@@ -50,7 +50,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             name: macOS-arm64
             arch: arm64
             target: aarch64-apple-darwin
@@ -142,7 +142,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             name: macOS-arm64
             arch: arm64
             target: aarch64-apple-darwin

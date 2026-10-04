@@ -123,9 +123,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          # The ffmpeg directory includes bin/ffmpeg.exe, bin/ffprobe.exe, and share/licenses.
           7z a "artifacts\koko-${{ matrix.target }}.7z" `
             ".\assets" `
-            ".\target\${{ matrix.target }}\release\koko.exe"
+            ".\target\${{ matrix.target }}\release\koko.exe" `
+            ".\target\${{ matrix.target }}\release\ffmpeg"
 
       - name: Resolve MSI package version
         shell: pwsh

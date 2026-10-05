@@ -33,6 +33,7 @@ cleanup:
   - /share/man
 
 modules:
+  - modules/ffmpeg.json
   - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
   # Required by the Linux tray/menu stack through the muda crate.
   - modules/libxdo.json
@@ -45,6 +46,7 @@ modules:
         BUILD_VERSION: "@BUILD_VERSION@"
         CARGO_HOME: /run/build/koko/cargo
         CARGO_NET_OFFLINE: "true"
+        KOKO_SKIP_FFMPEG_DOWNLOAD: "1"
         LD_LIBRARY_PATH: /app/lib
         LIBRARY_PATH: /app/lib
         npm_config_cache: /run/build/koko/flatpak-node/npm-cache

@@ -8,7 +8,7 @@ Koko should grow as a single-repo Rust media platform with a strong shared core:
 
 - Rust-first server and shared contracts
 - FFmpeg-backed media inspection, transcoding, and packaging
-- External-FFmpeg-first licensing posture, with an abstraction layer that keeps future embedded-library support possible if licensing allows
+- Shared build-deps FFmpeg executables, with an abstraction layer that keeps future embedded-library support possible
 - TMDB-first metadata for movies and TV, with a provider model that keeps additional sources pluggable and user-selectable over time
 - Browser client first
 - Kodi/Plex-inspired browse and playback UX
@@ -168,7 +168,7 @@ These run across multiple stages:
 
 ## FFmpeg strategy
 
-- The current implementation path assumes external `ffmpeg` and `ffprobe` executables by default.
+- Packaged builds include shared build-deps `ffmpeg` and `ffprobe` executables; custom paths remain supported.
 - This keeps the licensing path clearer for a source-available distribution model while still letting Koko use FFmpeg capabilities.
 - The server architecture should keep a clean transcoding abstraction so embedded FFmpeg libraries remain a future option if licensing and distribution requirements are compatible.
 

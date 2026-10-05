@@ -139,11 +139,122 @@ fn default_recursive_scan() -> bool {
 }
 
 fn default_ffmpeg_path() -> String {
-    "ffmpeg".into()
+    default_media_tool_path("ffmpeg")
 }
 
 fn default_ffprobe_path() -> String {
-    "ffprobe".into()
+    default_media_tool_path("ffprobe")
+}
+
+fn default_media_tool_path(name: &str) -> String {
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(std::path::Path::to_path_buf))
+        .map(|directory| media_tool_path_in(&directory, name))
+        .unwrap_or_else(|| name.to_owned());
+    if bundled != name {
+        return bundled;
+    }
+    option_env!("KOKO_BUILD_FFMPEG_ROOT")
+        .filter(|root| !root.is_empty())
+        .map(|root| {
+            std::path::Path::new(root)
+                .join("bin")
+                .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        })
+        .filter(|binary| binary.is_file())
+        .map(|binary| binary.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned())
+}
+
+fn media_tool_path_in(
+    directory: &std::path::Path,
+    name: &str,
+) -> String {
+    let binary = directory
+        .join("ffmpeg")
+        .join("bin")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if binary.is_file() { binary.to_string_lossy().into_owned() } else { name.to_owned() }
+}
+
+#[cfg(test)]
+mod bundled_media_tool_tests {
+    use super::media_tool_path_in;
+
+    #[test]
+    fn local_cargo_build_resolves_the_prepared_tools() {
+        if let Some(root) = option_env!("KOKO_BUILD_FFMPEG_ROOT").filter(|root| !root.is_empty()) {
+            for name in ["ffmpeg", "ffprobe"] {
+                let expected = std::path::Path::new(root)
+                    .join("bin")
+                    .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+                assert!(expected.is_file());
+                assert_eq!(
+                    super::default_media_tool_path(name),
+                    expected.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolves_bundled_tools_without_using_the_working_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("koko-media-tools-{}", std::process::id()));
+        let bin = directory.join("ffmpeg").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let binary = bin.join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&binary, b"fixture").unwrap();
+        assert_eq!(
+            media_tool_path_in(&directory, "ffprobe"),
+            binary.to_string_lossy()
+        );
+        assert_eq!(media_tool_path_in(&directory, "ffmpeg"), "ffmpeg");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn in_memory_database() -> diesel::SqliteConnection {
+        use diesel::Connection;
+        let mut connection = diesel::SqliteConnection::establish(":memory:").unwrap();
+        crate::db::run_pending_sqlite_migrations(&mut connection).unwrap();
+        connection
+    }
+
+    #[test]
+    fn cleared_media_tool_paths_use_defaults_before_save() {
+        use diesel::prelude::*;
+        let mut connection = in_memory_database();
+        let settings = super::Settings {
+            ffmpeg: super::FfmpegSettings {
+                ffmpeg_path: String::new(),
+                ffprobe_path: " \t".into(),
+            },
+            ..Default::default()
+        };
+        super::save_database_settings(&mut connection, &settings).unwrap();
+        let saved: String = super::app_settings::table
+            .filter(super::app_settings::key.eq(super::FFMPEG_SETTINGS_KEY))
+            .select(super::app_settings::value)
+            .first(&mut connection)
+            .unwrap();
+        let saved: super::FfmpegSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(saved, super::FfmpegSettings::default());
+    }
+
+    #[test]
+    fn custom_media_tool_paths_are_preserved() {
+        let custom = super::FfmpegSettings {
+            ffmpeg_path: "C:/Custom media tools/ffmpeg.exe".into(),
+            ffprobe_path: "custom-ffprobe".into(),
+        };
+        let mut settings = super::Settings {
+            ffmpeg: custom.clone(),
+            ..Default::default()
+        };
+        super::normalize_settings(&mut settings);
+        assert_eq!(settings.ffmpeg, custom);
+    }
 }
 
 fn default_metadata_language() -> String {
@@ -844,6 +955,13 @@ impl Settings {
 
 /// Normalize settings values before persistence or runtime replacement.
 pub fn normalize_settings(settings: &mut Settings) {
+    if settings.ffmpeg.ffmpeg_path.trim().is_empty() {
+        settings.ffmpeg.ffmpeg_path = default_ffmpeg_path();
+    }
+    if settings.ffmpeg.ffprobe_path.trim().is_empty() {
+        settings.ffmpeg.ffprobe_path = default_ffprobe_path();
+    }
+
     if let Some(days) = settings.metadata.refresh_interval_days {
         settings.metadata.refresh_interval_days = match days {
             30 | 60 | 90 => Some(days),

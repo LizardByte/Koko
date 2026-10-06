@@ -219,6 +219,7 @@ jobs:
             --locked \
             --color always \
             --engine llvm \
+            --timeout 300 \
             "${tarpaulin_args[@]}" \
             --no-fail-fast \
             --out Xml \

@@ -137,7 +137,12 @@ rm -rf "${package_dir}"
 mkdir -p "${macos_dir}" "${resources_dir}" "${dmg_root}" "${output_dir}"
 
 install -m 0755 "${binary_path}" "${macos_dir}/koko"
-ditto "$(dirname "${binary_path}")/ffmpeg" "${macos_dir}/ffmpeg"
+ffmpeg_dir="$(dirname "${binary_path}")/ffmpeg"
+for tool in ffmpeg ffprobe; do
+  install -m 0755 "${ffmpeg_dir}/bin/${tool}" "${macos_dir}/${tool}"
+done
+# Code belongs in MacOS; license files must be sealed as resources.
+ditto "${ffmpeg_dir}/share" "${resources_dir}/ffmpeg/share"
 ditto "assets" "${resources_dir}/assets"
 ditto "crates/client-web/dist" "${resources_dir}/client-web/dist"
 install -m 0644 "LICENSE" "${resources_dir}/LICENSE"
@@ -196,7 +201,7 @@ if [[ "${sign_bundle}" == "true" ]]; then
   xattr -rc "${app_dir}"
   for tool in ffmpeg ffprobe; do
     codesign --force --timestamp --options runtime \
-      --sign "${codesign_identity}" "${macos_dir}/ffmpeg/bin/${tool}"
+      --sign "${codesign_identity}" "${macos_dir}/${tool}"
   done
   codesign --force --timestamp --options runtime \
     --sign "${codesign_identity}" \

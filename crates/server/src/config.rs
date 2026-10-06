@@ -171,11 +171,16 @@ fn media_tool_path_in(
     directory: &std::path::Path,
     name: &str,
 ) -> String {
-    let binary = directory
-        .join("ffmpeg")
-        .join("bin")
-        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    if binary.is_file() { binary.to_string_lossy().into_owned() } else { name.to_owned() }
+    let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    // macOS app bundles keep helper executables directly in Contents/MacOS.
+    [
+        directory.join("ffmpeg").join("bin").join(&filename),
+        directory.join(&filename),
+    ]
+    .into_iter()
+    .find(|binary| binary.is_file())
+    .map(|binary| binary.to_string_lossy().into_owned())
+    .unwrap_or_else(|| name.to_owned())
 }
 
 #[cfg(test)]
@@ -212,6 +217,23 @@ mod bundled_media_tool_tests {
         );
         assert_eq!(media_tool_path_in(&directory, "ffmpeg"), "ffmpeg");
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resolves_tools_in_macos_bundle_layout() {
+        let root =
+            std::env::temp_dir().join(format!("koko-macos-media-tools-{}", std::process::id()));
+        let directory = root.join("Koko.app").join("Contents").join("MacOS");
+        std::fs::create_dir_all(&directory).unwrap();
+        for name in ["ffmpeg", "ffprobe"] {
+            let binary = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+            std::fs::write(&binary, b"fixture").unwrap();
+            assert_eq!(
+                media_tool_path_in(&directory, name),
+                binary.to_string_lossy()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn in_memory_database() -> diesel::SqliteConnection {

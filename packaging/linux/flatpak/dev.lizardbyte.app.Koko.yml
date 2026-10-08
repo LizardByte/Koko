@@ -43,6 +43,8 @@ modules:
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
       env:
+        # CMake applies jitterentropy's required -O0 after the SDK's optimization flags.
+        AWS_LC_SYS_CMAKE_BUILDER: "1"
         BUILD_VERSION: "@BUILD_VERSION@"
         CARGO_HOME: /run/build/koko/cargo
         CARGO_NET_OFFLINE: "true"

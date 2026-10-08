@@ -12,17 +12,8 @@ repository.workspace = true
 publish.workspace = true
 build = "../../build.rs"
 
-categories = [
-    "multimedia",
-    "multimedia::audio",
-    "multimedia::images",
-    "multimedia::video",
-]
-keywords = [
-    "koko",
-    "media-server",
-    "self-hosted",
-]
+categories.workspace = true
+keywords.workspace = true
 
 include = [
     "/assets",
@@ -101,4 +92,6 @@ objc2-core-foundation = { version = "=0.3.2", optional = true }
 
 [dev-dependencies]
 async-std.workspace = true
+# Use std's abort API in tests; branches' no_std intrinsic was removed from nightly.
+branches = { version = "=0.4.6", default-features = false, features = ["std"] }
 rstest.workspace = true

@@ -102,6 +102,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
+      TEST_TOOLCHAIN: nightly  # libtest's JSON output requires nightly.
     steps:
       - name: Fix arm64 Alpine container
         if: runner.arch == 'ARM64' && contains(matrix.container, 'alpine')
@@ -188,7 +189,10 @@ jobs:
             cargo bin cargo-set-version --version
           fi
           if [[ "${{ matrix.run }}" == "test" ]]; then
-            cargo bin cargo-tarpaulin --version
+            rustup toolchain install "${TEST_TOOLCHAIN}" --profile minimal --target ${{ matrix.target }}
+            # Tarpaulin clears RUSTUP_TOOLCHAIN on Windows; select nightly for child Cargo processes.
+            rustup override set "${TEST_TOOLCHAIN}"
+            cargo +"${TEST_TOOLCHAIN}" bin cargo-tarpaulin --version
           fi
 
       - name: Update Version
@@ -215,7 +219,8 @@ jobs:
               ;;
           esac
 
-          cargo bin cargo-tarpaulin \
+          test_status=0
+          cargo +"${TEST_TOOLCHAIN}" bin cargo-tarpaulin \
             --locked \
             --color always \
             --engine llvm \
@@ -223,9 +228,14 @@ jobs:
             "${tarpaulin_args[@]}" \
             --no-fail-fast \
             --out Xml \
+            --stderr \
             ${{ matrix.cargo_features }} \
             --target ${{ matrix.target }} \
-            --verbose
+            --verbose \
+            -- -Z unstable-options --format=json --report-time \
+            > results.json || test_status=$?
+          cargo bin cargo2junit < results.json > junit.xml
+          exit "${test_status}"
 
       - name: Upload coverage artifact
         if: >-
@@ -236,7 +246,9 @@ jobs:
         with:
           if-no-files-found: error
           name: coverage-${{ matrix.target }}
-          path: cobertura.xml
+          path: |
+            cobertura.xml
+            junit.xml
 
       - name: Build
         if: matrix.run == 'build'

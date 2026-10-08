@@ -240,10 +240,11 @@ pub async fn launch_rocket_with_shutdown(
 }
 
 /// Launch the web server.
-#[rocket::main]
-pub async fn launch() {
-    rocket()
-        .launch()
-        .await
-        .expect("Failed to launch web server");
+pub fn launch() {
+    rocket::async_main(async move {
+        rocket()
+            .launch()
+            .await
+            .expect("Failed to launch web server");
+    });
 }

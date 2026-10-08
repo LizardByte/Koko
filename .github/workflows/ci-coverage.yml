@@ -41,6 +41,18 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
           files: ./_coverage/cobertura.xml
+          report_type: coverage
           flags: ${{ matrix.target }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
+
+      - name: Upload test results
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: ./_coverage/junit.xml
+          flags: ${{ matrix.target }}
+          report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
           verbose: true

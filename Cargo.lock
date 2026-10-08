@@ -3800,6 +3800,7 @@ dependencies = [
  "async-std",
  "base64 0.23.1",
  "bcrypt",
+ "branches",
  "cargo_metadata",
  "chrono",
  "config",

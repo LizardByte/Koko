@@ -93,5 +93,5 @@ objc2-core-foundation = { version = "=0.3.2", optional = true }
 [dev-dependencies]
 async-std.workspace = true
 # Use std's abort API in tests; branches' no_std intrinsic was removed from nightly.
-branches = { version = "=0.4.6", default-features = false, features = ["std"] }
+branches = { version = "=0.5.1", default-features = false, features = ["std"] }
 rstest.workspace = true

@@ -31,7 +31,10 @@ use rocket::serde::{
     json::Json,
 };
 use rocket::tokio::fs;
-use rocket_okapi::JsonSchema;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use rocket_okapi::openapi;
 use sha2::{
     Digest,

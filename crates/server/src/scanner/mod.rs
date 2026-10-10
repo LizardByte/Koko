@@ -13,7 +13,10 @@ use std::path::{
     PathBuf,
 };
 
-use schemars::JsonSchema;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use serde::Serialize;
 
 use crate::config::{

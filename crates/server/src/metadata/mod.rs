@@ -30,7 +30,10 @@ use diesel::{
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
-use schemars::JsonSchema;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use serde::{
     Deserialize,
     Serialize,

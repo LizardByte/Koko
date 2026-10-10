@@ -42,8 +42,11 @@ use rocket::tokio::io::{
     Take,
 };
 use rocket::tokio::process::ChildStdout;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use rocket_okapi::openapi;
-use schemars::JsonSchema;
 use serde::Serialize;
 use strsim::normalized_levenshtein;
 

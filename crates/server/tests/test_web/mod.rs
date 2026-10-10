@@ -9,7 +9,78 @@ use rocket::http::Status;
 use koko::web;
 
 // test imports
-use crate::test_utils::make_request;
+use crate::test_utils::{
+    create_test_client,
+    make_request,
+};
+
+#[rocket::async_test]
+async fn test_openapi_schema_document() {
+    let client = create_test_client(Some("openapi_schema")).await;
+    let response = client.get("/openapi.json").dispatch().await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let document: serde_json::Value = response.into_json().await.unwrap();
+    assert_eq!(document["openapi"], "3.0.0");
+    assert_eq!(
+        document["paths"]["/login"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+            ["$ref"],
+        "#/components/schemas/LoginForm"
+    );
+
+    let schemas = document["components"]["schemas"].as_object().unwrap();
+    for name in [
+        "LoginForm",
+        "TokenResponse",
+        "BootstrapResponse",
+        "PackageResponse",
+        "SettingsResponse",
+        "Settings",
+        "MediaLibrarySettings",
+        "ServerCapabilitiesResponse",
+    ] {
+        assert!(schemas.contains_key(name), "Missing OpenAPI schema: {name}");
+    }
+    assert_eq!(
+        schemas["LoginForm"]["properties"]["password"]["type"],
+        "string"
+    );
+    assert!(
+        schemas["LoginForm"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("password"))
+    );
+
+    fn assert_schema_references(
+        document: &serde_json::Value,
+        value: &serde_json::Value,
+    ) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
+                    let pointer = reference
+                        .strip_prefix('#')
+                        .expect("Expected a local schema");
+                    assert!(
+                        document.pointer(pointer).is_some(),
+                        "Unresolved schema: {reference}"
+                    );
+                }
+                for value in object.values() {
+                    assert_schema_references(document, value);
+                }
+            }
+            serde_json::Value::Array(array) => {
+                for value in array {
+                    assert_schema_references(document, value);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_schema_references(&document, &document);
+}
 
 #[rocket::async_test]
 async fn test_swagger_ui_route() {

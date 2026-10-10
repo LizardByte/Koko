@@ -16,7 +16,10 @@ use config::{
 use diesel::prelude::*;
 use dirs::config_local_dir;
 use once_cell::sync::Lazy;
-use schemars::JsonSchema;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use serde::Deserialize;
 use serde::Serialize;
 

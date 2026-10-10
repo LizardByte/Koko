@@ -3824,7 +3824,6 @@ dependencies = [
  "rocket_okapi",
  "rocket_sync_db_pools",
  "rstest",
- "schemars 0.8.22",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -5,8 +5,11 @@ use cargo_metadata::Package;
 use rocket::get;
 use rocket::http::Status;
 use rocket::serde::json::Json;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use rocket_okapi::openapi;
-use schemars::JsonSchema;
 use serde::Serialize;
 
 // local imports

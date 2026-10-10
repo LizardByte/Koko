@@ -17,10 +17,11 @@ use rocket::{
     get,
     post,
 };
-use rocket_okapi::{
+use rocket_okapi::okapi::schemars::{
+    self,
     JsonSchema,
-    openapi,
 };
+use rocket_okapi::openapi;
 use serde_json::json;
 
 // local imports

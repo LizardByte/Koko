@@ -22,7 +22,10 @@ use diesel::{
     SqliteConnection,
     sql_types,
 };
-use schemars::JsonSchema;
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
 use serde::{
     Deserialize,
     Serialize,

@@ -18,6 +18,7 @@ interface SetElementHtmlOptions {
 
 const DOM_PATCH_KEY_ATTRIBUTES = [
   'id',
+  'data-nav-section',
   'data-shelf-row',
   'data-lazy-shelf-id',
   'data-shelf-scroll',
@@ -62,9 +63,13 @@ function elementSelectorForFocus(element: Element | null): string | undefined {
     : undefined;
   const name = namedControl?.name;
   const formId = namedControl?.form?.id;
-  return name && formId
-    ? `#${CSS.escape(formId)} [name="${CSS.escape(name)}"]`
-    : undefined;
+  if (name && formId) return `#${CSS.escape(formId)} [name="${CSS.escape(name)}"]`;
+  const keyAttribute = DOM_PATCH_KEY_ATTRIBUTES.find((attribute) => element.hasAttribute(attribute));
+  const section = element.closest<HTMLElement>('[data-nav-section]');
+  if (keyAttribute && section) {
+    return `[data-nav-section="${CSS.escape(section.dataset.navSection!)}"] [${keyAttribute}="${CSS.escape(element.getAttribute(keyAttribute)!)}"]`;
+  }
+  return undefined;
 }
 
 function domPatchKey(node: Node): string | undefined {

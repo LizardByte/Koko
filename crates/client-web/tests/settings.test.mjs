@@ -9,7 +9,7 @@ globalThis.location = { pathname: '/settings', origin: 'http://localhost' };
 globalThis.localStorage = { getItem: () => null };
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false, ws: false },
 });
 after(() => server.close());
 const assetServer = createHttpServer(server.middlewares);

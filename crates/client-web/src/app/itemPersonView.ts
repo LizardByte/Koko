@@ -282,7 +282,7 @@ export function renderPeopleRail(): string {
   }
 
   return `
-    <section class="panel page-panel item-section item-people-section">
+    <section class="panel page-panel item-section item-people-section" data-nav-section="people" data-nav-label="People">
       <div class="section-heading section-heading-actions">
         <h3>People</h3>
         <span class="muted">${people.length} credit${people.length === 1 ? '' : 's'}</span>
@@ -342,7 +342,7 @@ export function renderItemExtrasRail(): string {
   }
 
   return `
-    <section class="panel page-panel item-section item-extras-section">
+    <section class="panel page-panel item-section item-extras-section" data-nav-section="extras" data-nav-label="Extras">
       <div class="section-heading section-heading-actions">
         <h3>Extras</h3>
         <span class="muted">${extras.length} video${extras.length === 1 ? '' : 's'}</span>
@@ -368,7 +368,7 @@ export function renderSelectedItemCollectionRails(): string {
     .map((rail, index) => {
       const rowId = `item-collection-${index}`;
       return `
-        <section class="panel page-panel item-section item-collection-section">
+        <section class="panel page-panel item-section item-collection-section" data-nav-section="collection:${escapeHtml(rail.collection.id)}" data-nav-label="${escapeHtml(rail.collection.name)}">
           <div class="section-heading section-heading-actions">
             <div>
               <h3>${escapeHtml(rail.collection.name)}</h3>
@@ -489,7 +489,7 @@ export function renderPersonCreditGroup(group: PersonCreditGroup): string {
 
 function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: string): string {
   return `
-    <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}">
+    <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}" data-nav-section="credit-seasons:${group.root.id}" data-nav-label="Seasons">
       <div class="person-credit-tray-heading">
         <span>${escapeHtml(traySummary || 'Credits')}</span>
         <button class="person-credit-tray-close" type="button" data-close-person-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
@@ -511,7 +511,7 @@ function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: str
 
 function renderPersonEpisodeCreditTray(seasonGroup: PersonCreditGroup['seasons'][number]): string {
   return `
-    <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}">
+    <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}" data-nav-section="credit-episodes:${seasonGroup.season.id}" data-nav-label="Episodes">
       <div class="person-credit-tray-heading">
         <span>${escapeHtml(countLabel(seasonGroup.episodes.length, 'episode'))}</span>
         <button class="person-credit-tray-close" type="button" data-close-person-season-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
@@ -545,7 +545,7 @@ export function renderPersonPage(): string {
 
   return `
     <section class="item-page person-page">
-      <section class="item-hero person-hero">
+      <section class="item-hero person-hero" data-nav-section="person-overview" data-nav-label="About ${escapeHtml(response.person.name)}">
         <div class="detail-art item-poster person-poster ${personImageUrl ? 'has-image' : ''}">
           ${personImageUrl ? `<img src="${escapeHtml(personImageUrl)}" alt="${escapeHtml(response.person.name)}" />` : `<span>${escapeHtml(response.person.name.slice(0, 1).toUpperCase())}</span>`}
         </div>
@@ -567,7 +567,7 @@ export function renderPersonPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
         <div class="section-heading section-heading-actions">
           <h3>Credits</h3>
           <span class="muted">${creditGroups.length} title${creditGroups.length === 1 ? '' : 's'}</span>
@@ -739,7 +739,7 @@ function renderSelectedItemBreadcrumbs(item: MediaItemDetail): string {
   }
 
   return `
-        <nav class="item-breadcrumbs panel page-panel" aria-label="Item hierarchy">
+        <nav class="item-breadcrumbs panel page-panel" aria-label="Item hierarchy" data-nav-section="hierarchy" data-nav-label="Item hierarchy">
           ${item.hierarchy.map((hierarchyItem) => `
             <button type="button" class="breadcrumb-button" data-item-id="${hierarchyItem.id}">${escapeHtml(hierarchyItem.display_title)}</button>
           `).join('<span class="breadcrumb-separator">/</span>')}
@@ -861,7 +861,7 @@ function renderTrailerPicker(trailerOptions: TrailerOption[], hasMultipleTrailer
   }
 
   return `
-            <section class="trailer-picker panel">
+            <section class="trailer-picker panel" data-nav-section="trailers" data-nav-label="Trailers">
               <div class="section-heading section-heading-actions">
                 <h3>Choose a trailer</h3>
                 <button type="button" class="secondary-button" id="close-trailer-picker">${renderButtonContent('Close', 'x')}</button>
@@ -920,7 +920,7 @@ function renderSelectedItemHero(
   const itemHeroClass = item.item_type === 'episode' ? 'episode-hero' : '';
   const itemPosterClass = item.item_type === 'episode' ? 'item-thumbnail' : '';
   return `
-      <section class="item-hero ${itemHeroClass}">
+      <section class="item-hero ${itemHeroClass}" data-nav-section="item-overview" data-nav-label="Overview and playback">
         <div class="detail-art item-poster ${itemPosterClass} ${posterUrl ? 'has-image' : ''}">
           ${renderSelectedItemPoster(item, posterUrl)}
         </div>
@@ -946,7 +946,7 @@ function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
   const childCountLabel = countLabel(item.children.length, 'item');
   const childGridClass = item.item_type === 'season' ? 'season-episodes-grid' : '';
   return `
-        <section class="panel page-panel item-section">
+        <section class="panel page-panel item-section" data-nav-section="children" data-nav-label="${escapeHtml(selectedItemChildSectionTitle(item))}">
           <div class="section-heading section-heading-actions">
             <h3>${escapeHtml(selectedItemChildSectionTitle(item))}</h3>
             <span class="muted">${childCountLabel}</span>
@@ -1020,7 +1020,7 @@ function renderSelectedItemSupportGrid(
           </div>
         </section>
 
-        <section class="panel page-panel item-section item-link-panel">
+        <section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
           <div class="section-heading section-heading-actions">
             <h3>${supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3>
             ${metadataRefreshButtonMarkup}

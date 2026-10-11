@@ -36,14 +36,14 @@ button {
   color: #fff;
   padding: 0.8rem 1rem;
   cursor: pointer;
-  transition: transform 160ms ease, opacity 160ms ease, box-shadow 160ms ease, background 160ms ease, outline-color 160ms ease;
+  transition: opacity 140ms ease, box-shadow 140ms ease, background-color 140ms ease, color 140ms ease;
   box-shadow: 0 12px 30px rgba(93, 123, 255, 0.24);
 }
 
-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 14px 34px rgba(93, 123, 255, 0.38);
-  filter: brightness(1.1);
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled) {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  }
 }
 
 button:focus-visible,
@@ -816,7 +816,7 @@ legend {
 
 .filter-card-button:hover {
   border-color: rgba(93, 123, 255, 0.35);
-  background: rgba(255, 255, 255, 0.06);
+  background-color: rgba(255, 255, 255, 0.06);
 }
 
 .shelf-stack {
@@ -1129,8 +1129,7 @@ legend {
 }
 
 .home-feature {
-  position: sticky;
-  top: 3.75rem;
+  position: relative;
   z-index: 7;
   isolation: isolate;
   display: grid;
@@ -2975,7 +2974,6 @@ legend {
   }
 
   .home-feature {
-    top: 5.6rem;
     height: 230px;
     min-height: 230px;
     max-height: 230px;
@@ -3638,5 +3636,164 @@ legend {
   .log-search-row,
   .log-filter-options {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Browsing: quiet pointer feedback and distinct keyboard/controller focus. */
+.browse-workspace {
+  --navigation-accent: #a1f3ce;
+  --navigation-ring: #dcfff0;
+}
+
+.browse-workspace button {
+  box-shadow: none;
+}
+
+.browse-workspace :is(button, a, summary, input, select, textarea) {
+  scroll-margin-block: 5rem 4.5rem;
+  scroll-margin-inline: 0.6rem;
+}
+
+.browse-workspace :is(button, a, summary, input, select, textarea):focus-visible,
+body[data-input-mode='gamepad'] .browse-workspace :is(button, a, summary, input, select, textarea):focus {
+  outline: 2px solid var(--navigation-ring);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px #0c111d;
+}
+
+.browse-workspace :is(.media-card, .person-card, .media-extra-card):focus-visible,
+body[data-input-mode='gamepad'] .browse-workspace :is(.media-card, .person-card, .media-extra-card):focus {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Keep the ring inside controls whose scrolling parents clip outside outlines. */
+.browse-workspace :is(.rail-button, .browse-tab-button, .search-form input, .search-form button):focus-visible,
+body[data-input-mode='gamepad'] .browse-workspace :is(.rail-button, .browse-tab-button, .search-form input, .search-form button):focus {
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #0c111d;
+}
+
+.browse-workspace :is(.media-card, .person-card, .media-extra-card):focus-visible :is(.media-card-art, .person-card-art, .media-extra-thumbnail),
+body[data-input-mode='gamepad'] .browse-workspace :is(.media-card, .person-card, .media-extra-card):focus :is(.media-card-art, .person-card-art, .media-extra-thumbnail) {
+  outline: 2px solid var(--navigation-ring);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #0c111d;
+}
+
+.browse-workspace :is(.media-card, .person-card, .media-extra-card):focus-visible :is(.media-card-title, .person-card-title, .media-extra-title),
+body[data-input-mode='gamepad'] .browse-workspace :is(.media-card, .person-card, .media-extra-card):focus :is(.media-card-title, .person-card-title, .media-extra-title) {
+  color: var(--navigation-accent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .browse-workspace :is(.media-card, .person-card, .media-extra-card):hover {
+    box-shadow: none;
+    background-color: transparent;
+  }
+
+  body:not([data-input-mode='gamepad']) .browse-workspace :is(.media-card, .person-card, .media-extra-card):hover:not(:focus-visible) :is(.media-card-art, .person-card-art, .media-extra-thumbnail) {
+    outline: 2px solid rgba(220, 255, 240, 0.45);
+    outline-offset: -2px;
+  }
+
+  .browse-workspace :is(.media-card, .person-card, .media-extra-card):hover :is(.media-card-title, .person-card-title, .media-extra-title) {
+    color: #fff;
+  }
+
+  .browse-workspace :is(.rail-button, .browse-tab-button):hover {
+    box-shadow: none;
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
+.browse-workspace .shelf {
+  padding-block: 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.browse-workspace [data-nav-section] {
+  scroll-margin-top: 5rem;
+}
+
+.browse-workspace :is(.shelf-header, .section-heading) {
+  border-left: 3px solid transparent;
+  padding-left: 0.65rem;
+}
+
+.browse-workspace .nav-section-active > :is(.shelf-header, .section-heading) {
+  border-left-color: var(--navigation-accent);
+}
+.browse-workspace :is(.home-navbar, .item-breadcrumbs).nav-section-active {
+  border-bottom-color: var(--navigation-accent);
+}
+
+.browse-workspace :is(.item-hero, .home-feature).nav-section-active {
+  box-shadow: inset 0 -2px var(--navigation-accent);
+}
+
+.browse-workspace .library-rail.nav-section-active {
+  border-right-color: var(--navigation-accent);
+}
+
+.app-shell > .navigation-hint {
+  position: fixed;
+  z-index: 25;
+  right: 1rem;
+  bottom: 0.8rem;
+  display: none;
+  align-items: center;
+  gap: 0.85rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.6rem 0.9rem;
+  border: 1px solid rgba(161, 243, 206, 0.25);
+  border-radius: 12px;
+  background: #101a29;
+  color: #b7c9df;
+  font-size: 0.75rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.navigation-hint strong {
+  color: var(--navigation-accent);
+}
+
+.navigation-hint kbd {
+  margin-left: 0.65rem;
+  font: inherit;
+  font-weight: 700;
+  color: #f4f7fb;
+}
+
+.keyboard-navigation-hint,
+.gamepad-navigation-hint {
+  display: none;
+}
+
+body:is([data-input-mode='keyboard'], [data-input-mode='gamepad']) .navigation-hint {
+  display: flex;
+}
+
+body[data-input-mode='keyboard'] .keyboard-navigation-hint,
+body[data-input-mode='gamepad'] .gamepad-navigation-hint {
+  display: inline;
+}
+
+@media (max-width: 700px) {
+  .navigation-hint {
+    flex-wrap: wrap;
+    gap: 0.2rem;
+    font-size: 0.65rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browse-workspace :is(button, a, .media-card-art, .person-card-art, .media-extra-thumbnail) {
+    transition: none;
+  }
+
+  .browse-workspace :is(.main-shell, .shelf-row, .people-row) {
+    scroll-behavior: auto;
   }
 }

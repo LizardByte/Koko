@@ -22,7 +22,7 @@ import {
 import { setElementHtml as patchElementHtml } from './app/domPatcher';
 import { abortRenderEvents, bindEvents, type AppEventBindingContext } from './app/eventBindings';
 import { escapeHtml } from './app/format';
-import { bindGlobalInputHandlers } from './app/input';
+import { bindGlobalInputHandlers, syncNavigationAfterRender } from './app/input';
 import {
   configurePlaybackController,
   renderPlayerOverlay,
@@ -383,7 +383,7 @@ function renderRail(): string {
     : '';
 
   return `
-    <aside class="library-rail${collapsed ? ' collapsed' : ''}">
+    <aside class="library-rail${collapsed ? ' collapsed' : ''}" data-nav-section="libraries" data-nav-label="Libraries" aria-label="Libraries">
       <div class="library-rail-top">
         <div class="brand-block">
           <div class="brand-mark logo-brand-mark"><img class="brand-logo" src="${escapeHtml(kokoLogoUrl)}" alt="" /></div>
@@ -463,7 +463,7 @@ function render(preserveScroll = true): void {
     : '';
 
   setElementHtml(appRoot, `
-    <div class="app-shell${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
+    <div class="app-shell${state.route.page !== 'settings' ? ' browse-workspace' : ''}${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
       ${pageBackdropUrl ? `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(pageBackdropUrl)}');"></div>` : ''}
       ${renderRail()}
       <div class="main-shell">
@@ -472,12 +472,20 @@ function render(preserveScroll = true): void {
           ${renderCurrentPage()}
         </div>
       </div>
+      ${state.route.page !== 'settings' && !state.isPlayerOpen && !state.activeTrailer ? `
+        <div class="navigation-hint">
+          <strong data-navigation-section-label role="status">Browse</strong>
+          <span class="keyboard-navigation-hint"><kbd>↑ ↓ ← →</kbd> Move <kbd>Tab</kbd> Next section <kbd>Shift Tab</kbd> Previous section <span data-search-navigation-hint hidden><kbd>Esc</kbd> Browse tabs</span></span>
+          <span class="gamepad-navigation-hint"><kbd>D-pad</kbd> Move <kbd>LB / RB</kbd> Sections <kbd>A</kbd> Open <kbd>B</kbd> <span data-gamepad-back-label>Back</span></span>
+        </div>
+      ` : ''}
       ${renderPlayerOverlay()}
     </div>
   `, preserveScroll);
 
   createIcons({ icons });
   bindEvents(eventBindingContext());
+  syncNavigationAfterRender();
   syncVisibleSpinners();
   syncThemeSongPlayer();
 }

@@ -129,7 +129,7 @@ export function renderBrowseFilterDetail(): string {
 
   return `
     <section class="browse-filter-detail">
-      <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" ${artworkStyle}>
+      <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" data-nav-section="featured" data-nav-label="Overview" ${artworkStyle}>
         <div class="home-feature-copy">
           <p class="eyebrow">${escapeHtml(filterKindLabel)}</p>
           <h2>${escapeHtml(filter.label)}</h2>
@@ -145,7 +145,7 @@ export function renderBrowseFilterDetail(): string {
           </button>
         </div>
       </div>
-      <div class="item-grid">${items.map(renderItemCard).join('')}</div>
+      <div class="item-grid" data-nav-section="items" data-nav-label="Items">${items.map(renderItemCard).join('')}</div>
     </section>
   `;
 }
@@ -166,7 +166,7 @@ export function renderCollectionDetailPage(): string {
 
   return `
     <section class="item-page collection-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster ${posterUrl ? 'has-image' : ''}">
           ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(collection.name)} poster" />` : renderIcon('image', 'audio-player-art-icon')}
         </div>
@@ -184,7 +184,7 @@ export function renderCollectionDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">${items.length} item${items.length === 1 ? '' : 's'}</span>
@@ -211,7 +211,7 @@ export function renderCategoryDetailPage(): string {
 
   return `
     <section class="item-page grouped-page category-detail-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster">
           ${renderIcon('layout-grid', 'audio-player-art-icon')}
         </div>
@@ -228,7 +228,7 @@ export function renderCategoryDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">${category.items.length} item${category.items.length === 1 ? '' : 's'}</span>
@@ -249,7 +249,7 @@ export function renderPlaylistDetailPage(): string {
 
   return `
     <section class="item-page grouped-page playlist-detail-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster">
           ${renderIcon('play', 'audio-player-art-icon')}
         </div>
@@ -266,7 +266,7 @@ export function renderPlaylistDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">0 items</span>
@@ -477,7 +477,7 @@ export function renderHomeFeature(): string {
     const collection = preview.collection;
     const backdropUrl = pageBackdropUrlForCollection(collection);
     return `
-      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
         <div class="home-feature-copy">
           <p class="eyebrow">Collection</p>
           <h2>${escapeHtml(collection.name)}</h2>
@@ -500,7 +500,7 @@ export function renderHomeFeature(): string {
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
 
   return `
-    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
       <div class="home-feature-copy">
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
@@ -608,7 +608,7 @@ export function renderSearchResults(): string {
   }
 
   return `
-    <section class="search-results-section">
+    <section class="search-results-section" data-nav-section="search-results" data-nav-label="Search results">
       <div class="shelf-header">
         <h3>Search results</h3>
         <span>${state.searchResults.length} matches</span>
@@ -632,7 +632,7 @@ export function renderShelfStack(): string {
 
   return shelves
     .map((shelf) => `
-      <section class="shelf">
+      <section class="shelf" data-nav-section="shelf:${escapeHtml(shelf.id)}" data-nav-label="${escapeHtml(shelf.title)}" aria-label="${escapeHtml(shelf.title)}">
         <div class="shelf-header">
           <h3>${escapeHtml(shelf.title)}</h3>
           <span>${shelf.items.length} items</span>
@@ -680,7 +680,7 @@ type MetadataRefreshProgress = NonNullable<ReturnType<typeof metadataRefreshActi
 
 function renderEmptyLibraryOverview(): string {
   return `
-    <section class="panel page-panel library-overview-panel">
+    <section class="panel page-panel library-overview-panel" data-nav-section="library-status" data-nav-label="Library status">
       <div class="library-overview-grid">
         <article class="library-stat-card">
           <span class="label">Libraries</span>
@@ -749,7 +749,7 @@ export function renderLibraryOverview(): string {
   const stalePendingNote = renderStalePendingNote(stalePending);
 
   return `
-    <section class="panel page-panel library-overview-panel">
+    <section class="panel page-panel library-overview-panel" data-nav-section="library-status" data-nav-label="Library status">
       <div class="library-overview-header">
         <div>
           <p class="eyebrow">Library overview</p>
@@ -817,7 +817,7 @@ export function renderLibraryTab(): string {
   }
 
   return `
-    <section class="browse-section">
+    <section class="browse-section" data-nav-section="items" data-nav-label="Library items">
       <div class="shelf-header browse-section-header">
         <h3>${isSpecificLibrary ? 'All items' : 'All libraries'}</h3>
         <span>${items.length} top-level item${items.length === 1 ? '' : 's'}</span>
@@ -841,7 +841,7 @@ export function renderCollectionsTab(): string {
   }
 
   return `
-    <section class="item-grid">
+    <section class="item-grid" data-nav-section="collections" data-nav-label="Collections" aria-label="Collections">
       ${collections.map((collection) => {
         const posterUrl = collection.artwork_url ?? collection.backdrop_url;
         return `
@@ -867,7 +867,7 @@ export function renderCollectionsTab(): string {
 
 export function renderPlaylistsTab(): string {
   return `
-    <section class="category-grid">
+    <section class="category-grid" data-nav-section="playlists" data-nav-label="Playlists" aria-label="Playlists">
       <button
         type="button"
         class="category-card panel filter-card-button"
@@ -890,7 +890,7 @@ export function renderCategoriesTab(): string {
   }
 
   return `
-    <section class="category-grid">
+    <section class="category-grid" data-nav-section="categories" data-nav-label="Categories" aria-label="Categories">
       ${categories.map((category) => `
         <button
           type="button"
@@ -961,7 +961,7 @@ export function renderSearchPopover(): string {
   }
 
   return `
-    <div class="search-popover panel">
+    <div class="search-popover panel" data-nav-section="search-preview" data-nav-label="Search results">
       <div class="search-popover-header">
         <strong>Search results</strong>
         <span>${state.searchResults.length} match${state.searchResults.length === 1 ? '' : 'es'}</span>
@@ -992,7 +992,7 @@ export function renderHomeNavbar(): string {
     : '';
 
   return `
-    <header class="home-navbar">
+    <header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Browse and search">
       ${renderHomeTabs()}
       <div class="home-navbar-tools">
         <form id="search-form" class="search-form">

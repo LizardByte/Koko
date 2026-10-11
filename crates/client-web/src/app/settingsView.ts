@@ -3,35 +3,41 @@ import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, Meta
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
-import { renderLogViewer, renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
+import { renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
+import { renderLogViewer } from './logView';
 import { renderUserManagement } from './auth';
 import { providerDisplayName, libraryProviderOptions } from './providers';
 import { persistedLibraryForSettings } from './selectors';
 import { state } from './state';
-import type { SettingsSection } from './types';
+import type { AppIconName, SettingsSection } from './types';
 import { renderButtonContent, renderIcon, renderPageNavbar } from './ui';
 
 export function activeSettingsSection(): SettingsSection {
   return state.route.page === 'settings' ? state.route.section ?? 'general' : 'general';
 }
 
+/** Shared navigation and headings for the settings workspace. */
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description: string; icon: AppIconName }> = [
+  { id: 'general', label: 'General', description: 'Server, storage and media tools', icon: 'settings' },
+  { id: 'libraries', label: 'Libraries', description: 'Media folders, scanning and access', icon: 'layers' },
+  { id: 'providers', label: 'Metadata providers', description: 'Credentials and metadata sources', icon: 'link-2' },
+  { id: 'scheduled', label: 'Scheduled tasks', description: 'Automated refresh and maintenance', icon: 'refresh-cw' },
+  { id: 'users', label: 'Users', description: 'Accounts and permissions', icon: 'user-plus' },
+  { id: 'dashboard', label: 'Activity', description: 'Metadata status and background tasks', icon: 'layout-grid' },
+  { id: 'logs', label: 'Logs', description: 'Search and inspect server events', icon: 'search' },
+];
+
+/** Render section links with an accessible current-page indicator. */
 export function renderSettingsSectionNav(): string {
   const activeSection = activeSettingsSection();
-  const sections: Array<{ id: SettingsSection; label: string; path: string }> = [
-    { id: 'general', label: 'General', path: '/settings' },
-    { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
-    { id: 'providers', label: 'Providers', path: '/settings/providers' },
-    { id: 'scheduled', label: 'Scheduled', path: '/settings/scheduled' },
-    { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
-    { id: 'logs', label: 'Logs', path: '/settings/logs' },
-  ];
-
   return `
-    <nav class="settings-section-nav panel page-panel" aria-label="Settings sections">
-      ${sections.map((section) => `
-        <button type="button" class="secondary-button ${activeSection === section.id ? 'active' : ''}" data-settings-section-path="${section.path}">
-          ${escapeHtml(section.label)}
-        </button>
+    <nav class="settings-section-nav" aria-label="Settings sections">
+      <p class="eyebrow settings-nav-label">Settings</p>
+      ${SETTINGS_SECTIONS.map((section) => `
+        <a class="settings-nav-link ${activeSection === section.id ? 'active' : ''}" href="/settings${section.id === 'general' ? '' : `/${section.id}`}" ${activeSection === section.id ? 'aria-current="page"' : ''}>
+          ${renderIcon(section.icon, 'settings-nav-icon')}
+          <span><strong>${escapeHtml(section.label)}</strong><small>${escapeHtml(section.description)}</small></span>
+        </a>
       `).join('')}
     </nav>
   `;
@@ -210,18 +216,20 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
   const persistedLibraryActions = renderPersistedLibraryActions(persistedLibrary, refreshPending, scanPending);
 
   return `
-      <section class="settings-library-card">
-        <div class="settings-library-header">
-          <div>
-            <p class="eyebrow">Library ${index + 1}</p>
-            <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
+      <details class="settings-library-card library-settings-disclosure" id="library-settings-${index}">
+        <summary>
+          <div class="library-settings-summary-copy">
+            <strong>${escapeHtml(library.name || `Library ${index + 1}`)}</strong>
+            <span class="muted">${escapeHtml(library.kind.replace(/_/g, ' '))} · ${Math.max(1, library.paths.length)} folder${library.paths.length > 1 ? 's' : ''}</span>
             ${persistedLibraryTags}
           </div>
+          ${renderIcon('chevron-right', 'settings-disclosure-icon')}
+        </summary>
+        <div class="library-settings-body">
           <div class="settings-library-actions">
             ${persistedLibraryActions}
             <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
           </div>
-        </div>
         <div class="form-row">
           <label>Name<input name="existing_library_name_${index}" value="${escapeHtml(library.name)}" /></label>
           <label>Type
@@ -258,7 +266,8 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
           <legend>Metadata sources</legend>
           ${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}
         </fieldset>
-      </section>
+        </div>
+      </details>
     `;
 }
 
@@ -316,9 +325,6 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Scheduled tasks</h3>
-          </div>
           <div class="settings-library-card">
             <div class="settings-library-header">
               <div>
@@ -475,11 +481,14 @@ export function renderProviderSettingsCard(provider: MetadataProviderSettings): 
         `
     : '';
   const providerSettingsFields = showApiKey || showRequestSettings
-    ? `<div class="form-row">
+    ? `${showApiKey ? `<div class="form-row provider-credentials">
         ${apiKeyField}
         ${clearApiKeyField}
-        ${requestSettingsFields}
-      </div>`
+      </div>` : ''}
+      ${showRequestSettings ? `<details class="provider-request-settings">
+        <summary>Request limits and retries</summary>
+        <div class="form-row">${requestSettingsFields}</div>
+      </details>` : ''}`
     : '<p class="muted">This provider does not require provider-specific settings.</p>';
   return `
     <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
@@ -505,9 +514,6 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Metadata providers</h3>
-          </div>
           <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
           <div class="settings-library-list">
             ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
@@ -531,16 +537,15 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
   return `
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
-        <section>
-          <h3>Server</h3>
-          <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Connection</h3><p class="muted">Choose how devices connect to your server.</p></div>
           <div class="form-row">
-            <label>Address<input name="address" value="${escapeHtml(settings.server.address)}" /></label>
-            <label>Port<input name="port" type="number" min="1" value="${settings.server.port}" /></label>
+            <label>Listen address<input name="address" value="${escapeHtml(settings.server.address)}" /><small class="muted">Use 0.0.0.0 to listen on all network interfaces.</small></label>
+            <label>Port<input name="port" type="number" min="1" max="65535" value="${settings.server.port}" /></label>
           </div>
           <div class="form-row checkbox-row">
-            <label><input name="use_https" type="checkbox" ${useHttpsChecked} /> Use HTTPS</label>
-            <label><input name="use_custom_certs" type="checkbox" ${useCustomCertsChecked} /> Use custom certificates</label>
+            <label class="checkbox-inline"><input name="use_https" type="checkbox" ${useHttpsChecked} /> Use HTTPS</label>
+            <label class="checkbox-inline"><input name="use_custom_certs" type="checkbox" ${useCustomCertsChecked} /> Use custom certificates</label>
           </div>
           <div class="form-row">
             <label>Certificate path<input name="cert_path" value="${escapeHtml(settings.server.cert_path)}" /></label>
@@ -548,28 +553,23 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
           </div>
         </section>
 
-        <section>
-          <h3>FFmpeg</h3>
-          <p class="muted">Leave a path blank to use the bundled tool.</p>
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Storage</h3><p class="muted">Where Koko keeps its database and cached metadata.</p></div>
+          <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+        </section>
+
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Media tools</h3><p class="muted">Leave a path blank to use the bundled tool.</p></div>
           <div class="form-row">
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
           </div>
         </section>
 
-        <section>
-          <h3>Metadata providers</h3>
-          <p class="muted">Provider credentials and refresh behavior are configured on their own settings page.</p>
-          <button type="button" class="secondary-button" data-settings-section-path="/settings/providers">${renderButtonContent('Open provider settings', 'settings')}</button>
-        </section>
-
-        <div class="page-actions">
+        <div class="page-actions settings-save-bar">
           <button type="submit">${renderButtonContent('Save settings', 'save')}</button>
-          <button type="button" class="secondary-button" id="go-home-from-settings">${renderButtonContent('Back home', 'house')}</button>
         </div>
       </form>
-
-      ${renderUserManagement()}
     </section>
   `;
 }
@@ -579,10 +579,7 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Libraries</h3>
-          </div>
-          <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+          <p class="muted">Expand a library to edit its folders, scanning and metadata preferences.</p>
           <div class="settings-library-list">
             ${renderExistingLibrariesSettings(settings)}
           </div>
@@ -592,7 +589,9 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
         </div>
       </form>
 
-      <form id="add-library-form" class="settings-form add-library-form">
+      <details class="settings-add-library">
+        <summary>${renderButtonContent('Add a library', 'plus')}</summary>
+        <form id="add-library-form" class="settings-form add-library-form">
         <section>
           <h3>Add library</h3>
           <label>Name<input name="library_name" placeholder="Movies" required /></label>
@@ -632,6 +631,7 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
         </section>
         <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
       </form>
+      </details>
     </section>
   `;
 }
@@ -648,6 +648,9 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
   }
   if (section === 'libraries') {
     return renderLibrarySettingsPage(settings);
+  }
+  if (section === 'users') {
+    return `<section class="panel page-panel settings-page-panel">${renderUserManagement()}</section>`;
   }
   if (section === 'dashboard') {
     return `
@@ -669,15 +672,16 @@ export function renderSettingsPage(): string {
 
   const section = activeSettingsSection();
   const settingsContent = renderSettingsSectionContent(section, settings);
+  const heading = SETTINGS_SECTIONS.find((entry) => entry.id === section)!;
 
   return `
-    ${renderPageNavbar(
-      'Settings',
-      'Program configuration',
-      `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
-    )}
-    ${renderSettingsSectionNav()}
-    ${settingsContent}
+    <div class="settings-workspace">
+      ${renderSettingsSectionNav()}
+      <div class="settings-content">
+        ${renderPageNavbar('Settings', heading.label, heading.description)}
+        ${settingsContent}
+      </div>
+    </div>
   `;
 }
 

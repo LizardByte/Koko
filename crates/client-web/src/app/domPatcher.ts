@@ -105,7 +105,7 @@ function captureRenderSnapshot(): RenderSnapshot {
       ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
       : undefined;
   const scrollPositions = new Map<string, ScrollPosition>();
-  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
     const key = scrollPositionKey(element, index);
     if (key) {
       scrollPositions.set(key, { top: element.scrollTop, left: element.scrollLeft });
@@ -121,7 +121,7 @@ function captureRenderSnapshot(): RenderSnapshot {
 
 function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
   globalThis.requestAnimationFrame(() => {
-    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
       if (position) {
@@ -217,9 +217,14 @@ function patchNode(current: Node, next: Node): Node {
   }
 
   if (current instanceof Element && next instanceof Element) {
+    // A results refresh must preserve the user's expanded settings cards.
+    const detailsOpen = current instanceof HTMLDetailsElement ? current.open : undefined;
     patchAttributes(current, next);
     patchChildren(current, next);
     syncFormControlState(current, next);
+    if (current instanceof HTMLDetailsElement && detailsOpen !== undefined) {
+      current.open = detailsOpen;
+    }
   }
 
   return current;

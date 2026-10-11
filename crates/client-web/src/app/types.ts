@@ -31,7 +31,7 @@ export type AppRoute =
 export type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
 
 /** Settings subsections addressable from navigation and direct URLs. */
-export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'dashboard' | 'logs';
+export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
 
 /** Describes a resolved browse filter used by category, collection, and playlist detail pages. */
 export interface BrowseFilter {
@@ -116,6 +116,9 @@ export interface AppState {
   dashboardItems: MediaItemSummary[];
   settingsResponse?: SettingsResponse;
   logsResponse?: LogEntriesResponse;
+  logsLoading?: boolean;
+  logsError?: string;
+  logPage: number;
   selectedItem?: MediaItemDetail;
   selectedItemMetadata?: ItemMetadataResponse;
   selectedPerson?: MetadataPersonResponse;

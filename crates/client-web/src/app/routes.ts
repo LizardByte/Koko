@@ -30,7 +30,7 @@ function normalizePath(pathname: string): string {
 export function parseRoute(): AppRoute {
   const normalizedPath = normalizePath(globalThis.location.pathname);
 
-  const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|dashboard|logs))?$/.exec(normalizedPath);
+  const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|users|dashboard|logs))?$/.exec(normalizedPath);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }

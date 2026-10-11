@@ -652,7 +652,14 @@ async function refreshData(showLoading = true): Promise<void> {
         state.dashboardItems = await getItems();
       } else if (state.route.section === 'logs') {
         state.dashboardItems = [];
-        state.logsResponse = await getLogs(currentLogFilterRequest());
+        state.logPage = 0;
+        state.logsError = undefined;
+        try {
+          state.logsResponse = await getLogs(currentLogFilterRequest());
+        } catch (error) {
+          state.logsResponse = undefined;
+          state.logsError = error instanceof Error ? error.message : 'Failed to load logs.';
+        }
       } else {
         state.dashboardItems = [];
         state.logsResponse = undefined;
@@ -809,26 +816,28 @@ async function refreshPendingMetadataData(): Promise<void> {
       const previousSnapshot = snapshotJson({
         systemActivities: state.systemActivities,
         libraries: state.libraries,
-        logsResponse: state.logsResponse,
         dashboardItems: state.dashboardItems,
       });
-      const [activitiesResponse, libraries, logsResponse, dashboardItems] = await Promise.all([
+      const [activitiesResponse, libraries, dashboardItems] = await Promise.all([
         getSystemActivities(),
         getLibraries(),
-        getLogs(currentLogFilterRequest()),
-        getItems(),
+        route.page === 'settings' && route.section === 'dashboard' ? getItems() : Promise.resolve(state.dashboardItems),
       ]);
+      if (state.route.page !== route.page || (state.route.page === 'settings' && route.page === 'settings' && state.route.section !== route.section)) {
+        return;
+      }
       state.systemActivities = activitiesResponse.activities;
       state.libraries = libraries;
-      state.logsResponse = logsResponse;
       state.dashboardItems = dashboardItems;
       state.error = undefined;
       shouldRender = previousSnapshot !== snapshotJson({
         systemActivities: state.systemActivities,
         libraries: state.libraries,
-        logsResponse: state.logsResponse,
         dashboardItems: state.dashboardItems,
       }) || previousError !== state.error;
+      if (route.page === 'settings' && route.section !== 'dashboard' && route.section !== 'libraries') {
+        shouldRender = false;
+      }
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : 'Failed to refresh media metadata.';

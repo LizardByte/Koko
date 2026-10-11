@@ -121,7 +121,11 @@ export function renderUserManagement(): string {
       const adminTagLabel = user.admin ? 'Admin' : 'User';
       return `
               <form class="provider-row user-edit-row" data-update-user-id="${user.id}">
-                ${renderUserAvatar(user, 'edit-avatar')}
+                <div class="user-edit-header">
+                  ${renderUserAvatar(user, 'edit-avatar')}
+                  <strong>${escapeHtml(user.username)}</strong>
+                  <span class="tag ${adminTagClass}">${adminTagLabel}</span>
+                </div>
                 <div class="user-edit-fields">
                   <label>Username<input name="username" value="${escapeHtml(user.username)}" required /></label>
                   <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
@@ -131,7 +135,6 @@ export function renderUserManagement(): string {
                   <label class="checkbox-inline"><input name="remove_profile_image" type="checkbox" /> Remove image</label>
                 </div>
                 <div class="provider-tags">
-                  <span class="tag ${adminTagClass}">${adminTagLabel}</span>
                   <button type="submit" class="secondary-button">${renderButtonContent('Save', 'save')}</button>
                 </div>
               </form>
@@ -142,27 +145,32 @@ export function renderUserManagement(): string {
   return `
     <section class="settings-form user-management-form">
       <div class="section-heading">
-        <h3>Users</h3>
+        <h3>Accounts</h3>
       </div>
       <div class="user-list">
         ${userListMarkup}
       </div>
     </section>
 
-    <form id="create-user-form" class="settings-form user-management-form">
+    <details class="settings-add-user">
+      <summary>${renderButtonContent('Add a user', 'user-plus')}</summary>
+      <form id="create-user-form" class="settings-form user-management-form">
       <section>
         <div class="section-heading">
           <h3>Add user</h3>
         </div>
+        <div class="new-user-fields">
         <label>Username<input name="username" autocomplete="off" required /></label>
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
         <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
         <label>Metadata languages<input name="preferred_metadata_languages" value="en-US" placeholder="en-US, es-ES" /></label>
+        </div>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>
         <button type="submit">${renderButtonContent('Create user', 'user-plus')}</button>
       </section>
     </form>
+    </details>
   `;
 }

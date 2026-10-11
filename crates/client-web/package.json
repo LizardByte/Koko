@@ -8,7 +8,8 @@
     "dev:mock": "set VITE_USE_MOCK_API=true&& vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "lucide": "1.52.0"

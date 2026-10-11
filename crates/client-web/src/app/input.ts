@@ -5,7 +5,7 @@ const activeGamepadButtons = new Set<string>();
 function visibleFocusableElements(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled), a[href], summary, input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
     ),
   ).filter((element) => element.offsetParent !== null);
 }
@@ -21,7 +21,7 @@ function moveFocus(direction: 1 | -1): void {
 
 function activateFocusedElement(): void {
   const focused = document.activeElement as HTMLElement | null;
-  if (focused?.matches('button, a[href], input, select, textarea')) {
+  if (focused?.matches('button, a[href], summary, input, select, textarea')) {
     focused.click();
   }
 }

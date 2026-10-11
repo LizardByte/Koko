@@ -3,7 +3,8 @@ import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';
 import { readProfileImageUpload } from './auth';
-import { renderLogViewer, renderMetadataDashboard } from './dashboardView';
+import { renderMetadataDashboard } from './dashboardView';
+import { LOG_PAGE_SIZE, renderLogResults } from './logView';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -137,29 +138,49 @@ function setAuthFormBusy(form: HTMLFormElement, busy: boolean): void {
 
 
 
+/** Refresh results without rebuilding the filter form or rebinding the entire app. */
 async function refreshLogsView(context: AppEventBindingContext): Promise<void> {
-  const { render, setElementHtml } = context;
-  if (state.route.page !== 'settings') {
+  if (state.route.page !== 'settings' || state.route.section !== 'logs' || state.logsLoading) {
     return;
   }
-
+  const route = state.route;
+  state.logsLoading = true;
+  state.logsError = undefined;
+  updateLogResults(context);
   try {
-    state.logsResponse = await getLogs(currentLogFilterRequest());
-    state.error = undefined;
+    const response = await getLogs(currentLogFilterRequest());
+    if (state.route === route) {
+      state.logsResponse = response;
+      state.logPage = 0;
+    }
   } catch (error) {
-    state.error = error instanceof Error ? error.message : 'Failed to load logs.';
+    if (state.route === route) {
+      state.logsError = error instanceof Error ? error.message : 'Failed to load logs.';
+    }
   } finally {
-    const root = document.querySelector<HTMLElement>('#log-viewer-panel-root');
-    if (root) {
-      setElementHtml(root, renderLogViewer());
-      createIcons({ icons });
-      bindEvents(context);
-    } else {
-      render();
+    state.logsLoading = false;
+    if (state.route.page === 'settings' && state.route.section === 'logs') {
+      updateLogResults(context);
     }
   }
 }
 
+/** Patch the bounded result list and synchronize controls while a request is running. */
+function updateLogResults(context: AppEventBindingContext): void {
+  const root = document.querySelector<HTMLElement>('#log-results');
+  if (!root) {
+    return;
+  }
+  context.setElementHtml(root, renderLogResults());
+  createIcons({ icons, root });
+  document.querySelectorAll<HTMLButtonElement>('#refresh-log-viewer, #log-filter-form button').forEach((button) => {
+    button.disabled = Boolean(state.logsLoading);
+  });
+  const path = document.querySelector<HTMLElement>('.log-file-path code');
+  if (path) {
+    path.textContent = state.logsResponse?.log_path ?? 'Unavailable';
+  }
+}
 
 
 function updatePageBackdrop(backdropUrl: string | undefined): void {
@@ -523,6 +544,14 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       const path = button.dataset.settingsSectionPath;
       if (path) {
         navigateTo(path);
+      }
+    });
+  });
+  document.querySelectorAll<HTMLAnchorElement>('.settings-nav-link').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        navigateTo(link.pathname);
       }
     });
   });
@@ -1053,6 +1082,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
   document.querySelector<HTMLFormElement>('#log-filter-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (state.logsLoading) {
+      return;
+    }
     const form = event.currentTarget as HTMLFormElement | null;
     if (!form) {
       return;
@@ -1077,11 +1109,25 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       since: '',
       until: '',
     };
+    document.querySelector<HTMLFormElement>('#log-filter-form')?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select').forEach((control) => {
+      control.value = '';
+    });
     await refreshLogsView(context);
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-log-viewer')?.addEventListener('click', async () => {
     await refreshLogsView(context);
+  });
+  document.querySelector<HTMLElement>('#log-viewer-panel-root')?.addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-log-page]') : null;
+    if (!button || button.disabled) {
+      return;
+    }
+    const page = Number(button.dataset.logPage);
+    const lastPage = Math.max(0, Math.ceil((state.logsResponse?.entries.length ?? 0) / LOG_PAGE_SIZE) - 1);
+    state.logPage = Math.min(Math.max(0, page), lastPage);
+    updateLogResults(context);
+    document.querySelector<HTMLElement>('#log-results')?.scrollIntoView({ block: 'nearest' });
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-shelf-scroll]').forEach((button) => {

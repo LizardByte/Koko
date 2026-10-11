@@ -48,4 +48,5 @@ export const state: AppState = {
     since: '',
     until: '',
   },
+  logPage: 0,
 };

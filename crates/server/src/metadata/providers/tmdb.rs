@@ -50,11 +50,6 @@ use crate::metadata::{
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
-const TMDB_LOGO_URL: &str = concat!(
-    "https://www.themoviedb.org/assets/2/v4/logos/v2/",
-    "blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6b",
-    "ffa71d7f5c4.svg",
-);
 
 static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -76,8 +71,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         extends_provider_ids: Vec::new(),
         attribution_text: "Metadata and artwork provided by The Movie Database (TMDB).".into(),
         attribution_url: "https://www.themoviedb.org/".into(),
-        logo_light_url: Some(TMDB_LOGO_URL.into()),
-        logo_dark_url: Some(TMDB_LOGO_URL.into()),
+        logo_light_url: Some("/assets/providers/tmdb.svg".into()),
+        logo_dark_url: Some("/assets/providers/tmdb.svg".into()),
     }
 }
 

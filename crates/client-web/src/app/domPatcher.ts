@@ -181,6 +181,13 @@ function patchAttributes(current: Element, next: Element): void {
 function syncFormControlState(current: Element, next: Element): void {
   const isActive = current === document.activeElement;
   if (current instanceof HTMLInputElement && next instanceof HTMLInputElement) {
+    // Preserve pending image and credential edits until the user saves the form.
+    if (current.type === 'file'
+      || current.hasAttribute('data-profile-image-removal')
+      || current.hasAttribute('data-api-key-draft')
+      || current.hasAttribute('data-api-key-removal')) {
+      return;
+    }
     current.defaultValue = next.defaultValue;
     current.defaultChecked = next.defaultChecked;
     if (!isActive) {

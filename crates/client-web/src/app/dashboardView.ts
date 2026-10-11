@@ -161,12 +161,12 @@ export function renderMetadataDashboard(): string {
 
   return `
     <section class="panel page-panel metadata-dashboard-panel">
-      <div class="section-heading section-heading-actions">
+      <div class="section-heading metadata-dashboard-heading">
         <div>
           <h3>Metadata dashboard</h3>
           <p class="muted">Browse every item, identify failed refreshes, and spot pending items that no longer have an active worker.</p>
         </div>
-        <div class="provider-tags">
+        <div class="provider-tags metadata-dashboard-summary">
           <span class="tag">${state.dashboardItems.length} total</span>
           <span class="tag ${summary.failed ? 'danger-tag' : ''}">${summary.failed} failed</span>
           <span class="tag warning">${summary.pending} active</span>

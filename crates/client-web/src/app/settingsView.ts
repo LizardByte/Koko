@@ -6,7 +6,7 @@ import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
 import { renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
 import { renderLogViewer } from './logView';
 import { renderUserManagement } from './auth';
-import { providerDisplayName, libraryProviderOptions } from './providers';
+import { providerAttributionLogo, providerDisplayName, libraryProviderOptions } from './providers';
 import { persistedLibraryForSettings } from './selectors';
 import { state } from './state';
 import type { AppIconName, SettingsSection } from './types';
@@ -106,8 +106,8 @@ function renderPrimaryProviderMoveButtons(label: string, isSecondary: boolean): 
   return isSecondary
     ? ''
     : `
-            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
-            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-up')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-down')}</button>
           `;
 }
 
@@ -391,7 +391,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                 <label>Days missing
                   <input name="scheduled_trash_cleanup_days" type="number" min="1" max="3650" value="${trashCleanupDays}" />
                 </label>
-                <label>Run interval
+                <label>Run interval (days)
                   <input name="scheduled_trash_cleanup_interval_days" type="number" min="1" max="365" value="${scheduled.trash_cleanup.interval_days}" />
                 </label>
               </div>
@@ -412,7 +412,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                 <label><input name="scheduled_database_maintenance_enabled" type="checkbox" ${scheduled.database_maintenance.enabled ? 'checked' : ''} /> Checkpoint, vacuum, and optimize automatically</label>
               </div>
               <div class="form-row">
-                <label>Run interval
+                <label>Run interval (days)
                   <input name="scheduled_database_maintenance_interval_days" type="number" min="1" max="365" value="${scheduled.database_maintenance.interval_days}" />
                 </label>
               </div>
@@ -457,38 +457,34 @@ export function libraryScannerOptions(selectedScanner: string): string {
 export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
   const label = providerDisplayName(provider.id);
   const status = state.metadataProviders.find((entry) => entry.id === provider.id);
-  const logoUrl = status?.logo_dark_url ?? status?.logo_light_url;
+  const logoUrl = providerAttributionLogo(provider.id);
   const showApiKey = Boolean(status?.requires_api_key);
   const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
-  const showRequestSettings = provider.id !== 'local_nfo';
-  const logoMarkup = logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : '';
+  const logoMarkup = logoUrl ? `<span class="provider-settings-logo" aria-hidden="true">
+    ${renderIcon('link-2', 'provider-logo-fallback')}
+    <img data-provider-logo src="${escapeHtml(logoUrl)}" alt="" />
+  </span>` : '';
   const providerRoleLabel = status?.role === 'secondary' ? 'Secondary' : 'Primary';
   const providerRoleTag = status?.role ? `<span class="tag">${escapeHtml(providerRoleLabel)}</span>` : '';
   const providerDescription = status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : '';
   const providerAttribution = status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : '';
+  const apiKeyId = `${provider.id}-api-key`;
   const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
   const apiKeyField = showApiKey
-    ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>`
+    ? `<div class="api-key-field">
+        <label for="${apiKeyId}">API key</label>
+        <div class="input-group api-key-picker" role="group" aria-label="${escapeHtml(label)} API key" data-api-key-configured="${apiKeyConfigured}">
+          <input id="${apiKeyId}" class="input-group-field" name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" data-api-key-draft />
+          <input name="${provider.id}_clear_api_key" type="checkbox" data-api-key-removal hidden />
+          <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyConfigured ? '' : 'disabled'}>${renderIcon('x')}</button>
+        </div>
+        <small class="muted" data-api-key-status aria-live="polite" hidden>Saved API key will be cleared on save.</small>
+      </div>`
     : '';
-  const clearApiKeyField = showApiKey && apiKeyConfigured
-    ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>`
-    : '';
-  const requestSettingsFields = showRequestSettings
-    ? `
-        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
-        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
-        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
-        `
-    : '';
-  const providerSettingsFields = showApiKey || showRequestSettings
-    ? `${showApiKey ? `<div class="form-row provider-credentials">
+  const providerSettingsFields = showApiKey
+    ? `<div class="form-row provider-credentials">
         ${apiKeyField}
-        ${clearApiKeyField}
-      </div>` : ''}
-      ${showRequestSettings ? `<details class="provider-request-settings">
-        <summary>Request limits and retries</summary>
-        <div class="form-row">${requestSettingsFields}</div>
-      </details>` : ''}`
+      </div>`
     : '<p class="muted">This provider does not require provider-specific settings.</p>';
   return `
     <section class="settings-library-card provider-settings-card" id="provider-${escapeHtml(provider.id)}">
@@ -514,7 +510,7 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
+          <p class="muted">Manage provider credentials here. Metadata languages are selected per library.</p>
           <div class="settings-library-list">
             ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
           </div>
@@ -747,9 +743,6 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
         if (
           !formData.has(`${prefix}_api_key`)
           && !formData.has(`${prefix}_clear_api_key`)
-          && !formData.has(`${prefix}_rate_limit_per_second`)
-          && !formData.has(`${prefix}_retry_attempts`)
-          && !formData.has(`${prefix}_retry_backoff_ms`)
         ) {
           return provider;
         }
@@ -763,9 +756,6 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
           ...provider,
           api_key: submittedApiKey && !clearApiKey ? submittedApiKey : null,
           clear_api_key: clearApiKey,
-          rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
-          retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
-          retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),
         };
       }),
     },

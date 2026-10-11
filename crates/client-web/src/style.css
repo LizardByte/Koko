@@ -2317,12 +2317,37 @@ legend {
 }
 
 .provider-settings-logo {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
   width: 2.75rem;
   height: 2.75rem;
-  object-fit: contain;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.08);
   padding: 0.35rem;
+}
+
+.provider-settings-logo img {
+  position: absolute;
+  inset: 0.35rem;
+  width: calc(100% - 0.7rem);
+  height: calc(100% - 0.7rem);
+  object-fit: contain;
+  opacity: 0;
+}
+
+.provider-settings-logo.is-loaded img {
+  opacity: 1;
+}
+
+.provider-settings-logo.is-loaded .provider-logo-fallback {
+  visibility: hidden;
+}
+
+.provider-logo-fallback svg {
+  width: 1.4rem;
+  height: 1.4rem;
 }
 
 .player-overlay {
@@ -3248,24 +3273,112 @@ legend {
   align-items: center;
 }
 
-.provider-request-settings > summary {
-  cursor: pointer;
-  font-size: 0.85rem;
-  color: #9caccc;
-}
-
-.provider-request-settings > .form-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding-top: 1rem;
-}
-
 .settings-workspace .library-settings-body > .form-row:has(> label:nth-child(3)) {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .settings-workspace .metadata-provider-option {
-  padding: 0.6rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 0.75rem 0.85rem;
+}
+
+.provider-option-main .checkbox-inline {
+  flex-wrap: nowrap;
+}
+
+.provider-option-main > .muted {
+  white-space: nowrap;
+}
+
+.metadata-dashboard-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+
+.metadata-dashboard-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-image-field,
+.api-key-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.86rem;
+  color: #c7d4e9;
+}
+
+.input-group {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid #2b3850;
+  border-radius: 8px;
+  background: #0c1422;
+}
+
+.input-group:focus-within {
+  border-color: #8b9cff;
+}
+
+.input-group-field {
+  flex: 1;
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+}
+
+.settings-workspace .settings-form .input-group > input:not([hidden]) {
+  border: 0;
+  border-radius: 7px 0 0 7px;
+  background: transparent;
+}
+
+.profile-image-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input-group > button.icon-only {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: auto;
+  padding: 0;
+  border-left: 1px solid #2b3850;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.input-group > button:last-child {
+  border-radius: 0 7px 7px 0;
+}
+
+.input-group > button.icon-only:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+.input-group > button:focus-visible,
+.input-group > input:focus-visible {
+  outline-offset: -3px;
+}
+
+.input-group > button:disabled {
+  opacity: 1;
+  color: #66758b;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.input-group button[aria-pressed='true'] {
+  background: rgba(255, 111, 126, 0.18);
+  color: #ffb3bd;
 }
 
 .settings-workspace .add-library-form {
@@ -3500,8 +3613,7 @@ legend {
 
   .settings-workspace .library-settings-body > .form-row:has(> label:nth-child(3)),
   .settings-workspace .user-edit-fields,
-  .new-user-fields,
-  .provider-request-settings > .form-row {
+  .new-user-fields {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -3515,6 +3627,14 @@ legend {
 }
 
 @media (max-width: 500px) {
+  .settings-workspace .metadata-provider-option {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-option-actions {
+    justify-content: flex-end;
+  }
+
   .log-search-row,
   .log-filter-options {
     grid-template-columns: minmax(0, 1fr);

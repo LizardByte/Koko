@@ -3,7 +3,7 @@ import kokoLogoUrl from '../../../../assets/Koko.svg';
 import type { BootstrapUser, ProfileImageUploadRequest } from '../api';
 import { escapeHtml } from './format';
 import { state } from './state';
-import { renderButtonContent, renderUserAvatar } from './ui';
+import { renderButtonContent, renderIcon, renderUserAvatar } from './ui';
 
 export function currentUser(): BootstrapUser | undefined {
   return state.bootstrap?.current_user;
@@ -56,6 +56,55 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/** Render an accessible image picker with attached folder and remove buttons. */
+export function renderProfileImagePicker(id: string, hasImage = false): string {
+  return `
+    <div class="profile-image-field">
+      <span id="${id}-label">Profile image</span>
+      <div class="input-group profile-image-picker" role="group" aria-labelledby="${id}-label" data-has-profile-image="${hasImage}">
+        <input id="${id}" name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-labelledby="${id}-label" hidden />
+        <input name="remove_profile_image" type="checkbox" data-profile-image-removal hidden />
+        <span class="input-group-field profile-image-status muted" data-profile-image-status aria-live="polite">${hasImage ? 'Current image' : 'No image selected'}</span>
+        <button type="button" class="secondary-button icon-only" data-remove-profile-image title="Remove image on save" aria-label="Remove profile image" aria-pressed="false" ${hasImage ? '' : 'disabled'}>${renderIcon('x')}</button>
+        <button type="button" class="secondary-button icon-only" data-browse-profile-image title="Browse for an image" aria-label="Browse for a profile image">${renderIcon('folder-open')}</button>
+      </div>
+    </div>
+  `;
+}
+
+/** Bind image selection and reversible removal without discarding other form edits. */
+export function bindProfileImagePickers(root: ParentNode = document): void {
+  root.querySelectorAll<HTMLElement>('.profile-image-picker').forEach((picker) => {
+    const fileInput = picker.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const removalInput = picker.querySelector<HTMLInputElement>('[data-profile-image-removal]')!;
+    const status = picker.querySelector<HTMLElement>('[data-profile-image-status]')!;
+    const removeButton = picker.querySelector<HTMLButtonElement>('[data-remove-profile-image]')!;
+    const hasImage = picker.dataset.hasProfileImage === 'true';
+    const sync = () => {
+      status.textContent = removalInput.checked
+        ? 'Image will be removed on save'
+        : fileInput.files?.[0]?.name ?? (hasImage ? 'Current image' : 'No image selected');
+      removeButton.disabled = !hasImage && !fileInput.files?.length && !removalInput.checked;
+      removeButton.setAttribute('aria-pressed', String(removalInput.checked));
+      removeButton.setAttribute('aria-label', removalInput.checked ? 'Undo profile image removal' : 'Remove profile image');
+      removeButton.title = removalInput.checked ? 'Undo image removal' : 'Remove image on save';
+    };
+    picker.querySelector<HTMLButtonElement>('[data-browse-profile-image]')?.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files?.length) {
+        removalInput.checked = false;
+      }
+      sync();
+    });
+    removeButton.addEventListener('click', () => {
+      fileInput.value = '';
+      removalInput.checked = hasImage && !removalInput.checked;
+      sync();
+    });
+    sync();
+  });
+}
+
 export function renderAuthShell(title: string, description: string, content: string): string {
   return `
     <div class="auth-shell">
@@ -87,7 +136,7 @@ export function renderWelcomeScreen(): string {
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
-        <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+        ${renderProfileImagePicker('welcome-profile-image')}
         <button type="submit">${renderButtonContent('Create admin account', 'user-plus')}</button>
       </form>
     `,
@@ -129,10 +178,9 @@ export function renderUserManagement(): string {
                 <div class="user-edit-fields">
                   <label>Username<input name="username" value="${escapeHtml(user.username)}" required /></label>
                   <label>Birthday<input name="birthday" type="date" value="${escapeHtml(user.birthday ?? '')}" /></label>
-                  <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+                  ${renderProfileImagePicker(`user-${user.id}-profile-image`, Boolean(user.profile_image_url))}
                   <label>Metadata languages<input name="preferred_metadata_languages" value="${escapeHtml((user.preferred_metadata_languages ?? ['en-US']).join(', '))}" placeholder="en-US, es-ES" /></label>
                   <label class="checkbox-inline"><input name="admin" type="checkbox" ${adminChecked} /> Administrator</label>
-                  <label class="checkbox-inline"><input name="remove_profile_image" type="checkbox" /> Remove image</label>
                 </div>
                 <div class="provider-tags">
                   <button type="submit" class="secondary-button">${renderButtonContent('Save', 'save')}</button>
@@ -164,7 +212,7 @@ export function renderUserManagement(): string {
         <label>Password<input name="password" type="password" autocomplete="new-password" required /></label>
         <label>Optional PIN<input name="pin" inputmode="numeric" pattern="[0-9]{4,6}" placeholder="1234" /></label>
         <label>Birthday<input name="birthday" type="date" /></label>
-        <label>Profile image<input name="profile_image_file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+        ${renderProfileImagePicker('new-user-profile-image')}
         <label>Metadata languages<input name="preferred_metadata_languages" value="en-US" placeholder="en-US, es-ES" /></label>
         </div>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>

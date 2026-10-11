@@ -549,9 +549,6 @@ export interface MetadataProviderSettings {
   api_key_configured?: boolean;
   clear_api_key?: boolean;
   language: string;
-  rate_limit_per_second: number;
-  retry_attempts: number;
-  retry_backoff_ms: number;
 }
 
 export interface SystemActivity {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
+import { createServer as createHttpServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 
@@ -11,11 +12,16 @@ const server = await createServer({
   server: { middlewareMode: true },
 });
 after(() => server.close());
+const assetServer = createHttpServer(server.middlewares);
+await new Promise((resolve) => assetServer.listen(0, '127.0.0.1', resolve));
+after(() => new Promise((resolve) => assetServer.close(resolve)));
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderLogResults, renderLogViewer } = await server.ssrLoadModule('/src/app/logView.ts');
 const { renderSettingsPage, buildSettingsFromForm } = await server.ssrLoadModule('/src/app/settingsView.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
-const { getMockSettings, getMockMetadataProviders } = await server.ssrLoadModule('/src/mockApi.ts');
+const { getMockSettings, getMockMetadataProviders, updateMockSettings } = await server.ssrLoadModule('/src/mockApi.ts');
+const { providerAttributionLogo } = await server.ssrLoadModule('/src/app/providers.ts');
+const { escapeHtml } = await server.ssrLoadModule('/src/app/format.ts');
 
 beforeEach(() => {
   globalThis.location.pathname = '/settings';
@@ -94,16 +100,118 @@ test('user management has a dedicated route and navigation current-page indicato
   assert.match(html, /<h3>Storage<\/h3>/);
 });
 
-test('provider request settings remain in the form and saved credentials stay hidden', () => {
+test('provider request policies are absent while saved credentials stay hidden', () => {
   globalThis.location.pathname = '/settings/providers';
   state.route = parseRoute();
   state.settingsResponse.settings.metadata.providers[0].api_key = 'saved-secret';
   const html = renderSettingsPage();
-  assert.match(html, /<details class="provider-request-settings">/);
+  assert.ok(!html.includes('Request limits and retries'));
   assert.ok(!html.includes('saved-secret'));
-  for (const provider of state.settingsResponse.settings.metadata.providers.filter(provider => provider.id !== 'local_nfo')) {
-    assert.ok(html.includes(`name="${provider.id}_retry_attempts"`));
+  for (const field of ['rate_limit_per_second', 'retry_attempts', 'retry_backoff_ms']) {
+    assert.ok(!html.includes(field));
+    const form = new FormData();
+    form.set(`tmdb_${field}`, '999');
+    assert.ok(!(field in buildSettingsFromForm(form).metadata.providers[0]));
   }
+  const form = new FormData();
+  form.set('tmdb_api_key', 'replacement-key');
+  assert.equal(buildSettingsFromForm(form).metadata.providers[0].api_key, 'replacement-key');
+  form.set('tmdb_clear_api_key', 'on');
+  assert.equal(buildSettingsFromForm(form).metadata.providers[0].api_key, null);
+  assert.equal(buildSettingsFromForm(form).metadata.providers[0].clear_api_key, true);
+});
+
+test('scheduled task intervals specify days', () => {
+  state.route = { page: 'settings', section: 'scheduled' };
+  const html = renderSettingsPage();
+  assert.equal([...html.matchAll(/<label>Run interval \(days\)/g)].length, 2);
+  assert.ok(!html.includes('<label>Run interval\n'));
+});
+
+test('API-key removal is an accessible button attached to the password field', () => {
+  state.route = { page: 'settings', section: 'providers' };
+  const html = renderSettingsPage();
+  assert.match(html, /class="input-group api-key-picker"[^>]*aria-label="TheMovieDB API key"/);
+  assert.match(html, /id="tmdb-api-key"[^>]*data-api-key-draft/);
+  assert.match(html, /name="tmdb_clear_api_key"[^>]*data-api-key-removal hidden/);
+  assert.match(html, /data-clear-api-key[^>]*aria-label="Clear TheMovieDB API key"[^>]*>[^]*?data-lucide="x"/);
+  assert.match(html, /data-clear-api-key[^>]*aria-label="Clear TheTVDB API key"[^>]*disabled/);
+  assert.ok(!html.includes('Clear saved API key'));
+});
+
+test('provider artwork comes from API descriptors and resolves against the API server', () => {
+  state.route = { page: 'settings', section: 'providers' };
+  state.metadataProviders[0].logo_dark_url = '/assets/providers/server-selected.svg';
+  const logoUrl = 'http://localhost/assets/providers/server-selected.svg';
+  assert.equal(providerAttributionLogo('tmdb'), logoUrl);
+  assert.ok(renderSettingsPage().includes(`src="${escapeHtml(logoUrl)}"`));
+  globalThis.localStorage = { getItem: () => 'http://backend.test:9191' };
+  try {
+    assert.equal(providerAttributionLogo('tmdb'), 'http://backend.test:9191/assets/providers/server-selected.svg');
+    state.metadataProviders[0].logo_dark_url = undefined;
+    assert.equal(providerAttributionLogo('tmdb'), 'http://backend.test:9191/assets/providers/tmdb.svg');
+    state.metadataProviders[0].logo_light_url = undefined;
+    assert.equal(providerAttributionLogo('tmdb'), undefined);
+  } finally {
+    globalThis.localStorage = { getItem: () => null };
+  }
+});
+
+test('every mock provider has working local logos in the development server', async () => {
+  const providers = getMockMetadataProviders();
+  assert.equal(providers.length, 7);
+  const origin = `http://127.0.0.1:${assetServer.address().port}`;
+  for (const provider of providers) {
+    for (const url of [provider.logo_light_url, provider.logo_dark_url]) {
+      assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png)$/);
+      const response = await fetch(`${origin}${url}`);
+      assert.equal(response.status, 200, url);
+      assert.equal(response.headers.get('content-type'), url.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
+      assert.ok((await response.arrayBuffer()).byteLength > 0);
+    }
+  }
+  assert.equal((await fetch(`${origin}/assets/providers/unknown.svg`)).status, 404);
+  assert.equal((await fetch(`${origin}/assets/providers/README.md`)).status, 404);
+});
+
+test('mock credential saves clear or replace saved keys without exposing plaintext', () => {
+  const original = getMockSettings().settings;
+  try {
+    const next = structuredClone(original);
+    next.metadata.providers[0].clear_api_key = true;
+    const cleared = updateMockSettings(next).settings;
+    assert.equal(cleared.metadata.providers[0].api_key_configured, false);
+    assert.ok(!('api_key' in cleared.metadata.providers[0]));
+    assert.ok(!('api_key_secret_ref' in cleared.metadata.providers[0]));
+    assert.ok(!('clear_api_key' in cleared.metadata.providers[0]));
+    cleared.metadata.providers[0].api_key = 'replacement-key';
+    const saved = updateMockSettings(cleared).settings;
+    assert.equal(saved.metadata.providers[0].api_key_configured, true);
+    assert.ok(!('api_key' in saved.metadata.providers[0]));
+  } finally {
+    updateMockSettings(original);
+  }
+});
+
+test('image pickers expose labeled folder and remove buttons without native browse controls', () => {
+  state.route = { page: 'settings', section: 'users' };
+  const html = renderSettingsPage();
+  assert.match(html, /data-browse-profile-image[^>]*aria-label="Browse for a profile image"/);
+  assert.match(html, /data-remove-profile-image[^>]*aria-label="Remove profile image"/);
+  assert.match(html, /data-lucide="folder-open"/);
+  assert.match(html, /name="profile_image_file"[^>]*hidden/);
+  assert.ok(!html.includes(' /> Remove image'));
+});
+
+test('provider ordering uses vertical arrows and logos include a fallback', () => {
+  state.route = { page: 'settings', section: 'libraries' };
+  const html = renderSettingsPage();
+  assert.match(html, /data-provider-move="up"[^<]*>[^]*?data-lucide="chevron-up"/);
+  assert.match(html, /data-provider-move="down"[^<]*>[^]*?data-lucide="chevron-down"/);
+  state.route = { page: 'settings', section: 'providers' };
+  state.metadataProviders[0].logo_dark_url = 'https://example.test/unavailable.svg';
+  assert.match(renderSettingsPage(), /provider-logo-fallback/);
+  assert.match(renderSettingsPage(), /data-provider-logo/);
 });
 
 test('collapsed library cards retain the controls for every configured library', () => {

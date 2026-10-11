@@ -2,7 +2,7 @@
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';
-import { readProfileImageUpload } from './auth';
+import { bindProfileImagePickers, readProfileImageUpload } from './auth';
 import { renderMetadataDashboard } from './dashboardView';
 import { LOG_PAGE_SIZE, renderLogResults } from './logView';
 import { escapeHtml } from './format';
@@ -458,6 +458,9 @@ export function bindEvents(context: AppEventBindingContext): void {
 
 function bindRenderEvents(context: AppEventBindingContext): void {
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
+  bindProfileImagePickers();
+  bindProviderLogos();
+  bindApiKeyPickers();
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement | null;
@@ -571,11 +574,13 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       if (!option || !list) {
         return;
       }
-      if (button.dataset.providerMove === 'up' && option.previousElementSibling) {
-        list.insertBefore(option, option.previousElementSibling);
+      const primaryOptions = visiblePrimaryProviderOptions(list);
+      const index = primaryOptions.indexOf(option);
+      if (button.dataset.providerMove === 'up' && index > 0) {
+        list.insertBefore(option, primaryOptions[index - 1]);
       }
-      if (button.dataset.providerMove === 'down' && option.nextElementSibling) {
-        list.insertBefore(option.nextElementSibling, option);
+      if (button.dataset.providerMove === 'down' && index >= 0 && index < primaryOptions.length - 1) {
+        list.insertBefore(option, primaryOptions[index + 1].nextSibling);
       }
       syncProviderDependencyOptions(list);
     });
@@ -992,6 +997,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     try {
       state.settingsResponse = await updateSettings(nextSettings);
+      form.reset();
       await refreshData();
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to save settings.';
@@ -1204,6 +1210,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
           preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
         };
         const updatedUser = await updateUser(userId, request);
+        form.reset();
         state.users = state.users.map((user) => (user.id === updatedUser.id ? updatedUser : user));
         if (state.bootstrap?.current_user?.id === updatedUser.id) {
           state.bootstrap.current_user = updatedUser;
@@ -1372,7 +1379,59 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
 
 
+/** Show a fallback while a provider logo loads or is unavailable. */
+function bindProviderLogos(): void {
+  document.querySelectorAll<HTMLImageElement>('[data-provider-logo]').forEach((image) => {
+    const sync = () => image.parentElement?.classList.toggle('is-loaded', image.complete && image.naturalWidth > 0);
+    image.addEventListener('load', sync);
+    image.addEventListener('error', sync);
+    sync();
+  });
+}
+
+/** Bind attached API-key buttons; clearing stays reversible until settings are saved. */
+function bindApiKeyPickers(): void {
+  document.querySelectorAll<HTMLElement>('.api-key-picker').forEach((picker) => {
+    const input = picker.querySelector<HTMLInputElement>('input[type="password"]')!;
+    const removal = picker.querySelector<HTMLInputElement>('[data-api-key-removal]')!;
+    const button = picker.querySelector<HTMLButtonElement>('[data-clear-api-key]')!;
+    const status = picker.closest('.api-key-field')?.querySelector<HTMLElement>('[data-api-key-status]');
+    const configured = picker.dataset.apiKeyConfigured === 'true';
+    const label = picker.getAttribute('aria-label') ?? 'API key';
+    const sync = () => {
+      input.placeholder = removal.checked ? 'Will be cleared on save' : configured ? 'Saved' : '';
+      button.disabled = !configured && !input.value && !removal.checked;
+      button.setAttribute('aria-pressed', String(removal.checked));
+      button.setAttribute('aria-label', removal.checked ? `Undo clearing ${label}` : `Clear ${label}`);
+      button.title = removal.checked ? 'Undo API key clearing' : 'Clear API key on save';
+      if (status) status.hidden = !removal.checked;
+    };
+    input.addEventListener('input', () => {
+      removal.checked = false;
+      sync();
+    });
+    button.addEventListener('click', () => {
+      input.value = '';
+      removal.checked = configured && !removal.checked;
+      sync();
+    });
+    sync();
+  });
+}
+
+/** Return only primary providers offered for the current library type, in display order. */
+function visiblePrimaryProviderOptions(list: HTMLElement): HTMLElement[] {
+  return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option[data-provider-role="primary"]:not(.is-hidden)'));
+}
+
 function syncProviderDependencyOptions(list: HTMLElement): void {
+  const primaryOptions = visiblePrimaryProviderOptions(list);
+  primaryOptions.forEach((option, index) => {
+    const up = option.querySelector<HTMLButtonElement>('[data-provider-move="up"]');
+    const down = option.querySelector<HTMLButtonElement>('[data-provider-move="down"]');
+    if (up) up.disabled = index === 0;
+    if (down) down.disabled = index === primaryOptions.length - 1;
+  });
   const selectedPrimaryIds = new Set(
     Array.from(list.querySelectorAll<HTMLInputElement>('.metadata-provider-option[data-provider-role="primary"] input[type="checkbox"]:checked'))
       .map((input) => input.value),
@@ -1382,11 +1441,14 @@ function syncProviderDependencyOptions(list: HTMLElement): void {
     const input = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
     const role = option.dataset.providerRole ?? 'primary';
-    if (role === 'primary') {
+    if (role === 'primary' && !option.classList.contains('is-hidden')) {
       priority += 1;
       if (label) {
         label.textContent = `Priority ${priority}`;
       }
+      return;
+    }
+    if (role === 'primary') {
       return;
     }
 

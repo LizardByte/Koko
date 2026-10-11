@@ -59,6 +59,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
 pub fn spa_routes() -> Vec<rocket::Route> {
     routes![
         common::index,
+        common::provider_logo,
         common::spa_asset,
         user::get_user_profile_image,
         media::get_item_artwork,

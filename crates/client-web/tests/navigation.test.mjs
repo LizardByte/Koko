@@ -95,6 +95,7 @@ class Control {
     if (selector === 'form') return this.form ?? null;
     if (selector === '#search-form') return this.form?.id === 'search-form' ? this.form : null;
     if (selector === '.search-popover') return this.searchPopover ?? null;
+    if (selector === '.home-pinned-header') return this.pinnedHeader ?? this.section?.pinnedHeader ?? null;
     if (selector.startsWith('input,')) return this.kind === 'input' ? this : null;
     return null;
   }
@@ -200,6 +201,27 @@ test('moving up into an unvisited section starts at the first card', () => {
   assert.equal(document.activeElement.name, 'Shelf second');
   key('ArrowUp');
   assert.equal(document.activeElement.name, 'Browse second');
+});
+
+test('returning to pinned hero controls does not scroll the media rows back to the top', () => {
+  sections[1].pinnedHeader = {};
+  sections[2].controls[0].focus();
+  key('ArrowUp');
+  assert.equal(document.activeElement.name, 'Browse first');
+  assert.equal(document.activeElement.scrolled, undefined);
+  assert.equal(sections[1].scrolled, undefined);
+  key('ArrowDown');
+  assert.equal(document.activeElement.name, 'Shelf first');
+  assert.equal(document.activeElement.scrolled, true);
+});
+
+test('search suggestions inside the pinned header can still scroll into view', () => {
+  sections[1].pinnedHeader = {};
+  sections[1].controls[1].searchPopover = {};
+  sections[1].controls[0].focus();
+  key('ArrowRight');
+  assert.equal(document.activeElement.name, 'Browse second');
+  assert.equal(document.activeElement.scrolled, true);
 });
 
 test('unavailable remembered cards fall back to the beginning of the row', () => {

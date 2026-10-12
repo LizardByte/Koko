@@ -6,6 +6,7 @@
   font-weight: 400;
   background: #0c111d;
   color: #f4f7fb;
+  scroll-padding-top: var(--home-pinned-header-height, 0px);
 }
 
 * {
@@ -502,6 +503,7 @@ legend {
   height: 100vh;
   min-width: 0;
   overflow-y: auto;
+  scroll-padding-top: var(--home-pinned-header-height, 0px);
 }
 
 .main-shell:has(.home-navbar) {
@@ -575,6 +577,17 @@ legend {
 
 .content-navbar-actions .search-form {
   justify-content: flex-end;
+}
+
+.home-pinned-header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  flex-shrink: 0;
+}
+
+.home-pinned-header .home-navbar {
+  position: relative;
 }
 
 .home-navbar {
@@ -2938,6 +2951,45 @@ legend {
   }
 }
 
+@media (max-height: 850px) {
+  .home-pinned-header .home-feature {
+    height: clamp(140px, calc(100dvh - 510px), 350px);
+    min-height: 0;
+    max-height: none;
+    padding: 0.9rem;
+  }
+
+  .home-pinned-header .home-feature-copy {
+    gap: 0.45rem;
+  }
+
+  .home-pinned-header .home-feature-copy h2 {
+    font-size: 1.65rem;
+  }
+
+  .home-pinned-header .home-feature-copy p {
+    -webkit-line-clamp: 2;
+  }
+
+  .home-pinned-header .home-feature-logo {
+    max-height: 65px;
+  }
+}
+
+@media (max-height: 600px) {
+  .home-pinned-header .home-feature {
+    padding: 0.75rem;
+  }
+
+  .home-pinned-header .home-feature-copy p {
+    display: none;
+  }
+
+  .home-pinned-header .home-feature-logo {
+    max-height: 40px;
+  }
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -3001,6 +3053,12 @@ legend {
     height: 230px;
     min-height: 230px;
     max-height: 230px;
+  }
+
+  .home-pinned-header .home-feature {
+    height: min(230px, max(140px, calc(100dvh - 510px)));
+    min-height: 0;
+    max-height: none;
   }
 
   .home-feature.has-artwork::before {
@@ -3739,6 +3797,10 @@ body[data-input-mode='gamepad'] .browse-workspace :is(.media-card, .person-card,
 
 .browse-workspace [data-nav-section] {
   scroll-margin-top: 5rem;
+}
+
+.main-shell:has(.home-pinned-header) :is([data-nav-section], button, a, summary, input, select, textarea) {
+  scroll-margin-top: 1rem;
 }
 
 .browse-workspace :is(.shelf-header, .section-heading) {

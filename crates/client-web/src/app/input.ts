@@ -45,10 +45,13 @@ function focusControl(control: HTMLElement | undefined, revealSection = false): 
   if (!control) return;
   control.focus({ preventScroll: true });
   const section = control.closest<HTMLElement>(SECTION_SELECTOR);
-  if (revealSection && section?.dataset.navSection !== 'libraries') {
-    section?.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' });
+  // Pinned controls are already visible; scrolling them would reset the media rows below.
+  if (!control.closest('.home-pinned-header') || control.closest('.search-popover')) {
+    if (revealSection && section?.dataset.navSection !== 'libraries') {
+      section?.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' });
+    }
+    control.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   }
-  control.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   syncNavigationState();
 }
 

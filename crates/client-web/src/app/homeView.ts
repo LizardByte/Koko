@@ -945,8 +945,10 @@ export function renderHomePage(): string {
   }
 
   return `
-    ${renderHomeNavbar()}
-    ${renderHomeFeature()}
+    <div class="home-pinned-header">
+      ${renderHomeNavbar()}
+      ${renderHomeFeature()}
+    </div>
     <section class="shelf-stack panel page-panel">${renderHomeTabContent()}</section>
   `;
 }

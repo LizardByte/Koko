@@ -23,6 +23,7 @@ import { setElementHtml as patchElementHtml } from './app/domPatcher';
 import { abortRenderEvents, bindEvents, type AppEventBindingContext } from './app/eventBindings';
 import { escapeHtml } from './app/format';
 import { bindGlobalInputHandlers, syncNavigationAfterRender } from './app/input';
+import { syncPinnedHomeHeader } from './app/pinnedHeader';
 import {
   configurePlaybackController,
   renderPlayerOverlay,
@@ -118,6 +119,7 @@ function setElementHtml(root: HTMLElement, html: string, preserveDom = true): vo
     abortEvents: abortRenderEvents,
     beforePatch: expandLazyShelfRowsForPatch,
   });
+  syncPinnedHomeHeader();
 }
 
 function shouldDeferAutoRefreshRender(): boolean {

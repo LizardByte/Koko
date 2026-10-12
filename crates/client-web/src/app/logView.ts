@@ -6,6 +6,11 @@ import type { LogEntry } from '../api';
 
 export const LOG_PAGE_SIZE = 50;
 
+/** Route loading starts before the first log request; refreshes use the log-specific flag. */
+export function logsAreLoading(): boolean {
+  return Boolean(state.isLoading || state.logsLoading);
+}
+
 function renderLogEntry(entry: LogEntry): string {
   let levelClass = '';
   if (entry.level === 'ERROR') {
@@ -28,6 +33,7 @@ function renderLogEntry(entry: LogEntry): string {
 
 /** Render only the current page of results, preserving the separate filter form. */
 export function renderLogResults(): string {
+  const loading = logsAreLoading();
   const entries = state.logsResponse?.entries ?? [];
   const lastPage = Math.max(0, Math.ceil(entries.length / LOG_PAGE_SIZE) - 1);
   const page = Math.min(Math.max(0, state.logPage), lastPage);
@@ -35,27 +41,27 @@ export function renderLogResults(): string {
   const visible = entries.slice(start, start + LOG_PAGE_SIZE);
   const error = state.logsError ? `<p class="log-error" role="alert">${escapeHtml(state.logsError)}</p>` : '';
   let status = 'No matching entries';
-  if (state.logsLoading) {
+  if (loading) {
     status = 'Loading logs…';
   } else if (entries.length) {
     status = `${start + 1}–${start + visible.length} of ${entries.length} recent matches · newest first`;
   }
-  const emptyMessage = state.logsLoading
+  const emptyMessage = loading
     ? 'Loading recent server events…'
     : 'No entries match these filters. Try a different search or clear the filters.';
-  const emptyState = `<div class="empty-state">${emptyMessage}</div>`;
+  const emptyState = `<div class="log-results-placeholder">${emptyMessage}</div>`;
   const events = visible.length ? visible.map(renderLogEntry).join('') : emptyState;
   return `
     ${error}
     <div class="log-results-toolbar">
       <span class="muted" role="status">${status}</span>
       <div class="log-pagination" aria-label="Log pages">
-        <button type="button" class="secondary-button icon-only" data-log-page="${page - 1}" ${page === 0 ? 'disabled' : ''} aria-label="Previous log page">${renderButtonContent('', 'chevron-left')}</button>
+        <button type="button" class="secondary-button icon-only" data-log-page="${page - 1}" ${loading || page === 0 ? 'disabled' : ''} aria-label="Previous log page">${renderButtonContent('', 'chevron-left')}</button>
         <span>${page + 1} / ${lastPage + 1}</span>
-        <button type="button" class="secondary-button icon-only" data-log-page="${page + 1}" ${page === lastPage ? 'disabled' : ''} aria-label="Next log page">${renderButtonContent('', 'chevron-right')}</button>
+        <button type="button" class="secondary-button icon-only" data-log-page="${page + 1}" ${loading || page === lastPage ? 'disabled' : ''} aria-label="Next log page">${renderButtonContent('', 'chevron-right')}</button>
       </div>
     </div>
-    <div id="log-events" class="log-events" aria-label="Log entries" aria-busy="${Boolean(state.logsLoading)}">
+    <div id="log-events" class="log-events" aria-label="Log entries" aria-busy="${loading}">
       ${events}
     </div>
   `;
@@ -63,7 +69,9 @@ export function renderLogResults(): string {
 
 /** Render filters once; subsequent refreshes update only the result region. */
 export function renderLogViewer(): string {
-  const disabled = state.logsLoading ? 'disabled' : '';
+  const loading = logsAreLoading();
+  const disabled = loading ? 'disabled' : '';
+  const logPath = state.logsResponse?.log_path ?? (loading ? 'Loading…' : 'Unavailable');
   return `
     <section class="panel page-panel settings-log-panel">
       <div class="section-heading section-heading-actions">
@@ -89,7 +97,7 @@ export function renderLogViewer(): string {
         </div>
       </form>
       <div id="log-results">${renderLogResults()}</div>
-      <p class="log-file-path muted">Log file <code>${escapeHtml(state.logsResponse?.log_path ?? 'Unavailable')}</code></p>
+      <p class="log-file-path muted">Log file <code>${escapeHtml(logPath)}</code></p>
     </section>
   `;
 }

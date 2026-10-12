@@ -2039,6 +2039,10 @@ legend {
   align-items: end;
 }
 
+.metadata-dashboard-filter-form {
+  margin-bottom: 1.2rem;
+}
+
 .table-shell {
   width: 100%;
   overflow-x: auto;
@@ -3595,6 +3599,16 @@ legend {
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   content-visibility: auto;
   contain-intrinsic-size: auto 120px;
+}
+
+.log-results-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  padding: 1.5rem;
+  color: #afc0db;
+  font-size: 0.85rem;
+  text-align: center;
 }
 
 .log-event:last-child {

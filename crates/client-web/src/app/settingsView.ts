@@ -633,7 +633,13 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
   `;
 }
 
-function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot): string {
+function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot | undefined): string {
+  if (section === 'logs') {
+    return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
+  }
+  if (!settings) {
+    return '<section class="panel page-panel settings-page-panel"><div class="empty-state" role="status">Settings are still loading…</div></section>';
+  }
   if (section === 'general') {
     return renderGeneralSettingsPage(settings);
   }
@@ -655,18 +661,11 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
       <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
     `;
   }
-  if (section === 'logs') {
-    return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
-  }
   return '';
 }
 
 export function renderSettingsPage(): string {
   const settings = state.settingsResponse?.settings;
-  if (!settings) {
-    return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
-  }
-
   const section = activeSettingsSection();
   const settingsContent = renderSettingsSectionContent(section, settings);
   const heading = SETTINGS_SECTIONS.find((entry) => entry.id === section)!;

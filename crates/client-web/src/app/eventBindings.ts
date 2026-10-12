@@ -4,7 +4,7 @@ import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';
 import { bindProfileImagePickers, readProfileImageUpload } from './auth';
 import { renderMetadataDashboard } from './dashboardView';
-import { LOG_PAGE_SIZE, renderLogResults } from './logView';
+import { LOG_PAGE_SIZE, logsAreLoading, renderLogResults } from './logView';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -140,7 +140,7 @@ function setAuthFormBusy(form: HTMLFormElement, busy: boolean): void {
 
 /** Refresh results without rebuilding the filter form or rebinding the entire app. */
 async function refreshLogsView(context: AppEventBindingContext): Promise<void> {
-  if (state.route.page !== 'settings' || state.route.section !== 'logs' || state.logsLoading) {
+  if (state.route.page !== 'settings' || state.route.section !== 'logs' || logsAreLoading()) {
     return;
   }
   const route = state.route;
@@ -174,7 +174,7 @@ function updateLogResults(context: AppEventBindingContext): void {
   context.setElementHtml(root, renderLogResults());
   createIcons({ icons, root });
   document.querySelectorAll<HTMLButtonElement>('#refresh-log-viewer, #log-filter-form button').forEach((button) => {
-    button.disabled = Boolean(state.logsLoading);
+    button.disabled = logsAreLoading();
   });
   const path = document.querySelector<HTMLElement>('.log-file-path code');
   if (path) {
@@ -1088,7 +1088,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
   document.querySelector<HTMLFormElement>('#log-filter-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (state.logsLoading) {
+    if (logsAreLoading()) {
       return;
     }
     const form = event.currentTarget as HTMLFormElement | null;

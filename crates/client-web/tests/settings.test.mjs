@@ -31,6 +31,7 @@ beforeEach(() => {
   state.metadataProviders = getMockMetadataProviders();
   state.bootstrap = { current_user: { id: 1, username: 'admin', admin: true } };
   state.users = [state.bootstrap.current_user];
+  state.isLoading = false;
   state.logsLoading = false;
   state.logsError = undefined;
   state.logPage = 0;
@@ -82,6 +83,49 @@ test('loading logs communicates progress and disables duplicate request controls
   assert.match(html, /id="refresh-log-viewer" disabled/);
   assert.match(html, /type="submit" disabled/);
   assert.match(html, /id="clear-log-filters" disabled/);
+});
+
+test('opening logs keeps the settings layout and shows progress before settings or logs arrive', () => {
+  state.route = { page: 'settings', section: 'logs' };
+  state.settingsResponse = undefined;
+  state.logsResponse = undefined;
+  state.isLoading = true;
+  const html = renderSettingsPage();
+  assert.match(html, /class="settings-workspace"/);
+  assert.match(html, /href="\/settings\/logs" aria-current="page"/);
+  assert.match(html, /<h2>Logs<\/h2>/);
+  assert.match(html, /id="log-filter-form"/);
+  assert.match(html, /class="log-results-placeholder">Loading recent server events…/);
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /id="refresh-log-viewer" disabled/);
+  assert.doesNotMatch(html, /No matching entries|No entries match|Unavailable|Settings are still loading/);
+  state.isLoading = false;
+  const loaded = renderSettingsPage();
+  assert.match(loaded, /No entries match these filters/);
+  assert.match(loaded, /aria-busy="false"/);
+  assert.doesNotMatch(loaded, /id="refresh-log-viewer" disabled/);
+});
+
+test('settings navigation and heading remain present while configuration loads', () => {
+  state.settingsResponse = undefined;
+  const html = renderSettingsPage();
+  assert.match(html, /class="settings-workspace"/);
+  assert.match(html, /<h2>General<\/h2>/);
+  assert.match(html, /role="status">Settings are still loading/);
+});
+
+test('route loading retains cached log entries while disabling pagination until refreshed', () => {
+  state.isLoading = true;
+  state.logPage = 1;
+  const pending = renderLogResults();
+  assert.match(pending, /event-50/);
+  assert.match(pending, /Loading logs/);
+  assert.match(pending, /data-log-page="0" disabled/);
+  assert.match(pending, /data-log-page="2" disabled/);
+  state.isLoading = false;
+  const loaded = renderLogResults();
+  assert.match(loaded, /51–100 of 123/);
+  assert.doesNotMatch(loaded, /data-log-page="[02]" disabled/);
 });
 
 test('log severity and optional source lines retain their meaning and escape filenames', () => {

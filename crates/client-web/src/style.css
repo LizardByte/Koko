@@ -32,7 +32,7 @@ textarea {
 button {
   border: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, #5d7bff, #7c5cff);
+  background: linear-gradient(135deg, #4964d8, #6845db);
   color: #fff;
   padding: 0.8rem 1rem;
   cursor: pointer;
@@ -62,17 +62,19 @@ button:disabled {
 }
 
 .secondary-button {
-  background: rgba(255, 255, 255, 0.08);
+  background: #222b3d;
   box-shadow: none;
   color: #dbe7ff;
 }
 
 .secondary-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.16);
+  background: #303b51;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 }
 
 .icon-only {
+  display: inline-flex;
+  align-items: center;
   width: 2.35rem;
   min-width: 2.35rem;
   height: 2.35rem;
@@ -288,7 +290,7 @@ legend {
   align-items: center;
   padding: 0.85rem 0.9rem;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.05);
+  background: #141824;
   color: #dbe7ff;
 }
 
@@ -412,7 +414,7 @@ legend {
 
 .rail-button.active,
 .rail-button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: #1c2332;
   color: #fff;
 }
 
@@ -632,7 +634,7 @@ legend {
 
 .browse-tab-button.active,
 .browse-tab-button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: #1c2332;
   color: #fff;
 }
 
@@ -878,11 +880,13 @@ legend {
 }
 
 .shelf-scroll-button {
+  display: inline-grid;
+  place-items: center;
   width: 2.3rem;
   height: 2.3rem;
   padding: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: #222b3d;
   color: #dfe9ff;
   box-shadow: none;
 }
@@ -1002,6 +1006,15 @@ legend {
   white-space: nowrap;
 }
 
+.media-card-kind {
+  display: inline-grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  flex-shrink: 0;
+}
+
 .media-card-status {
   display: inline-flex;
   align-items: center;
@@ -1079,7 +1092,6 @@ legend {
   height: 1.96rem;
   border-radius: 999px;
   background: conic-gradient(#8bf3ca var(--watch-progress), rgba(255, 255, 255, 0.18) 0);
-  color: #f4f7fb;
   font-size: 0.62rem;
   font-weight: 800;
 }
@@ -1234,6 +1246,22 @@ legend {
   align-self: end;
 }
 
+.home-feature-action {
+  padding: 0.65rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  /* The dark tint keeps text readable even over white artwork. */
+  background: rgba(9, 14, 24, 0.66);
+  color: #fff;
+  font-weight: 600;
+  backdrop-filter: blur(12px);
+}
+
+.home-feature-action:hover:not(:disabled) {
+  background: rgba(9, 14, 24, 0.78);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
 .home-feature-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1340,7 +1368,7 @@ legend {
 .empty-state {
   padding: 1rem;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
+  background: #192131;
   color: #afc0db;
 }
 
@@ -1651,7 +1679,7 @@ legend {
   height: 1.8rem;
   padding: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: #222b3d;
   color: #dfe9ff;
   box-shadow: none;
 }
@@ -1822,7 +1850,7 @@ legend {
   justify-content: center;
   aspect-ratio: 2 / 3;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: #222b3d;
   background-size: cover;
   background-position: center;
   overflow: hidden;
@@ -1954,12 +1982,12 @@ legend {
 }
 
 .tag.success {
-  background: rgba(66, 214, 158, 0.18);
+  background: #173d33;
   color: #8bf3ca;
 }
 
 .tag.warning {
-  background: rgba(255, 191, 84, 0.16);
+  background: #423321;
   color: #ffd78a;
 }
 
@@ -2028,8 +2056,8 @@ legend {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.65);
-  background: rgba(255, 255, 255, 0.02);
+  color: #adbcd3;
+  background: #1b2332;
 }
 
 .table-title-cell {
@@ -2227,7 +2255,7 @@ legend {
 }
 
 .danger-button {
-  background: rgba(255, 107, 107, 0.14);
+  background: #3b252e;
   color: #ffb9b9;
 }
 
@@ -2740,7 +2768,7 @@ legend {
   min-height: 2.25rem;
   padding: 0 0.8rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(10, 14, 24, 0.85);
   color: #f4f7fb;
   font-size: 0.78rem;
   font-weight: 700;
@@ -2811,7 +2839,7 @@ legend {
   height: 2.55rem;
   padding: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.13);
+  background: rgba(10, 14, 24, 0.82);
   box-shadow: none;
   color: #fff;
   backdrop-filter: blur(14px);
@@ -2819,7 +2847,7 @@ legend {
 
 .player-icon-button:hover:not(:disabled),
 .player-icon-button:focus-visible {
-  background: rgba(255, 255, 255, 0.24);
+  background: rgba(31, 41, 61, 0.92);
   box-shadow: none;
 }
 
@@ -2831,7 +2859,7 @@ legend {
 .player-primary-button {
   width: 4.2rem;
   height: 4.2rem;
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(28, 38, 58, 0.9);
 }
 
 .player-control-icon svg {
@@ -3371,7 +3399,7 @@ legend {
 }
 
 .input-group button[aria-pressed='true'] {
-  background: rgba(255, 111, 126, 0.18);
+  background: #382433;
   color: #ffb3bd;
 }
 

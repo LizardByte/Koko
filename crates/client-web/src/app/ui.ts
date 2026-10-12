@@ -62,10 +62,11 @@ export function renderButtonContent(label: string, iconName?: AppIconName, iconP
     return escapeHtml(label);
   }
 
+  const labelContent = label ? `<span>${escapeHtml(label)}</span>` : '';
   return `
     <span class="button-content${iconPosition === 'end' ? ' icon-end' : ''}">
       ${renderIcon(iconName, 'button-icon')}
-      <span>${escapeHtml(label)}</span>
+      ${labelContent}
     </span>
   `;
 }

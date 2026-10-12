@@ -22,6 +22,7 @@ const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { getMockSettings, getMockMetadataProviders, updateMockSettings } = await server.ssrLoadModule('/src/mockApi.ts');
 const { providerAttributionLogo } = await server.ssrLoadModule('/src/app/providers.ts');
 const { escapeHtml } = await server.ssrLoadModule('/src/app/format.ts');
+const { renderButtonContent } = await server.ssrLoadModule('/src/app/ui.ts');
 
 beforeEach(() => {
   globalThis.location.pathname = '/settings';
@@ -145,6 +146,13 @@ test('scheduled task intervals specify days', () => {
   const html = renderSettingsPage();
   assert.equal([...html.matchAll(/<label>Run interval \(days\)/g)].length, 2);
   assert.ok(!html.includes('<label>Run interval\n'));
+});
+
+test('icon-only button content has no empty label taking up space beside the icon', () => {
+  const html = renderButtonContent('', 'chevron-left');
+  assert.match(html, /data-lucide="chevron-left"/);
+  assert.doesNotMatch(html, /<span>\s*<\/span>/);
+  assert.match(renderButtonContent('Next', 'chevron-right'), /<span>Next<\/span>/);
 });
 
 test('API-key removal is an accessible button attached to the password field', () => {

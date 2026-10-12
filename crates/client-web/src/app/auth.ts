@@ -80,10 +80,11 @@ export function bindProfileImagePickers(root: ParentNode = document): void {
     const status = picker.querySelector<HTMLElement>('[data-profile-image-status]')!;
     const removeButton = picker.querySelector<HTMLButtonElement>('[data-remove-profile-image]')!;
     const hasImage = picker.dataset.hasProfileImage === 'true';
+    const savedImageStatus = hasImage ? 'Current image' : 'No image selected';
     const sync = () => {
       status.textContent = removalInput.checked
         ? 'Image will be removed on save'
-        : fileInput.files?.[0]?.name ?? (hasImage ? 'Current image' : 'No image selected');
+        : fileInput.files?.[0]?.name ?? savedImageStatus;
       removeButton.disabled = !hasImage && !fileInput.files?.length && !removalInput.checked;
       removeButton.setAttribute('aria-pressed', String(removalInput.checked));
       removeButton.setAttribute('aria-label', removalInput.checked ? 'Undo profile image removal' : 'Remove profile image');

@@ -2095,10 +2095,6 @@ legend {
   background: linear-gradient(90deg, #5d7bff 0%, #8bf3ca 100%);
 }
 
-.log-filter-form {
-  margin-bottom: 1rem;
-}
-
 .log-entry-source,
 .log-entry-message {
   margin: 0;
@@ -3070,12 +3066,12 @@ legend {
 
 .settings-nav-link:hover {
   color: #f4f7fb;
-  background: rgba(255, 255, 255, 0.04);
+  background: #161a26;
 }
 
 .settings-nav-link.active {
   color: #e6eeff;
-  background: rgba(112, 136, 255, 0.12);
+  background: #181f38;
   border-color: rgba(112, 136, 255, 0.22);
 }
 
@@ -3370,8 +3366,8 @@ legend {
 
 .input-group > button:disabled {
   opacity: 1;
-  color: #66758b;
-  background: rgba(255, 255, 255, 0.035);
+  color: #8695aa;
+  background: #151c2a;
 }
 
 .input-group button[aria-pressed='true'] {
@@ -3477,6 +3473,7 @@ legend {
 }
 
 .log-filter-form {
+  margin-bottom: 1rem;
   padding: 1.2rem 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.09);
 }

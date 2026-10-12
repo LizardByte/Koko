@@ -188,9 +188,9 @@ function syncFormControlState(current: Element, next: Element): void {
   if (current instanceof HTMLInputElement && next instanceof HTMLInputElement) {
     // Preserve pending image and credential edits until the user saves the form.
     if (current.type === 'file'
-      || current.hasAttribute('data-profile-image-removal')
-      || current.hasAttribute('data-api-key-draft')
-      || current.hasAttribute('data-api-key-removal')) {
+      || current.dataset.profileImageRemoval !== undefined
+      || current.dataset.apiKeyDraft !== undefined
+      || current.dataset.apiKeyRemoval !== undefined) {
       return;
     }
     current.defaultValue = next.defaultValue;

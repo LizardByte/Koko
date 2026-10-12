@@ -446,6 +446,23 @@ const items: MediaItemDetail[] = [
   },
 ];
 
+type PlannedProviderDetails = Pick<MetadataProviderStatus,
+  'id' | 'display_name' | 'description' | 'supported_kinds'
+  | 'attribution_text' | 'attribution_url' | 'logo_light_url' | 'logo_dark_url'>;
+
+function plannedMetadataProvider(details: PlannedProviderDetails): MetadataProviderStatus {
+  return {
+    ...details,
+    requires_api_key: false,
+    implemented: false,
+    role: 'primary',
+    extends_provider_ids: [],
+    enabled: false,
+    configured: true,
+    language: 'en-US',
+  };
+}
+
 const metadataProviders: MetadataProviderStatus[] = [
   {
     id: 'tmdb',
@@ -481,23 +498,16 @@ const metadataProviders: MetadataProviderStatus[] = [
     logo_light_url: '/assets/providers/tvdb-light.png',
     logo_dark_url: '/assets/providers/tvdb-dark.png',
   },
-  {
+  plannedMetadataProvider({
     id: 'musicbrainz',
     display_name: 'MusicBrainz',
     description: 'Planned music metadata provider for albums, artists, and tracks.',
     supported_kinds: ['music'],
-    requires_api_key: false,
-    implemented: false,
-    role: 'primary',
-    extends_provider_ids: [],
-    enabled: false,
-    configured: true,
-    language: 'en-US',
     attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
     attribution_url: 'https://musicbrainz.org/',
     logo_light_url: '/assets/providers/musicbrainz.svg',
     logo_dark_url: '/assets/providers/musicbrainz.svg',
-  },
+  }),
   {
     id: 'themerr',
     display_name: 'ThemerrDB',
@@ -532,40 +542,26 @@ const metadataProviders: MetadataProviderStatus[] = [
     logo_light_url: '/assets/providers/trailerdb-light.svg',
     logo_dark_url: '/assets/providers/trailerdb-dark.svg',
   },
-  {
+  plannedMetadataProvider({
     id: 'open_library',
     display_name: 'Open Library',
     description: 'Planned book metadata provider for ebooks, PDFs, and comics.',
     supported_kinds: ['books'],
-    requires_api_key: false,
-    implemented: false,
-    role: 'primary',
-    extends_provider_ids: [],
-    enabled: false,
-    configured: true,
-    language: 'en-US',
     attribution_text: 'Book metadata is provided by Open Library.',
     attribution_url: 'https://openlibrary.org/',
     logo_light_url: '/assets/providers/open-library.png',
     logo_dark_url: '/assets/providers/open-library.png',
-  },
-  {
+  }),
+  plannedMetadataProvider({
     id: 'local_nfo',
     display_name: 'Local NFO',
     description: 'Planned sidecar metadata provider for locally curated libraries.',
     supported_kinds: ['movies', 'shows', 'music', 'books', 'home_videos'],
-    requires_api_key: false,
-    implemented: false,
-    role: 'primary',
-    extends_provider_ids: [],
-    enabled: false,
-    configured: true,
-    language: 'en-US',
     attribution_text: 'Local metadata is provided by files in your library.',
     attribution_url: '',
     logo_light_url: '/assets/providers/local-nfo.svg',
     logo_dark_url: '/assets/providers/local-nfo.svg',
-  },
+  }),
 ];
 
 const metadataSearchResults: Record<number, MetadataSearchResult[]> = {

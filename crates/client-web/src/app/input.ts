@@ -116,7 +116,8 @@ function moveSection(direction: 1 | -1): void {
   if (!sections.length) return;
   const current = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>(SECTION_SELECTOR);
   const index = current ? sections.indexOf(current) : -1;
-  const next = index < 0 ? (direction > 0 ? 0 : sections.length - 1) : (index + direction + sections.length) % sections.length;
+  const firstSection = direction > 0 ? 0 : sections.length - 1;
+  const next = index < 0 ? firstSection : (index + direction + sections.length) % sections.length;
   focusControl(entryControl(sections[next]), true);
 }
 
@@ -155,6 +156,54 @@ function activateFocusedElement(): void {
   if (focused && isVisible(focused) && focused.matches(CONTROL_SELECTOR)) focused.click();
 }
 
+/** Return to browse tabs while keeping normal search-caret movement available. */
+function handleSearchKey(event: KeyboardEvent, target: HTMLElement | null): boolean {
+  if (event.key === 'Escape' && returnToBrowseTabs()) {
+    event.preventDefault();
+    return true;
+  }
+  if (event.key === 'ArrowLeft' && target?.matches('#search-input')) {
+    const search = target as HTMLInputElement;
+    if (search.selectionStart === 0 && search.selectionEnd === 0 && returnToBrowseTabs()) {
+      event.preventDefault();
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Keep native Tab movement between form fields until a form edge is reached. */
+function keepsNativeFormTab(target: HTMLElement | null, reverse: boolean): boolean {
+  const form = target?.closest('form');
+  if (!form) return false;
+  const fields = Array.from(form.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter((field) => isVisible(field) && field.tabIndex >= 0);
+  const index = fields.indexOf(target!);
+  if (index < 0) return false;
+  return reverse ? index > 0 : index < fields.length - 1;
+}
+
+/** Handle section switching, including native field tabbing within a section. */
+function handleSectionTab(event: KeyboardEvent, target: HTMLElement | null): boolean {
+  if (event.key !== 'Tab' || !navigationSections().length) return false;
+  if (keepsNativeFormTab(target, event.shiftKey)) return true;
+  moveSection(event.shiftKey ? -1 : 1);
+  event.preventDefault();
+  return true;
+}
+
+/** Dispatch navigation keys after player and browser-shortcut guards have passed. */
+function handleNavigationKey(event: KeyboardEvent): void {
+  setInputMode('keyboard');
+  const target = event.target as HTMLElement | null;
+  if (handleSearchKey(event, target) || handleSectionTab(event, target)) return;
+  if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+  const directions: Record<string, NavigationDirection> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+  if (directions[event.key] && navigationSections().length) {
+    moveFocus(directions[event.key]);
+    event.preventDefault();
+  }
+}
+
 /** Bind section-aware navigation for browsing pages, leaving settings and players to their own controls. */
 export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 'isPlayerOpen' | 'route'>): void {
   const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden;
@@ -165,37 +214,7 @@ export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 
   globalThis.addEventListener('focusin', syncNavigationState);
   globalThis.addEventListener('keydown', (event) => {
     if (suspended() || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    setInputMode('keyboard');
-    const target = event.target as HTMLElement | null;
-    if (event.key === 'Escape' && returnToBrowseTabs()) {
-      event.preventDefault();
-      return;
-    }
-    if (event.key === 'ArrowLeft' && target?.matches('#search-input')) {
-      const search = target as HTMLInputElement;
-      if (search.selectionStart === 0 && search.selectionEnd === 0 && returnToBrowseTabs()) {
-        event.preventDefault();
-        return;
-      }
-    }
-    if (event.key === 'Tab' && navigationSections().length) {
-      // Keep every field reachable inside a form; its edges join the section order.
-      const form = target?.closest('form');
-      if (form) {
-        const fields = Array.from(form.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter((field) => isVisible(field) && field.tabIndex >= 0);
-        const index = fields.indexOf(target!);
-        if (index >= 0 && (event.shiftKey ? index > 0 : index < fields.length - 1)) return;
-      }
-      moveSection(event.shiftKey ? -1 : 1);
-      event.preventDefault();
-      return;
-    }
-    if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
-    const directions: Record<string, NavigationDirection> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
-    if (directions[event.key] && navigationSections().length) {
-      moveFocus(directions[event.key]);
-      event.preventDefault();
-    }
+    handleNavigationKey(event);
   });
 
   const readActions = createGamepadNavigationReader();

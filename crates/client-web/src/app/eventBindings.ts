@@ -1397,9 +1397,10 @@ function bindApiKeyPickers(): void {
     const button = picker.querySelector<HTMLButtonElement>('[data-clear-api-key]')!;
     const status = picker.closest('.api-key-field')?.querySelector<HTMLElement>('[data-api-key-status]');
     const configured = picker.dataset.apiKeyConfigured === 'true';
+    const savedPlaceholder = configured ? 'Saved' : '';
     const label = picker.getAttribute('aria-label') ?? 'API key';
     const sync = () => {
-      input.placeholder = removal.checked ? 'Will be cleared on save' : configured ? 'Saved' : '';
+      input.placeholder = removal.checked ? 'Will be cleared on save' : savedPlaceholder;
       button.disabled = !configured && !input.value && !removal.checked;
       button.setAttribute('aria-pressed', String(removal.checked));
       button.setAttribute('aria-label', removal.checked ? `Undo clearing ${label}` : `Clear ${label}`);

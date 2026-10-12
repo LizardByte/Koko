@@ -470,13 +470,14 @@ export function renderProviderSettingsCard(provider: MetadataProviderSettings): 
   const providerAttribution = status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : '';
   const apiKeyId = `${provider.id}-api-key`;
   const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
+  const apiKeyDisabled = apiKeyConfigured ? '' : 'disabled';
   const apiKeyField = showApiKey
     ? `<div class="api-key-field">
         <label for="${apiKeyId}">API key</label>
         <div class="input-group api-key-picker" role="group" aria-label="${escapeHtml(label)} API key" data-api-key-configured="${apiKeyConfigured}">
           <input id="${apiKeyId}" class="input-group-field" name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" data-api-key-draft />
           <input name="${provider.id}_clear_api_key" type="checkbox" data-api-key-removal hidden />
-          <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyConfigured ? '' : 'disabled'}>${renderIcon('x')}</button>
+          <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyDisabled}>${renderIcon('x')}</button>
         </div>
         <small class="muted" data-api-key-status aria-live="polite" hidden>Saved API key will be cleared on save.</small>
       </div>`

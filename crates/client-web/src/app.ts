@@ -46,6 +46,7 @@ import {
   renderPersonPage,
 } from './app/itemPersonView';
 import { renderSettingsPage } from './app/settingsView';
+import type { AppRoute, SettingsSection } from './app/types';
 import {
   renderIcon,
   renderUserAvatar,
@@ -425,6 +426,19 @@ function renderRail(): string {
   `;
 }
 
+function renderNavigationHint(): string {
+  if (state.route.page === 'settings' || state.isPlayerOpen || state.activeTrailer) {
+    return '';
+  }
+  return `
+    <div class="navigation-hint">
+      <strong data-navigation-section-label role="status">Browse</strong>
+      <span class="keyboard-navigation-hint"><kbd>↑ ↓ ← →</kbd> Move <kbd>Tab</kbd> Next section <kbd>Shift Tab</kbd> Previous section <span data-search-navigation-hint hidden><kbd>Esc</kbd> Browse tabs</span></span>
+      <span class="gamepad-navigation-hint"><kbd>D-pad</kbd> Move <kbd>LB / RB</kbd> Sections <kbd>A</kbd> Open <kbd>B</kbd> <span data-gamepad-back-label>Back</span></span>
+    </div>
+  `;
+}
+
 function render(preserveScroll = true): void {
   if (!state.isPlayerOpen && !state.activeTrailer) {
     document.body.style.cursor = '';
@@ -472,13 +486,7 @@ function render(preserveScroll = true): void {
           ${renderCurrentPage()}
         </div>
       </div>
-      ${state.route.page !== 'settings' && !state.isPlayerOpen && !state.activeTrailer ? `
-        <div class="navigation-hint">
-          <strong data-navigation-section-label role="status">Browse</strong>
-          <span class="keyboard-navigation-hint"><kbd>↑ ↓ ← →</kbd> Move <kbd>Tab</kbd> Next section <kbd>Shift Tab</kbd> Previous section <span data-search-navigation-hint hidden><kbd>Esc</kbd> Browse tabs</span></span>
-          <span class="gamepad-navigation-hint"><kbd>D-pad</kbd> Move <kbd>LB / RB</kbd> Sections <kbd>A</kbd> Open <kbd>B</kbd> <span data-gamepad-back-label>Back</span></span>
-        </div>
-      ` : ''}
+      ${renderNavigationHint()}
       ${renderPlayerOverlay()}
     </div>
   `, preserveScroll);
@@ -488,6 +496,26 @@ function render(preserveScroll = true): void {
   syncNavigationAfterRender();
   syncVisibleSpinners();
   syncThemeSongPlayer();
+}
+
+async function loadSettingsPageData(section: SettingsSection | undefined): Promise<void> {
+  if (section === 'dashboard') {
+    state.logsResponse = undefined;
+    state.dashboardItems = await getItems();
+  } else if (section === 'logs') {
+    state.dashboardItems = [];
+    state.logPage = 0;
+    state.logsError = undefined;
+    try {
+      state.logsResponse = await getLogs(currentLogFilterRequest());
+    } catch (error) {
+      state.logsResponse = undefined;
+      state.logsError = error instanceof Error ? error.message : 'Failed to load logs.';
+    }
+  } else {
+    state.dashboardItems = [];
+    state.logsResponse = undefined;
+  }
 }
 
 async function refreshData(showLoading = true): Promise<void> {
@@ -655,23 +683,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.isTrailerMenuOpen = false;
       state.activeTrailer = undefined;
       state.hasDeferredAutoRefreshRender = false;
-      if (state.route.section === 'dashboard') {
-        state.logsResponse = undefined;
-        state.dashboardItems = await getItems();
-      } else if (state.route.section === 'logs') {
-        state.dashboardItems = [];
-        state.logPage = 0;
-        state.logsError = undefined;
-        try {
-          state.logsResponse = await getLogs(currentLogFilterRequest());
-        } catch (error) {
-          state.logsResponse = undefined;
-          state.logsError = error instanceof Error ? error.message : 'Failed to load logs.';
-        }
-      } else {
-        state.dashboardItems = [];
-        state.logsResponse = undefined;
-      }
+      await loadSettingsPageData(state.route.section);
     }
 
     state.apiMode = getApiMode();
@@ -736,116 +748,127 @@ async function refreshPendingLibraryData(): Promise<void> {
   }
 }
 
+async function refreshSelectedItemMetadata(itemId: number, previousError: string | undefined): Promise<boolean> {
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    selectedItem: state.selectedItem,
+    selectedItemMetadata: state.selectedItemMetadata,
+  });
+  const [activitiesResponse, libraries, item, metadata] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    getItem(itemId),
+    getItemMetadata(itemId),
+  ]);
+  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+    return false;
+  }
+  const [home, libraryItems] = await Promise.all([
+    getHome(item.library_id),
+    getItems(item.library_id),
+  ]);
+  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+    return false;
+  }
+
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.home = home;
+  state.libraryItems = libraryItems;
+  state.selectedItem = item;
+  state.selectedItemMetadata = metadata;
+  state.error = undefined;
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    selectedItem: state.selectedItem,
+    selectedItemMetadata: state.selectedItemMetadata,
+  }) || previousError !== state.error;
+}
+
+async function refreshHomeMetadata(libraryId: number | undefined, previousError: string | undefined): Promise<boolean> {
+  const searchQuery = state.searchQuery.trim();
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    searchResults: state.searchResults,
+  });
+  const [activitiesResponse, libraries, home, libraryItems, searchResults] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    getHome(libraryId),
+    getItems(libraryId),
+    searchQuery ? searchItems(searchQuery) : Promise.resolve([]),
+  ]);
+  if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
+    return false;
+  }
+
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.home = home;
+  state.libraryItems = libraryItems;
+  state.searchResults = searchResults;
+  state.error = undefined;
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    searchResults: state.searchResults,
+  }) || previousError !== state.error;
+}
+
+async function refreshOverviewMetadata(route: AppRoute, previousError: string | undefined): Promise<boolean> {
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    dashboardItems: state.dashboardItems,
+  });
+  const [activitiesResponse, libraries, dashboardItems] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    route.page === 'settings' && route.section === 'dashboard' ? getItems() : Promise.resolve(state.dashboardItems),
+  ]);
+  if (state.route.page !== route.page || (state.route.page === 'settings' && route.page === 'settings' && state.route.section !== route.section)) {
+    return false;
+  }
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.dashboardItems = dashboardItems;
+  state.error = undefined;
+  if (route.page === 'settings' && route.section !== 'dashboard' && route.section !== 'libraries') {
+    return false;
+  }
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    dashboardItems: state.dashboardItems,
+  }) || previousError !== state.error;
+}
+
 async function refreshPendingMetadataData(): Promise<void> {
   const route = parseRoute();
   let shouldRender = false;
   const previousError = state.error;
 
   try {
-    if (route.page === 'item') {
-      const itemId = route.itemId;
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        selectedItem: state.selectedItem,
-        selectedItemMetadata: state.selectedItemMetadata,
-      });
-      const [activitiesResponse, libraries, item, metadata] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        getItem(itemId),
-        getItemMetadata(itemId),
-      ]);
-      if (state.route.page !== 'item' || state.route.itemId !== itemId) {
-        return;
-      }
-      const [home, libraryItems] = await Promise.all([
-        getHome(item.library_id),
-        getItems(item.library_id),
-      ]);
-      if (state.route.page !== 'item' || state.route.itemId !== itemId) {
-        return;
-      }
-
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.home = home;
-      state.libraryItems = libraryItems;
-      state.selectedItem = item;
-      state.selectedItemMetadata = metadata;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        selectedItem: state.selectedItem,
-        selectedItemMetadata: state.selectedItemMetadata,
-      }) || previousError !== state.error;
-    } else if (route.page === 'home') {
-      const libraryId = route.libraryId;
-      const searchQuery = state.searchQuery.trim();
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        searchResults: state.searchResults,
-      });
-      const [activitiesResponse, libraries, home, libraryItems, searchResults] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        getHome(libraryId),
-        getItems(libraryId),
-        searchQuery
-          ? searchItems(searchQuery)
-          : Promise.resolve([]),
-      ]);
-      if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
-        return;
-      }
-
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.home = home;
-      state.libraryItems = libraryItems;
-      state.searchResults = searchResults;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        searchResults: state.searchResults,
-      }) || previousError !== state.error;
-    } else {
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        dashboardItems: state.dashboardItems,
-      });
-      const [activitiesResponse, libraries, dashboardItems] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        route.page === 'settings' && route.section === 'dashboard' ? getItems() : Promise.resolve(state.dashboardItems),
-      ]);
-      if (state.route.page !== route.page || (state.route.page === 'settings' && route.page === 'settings' && state.route.section !== route.section)) {
-        return;
-      }
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.dashboardItems = dashboardItems;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        dashboardItems: state.dashboardItems,
-      }) || previousError !== state.error;
-      if (route.page === 'settings' && route.section !== 'dashboard' && route.section !== 'libraries') {
-        shouldRender = false;
-      }
+    switch (route.page) {
+      case 'item':
+        shouldRender = await refreshSelectedItemMetadata(route.itemId, previousError);
+        break;
+      case 'home':
+        shouldRender = await refreshHomeMetadata(route.libraryId, previousError);
+        break;
+      default:
+        shouldRender = await refreshOverviewMetadata(route, previousError);
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : 'Failed to refresh media metadata.';

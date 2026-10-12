@@ -2,25 +2,46 @@ import type { NavigationDirection } from './spatialNavigation';
 
 export type GamepadNavigationAction = NavigationDirection | 'previous-section' | 'next-section' | 'activate' | 'back';
 
+const DPAD_BUTTONS = [['up', 12], ['down', 13], ['left', 14], ['right', 15]] as const;
+const ACTION_BUTTONS = [['previous-section', 4], ['next-section', 5], ['activate', 0], ['back', 1]] as const;
+const REPEATING_ACTIONS = new Set<GamepadNavigationAction>(['left', 'right', 'up', 'down']);
+
+/** Resolve only the dominant stick axis after it passes the navigation dead zone. */
+function leftStickDirection(axes: readonly number[]): NavigationDirection | undefined {
+  const x = axes[0] ?? 0;
+  const y = axes[1] ?? 0;
+  if (Math.max(Math.abs(x), Math.abs(y)) >= 0.65) {
+    if (Math.abs(x) > Math.abs(y)) return x > 0 ? 'right' : 'left';
+    return y > 0 ? 'down' : 'up';
+  }
+  return undefined;
+}
+
 /** Decode standard D-pad/stick input without taking two steps for a diagonal. */
 export function gamepadNavigationActions(gamepad: Pick<Gamepad, 'axes' | 'buttons'>): GamepadNavigationAction[] {
   const pressed = (index: number) => Boolean(gamepad.buttons[index]?.pressed);
   const actions: GamepadNavigationAction[] = [];
-  const dpad = ([['up', 12], ['down', 13], ['left', 14], ['right', 15]] as const).find(([, index]) => pressed(index));
-  if (dpad) {
-    actions.push(dpad[0]);
-  } else {
-    const x = gamepad.axes[0] ?? 0;
-    const y = gamepad.axes[1] ?? 0;
-    if (Math.max(Math.abs(x), Math.abs(y)) >= 0.65) {
-      actions.push(Math.abs(x) > Math.abs(y) ? (x > 0 ? 'right' : 'left') : (y > 0 ? 'down' : 'up'));
-    }
+  const dpad = DPAD_BUTTONS.find(([, index]) => pressed(index));
+  const direction = dpad?.[0] ?? leftStickDirection(gamepad.axes);
+  if (direction) actions.push(direction);
+  for (const [action, index] of ACTION_BUTTONS) {
+    if (pressed(index)) actions.push(action);
   }
-  if (pressed(4)) actions.push('previous-section');
-  if (pressed(5)) actions.push('next-section');
-  if (pressed(0)) actions.push('activate');
-  if (pressed(1)) actions.push('back');
   return actions;
+}
+
+/** Record a held action and decide whether this poll should emit it. */
+function actionIsDue(held: Map<string, number>, key: string, action: GamepadNavigationAction, now: number): boolean {
+  const nextRepeat = held.get(key);
+  if (nextRepeat === undefined) {
+    held.set(key, now + 400);
+    return true;
+  }
+  if (REPEATING_ACTIONS.has(action) && now >= nextRepeat) {
+    held.set(key, now + 110);
+    return true;
+  }
+  return false;
 }
 
 /** Repeat held directions with a delay; activation and section jumps fire once per press. */
@@ -36,15 +57,7 @@ export function createGamepadNavigationReader(): (
       for (const action of gamepadNavigationActions(gamepad)) {
         const key = `${gamepad.index}:${action}`;
         present.add(key);
-        const nextRepeat = held.get(key);
-        const repeats = ['left', 'right', 'up', 'down'].includes(action);
-        if (nextRepeat === undefined) {
-          held.set(key, now + 400);
-          if (!suspended) output.push(action);
-        } else if (repeats && now >= nextRepeat) {
-          held.set(key, now + 110);
-          if (!suspended) output.push(action);
-        }
+        if (actionIsDue(held, key, action, now) && !suspended) output.push(action);
       }
     }
     for (const key of held.keys()) {

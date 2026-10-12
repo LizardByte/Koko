@@ -83,6 +83,25 @@ test('loading logs communicates progress and disables duplicate request controls
   assert.match(html, /id="clear-log-filters" disabled/);
 });
 
+test('log severity and optional source lines retain their meaning and escape filenames', () => {
+  state.logsResponse.entries = [
+    { ...state.logsResponse.entries[0], level: 'ERROR', source_file_path: '<error>.rs', line_number: 0 },
+    { ...state.logsResponse.entries[1], level: 'WARN', source_file_path: 'warning.rs', line_number: undefined },
+    { ...state.logsResponse.entries[2], level: 'INFO', source_file_path: 'info.rs', line_number: 42 },
+  ];
+  const html = renderLogResults();
+  assert.match(html, /class="tag danger-tag">ERROR/);
+  assert.match(html, /class="tag warning">WARN/);
+  assert.match(html, /class="tag ">INFO/);
+  assert.match(html, /&lt;error&gt;\.rs:0<\/p>/);
+  assert.match(html, /warning\.rs<\/p>/);
+  assert.match(html, /info\.rs:42<\/p>/);
+  assert.ok(!html.includes(':undefined'));
+  state.logsLoading = true;
+  state.logsResponse.entries = [];
+  assert.match(renderLogResults(), /Loading recent server events…/);
+});
+
 test('user management has a dedicated route and navigation current-page indicator', () => {
   globalThis.location.pathname = '/settings/users';
   state.route = parseRoute();

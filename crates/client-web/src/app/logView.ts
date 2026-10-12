@@ -2,8 +2,29 @@
 import { escapeHtml } from './format';
 import { state } from './state';
 import { renderButtonContent } from './ui';
+import type { LogEntry } from '../api';
 
 export const LOG_PAGE_SIZE = 50;
+
+function renderLogEntry(entry: LogEntry): string {
+  let levelClass = '';
+  if (entry.level === 'ERROR') {
+    levelClass = 'danger-tag';
+  } else if (entry.level === 'WARN') {
+    levelClass = 'warning';
+  }
+  const lineSuffix = typeof entry.line_number === 'number' ? `:${entry.line_number}` : '';
+  const source = `${entry.source_file_path}${lineSuffix}`;
+  return `<article class="log-event">
+    <div class="log-event-meta">
+      <time datetime="${escapeHtml(entry.timestamp)}">${escapeHtml(entry.timestamp)}</time>
+      <span class="tag ${levelClass}">${escapeHtml(entry.level)}</span>
+      <span class="log-event-module">${escapeHtml(entry.module)}</span>
+    </div>
+    <pre class="log-entry-message">${escapeHtml(entry.message)}</pre>
+    <p class="log-entry-source muted">${escapeHtml(source)}</p>
+  </article>`;
+}
 
 /** Render only the current page of results, preserving the separate filter form. */
 export function renderLogResults(): string {
@@ -13,9 +34,17 @@ export function renderLogResults(): string {
   const start = page * LOG_PAGE_SIZE;
   const visible = entries.slice(start, start + LOG_PAGE_SIZE);
   const error = state.logsError ? `<p class="log-error" role="alert">${escapeHtml(state.logsError)}</p>` : '';
-  const status = state.logsLoading
-    ? 'Loading logs…'
-    : entries.length ? `${start + 1}–${start + visible.length} of ${entries.length} recent matches · newest first` : 'No matching entries';
+  let status = 'No matching entries';
+  if (state.logsLoading) {
+    status = 'Loading logs…';
+  } else if (entries.length) {
+    status = `${start + 1}–${start + visible.length} of ${entries.length} recent matches · newest first`;
+  }
+  const emptyMessage = state.logsLoading
+    ? 'Loading recent server events…'
+    : 'No entries match these filters. Try a different search or clear the filters.';
+  const emptyState = `<div class="empty-state">${emptyMessage}</div>`;
+  const events = visible.length ? visible.map(renderLogEntry).join('') : emptyState;
   return `
     ${error}
     <div class="log-results-toolbar">
@@ -27,19 +56,7 @@ export function renderLogResults(): string {
       </div>
     </div>
     <div id="log-events" class="log-events" aria-label="Log entries" aria-busy="${Boolean(state.logsLoading)}">
-      ${visible.length ? visible.map((entry) => {
-        const levelClass = entry.level === 'ERROR' ? 'danger-tag' : entry.level === 'WARN' ? 'warning' : '';
-        const source = `${entry.source_file_path}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}`;
-        return `<article class="log-event">
-          <div class="log-event-meta">
-            <time datetime="${escapeHtml(entry.timestamp)}">${escapeHtml(entry.timestamp)}</time>
-            <span class="tag ${levelClass}">${escapeHtml(entry.level)}</span>
-            <span class="log-event-module">${escapeHtml(entry.module)}</span>
-          </div>
-          <pre class="log-entry-message">${escapeHtml(entry.message)}</pre>
-          <p class="log-entry-source muted">${escapeHtml(source)}</p>
-        </article>`;
-      }).join('') : `<div class="empty-state">${state.logsLoading ? 'Loading recent server events…' : 'No entries match these filters. Try a different search or clear the filters.'}</div>`}
+      ${events}
     </div>
   `;
 }

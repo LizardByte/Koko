@@ -77,7 +77,7 @@ rocket_sync_db_pools = { version = "=0.1.0", features = ["diesel_sqlite_pool"] }
 serde = "=1.0.229"
 serde_json = "=1.0.154"
 serde_yaml = "=0.9.34"
-sha2 = "=0.11.0"
+sha2 = "=0.11.1"
 strsim = "=0.11.1"
 tao = { version = "=0.37.1", optional = true }
 tokio = { version = "=1.53.2", features = ["full"] }

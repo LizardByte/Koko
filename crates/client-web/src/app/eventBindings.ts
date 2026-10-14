@@ -5,6 +5,8 @@ import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './acti
 import { bindProfileImagePickers, readProfileImageUpload } from './auth';
 import { renderMetadataDashboard } from './dashboardView';
 import { LOG_PAGE_SIZE, logsAreLoading, renderLogResults } from './logView';
+import { DEFAULT_BROWSE_PREFERENCES, normalizeBrowsePreferences, saveBrowsePreferences } from './browsePreferences';
+import { bindHoverPreview } from './hoverPreview';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -36,7 +38,7 @@ import {
 import { syncVisibleSpinners } from './spinners';
 import { state } from './state';
 import type { HomeBrowseTab } from './types';
-import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard } from './homeView';
+import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
 import {
   bindPersonCreditTrays,
   defaultMetadataSearchLanguage,
@@ -63,6 +65,7 @@ import {
   runScheduledTask,
   scanLibrary,
   searchItemMetadata,
+  searchItems,
   setStoredAuthToken,
   updateSettings,
   updateUser,
@@ -109,17 +112,54 @@ export function abortRenderEvents(): void {
 
 /** Debounce handle for incremental home search updates. */
 let pendingLiveSearchHandle: number | undefined;
+let liveSearchGeneration = 0;
 
-function clearHomeSearch(): boolean {
-  const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+/** Navigation invalidates both queued searches and replies from the previous page. */
+export function cancelPendingHomeSearch(): void {
+  liveSearchGeneration += 1;
   if (pendingLiveSearchHandle !== undefined) {
     globalThis.clearTimeout(pendingLiveSearchHandle);
     pendingLiveSearchHandle = undefined;
   }
+  state.searchLoading = false;
+}
+
+function clearHomeSearch(): boolean {
+  const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+  cancelPendingHomeSearch();
   state.searchQuery = '';
   state.searchResults = [];
   state.showFullSearchResults = false;
   return hadSearch;
+}
+
+/** Live search refreshes its results without reloading settings or the media library. */
+async function refreshHomeSearch(context: AppEventBindingContext): Promise<void> {
+  if (pendingLiveSearchHandle !== undefined) clearTimeout(pendingLiveSearchHandle);
+  pendingLiveSearchHandle = undefined;
+  const generation = ++liveSearchGeneration;
+  const query = state.searchQuery.trim();
+  const route = state.route;
+  state.searchLoading = Boolean(query);
+  if (!query) {
+    state.searchResults = [];
+    context.render(true);
+    return;
+  }
+  context.render(true);
+  try {
+    const results = await searchItems(query);
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) state.searchResults = results;
+  } catch (error) {
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) {
+      state.error = error instanceof Error ? error.message : 'Failed to search the library.';
+    }
+  } finally {
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) {
+      state.searchLoading = false;
+      context.render(true);
+    }
+  }
 }
 
 /** Tracks the one global resize listener used to refresh shelf controls. */
@@ -283,8 +323,7 @@ function bindPreviewItemElement(element: HTMLElement): void {
   const updatePreview = (): void => {
     activatePreviewItem(Number(element.dataset.previewItemId));
   };
-  element.addEventListener('mouseenter', updatePreview);
-  element.addEventListener('focus', updatePreview);
+  bindHoverPreview(element, updatePreview);
 }
 
 
@@ -297,8 +336,7 @@ function bindPreviewCollectionElement(element: HTMLElement): void {
   const updatePreview = (): void => {
     activatePreviewCollection(element.dataset.previewCollectionId);
   };
-  element.addEventListener('mouseenter', updatePreview);
-  element.addEventListener('focus', updatePreview);
+  bindHoverPreview(element, updatePreview);
 }
 
 
@@ -461,6 +499,60 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();
+  document.querySelectorAll<HTMLImageElement>('[data-item-cover-image]').forEach((image) => {
+    const showFallback = () => {
+      image.hidden = true;
+      image.parentElement?.classList.remove('has-image');
+      const fallback = image.parentElement?.querySelector<HTMLElement>('.item-cover-fallback');
+      if (fallback) fallback.hidden = false;
+    };
+    image.addEventListener('error', showFallback);
+    if (image.complete && image.naturalWidth === 0) showFallback();
+  });
+  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void refreshData(); });
+  document.querySelector<HTMLFormElement>('#mobile-library-form')?.addEventListener('submit', (event) => event.preventDefault());
+  document.querySelector<HTMLSelectElement>('#mobile-library-picker')?.addEventListener('change', (event) => {
+    navigateTo((event.currentTarget as HTMLSelectElement).value);
+  });
+  document.querySelector<HTMLButtonElement>('[data-mobile-settings]')?.addEventListener('click', () => navigateTo('/settings'));
+  document.querySelector<HTMLButtonElement>('[data-mobile-sign-out]')?.addEventListener('click', () => {
+    document.querySelector<HTMLButtonElement>('[data-sign-out]')?.click();
+  });
+  document.querySelector<HTMLButtonElement>('#toggle-library-filters')?.addEventListener('click', () => {
+    state.browseFiltersOpen = !state.browseFiltersOpen;
+    render(true);
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#toggle-library-filters')?.focus({ preventScroll: true }));
+  });
+  document.querySelector<HTMLFormElement>('#library-browse-form')?.addEventListener('change', (event) => {
+    const form = event.currentTarget as HTMLFormElement;
+    const values = Object.fromEntries(new FormData(form));
+    state.browsePreferences = normalizeBrowsePreferences(values);
+    state.libraryPage = 0;
+    saveBrowsePreferences(state.browsePreferences, state.bootstrap?.current_user?.id, activeLibraryId());
+    render(true);
+  });
+  document.querySelector<HTMLFormElement>('#library-browse-form')?.addEventListener('submit', (event) => event.preventDefault());
+  document.querySelector<HTMLButtonElement>('#reset-library-filters')?.addEventListener('click', () => {
+    state.browsePreferences = { ...DEFAULT_BROWSE_PREFERENCES, density: state.browsePreferences.density };
+    state.libraryPage = 0;
+    saveBrowsePreferences(state.browsePreferences, state.bootstrap?.current_user?.id, activeLibraryId());
+    render(true);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-library-page]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const lastPage = Math.max(0, Math.ceil(visibleLibraryItems().length / LIBRARY_PAGE_SIZE) - 1);
+      state.libraryPage = Math.max(0, Math.min(lastPage, Number(button.dataset.libraryPage)));
+      render(true);
+      requestAnimationFrame(() => {
+        const card = document.querySelector<HTMLElement>('.library-item-grid .media-card');
+        card?.focus({ preventScroll: true });
+        card?.scrollIntoView({ block: 'nearest' });
+      });
+    });
+  });
+  document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
+    state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
+  });
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement | null;
@@ -600,20 +692,23 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     const input = document.querySelector<HTMLInputElement>('#search-input');
     state.searchQuery = input?.value ?? '';
     state.showFullSearchResults = Boolean(state.searchQuery.trim());
-    void refreshData();
+    void refreshHomeSearch(context);
   });
 
   document.querySelector<HTMLInputElement>('#search-input')?.addEventListener('input', (event) => {
+    liveSearchGeneration += 1;
     const input = event.currentTarget as HTMLInputElement;
     state.searchQuery = input.value;
+    state.searchLoading = Boolean(input.value.trim());
     state.showFullSearchResults = false;
     if (pendingLiveSearchHandle !== undefined) {
       globalThis.clearTimeout(pendingLiveSearchHandle);
     }
     pendingLiveSearchHandle = globalThis.setTimeout(() => {
       pendingLiveSearchHandle = undefined;
-      void refreshData(false);
+      void refreshHomeSearch(context);
     }, 250);
+    render(true);
   });
 
   document.querySelector<HTMLButtonElement>('[data-clear-search]')?.addEventListener('click', () => {
@@ -858,6 +953,11 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       suppressNextTrailerClick = true;
       state.isTrailerMenuOpen = true;
       render();
+      requestAnimationFrame(() => {
+        const content = document.querySelector<HTMLElement>('#item-scroll-content');
+        if (content) content.scrollTop = 0;
+        document.querySelector<HTMLButtonElement>('[data-play-trailer-index]')?.focus({ preventScroll: true });
+      });
     };
 
     trailerButton.addEventListener('click', () => {
@@ -908,6 +1008,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   document.querySelector<HTMLButtonElement>('#close-trailer-picker')?.addEventListener('click', () => {
     state.isTrailerMenuOpen = false;
     render();
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#play-item-trailer')?.focus({ preventScroll: true }));
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-play-trailer-index]').forEach((button) => {

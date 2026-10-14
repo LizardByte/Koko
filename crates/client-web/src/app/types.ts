@@ -121,6 +121,7 @@ export interface AppState {
   logPage: number;
   selectedItem?: MediaItemDetail;
   selectedItemMetadata?: ItemMetadataResponse;
+  itemMetadataLoading: boolean;
   selectedPerson?: MetadataPersonResponse;
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
@@ -131,6 +132,13 @@ export interface AppState {
   metadataSearchProviders: string[];
   showFullSearchResults: boolean;
   homeTab: HomeBrowseTab;
+  browsePreferences: import('./browsePreferences').BrowsePreferences;
+  browseFiltersOpen: boolean;
+  libraryPage: number;
+  itemManagementOpen: boolean;
+  expandedCreditId?: number;
+  expandedSeasonCreditId?: number;
+  searchLoading: boolean;
   browseFilter?: BrowseFilter;
   isLoading: boolean;
   isPlayerOpen: boolean;
@@ -189,11 +197,14 @@ export type AppIconName =
   | 'play'
   | 'plus'
   | 'refresh-cw'
+  | 'rotate-ccw'
   | 'save'
   | 'search'
   | 'settings'
   | 'skip-back'
   | 'skip-forward'
+  | 'sliders-horizontal'
+  | 'star'
   | 'trash-2'
   | 'tv'
   | 'triangle-alert'

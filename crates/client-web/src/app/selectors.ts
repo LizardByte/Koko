@@ -2,6 +2,8 @@
 import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaLibrarySettings } from '../api';
 import { getArtworkUrl, resolveApiUrl } from '../api';
 import { state } from './state';
+import { browseReturnPath } from './browseSession';
+import { browseItems } from './browsePreferences';
 import { humanizeItemType } from './ui';
 
 export type HomeFeaturePreview =
@@ -66,7 +68,7 @@ export function backNavigationTarget(): { label: string; path: string } {
   const libraryId = state.selectedItem?.library_id;
   return {
     label: 'Back to library',
-    path: typeof libraryId === 'number' ? `/libraries/${libraryId}` : '/',
+    path: browseReturnPath() ?? (typeof libraryId === 'number' ? `/libraries/${libraryId}` : '/'),
   };
 }
 
@@ -313,7 +315,7 @@ export function homePreviewCandidates(): MediaItemSummary[] {
 
   switch (state.homeTab) {
     case 'library':
-      return filteredTopLevelLibraryItems();
+      return browseItems(filteredTopLevelLibraryItems(), state.browsePreferences);
     case 'collections': {
       return filteredTopLevelLibraryItems();
     }

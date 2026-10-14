@@ -8,7 +8,7 @@ export const LOG_PAGE_SIZE = 50;
 
 /** Route loading starts before the first log request; refreshes use the log-specific flag. */
 export function logsAreLoading(): boolean {
-  return Boolean(state.isLoading || state.logsLoading);
+  return Boolean(state.logsLoading || (state.isLoading && !state.logsResponse && !state.logsError));
 }
 
 function renderLogEntry(entry: LogEntry): string {

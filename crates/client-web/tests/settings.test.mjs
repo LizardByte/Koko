@@ -116,6 +116,7 @@ test('settings navigation and heading remain present while configuration loads',
 
 test('route loading retains cached log entries while disabling pagination until refreshed', () => {
   state.isLoading = true;
+  state.logsLoading = true;
   state.logPage = 1;
   const pending = renderLogResults();
   assert.match(pending, /event-50/);
@@ -123,6 +124,7 @@ test('route loading retains cached log entries while disabling pagination until 
   assert.match(pending, /data-log-page="0" disabled/);
   assert.match(pending, /data-log-page="2" disabled/);
   state.isLoading = false;
+  state.logsLoading = false;
   const loaded = renderLogResults();
   assert.match(loaded, /51–100 of 123/);
   assert.doesNotMatch(loaded, /data-log-page="[02]" disabled/);

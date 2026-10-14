@@ -4,7 +4,7 @@ import { findSpatialTarget, type NavigationDirection } from './spatialNavigation
 
 const SECTION_SELECTOR = '[data-nav-section]';
 const CONTROL_SELECTOR = 'button:not(:disabled), a[href], summary, input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
-const CARD_SELECTOR = '.media-card, .person-card, .media-extra-card, .filter-card-button, .search-result-row';
+const CARD_SELECTOR = '.media-card, .episode-list-card, .person-card, .media-extra-card, .filter-card-button, .search-result-row';
 const rememberedFocus = new Map<string, HTMLElement>();
 let lastContentSection: string | undefined;
 let lastBrowseTab: string | undefined;
@@ -41,10 +41,36 @@ function entryControl(section: HTMLElement | undefined): HTMLElement | undefined
   return targets[0];
 }
 
+/** Reveal only inside item content or its action row, leaving the pinned layout untouched. */
+function revealItemControl(control: HTMLElement, section: HTMLElement | null, revealSection: boolean): boolean {
+  const content = control.closest<HTMLElement>('.item-scroll-content');
+  const actions = control.closest<HTMLElement>('.item-action-dock .detail-actions');
+  if (!content && !actions) return false;
+  if (content) {
+    const bounds = content.getBoundingClientRect();
+    if (revealSection && section) content.scrollTop += section.getBoundingClientRect().top - bounds.top;
+    const rect = control.getBoundingClientRect();
+    if (rect.top < bounds.top) content.scrollTop += rect.top - bounds.top;
+    else if (rect.bottom > bounds.bottom) content.scrollTop += rect.bottom - bounds.bottom;
+  }
+  const row = actions ?? control.closest<HTMLElement>('[data-shelf-row]');
+  if (row) {
+    const bounds = row.getBoundingClientRect();
+    const rect = control.getBoundingClientRect();
+    if (rect.left < bounds.left) row.scrollLeft += rect.left - bounds.left;
+    else if (rect.right > bounds.right) row.scrollLeft += rect.right - bounds.right;
+  }
+  return true;
+}
+
 function focusControl(control: HTMLElement | undefined, revealSection = false): void {
   if (!control) return;
   control.focus({ preventScroll: true });
   const section = control.closest<HTMLElement>(SECTION_SELECTOR);
+  if (revealItemControl(control, section, revealSection)) {
+    syncNavigationState();
+    return;
+  }
   // Pinned controls are already visible; scrolling them would reset the media rows below.
   if (!control.closest('.home-pinned-header') || control.closest('.search-popover')) {
     if (revealSection && section?.dataset.navSection !== 'libraries') {
@@ -81,6 +107,8 @@ export function syncNavigationState(): void {
   if (suggestions) suggestions.hidden = !inSearch && !active?.closest('.search-popover');
   const searchHint = document.querySelector<HTMLElement>('[data-search-navigation-hint]');
   if (searchHint) searchHint.hidden = !inSearch;
+  const selectHint = document.querySelector<HTMLElement>('[data-select-navigation-hint]');
+  if (selectHint) selectHint.hidden = active?.tagName !== 'SELECT';
   const backLabel = document.querySelector<HTMLElement>('[data-gamepad-back-label]');
   if (backLabel) backLabel.textContent = inSearch ? 'Browse tabs' : 'Back';
   const label = document.querySelector<HTMLElement>('[data-navigation-section-label]');
@@ -127,6 +155,15 @@ function moveSection(direction: 1 | -1): void {
 function moveFocus(direction: NavigationDirection): void {
   const sections = navigationSections();
   const active = document.activeElement as HTMLElement | null;
+  if (active?.tagName === 'SELECT' && (direction === 'left' || direction === 'right')) {
+    const select = active as HTMLSelectElement;
+    const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + (direction === 'right' ? 1 : -1)));
+    if (nextIndex !== select.selectedIndex) {
+      select.selectedIndex = nextIndex;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return;
+  }
   if (direction === 'left' && active?.matches('#search-input') && returnToBrowseTabs()) return;
   const section = active?.closest<HTMLElement>(SECTION_SELECTOR);
   if (!section || !active || !isVisible(active)) {
@@ -142,7 +179,7 @@ function moveFocus(direction: NavigationDirection): void {
   const libraries = sections.find((entry) => entry.dataset.navSection === 'libraries');
   if (direction === 'left' && libraries && section !== libraries) {
     focusControl(entryControl(libraries));
-  } else if (direction === 'right' && section === libraries) {
+  } else if ((direction === 'right' || (direction === 'down' && section.tagName === 'HEADER')) && section === libraries) {
     const content = sections.find((entry) => entry.dataset.navSection === lastContentSection)
       ?? sections.find((entry) => entry !== libraries);
     focusControl(entryControl(content));

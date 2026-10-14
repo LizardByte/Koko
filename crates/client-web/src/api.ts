@@ -149,6 +149,7 @@ export interface MediaItemSummary {
   height?: number;
   genres: string[];
   overview?: string;
+  release_year?: number | null;
   backdrop_url?: string;
   logo_url?: string;
   has_metadata?: boolean;

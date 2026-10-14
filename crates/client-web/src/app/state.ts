@@ -1,6 +1,7 @@
 import { getApiMode, getStoredApiBase } from '../api';
 import { defaultHomeTab, parseRoute } from './routes';
 import type { AppState } from './types';
+import { DEFAULT_BROWSE_PREFERENCES } from './browsePreferences';
 
 /** Shared mutable application state for the browser client. */
 export const state: AppState = {
@@ -11,6 +12,7 @@ export const state: AppState = {
   libraries: [],
   libraryItems: [],
   libraryItemsLoading: false,
+  itemMetadataLoading: false,
   searchResults: [],
   homePreviewItemId: undefined,
   homePreviewCollectionId: undefined,
@@ -25,6 +27,11 @@ export const state: AppState = {
   metadataSearchProviders: [],
   showFullSearchResults: false,
   homeTab: defaultHomeTab(parseRoute()),
+  browsePreferences: { ...DEFAULT_BROWSE_PREFERENCES },
+  browseFiltersOpen: false,
+  libraryPage: 0,
+  itemManagementOpen: false,
+  searchLoading: false,
   isLoading: true,
   hasDeferredAutoRefreshRender: false,
   isPlayerOpen: false,

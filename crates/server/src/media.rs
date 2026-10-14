@@ -104,6 +104,7 @@ struct SummaryMetadataLink {
     title: Option<String>,
     overview: Option<String>,
     genres_json: Option<String>,
+    release_year: Option<i32>,
     logo_url: Option<String>,
     cached_logo_path: Option<String>,
     backdrop_url: Option<String>,
@@ -289,6 +290,8 @@ pub struct MediaItemSummary {
     pub height: Option<i32>,
     /// Genre labels from linked metadata when available.
     pub genres: Vec<String>,
+    /// Release year from linked metadata, when available.
+    pub release_year: Option<i32>,
     /// Description or overview from linked metadata, when available.
     pub overview: Option<String>,
     /// Local or managed backdrop artwork URL, when available.
@@ -5240,6 +5243,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         width: None,
         height: None,
         genres: Vec::new(),
+        release_year: None,
         overview: None,
         backdrop_url: None,
         logo_url: None,
@@ -5403,6 +5407,7 @@ fn summary_metadata_link_from_full_link(link: &ItemMetadataLink) -> SummaryMetad
         title: link.title.clone(),
         overview: link.overview.clone(),
         genres_json: link.genres_json.clone(),
+        release_year: link.release_year,
         logo_url: link.logo_url.clone(),
         cached_logo_path: link.cached_logo_path.clone(),
         backdrop_url: link.backdrop_url.clone(),
@@ -5436,6 +5441,7 @@ fn apply_primary_metadata_link(
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default();
     summary.overview = link.overview.clone();
+    summary.release_year = link.release_year;
     if link.cached_backdrop_path.is_some() || link.backdrop_url.is_some() {
         summary.backdrop_url = Some(format!(
             "/api/v1/items/{}/artwork?kind=backdrop",
@@ -5475,6 +5481,7 @@ fn preferred_metadata_links_by_item_id(
             item_metadata_links_dsl::title,
             item_metadata_links_dsl::overview,
             item_metadata_links_dsl::genres_json,
+            item_metadata_links_dsl::release_year,
             item_metadata_links_dsl::logo_url,
             item_metadata_links_dsl::cached_logo_path,
             item_metadata_links_dsl::backdrop_url,
@@ -5489,6 +5496,7 @@ fn preferred_metadata_links_by_item_id(
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<i32>,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -5505,6 +5513,7 @@ fn preferred_metadata_links_by_item_id(
                 title,
                 overview,
                 genres_json,
+                release_year,
                 logo_url,
                 cached_logo_path,
                 backdrop_url,
@@ -5518,6 +5527,7 @@ fn preferred_metadata_links_by_item_id(
                 title,
                 overview,
                 genres_json,
+                release_year,
                 logo_url,
                 cached_logo_path,
                 backdrop_url,
@@ -6297,6 +6307,7 @@ mod tests {
             width: None,
             height: None,
             genres: Vec::new(),
+            release_year: None,
             overview: None,
             backdrop_url: None,
             logo_url: None,
@@ -6312,6 +6323,30 @@ mod tests {
             last_watched_at: None,
             missing_since: None,
         }
+    }
+
+    #[test]
+    fn summary_exposes_linked_release_year_for_browsing() {
+        let mut item = summary(1, None, "movie", "Example", 0, None, None);
+        assert_eq!(item.release_year, None);
+        let link = SummaryMetadataLink {
+            media_item_id: 1,
+            title: None,
+            overview: None,
+            genres_json: None,
+            release_year: Some(1999),
+            logo_url: None,
+            cached_logo_path: None,
+            backdrop_url: None,
+            cached_backdrop_path: None,
+            refresh_state: "fresh".into(),
+            refresh_error: None,
+            updated_at: None,
+            locale_key: "en-US".into(),
+        };
+        apply_primary_metadata_link(&mut item, Some(&link));
+        assert_eq!(item.release_year, Some(1999));
+        assert_eq!(serde_json::to_value(&item).unwrap()["release_year"], 1999);
     }
 
     #[test]

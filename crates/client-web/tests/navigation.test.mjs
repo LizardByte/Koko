@@ -96,6 +96,9 @@ class Control {
     if (selector === '#search-form') return this.form?.id === 'search-form' ? this.form : null;
     if (selector === '.search-popover') return this.searchPopover ?? null;
     if (selector === '.home-pinned-header') return this.pinnedHeader ?? this.section?.pinnedHeader ?? null;
+    if (selector === '.item-scroll-content') return this.itemContent ?? this.section?.itemContent ?? null;
+    if (selector === '.item-action-dock .detail-actions') return this.itemActionRow ?? this.section?.itemActionRow ?? null;
+    if (selector === '[data-shelf-row]') return this.shelfRow ?? null;
     if (selector.startsWith('input,')) return this.kind === 'input' ? this : null;
     return null;
   }
@@ -215,6 +218,34 @@ test('returning to pinned hero controls does not scroll the media rows back to t
   assert.equal(document.activeElement.scrolled, true);
 });
 
+test('item navigation reveals only the scrolling content and returning to playback preserves its position', () => {
+  appState.route = { page: 'item', itemId: 101 };
+  const content = { scrollTop: 300, getBoundingClientRect: () => rect(120, 180, 300, 140) };
+  const actionRow = { scrollLeft: 0, getBoundingClientRect: () => rect(120, 500, 180, 100) };
+  sections[1].itemActionRow = actionRow;
+  sections[1].controls[0].bounds = rect(120, 500);
+  sections[1].controls[1].bounds = rect(240, 500);
+  sections[2].itemContent = content;
+  sections[2].bounds = rect(120, 380, 300, 140);
+  sections[2].controls[0].bounds = rect(120, 380);
+  sections[2].controls[1].bounds = rect(240, 380);
+  sections[1].controls[0].focus();
+  key('ArrowDown');
+  assert.equal(document.activeElement.name, 'Shelf first');
+  assert.ok(content.scrollTop > 300);
+  assert.equal(document.activeElement.scrolled, undefined);
+  assert.equal(sections[2].scrolled, undefined);
+  const position = content.scrollTop;
+  key('ArrowUp');
+  assert.equal(document.activeElement.name, 'Browse first');
+  assert.equal(content.scrollTop, position);
+  assert.equal(document.activeElement.scrolled, undefined);
+  key('ArrowRight');
+  assert.equal(document.activeElement.name, 'Browse second');
+  assert.equal(actionRow.scrollLeft, 40);
+  assert.equal(content.scrollTop, position);
+});
+
 test('search suggestions inside the pinned header can still scroll into view', () => {
   sections[1].pinnedHeader = {};
   sections[1].controls[1].searchPopover = {};
@@ -252,6 +283,27 @@ test('controller row changes share the first-item and remembered-position behavi
   controllers = [pad()]; frame(50);
   controllers = [pad([13])]; frame(60);
   assert.equal(document.activeElement.name, 'Shelf second');
+});
+
+test('controller Left and Right change a selected filter without moving focus', () => {
+  const select = add(sections[1], 'Sort', 120, 0, 'field');
+  select.tagName = 'SELECT';
+  select.options = [{}, {}];
+  select.selectedIndex = 0;
+  let changes = 0;
+  select.dispatchEvent = (event) => { if (event.type === 'change') changes += 1; };
+  select.focus();
+  controllers = [pad([15])]; frame(0);
+  assert.equal(select.selectedIndex, 1);
+  assert.equal(document.activeElement, select);
+  controllers = [pad()]; frame(10);
+  controllers = [pad([15])]; frame(20);
+  assert.equal(select.selectedIndex, 1);
+  assert.equal(changes, 1);
+  controllers = [pad()]; frame(30);
+  controllers = [pad([14])]; frame(40);
+  assert.equal(select.selectedIndex, 0);
+  assert.equal(changes, 2);
 });
 
 test('sidebar movement and returning to content restore the previous control', () => {

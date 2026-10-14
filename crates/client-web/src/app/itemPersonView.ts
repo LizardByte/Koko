@@ -17,6 +17,8 @@ import { mediaExtraDurationLabel, mediaExtraTitle, mediaExtraTypeLabel } from '.
 import { currentThemeSongYouTubeTarget, currentTrailerOptions } from './mediaTargets';
 import { itemHasActiveMetadataRefresh, itemIsMetadataPending } from './activities';
 import { resumablePlaybackPositionMs } from './playbackProgress';
+import { renderLoadingDetail } from './loadingView';
+import { canManageUsers } from './auth';
 import { providerAttributionLogo, providerDisplayName } from './providers';
 import { state } from './state';
 import type { PersonCreditGroup, TrailerOption } from './types';
@@ -32,7 +34,7 @@ import {
   renderCollapsibleText,
   renderIcon,
 } from './ui';
-import { missingItemDetailBadgeMarkup, playbackDetailBadgeMarkup, renderItemCard, renderPlaybackTargetButton } from './homeView';
+import { missingItemDetailBadgeMarkup, playbackDetailBadgeMarkup, playbackStatusBadgeMarkup, renderItemCard, renderPlaybackTargetButton, renderWatchProgress } from './homeView';
 
 export function renderMetadataSearchResults(): string {
   const selectedItem = state.selectedItem;
@@ -160,6 +162,7 @@ export function renderMetadataSearchProviderControls(): string {
 }
 
 export function renderLinkedMetadataSummary(): string {
+  if (state.itemMetadataLoading && !state.selectedItemMetadata) return '<div class="empty-state tight" role="status">Loading linked metadata…</div>';
   const matches = state.selectedItemMetadata?.matches ?? [];
   const linkedMatch = matches.find((match) => match.relation_kind === 'primary') ?? matches[0];
   if (!linkedMatch) {
@@ -482,6 +485,7 @@ export function renderPersonCreditGroup(group: PersonCreditGroup): string {
   return `
     <article class="person-credit-card" data-person-credit-card data-person-credit-id="${group.root.id}">
       ${renderItemCard(group.root)}
+      ${seasonCount ? `<button type="button" class="secondary-button credit-expand-button" data-expand-credit="${group.root.id}" aria-expanded="false" aria-controls="credit-seasons-${group.root.id}">${renderButtonContent('View seasons', 'chevron-down')}</button>` : ''}
     </article>
     ${seasonTrayMarkup}
   `;
@@ -489,7 +493,7 @@ export function renderPersonCreditGroup(group: PersonCreditGroup): string {
 
 function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: string): string {
   return `
-    <div class="person-credit-tray person-season-tray" data-person-credit-tray data-person-credit-id="${group.root.id}" data-nav-section="credit-seasons:${group.root.id}" data-nav-label="Seasons">
+    <div class="person-credit-tray person-season-tray" id="credit-seasons-${group.root.id}" data-person-credit-tray data-person-credit-id="${group.root.id}" data-nav-section="credit-seasons:${group.root.id}" data-nav-label="Seasons">
       <div class="person-credit-tray-heading">
         <span>${escapeHtml(traySummary || 'Credits')}</span>
         <button class="person-credit-tray-close" type="button" data-close-person-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
@@ -500,6 +504,7 @@ function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: str
           return `
             <article class="person-season-credit-card" data-person-season-credit-card data-person-season-credit-id="${seasonGroup.season.id}">
               ${renderItemCard(seasonGroup.season)}
+              ${seasonGroup.episodes.length ? `<button type="button" class="secondary-button credit-expand-button" data-expand-season-credit="${seasonGroup.season.id}" aria-expanded="false" aria-controls="credit-episodes-${seasonGroup.season.id}">${renderButtonContent('View episodes', 'chevron-down')}</button>` : ''}
             </article>
             ${episodeTrayMarkup}
           `;
@@ -511,7 +516,7 @@ function renderPersonSeasonCreditTray(group: PersonCreditGroup, traySummary: str
 
 function renderPersonEpisodeCreditTray(seasonGroup: PersonCreditGroup['seasons'][number]): string {
   return `
-    <div class="person-credit-tray person-episode-tray" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}" data-nav-section="credit-episodes:${seasonGroup.season.id}" data-nav-label="Episodes">
+    <div class="person-credit-tray person-episode-tray" id="credit-episodes-${seasonGroup.season.id}" data-person-season-credit-tray data-person-season-credit-id="${seasonGroup.season.id}" data-nav-section="credit-episodes:${seasonGroup.season.id}" data-nav-label="Episodes">
       <div class="person-credit-tray-heading">
         <span>${escapeHtml(countLabel(seasonGroup.episodes.length, 'episode'))}</span>
         <button class="person-credit-tray-close" type="button" data-close-person-season-credit-tray title="Collapse row" aria-label="Collapse row">${renderIcon('x')}</button>
@@ -526,7 +531,8 @@ function renderPersonEpisodeCreditTray(seasonGroup: PersonCreditGroup['seasons']
 export function renderPersonPage(): string {
   const response = state.selectedPerson;
   if (!response) {
-    return '<section class="panel page-panel"><div class="empty-state">Loading person details…</div></section>';
+    if (!state.isLoading && state.error) return '<div class="empty-state">Person details could not be loaded. Use Retry to try again.</div>';
+    return renderLoadingDetail('Loading person details');
   }
 
   let personImageUrl: string | undefined;
@@ -618,6 +624,7 @@ export function activatePersonCreditTray(
   });
   cards.forEach((entry) => {
     entry.classList.remove('is-active');
+    entry.querySelector('[aria-expanded]')?.setAttribute('aria-expanded', 'false');
     entry.style.removeProperty('order');
   });
 
@@ -631,6 +638,7 @@ export function activatePersonCreditTray(
   });
 
   card.classList.add('is-active');
+  card.querySelector('[aria-expanded]')?.setAttribute('aria-expanded', 'true');
   tray.classList.add('is-active');
   tray.style.order = String(rowIndexForElement(card, rowTops) * 2 + 1);
 }
@@ -638,6 +646,7 @@ export function activatePersonCreditTray(
 export function collapsePersonCreditTrays(grid: HTMLElement, cardSelector: string, traySelector: string): void {
   directGridChildren(grid, cardSelector).forEach((entry) => {
     entry.classList.remove('is-active');
+    entry.querySelector('[aria-expanded]')?.setAttribute('aria-expanded', 'false');
     entry.style.removeProperty('order');
   });
   directGridChildren(grid, traySelector).forEach((entry) => {
@@ -681,21 +690,38 @@ export function bindPersonCreditTrays(): void {
     activatePersonCreditTray(seasonGrid, card, tray, '.person-season-credit-card', '.person-episode-tray');
   };
 
-  grid.addEventListener('mouseover', (event) => {
-    activateRootTray(event.target);
-    activateSeasonTray(event.target);
-  });
-  grid.addEventListener('focusin', (event) => {
-    activateRootTray(event.target);
-    activateSeasonTray(event.target);
-  });
   grid.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
+    const rootExpand = target?.closest<HTMLElement>('[data-expand-credit]');
+    const seasonExpand = target?.closest<HTMLElement>('[data-expand-season-credit]');
+    if (rootExpand) {
+      if (rootExpand.getAttribute('aria-expanded') === 'true') {
+        collapsePersonCreditTrays(grid, '.person-credit-card', '.person-season-tray');
+        state.expandedCreditId = undefined;
+      } else {
+        activateRootTray(rootExpand);
+        state.expandedCreditId = Number(rootExpand.dataset.expandCredit);
+      }
+      state.expandedSeasonCreditId = undefined;
+    }
+    if (seasonExpand) {
+      const seasonGrid = seasonExpand.closest<HTMLElement>('.person-season-credit-grid');
+      if (seasonGrid && seasonExpand.getAttribute('aria-expanded') === 'true') {
+        collapsePersonCreditTrays(seasonGrid, '.person-season-credit-card', '.person-episode-tray');
+        state.expandedSeasonCreditId = undefined;
+      } else {
+        activateSeasonTray(seasonExpand);
+        state.expandedSeasonCreditId = Number(seasonExpand.dataset.expandSeasonCredit);
+      }
+    }
     const rootCloseButton = target?.closest<HTMLButtonElement>('[data-close-person-credit-tray]');
     if (rootCloseButton) {
       event.preventDefault();
       event.stopPropagation();
+      grid.querySelector<HTMLElement>('[data-expand-credit][aria-expanded="true"]')?.focus({ preventScroll: true });
       collapsePersonCreditTrays(grid, '.person-credit-card', '.person-season-tray');
+      state.expandedCreditId = undefined;
+      state.expandedSeasonCreditId = undefined;
       return;
     }
 
@@ -704,9 +730,13 @@ export function bindPersonCreditTrays(): void {
     if (seasonCloseButton && seasonGrid) {
       event.preventDefault();
       event.stopPropagation();
+      seasonGrid.querySelector<HTMLElement>('[data-expand-season-credit][aria-expanded="true"]')?.focus({ preventScroll: true });
       collapsePersonCreditTrays(seasonGrid, '.person-season-credit-card', '.person-episode-tray');
+      state.expandedSeasonCreditId = undefined;
     }
   });
+  if (state.expandedCreditId) activateRootTray(grid.querySelector(`[data-expand-credit="${state.expandedCreditId}"]`));
+  if (state.expandedSeasonCreditId) activateSeasonTray(grid.querySelector(`[data-expand-season-credit="${state.expandedSeasonCreditId}"]`));
 }
 
 function selectedItemPosterUrl(item: MediaItemDetail): string | undefined {
@@ -751,8 +781,29 @@ function renderSelectedItemBreadcrumbs(item: MediaItemDetail): string {
 
 function renderSelectedItemPoster(item: MediaItemDetail, posterUrl: string | undefined): string {
   return posterUrl
-    ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(item.display_title)} poster" />`
+    ? `<img data-item-cover-image src="${escapeHtml(posterUrl)}" alt="${escapeHtml(item.display_title)} poster" /><span class="item-cover-fallback" hidden aria-hidden="true">${escapeHtml(item.display_title.slice(0, 1).toUpperCase())}</span>`
     : `<span>${escapeHtml(item.display_title.slice(0, 1).toUpperCase())}</span>`;
+}
+
+function renderItemPlaybackSummary(item: MediaItemDetail): string {
+  const playbackTarget = item.playback_target;
+  const playable = item.playable ? item : state.libraryItems.find((entry) => entry.id === playbackTarget?.item_id)
+    ?? item.children.find((entry) => entry.id === playbackTarget?.item_id);
+  const duration = playable?.playback_duration_ms ?? playable?.duration_ms ?? 0;
+  const position = item.playable ? resumablePlaybackPositionMs(item) : playbackTarget?.start_ms ?? 0;
+  const facts: Array<[string, string]> = [];
+  if (!item.playable && playbackTarget) facts.push(['Next up', playbackTarget.display_title]);
+  if (duration > 0) facts.push([item.playable ? 'Runtime' : 'Episode runtime', formatDuration(duration)]);
+  if (position > 0 && duration > position) facts.push(['Time remaining', formatDuration(duration - position)]);
+  if (item.playable) {
+    let status = 'Not started';
+    if (item.playback_completed) status = 'Watched';
+    else if ((item.playback_position_ms ?? 0) >= 30_000) status = 'In progress';
+    else if ((item.watch_count ?? 0) > 0) status = 'Watched';
+    facts.push(['Status', status]);
+  }
+  if (!facts.length) return '';
+  return `<section class="item-playback-summary" aria-label="Playback summary"><dl>${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl></section>`;
 }
 
 function renderSelectedItemTitle(item: MediaItemDetail, logoUrl: string | undefined): string {
@@ -773,7 +824,7 @@ function renderSelectedItemHeroMeta(item: MediaItemDetail, genres: string[]): st
     tags.push(`<span class="tag">${escapeHtml(item.content_rating)}</span>`);
   }
   if (typeof item.rating === 'number') {
-    tags.push(`<span class="tag">${escapeHtml(item.rating.toFixed(1))}</span>`);
+    tags.push(`<span class="tag rating-tag" aria-label="Rating: ${escapeHtml(item.rating.toFixed(1))}">${renderIcon('star', 'rating-icon')}<span>${escapeHtml(item.rating.toFixed(1))}</span></span>`);
   }
   tags.push(...genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`));
 
@@ -796,18 +847,18 @@ function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number): strin
 
   const playButtonClass = resumeMs > 0 ? 'secondary-button' : '';
   const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play now';
-  return `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, 'play')}</button>`;
+  return `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, resumeMs > 0 ? 'rotate-ccw' : 'play')}</button>`;
 }
 
 function renderTrailerActionButton(preferredTrailer: TrailerOption | undefined, trailerButtonTitle: string): string {
   return preferredTrailer
-    ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'play')}</button>`
+    ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'clapperboard')}</button>`
     : '';
 }
 
 function renderThemeSongButton(themeSongOption: ReturnType<typeof currentThemeSongYouTubeTarget>): string {
   return themeSongOption
-    ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'volume-2')}</button>`
+    ? `<button type="button" class="secondary-button" id="play-youtube-theme-song">${renderButtonContent('Play Theme', 'music')}</button>`
     : '';
 }
 
@@ -835,7 +886,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
   } = options;
 
   return `
-          <div class="detail-actions">
+          <div class="detail-actions" id="item-playback-actions">
             ${renderResumeButton(item, resumeMs)}
             ${renderPrimaryPlayButton(item, resumeMs)}
             ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false) : ''}
@@ -908,50 +959,82 @@ function renderSelectedItemFactList(item: MediaItemDetail): string {
   `;
 }
 
-function renderSelectedItemHero(
+function renderSelectedItemIdentity(
   item: MediaItemDetail,
   posterUrl: string | undefined,
   logoUrl: string | undefined,
-  overview: string,
   genres: string[],
-  actionsMarkup: string,
-  trailerPickerMarkup: string,
 ): string {
-  const itemHeroClass = item.item_type === 'episode' ? 'episode-hero' : '';
   const itemPosterClass = item.item_type === 'episode' ? 'item-thumbnail' : '';
   return `
-      <section class="item-hero ${itemHeroClass}" data-nav-section="item-overview" data-nav-label="Overview and playback">
+      <aside class="item-cover-column" aria-label="Cover artwork">
         <div class="detail-art item-poster ${itemPosterClass} ${posterUrl ? 'has-image' : ''}">
           ${renderSelectedItemPoster(item, posterUrl)}
+          ${renderWatchProgress(item)}
         </div>
-        <div class="detail-summary item-summary">
+        ${renderItemPlaybackSummary(item)}
+      </aside>
+      <header class="item-identity">
+          ${renderSelectedItemBreadcrumbs(item)}
           ${renderSelectedItemTitle(item, logoUrl)}
           ${item.tagline ? `<p class="hero-tagline">${escapeHtml(item.tagline)}</p>` : ''}
           ${renderSelectedItemHeroMeta(item, genres)}
-          ${renderCollapsibleText(overview, `item-overview:${item.id}`)}
-          ${actionsMarkup}
-          ${trailerPickerMarkup}
-          <p class="muted">${escapeHtml(state.selectedPlayback?.reason ?? 'Loading playback capabilities…')}</p>
-          ${renderSelectedItemFactList(item)}
-        </div>
-      </section>
+      </header>
   `;
 }
 
+export function renderEpisodeCard(episode: MediaItemSummary): string {
+  const artwork = getArtworkUrl(episode.id, 'poster', episode.artwork_updated_at);
+  const number = episode.episode_number === undefined ? '' : `Episode ${episode.episode_number}`;
+  const status = episode.playback_completed ? 'Watched' : (episode.playback_position_ms ?? 0) >= 30_000 ? 'In progress' : '';
+  return `<button type="button" class="episode-list-card" data-item-id="${episode.id}">
+    <span class="episode-thumbnail" style="background-image: url('${escapeHtml(artwork)}')"><span class="media-card-dynamic-badges"><span class="media-card-playback-badges">${playbackStatusBadgeMarkup(episode)}</span></span></span>
+    <span class="episode-copy"><span class="episode-number">${escapeHtml([number, formatDuration(episode.duration_ms), status].filter(Boolean).join(' · '))}</span>
+      <strong class="episode-title">${escapeHtml(episode.display_title)}</strong>
+      ${episode.overview ? `<span class="episode-overview">${escapeHtml(episode.overview)}</span>` : ''}
+    </span>
+    ${renderIcon('arrow-right', 'episode-open-icon')}
+  </button>`;
+}
+
+/** Keep season navigation separate from the current season's episode list. */
+export function renderEpisodeBrowser(item: MediaItemDetail): string {
+  const seasons = state.libraryItems.filter((child) => child.parent_id === item.parent_id && child.library_id === item.library_id && child.item_type === 'season');
+  // The current season is available before the request for its sibling seasons finishes.
+  if (!seasons.some((season) => season.id === item.id)) seasons.push(item);
+  seasons.sort((left, right) => (left.season_number ?? 0) - (right.season_number ?? 0) || left.id - right.id);
+  const episodes = item.children
+    .filter((child) => child.item_type === 'episode')
+    .sort((left, right) => (left.episode_number ?? 0) - (right.episode_number ?? 0) || left.id - right.id);
+  const tabs = `<nav class="season-tabs" aria-label="Seasons" data-nav-section="season-tabs" data-nav-label="Seasons">${seasons.map((season) => `<button type="button" class="season-tab secondary-button ${season.id === item.id ? 'active' : ''}" data-item-id="${season.id}" ${season.id === item.id ? 'aria-current="page"' : ''}>${escapeHtml(season.display_title)}</button>`).join('')}</nav>`;
+  const content = episodes.length ? `<div class="episode-list">${episodes.map(renderEpisodeCard).join('')}</div>` : '<div class="empty-state">No episodes are available in this season.</div>';
+  return `<section class="item-section episode-browser" id="episode-browser">
+    ${tabs}
+    <div data-nav-section="children" data-nav-label="Episodes">
+      <div class="section-heading section-heading-actions"><div><h3>Episodes</h3><p class="muted">${episodes.length} episode${episodes.length === 1 ? '' : 's'}</p></div></div>
+      ${content}
+    </div>
+  </section>`;
+}
+
 function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
+  if (item.item_type === 'season') return renderEpisodeBrowser(item);
+
   if (!item.children.length) {
     return '';
   }
 
-  const childCountLabel = countLabel(item.children.length, 'item');
-  const childGridClass = item.item_type === 'season' ? 'season-episodes-grid' : '';
+  const children = item.item_type === 'show'
+    ? item.children.filter((child) => child.item_type === 'season').sort((left, right) => (left.season_number ?? 0) - (right.season_number ?? 0) || left.id - right.id)
+    : item.children;
+  const childCountLabel = countLabel(children.length, item.item_type === 'show' ? 'season' : 'item');
   return `
         <section class="panel page-panel item-section" data-nav-section="children" data-nav-label="${escapeHtml(selectedItemChildSectionTitle(item))}">
           <div class="section-heading section-heading-actions">
             <h3>${escapeHtml(selectedItemChildSectionTitle(item))}</h3>
             <span class="muted">${childCountLabel}</span>
           </div>
-          <div class="item-grid hierarchy-item-grid ${childGridClass}">${item.children.map(renderItemCard).join('')}</div>
+          <div class="item-grid hierarchy-item-grid">${children.map(renderItemCard).join('')}</div>
         </section>
       `;
 }
@@ -995,7 +1078,12 @@ function renderSelectedItemSupportGrid(
   metadataSearchPanel: string,
 ): string {
   return `
-      <section class="item-support-grid">
+      <details class="item-management" id="item-management" ${state.itemManagementOpen ? 'open' : ''} data-nav-section="management" data-nav-label="Media details">
+        <summary>${renderButtonContent(canManageUsers() ? 'Details and management' : 'Media details', 'settings')}${renderIcon('chevron-down', 'disclosure-chevron')}</summary>
+        <div class="item-management-body">
+        ${renderSelectedItemFactList(item)}
+        ${state.selectedPlayback?.reason ? `<p class="muted playback-detail-reason">${escapeHtml(state.selectedPlayback.reason)}</p>` : ''}
+      <div class="item-support-grid">
         <section class="panel page-panel item-section">
           <div class="section-heading">
             <h3>File and library</h3>
@@ -1020,15 +1108,17 @@ function renderSelectedItemSupportGrid(
           </div>
         </section>
 
-        <section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
+        ${canManageUsers() ? `<section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
           <div class="section-heading section-heading-actions">
             <h3>${supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3>
             ${metadataRefreshButtonMarkup}
           </div>
           ${renderLinkedMetadataSummary()}
           ${metadataSearchPanel}
-        </section>
-      </section>
+        </section>` : ''}
+      </div>
+      </div>
+      </details>
   `;
 }
 
@@ -1055,23 +1145,26 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page">
-      ${renderSelectedItemBreadcrumbs(item)}
-      ${renderSelectedItemHero(
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}">
+      ${renderSelectedItemIdentity(
         item,
         selectedItemPosterUrl(item),
         selectedItemLogoUrl(item),
-        selectedItemOverview(item),
         item.genres.length ? item.genres : [],
-        actionsMarkup,
-        renderTrailerPicker(trailerOptions, hasMultipleTrailers),
       )}
+      <footer class="item-action-dock" data-nav-section="item-overview" data-nav-label="Playback actions">
+        ${actionsMarkup}
+      </footer>
+      <div class="item-scroll-content" id="item-scroll-content" role="region" aria-label="About ${escapeHtml(item.display_title)}">
+      ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
+      <section class="item-description-section" data-nav-section="description" data-nav-label="Description">
+        ${renderCollapsibleText(selectedItemOverview(item), `item-overview:${item.id}`)}
+      </section>
+      ${renderSelectedItemChildrenSection(item)}
 
       ${renderPeopleRail()}
 
       ${renderItemExtrasRail()}
-
-      ${renderSelectedItemChildrenSection(item)}
 
       ${renderSelectedItemCollectionRails()}
 
@@ -1082,13 +1175,15 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
         metadataRefreshButtonMarkup,
         renderMetadataSearchPanel(supportsManualLinking),
       )}
+      </div>
     </section>
   `;
 }
 
 export function renderItemPage(): string {
   if (!state.selectedItem) {
-    return '<section class="panel page-panel"><div class="empty-state">Loading item details…</div></section>';
+    if (!state.isLoading && state.error) return '<div class="empty-state">Item details could not be loaded. Use Retry to try again.</div>';
+    return renderLoadingDetail('Loading item details');
   }
 
   return renderSelectedItemPage(state.selectedItem);

@@ -27,6 +27,11 @@ const DOM_PATCH_KEY_ATTRIBUTES = [
   'data-preview-collection-id',
   'data-person-id',
   'data-home-tab',
+  'data-library-page',
+  'data-expand-credit',
+  'data-expand-season-credit',
+  'data-person-credit-id',
+  'data-person-season-credit-id',
   'data-settings-section-path',
   'data-nav-library-id',
   'data-category-filter',
@@ -110,7 +115,7 @@ function captureRenderSnapshot(): RenderSnapshot {
       ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
       : undefined;
   const scrollPositions = new Map<string, ScrollPosition>();
-  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, #item-scroll-content, .item-action-dock .detail-actions, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
     const key = scrollPositionKey(element, index);
     if (key) {
       scrollPositions.set(key, { top: element.scrollTop, left: element.scrollLeft });
@@ -126,7 +131,7 @@ function captureRenderSnapshot(): RenderSnapshot {
 
 function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
   globalThis.requestAnimationFrame(() => {
-    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
+    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, #item-scroll-content, .item-action-dock .detail-actions, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
       if (position) {

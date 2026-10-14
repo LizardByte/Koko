@@ -638,6 +638,7 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
     return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
   }
   if (!settings) {
+    if (!state.isLoading && state.error) return '<section class="panel page-panel settings-page-panel"><div class="empty-state">These settings could not be loaded. Use Retry to try again.</div></section>';
     return '<section class="panel page-panel settings-page-panel"><div class="empty-state" role="status">Settings are still loading…</div></section>';
   }
   if (section === 'general') {

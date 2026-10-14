@@ -136,6 +136,8 @@ export interface AppState {
   browseFiltersOpen: boolean;
   libraryPage: number;
   itemManagementOpen: boolean;
+  itemMoreOpen: boolean;
+  resumeOptionsOpen: boolean;
   expandedCreditId?: number;
   expandedSeasonCreditId?: number;
   searchLoading: boolean;
@@ -179,6 +181,7 @@ export type AppIconName =
   | 'circle-check'
   | 'clapperboard'
   | 'database-zap'
+  | 'ellipsis'
   | 'film'
   | 'folder-open'
   | 'folder-sync'

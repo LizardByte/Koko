@@ -5,20 +5,20 @@ import { escapeHtml, formatDuration } from './format';
 import { state } from './state';
 import type { AppIconName } from './types';
 
-export function renderCollapsibleText(text: string, key: string, className = 'hero-description'): string {
+export function renderCollapsibleText(text: string, key: string, className = 'hero-description', measureOverflow = false): string {
   const normalized = text.trim();
   const lineCount = normalized.split(/\r\n|\r|\n/).length;
   const shouldCollapse = normalized.length > COLLAPSIBLE_TEXT_LENGTH || lineCount > COLLAPSIBLE_TEXT_LINE_COUNT;
   const isExpanded = state.expandedTextKeys.has(key);
-  const stateClass = shouldCollapse && !isExpanded ? 'is-collapsed' : '';
+  const stateClass = (shouldCollapse || measureOverflow) && !isExpanded ? 'is-collapsed' : '';
   const toggleExpanded = isExpanded ? 'true' : 'false';
   const toggleLabel = isExpanded ? 'show less' : '... see more';
-  const toggle = shouldCollapse
-    ? `<button type="button" class="text-toggle-button" data-toggle-text="${escapeHtml(key)}" aria-expanded="${toggleExpanded}">${toggleLabel}</button>`
+  const toggle = shouldCollapse || measureOverflow
+    ? `<button type="button" class="text-toggle-button" ${measureOverflow ? 'data-overflow-toggle' : ''} ${measureOverflow && !shouldCollapse ? 'hidden' : ''} data-toggle-text="${escapeHtml(key)}" aria-expanded="${toggleExpanded}">${toggleLabel}</button>`
     : '';
 
   return `
-    <div class="collapsible-text ${className} ${stateClass}" data-collapsible-text="${escapeHtml(key)}">${escapeHtml(normalized)}</div>
+    <div class="collapsible-text ${className} ${stateClass}" ${measureOverflow ? 'data-measure-overflow' : ''} data-collapsible-text="${escapeHtml(key)}">${escapeHtml(normalized)}</div>
     ${toggle}
   `;
 }
@@ -57,12 +57,14 @@ export function renderIcon(iconName: AppIconName, className = 'rail-icon'): stri
   return `<span class="${className}"><i data-lucide="${iconName}"></i></span>`;
 }
 
-export function renderButtonContent(label: string, iconName?: AppIconName, iconPosition: 'start' | 'end' = 'start'): string {
+export function renderButtonContent(label: string, iconName?: AppIconName, iconPosition: 'start' | 'end' = 'start', subtitle?: string): string {
   if (!iconName) {
     return escapeHtml(label);
   }
 
-  const labelContent = label ? `<span>${escapeHtml(label)}</span>` : '';
+  const labelContent = label
+    ? subtitle ? `<span class="button-copy"><span>${escapeHtml(label)}</span><span class="button-secondary-label">${escapeHtml(subtitle)}</span></span>` : `<span>${escapeHtml(label)}</span>`
+    : '';
   return `
     <span class="button-content${iconPosition === 'end' ? ' icon-end' : ''}">
       ${renderIcon(iconName, 'button-icon')}

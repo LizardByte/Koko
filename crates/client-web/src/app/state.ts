@@ -31,6 +31,8 @@ export const state: AppState = {
   browseFiltersOpen: false,
   libraryPage: 0,
   itemManagementOpen: false,
+  itemMoreOpen: false,
+  resumeOptionsOpen: false,
   searchLoading: false,
   isLoading: true,
   hasDeferredAutoRefreshRender: false,

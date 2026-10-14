@@ -7,6 +7,8 @@ import { renderMetadataDashboard } from './dashboardView';
 import { LOG_PAGE_SIZE, logsAreLoading, renderLogResults } from './logView';
 import { DEFAULT_BROWSE_PREFERENCES, normalizeBrowsePreferences, saveBrowsePreferences } from './browsePreferences';
 import { bindHoverPreview } from './hoverPreview';
+import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
+import { bindResumeHold } from './resumeHold';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -486,7 +488,7 @@ export function bindEvents(context: AppEventBindingContext): void {
   };
 
   try {
-    bindRenderEvents(context);
+    bindRenderEvents(context, signal);
   } finally {
     EventTarget.prototype.addEventListener = originalAddEventListener;
   }
@@ -494,11 +496,104 @@ export function bindEvents(context: AppEventBindingContext): void {
 
 
 
-function bindRenderEvents(context: AppEventBindingContext): void {
+/** Bind item layout and disclosures, returning a shared way to dismiss secondary actions. */
+function bindItemDetailLayout(signal: AbortSignal): () => void {
+  const itemPage = document.querySelector<HTMLElement>('.item-detail-page');
+  if (itemPage) bindItemOpeningLayout(itemPage, signal, () => {
+    itemPage.querySelectorAll<HTMLElement>('[data-item-row]').forEach(updateShelfScrollControls);
+  });
+  const itemBar = document.querySelector<HTMLElement>('.item-action-dock');
+  const itemAnchor = document.querySelector<HTMLElement>('.item-actions-anchor');
+  const itemScroller = itemBar?.closest<HTMLElement>('.main-shell');
+  if (itemBar && itemAnchor && itemScroller) bindItemPlaybackBar(itemScroller, itemAnchor, itemBar, signal);
+  const moreActions = document.querySelector<HTMLDetailsElement>('#item-more');
+  const updateMoreActions = (): void => {
+    if (!moreActions) return;
+    state.itemMoreOpen = moreActions.open;
+    const menu = moreActions.querySelector<HTMLElement>('.item-more-menu');
+    if (!moreActions.open || !menu || !itemScroller || !itemBar) return;
+    menu.style.maxHeight = `${Math.max(48, itemScroller.clientHeight - itemBar.offsetHeight - 16)}px`;
+    const overflow = menu.getBoundingClientRect().bottom - itemScroller.getBoundingClientRect().bottom;
+    if (overflow > 0) {
+      const roomToScroll = Math.max(0, itemBar.getBoundingClientRect().top - itemScroller.getBoundingClientRect().top);
+      itemScroller.scrollTop += Math.min(overflow + 8, roomToScroll);
+    }
+  };
+  moreActions?.addEventListener('toggle', updateMoreActions);
+  updateMoreActions();
+  const closeMoreActions = (): void => {
+    if (moreActions) moreActions.open = false;
+    state.itemMoreOpen = false;
+  };
+  if (moreActions) {
+    globalThis.addEventListener('resize', updateMoreActions, { signal });
+    moreActions.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('button')) closeMoreActions();
+    }, { capture: true });
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !moreActions.contains(event.target)) closeMoreActions();
+    });
+    document.addEventListener('focusin', (event) => {
+      if (event.target instanceof Node && !moreActions.contains(event.target)) closeMoreActions();
+    });
+  }
+  document.querySelector<HTMLButtonElement>('#show-item-details')?.addEventListener('click', () => {
+    closeMoreActions();
+    const details = document.querySelector<HTMLDetailsElement>('#item-management');
+    if (details) {
+      details.open = true;
+      state.itemManagementOpen = true;
+      details.scrollIntoView({ block: 'start' });
+      details.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+    }
+  });
+  return closeMoreActions;
+}
+
+/** Open a distinct playback-options section without starting playback or rebuilding the page. */
+function bindResumeOptions(signal: AbortSignal): () => void {
+  const trigger = document.querySelector<HTMLButtonElement>('[data-resume-hold]');
+  const menu = document.querySelector<HTMLElement>('#resume-playback-menu');
+  const close = (): void => {
+    state.resumeOptionsOpen = false;
+    if (menu) menu.hidden = true;
+    trigger?.setAttribute('aria-expanded', 'false');
+  };
+  if (trigger && menu) {
+    trigger.addEventListener('resume-options-close', close);
+    menu.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('button')) close();
+    }, { capture: true });
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !menu.contains(event.target) && !trigger.contains(event.target)) close();
+    });
+    document.addEventListener('focusin', (event) => {
+      if (event.target instanceof Node && !menu.contains(event.target) && !trigger.contains(event.target)) close();
+    });
+  }
+  return () => {
+    if (!trigger || !menu || signal.aborted) return;
+    state.resumeOptionsOpen = true;
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    const scroller = menu.closest<HTMLElement>('.main-shell');
+    const bar = menu.closest<HTMLElement>('.item-action-dock');
+    if (scroller && bar) {
+      menu.style.maxHeight = `${Math.max(48, scroller.clientHeight - bar.offsetHeight - 16)}px`;
+      const overflow = menu.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+      if (overflow > 0) scroller.scrollTop += Math.min(overflow + 8, Math.max(0, bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top));
+    }
+    menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+  };
+}
+
+function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal): void {
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();
+  const closeMoreActions = bindItemDetailLayout(signal);
+  const openResumeOptions = bindResumeOptions(signal);
   document.querySelectorAll<HTMLImageElement>('[data-item-cover-image]').forEach((image) => {
     const showFallback = () => {
       image.hidden = true;
@@ -954,11 +1049,18 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       state.isTrailerMenuOpen = true;
       render();
       requestAnimationFrame(() => {
-        const content = document.querySelector<HTMLElement>('#item-scroll-content');
-        if (content) content.scrollTop = 0;
-        document.querySelector<HTMLButtonElement>('[data-play-trailer-index]')?.focus({ preventScroll: true });
+        const option = document.querySelector<HTMLButtonElement>('[data-play-trailer-index]');
+        option?.scrollIntoView({ block: 'center' });
+        option?.focus({ preventScroll: true });
       });
     };
+
+    document.querySelector<HTMLButtonElement>('#choose-item-trailer')?.addEventListener('click', () => {
+      closeMoreActions();
+      openTrailerChooser();
+      // The chooser button doesn't generate a click on the main trailer button.
+      suppressNextTrailerClick = false;
+    });
 
     trailerButton.addEventListener('click', () => {
       if (suppressNextTrailerClick) {
@@ -1047,38 +1149,44 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     }
   });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => button.addEventListener('click', async () => {
-    if (!state.selectedItem) {
-      return;
-    }
+  document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => {
+    const playFrom = async (startMs: number): Promise<void> => {
+      if (!state.selectedItem) {
+        return;
+      }
 
-    try {
-      const startMs = Number(button.dataset.playSelectedItemStartMs);
-      await startPlayback(state.selectedItem, Number.isFinite(startMs) ? startMs : 0);
-    } catch (error) {
-      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      render();
-    }
-  }));
+      try {
+        await startPlayback(state.selectedItem, Number.isFinite(startMs) ? startMs : 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+        state.isPlayerOpen = false;
+        state.activePlaybackItem = undefined;
+        render();
+      }
+    };
+    if (button.hasAttribute('data-resume-hold')) bindResumeHold(button, openResumeOptions, signal);
+    button.addEventListener('click', () => { void playFrom(Number(button.dataset.playSelectedItemStartMs)); });
+  });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-playback-target-item-id]').forEach((button) => button.addEventListener('click', async () => {
+  document.querySelectorAll<HTMLButtonElement>('[data-playback-target-item-id]').forEach((button) => {
     const itemId = Number(button.dataset.playbackTargetItemId);
-    const startMs = Number(button.dataset.playbackTargetStartMs);
-    if (!Number.isFinite(itemId)) {
-      return;
-    }
+    const playFrom = async (startMs: number): Promise<void> => {
+      if (!Number.isFinite(itemId)) {
+        return;
+      }
 
-    try {
-      await startPlaybackForItemId(itemId, Number.isFinite(startMs) ? startMs : 0);
-    } catch (error) {
-      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      render();
-    }
-  }));
+      try {
+        await startPlaybackForItemId(itemId, Number.isFinite(startMs) ? startMs : 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+        state.isPlayerOpen = false;
+        state.activePlaybackItem = undefined;
+        render();
+      }
+    };
+    if (button.hasAttribute('data-resume-hold')) bindResumeHold(button, openResumeOptions, signal);
+    button.addEventListener('click', () => { void playFrom(Number(button.dataset.playbackTargetStartMs)); });
+  });
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
     closeActivePlaybackSession();

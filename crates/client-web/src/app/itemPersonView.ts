@@ -284,21 +284,30 @@ export function renderPeopleRail(): string {
     return '';
   }
 
-  return `
-    <section class="panel page-panel item-section item-people-section" data-nav-section="people" data-nav-label="People">
-      <div class="section-heading section-heading-actions">
-        <h3>People</h3>
-        <span class="muted">${people.length} credit${people.length === 1 ? '' : 's'}</span>
-      </div>
-      <div class="shelf-row-shell people-row-shell">
-        <button type="button" class="shelf-scroll-button" data-shelf-scroll="people:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
-        <div class="people-row" data-shelf-row="people">
-          ${people.map(renderPersonCredit).join('')}
-        </div>
-        <button type="button" class="shelf-scroll-button" data-shelf-scroll="people:1" title="Scroll right">${renderIcon('chevron-right')}</button>
-      </div>
-    </section>
-  `;
+  const cast = people.filter(isCastCredit);
+  const crew = people.filter((person) => !isCastCredit(person));
+  return renderPeopleRow('Cast', cast, 'people') + renderPeopleRow('Crew', crew, 'crew');
+}
+
+/** Cast and crew share single rows of complete cards and separate navigation sections. */
+function renderPeopleRow(title: string, people: ItemMetadataPerson[], section: string): string {
+  if (!people.length) return '';
+  return `<section class="panel page-panel item-section item-people-section" data-nav-section="${section}" data-nav-label="${title}">
+    <div class="section-heading item-row-heading"><h3>${title} <span class="item-row-count">· ${people.length}</span></h3></div>
+    <div class="shelf-row-shell item-row-shell">
+      <button type="button" class="shelf-scroll-button" data-shelf-scroll="${section}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+      <div class="people-row item-responsive-row" data-item-row="people" data-shelf-row="${section}">${people.map(renderPersonCredit).join('')}</div>
+      <button type="button" class="shelf-scroll-button" data-shelf-scroll="${section}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+    </div>
+  </section>`;
+}
+
+/** Treat unclassified people as cast so incomplete provider data stays visible. */
+function isCastCredit(person: ItemMetadataPerson): boolean {
+  return Boolean(person.character_name)
+    || ['cast', 'acting'].includes(person.department?.toLowerCase() ?? '')
+    || person.role?.toLowerCase() === 'actor'
+    || (!person.department && !person.role);
 }
 
 export function selectedItemExtras(): MediaItemExtra[] {
@@ -346,13 +355,12 @@ export function renderItemExtrasRail(): string {
 
   return `
     <section class="panel page-panel item-section item-extras-section" data-nav-section="extras" data-nav-label="Extras">
-      <div class="section-heading section-heading-actions">
-        <h3>Extras</h3>
-        <span class="muted">${extras.length} video${extras.length === 1 ? '' : 's'}</span>
+      <div class="section-heading item-row-heading">
+        <h3>Extras <span class="item-row-count">· ${extras.length}</span></h3>
       </div>
-      <div class="shelf-row-shell">
+      <div class="shelf-row-shell item-row-shell">
         <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
-        <div class="shelf-row extras-row" data-shelf-row="item-extras">
+        <div class="shelf-row extras-row item-responsive-row" data-item-row="extras" data-shelf-row="item-extras">
           ${extras.map((extra, index) => renderMediaExtraCard(extra, index)).join('')}
         </div>
         <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-extras:1" title="Scroll right">${renderIcon('chevron-right')}</button>
@@ -764,17 +772,12 @@ function selectedItemChildSectionTitle(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemBreadcrumbs(item: MediaItemDetail): string {
-  if (!item.hierarchy.length) {
-    return '';
-  }
-
+  if (!item.hierarchy.length) return '';
   return `
         <nav class="item-breadcrumbs panel page-panel" aria-label="Item hierarchy" data-nav-section="hierarchy" data-nav-label="Item hierarchy">
           ${item.hierarchy.map((hierarchyItem) => `
             <button type="button" class="breadcrumb-button" data-item-id="${hierarchyItem.id}">${escapeHtml(hierarchyItem.display_title)}</button>
           `).join('<span class="breadcrumb-separator">/</span>')}
-          <span class="breadcrumb-separator">/</span>
-          <span class="breadcrumb-current">${escapeHtml(item.display_title)}</span>
         </nav>
       `;
 }
@@ -785,25 +788,14 @@ function renderSelectedItemPoster(item: MediaItemDetail, posterUrl: string | und
     : `<span>${escapeHtml(item.display_title.slice(0, 1).toUpperCase())}</span>`;
 }
 
-function renderItemPlaybackSummary(item: MediaItemDetail): string {
+/** Keep the current episode and remaining time beside the primary playback action. */
+function selectedItemRemainingTime(item: MediaItemDetail): string | undefined {
   const playbackTarget = item.playback_target;
   const playable = item.playable ? item : state.libraryItems.find((entry) => entry.id === playbackTarget?.item_id)
     ?? item.children.find((entry) => entry.id === playbackTarget?.item_id);
   const duration = playable?.playback_duration_ms ?? playable?.duration_ms ?? 0;
   const position = item.playable ? resumablePlaybackPositionMs(item) : playbackTarget?.start_ms ?? 0;
-  const facts: Array<[string, string]> = [];
-  if (!item.playable && playbackTarget) facts.push(['Next up', playbackTarget.display_title]);
-  if (duration > 0) facts.push([item.playable ? 'Runtime' : 'Episode runtime', formatDuration(duration)]);
-  if (position > 0 && duration > position) facts.push(['Time remaining', formatDuration(duration - position)]);
-  if (item.playable) {
-    let status = 'Not started';
-    if (item.playback_completed) status = 'Watched';
-    else if ((item.playback_position_ms ?? 0) >= 30_000) status = 'In progress';
-    else if ((item.watch_count ?? 0) > 0) status = 'Watched';
-    facts.push(['Status', status]);
-  }
-  if (!facts.length) return '';
-  return `<section class="item-playback-summary" aria-label="Playback summary"><dl>${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl></section>`;
+  return position > 0 && duration > position ? `${formatDuration(duration - position)} remaining` : undefined;
 }
 
 function renderSelectedItemTitle(item: MediaItemDetail, logoUrl: string | undefined): string {
@@ -826,9 +818,9 @@ function renderSelectedItemHeroMeta(item: MediaItemDetail, genres: string[]): st
   if (typeof item.rating === 'number') {
     tags.push(`<span class="tag rating-tag" aria-label="Rating: ${escapeHtml(item.rating.toFixed(1))}">${renderIcon('star', 'rating-icon')}<span>${escapeHtml(item.rating.toFixed(1))}</span></span>`);
   }
-  tags.push(...genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`));
-
-  return `<div class="hero-meta-row">${tags.join('')}</div>`;
+  if (item.playable && item.duration_ms) tags.push(`<span class="tag">${escapeHtml(formatDuration(item.duration_ms))}</span>`);
+  if (item.playback_completed || (item.watch_count ?? 0) > 0) tags.push(`<span class="tag watched-fact">${renderIcon('circle-check', 'button-icon')}Watched</span>`);
+  return `<div class="hero-meta-row">${tags.join('')}${genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('')}</div>`;
 }
 
 function renderResumeButton(item: MediaItemDetail, resumeMs: number): string {
@@ -837,22 +829,22 @@ function renderResumeButton(item: MediaItemDetail, resumeMs: number): string {
   }
 
   const resumeLabel = `Resume ${formatDuration(resumeMs)}`;
-  return `<button type="button" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(resumeLabel, 'play')}</button>`;
+  return `<button type="button" data-resume-hold aria-describedby="resume-hold-hint" aria-controls="resume-playback-menu" aria-expanded="${state.resumeOptionsOpen}" data-play-selected-item-start-ms="${resumeMs}">${renderButtonContent(resumeLabel, 'play', 'start', selectedItemRemainingTime(item))}</button>`;
 }
 
-function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number): string {
+function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number, id?: string): string {
   if (!item.playable) {
     return '';
   }
 
   const playButtonClass = resumeMs > 0 ? 'secondary-button' : '';
-  const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play now';
-  return `<button type="button" class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, resumeMs > 0 ? 'rotate-ccw' : 'play')}</button>`;
+  const playButtonLabel = resumeMs > 0 ? 'Start over' : 'Play';
+  return `<button type="button" ${id ? `id="${escapeHtml(id)}"` : ''} class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, resumeMs > 0 ? 'rotate-ccw' : 'play')}</button>`;
 }
 
 function renderTrailerActionButton(preferredTrailer: TrailerOption | undefined, trailerButtonTitle: string): string {
   return preferredTrailer
-    ? `<button type="button" class="secondary-button" id="play-item-trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Play Trailer', 'clapperboard')}</button>`
+    ? `<button type="button" class="secondary-button" id="play-item-trailer" aria-label="Play trailer" title="${escapeHtml(trailerButtonTitle)}">${renderButtonContent('Trailer', 'clapperboard')}</button>`
     : '';
 }
 
@@ -870,7 +862,7 @@ interface SelectedItemActionsOptions {
   preferredTrailer?: TrailerOption;
   themeSongOption?: ReturnType<typeof currentThemeSongYouTubeTarget>;
   trailerButtonTitle: string;
-  backTarget: ReturnType<typeof backNavigationTarget>;
+  hasMultipleTrailers: boolean;
 }
 
 function renderSelectedItemActions(options: SelectedItemActionsOptions): string {
@@ -882,18 +874,36 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
     preferredTrailer,
     themeSongOption,
     trailerButtonTitle,
-    backTarget,
+    hasMultipleTrailers,
   } = options;
 
   return `
           <div class="detail-actions" id="item-playback-actions">
+            <div class="item-primary-action">
+            <div class="item-bar-identity" hidden>
+              ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
+            </div>
             ${renderResumeButton(item, resumeMs)}
-            ${renderPrimaryPlayButton(item, resumeMs)}
-            ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false) : ''}
-            ${restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true) : ''}
+            ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
+            ${playbackTarget ? renderPlaybackTargetButton(playbackTarget, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: selectedItemRemainingTime(item) }) : ''}
+            ${!item.playable && playbackTarget ? `<span class="item-playback-context">Next: ${escapeHtml(playbackTarget.display_title)}</span>` : ''}
+            ${resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0 ? `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
+              <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
+                ${item.playable ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over') : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent('Start over', 'rotate-ccw')}</button>`}
+              </section>` : ''}
+            </div>
             ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
-            ${renderThemeSongButton(themeSongOption)}
-            <button type="button" class="secondary-button" id="back-to-library">${renderButtonContent(backTarget.label, 'arrow-left')}</button>
+            <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
+              <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
+              <div class="item-more-menu">
+                ${resumeMs > 0 ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over') : ''}
+                ${restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true, { id: 'item-start-over' }) : ''}
+                ${hasMultipleTrailers ? `<button type="button" class="secondary-button" id="choose-item-trailer">${renderButtonContent('Choose a trailer', 'clapperboard')}</button>` : ''}
+                ${renderThemeSongButton(themeSongOption)}
+                <button type="button" class="secondary-button" id="show-item-details">${renderButtonContent(canManageUsers() ? 'Details and management' : 'Media details', 'settings')}</button>
+              </div>
+            </details>
+            <button type="button" class="secondary-button item-back-button" id="back-to-library">${renderButtonContent(backNavigationTarget().label, 'arrow-left')}</button>
           </div>
   `;
 }
@@ -972,7 +982,6 @@ function renderSelectedItemIdentity(
           ${renderSelectedItemPoster(item, posterUrl)}
           ${renderWatchProgress(item)}
         </div>
-        ${renderItemPlaybackSummary(item)}
       </aside>
       <header class="item-identity">
           ${renderSelectedItemBreadcrumbs(item)}
@@ -1140,31 +1149,33 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
     preferredTrailer: trailerOptions[0],
     themeSongOption: currentThemeSongYouTubeTarget(),
     trailerButtonTitle,
-    backTarget: backNavigationTarget(),
+    hasMultipleTrailers,
   });
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
     <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}">
+      ${item.backdrop_url || state.selectedItemMetadata?.matches.some((match) => match.backdrop_url || match.cached_backdrop_path) ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at))}');"></div>` : ''}
       ${renderSelectedItemIdentity(
         item,
         selectedItemPosterUrl(item),
         selectedItemLogoUrl(item),
         item.genres.length ? item.genres : [],
       )}
-      <footer class="item-action-dock" data-nav-section="item-overview" data-nav-label="Playback actions">
+      <span class="item-actions-anchor" aria-hidden="true"></span>
+      <div class="item-action-dock" data-nav-section="item-overview" data-nav-label="Playback actions">
         ${actionsMarkup}
-      </footer>
-      <div class="item-scroll-content" id="item-scroll-content" role="region" aria-label="About ${escapeHtml(item.display_title)}">
-      ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
+      </div>
       <section class="item-description-section" data-nav-section="description" data-nav-label="Description">
-        ${renderCollapsibleText(selectedItemOverview(item), `item-overview:${item.id}`)}
+        ${renderCollapsibleText(selectedItemOverview(item), `item-overview:${item.id}`, 'hero-description', true)}
       </section>
+      <div class="item-support-content" id="item-support-content">
+      ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
       ${renderSelectedItemChildrenSection(item)}
 
-      ${renderPeopleRail()}
-
       ${renderItemExtrasRail()}
+
+      ${renderPeopleRail()}
 
       ${renderSelectedItemCollectionRails()}
 

@@ -84,6 +84,7 @@ class Control {
     this.clicks = 0;
   }
   matches(selector) {
+    if (selector === '[data-resume-hold]') return Boolean(this.resumeHold);
     if (selector === ':disabled') return this.disabled;
     if (selector === '#search-input') return this.id === 'search-input';
     if (selector === '[data-shelf-scroll]') return this.kind === 'scroll';
@@ -96,8 +97,10 @@ class Control {
     if (selector === '#search-form') return this.form?.id === 'search-form' ? this.form : null;
     if (selector === '.search-popover') return this.searchPopover ?? null;
     if (selector === '.home-pinned-header') return this.pinnedHeader ?? this.section?.pinnedHeader ?? null;
-    if (selector === '.item-scroll-content') return this.itemContent ?? this.section?.itemContent ?? null;
-    if (selector === '.item-action-dock .detail-actions') return this.itemActionRow ?? this.section?.itemActionRow ?? null;
+    if (selector === '.item-detail-page') return this.itemPage ?? this.section?.itemPage ?? null;
+    if (selector === '.main-shell') return this.itemScroller ?? this.section?.itemScroller ?? null;
+    if (selector === '.item-action-dock') return this.itemBar ?? this.section?.itemBar ?? null;
+    if (selector === '.item-more-menu') return this.itemMoreMenu ?? null;
     if (selector === '[data-shelf-row]') return this.shelfRow ?? null;
     if (selector.startsWith('input,')) return this.kind === 'input' ? this : null;
     return null;
@@ -106,6 +109,7 @@ class Control {
   focus() { document.activeElement = this; syncNavigationState(); }
   scrollIntoView() { this.scrolled = true; }
   click() { this.clicks += 1; }
+  dispatchEvent(event) { (this.events ??= []).push(event.type); }
 }
 class Section extends Control {
   constructor(id, bounds) { super(null, id, bounds); this.dataset = { navSection: id, navLabel: id }; this.controls = []; }
@@ -118,6 +122,9 @@ let frame;
 let backCount;
 let playerOverlay;
 let searchPopover;
+let moreMenu;
+let resumeMenu;
+let resumeTrigger;
 const listeners = new Map();
 const appState = { route: { page: 'home' }, activeTrailer: undefined, isPlayerOpen: false };
 globalThis.addEventListener = (name, listener) => listeners.set(name, listener);
@@ -128,7 +135,7 @@ globalThis.history = { back: () => { backCount += 1; } };
 globalThis.document = {
   activeElement: null, hidden: false, body: { dataset: {} },
   querySelectorAll: (selector) => selector === '[data-nav-section]' ? sections : selector === '.home-navbar [data-home-tab]' ? sections.flatMap((section) => section.controls).filter((control) => control.dataset.homeTab) : sections.filter((section) => section.classes.has('nav-section-active')),
-  querySelector: (selector) => selector === '.browse-workspace' ? {} : selector === '.player-overlay' && playerOverlay ? {} : selector === '.search-popover' ? searchPopover : null,
+  querySelector: (selector) => selector === '.browse-workspace' ? {} : selector === '.player-overlay' && playerOverlay ? {} : selector === '.search-popover' ? searchPopover : selector === '#item-more[open]' && moreMenu?.open ? moreMenu : selector === '#resume-playback-menu:not([hidden])' && resumeMenu && !resumeMenu.hidden ? resumeMenu : selector === '[data-resume-hold]' ? resumeTrigger : null,
 };
 bindGlobalInputHandlers(appState);
 const key = (value, extra = {}) => {
@@ -153,6 +160,8 @@ beforeEach(() => {
   backCount = 0;
   playerOverlay = false;
   searchPopover = undefined;
+  moreMenu = undefined;
+  resumeMenu = resumeTrigger = undefined;
   sections = [new Section('libraries', rect(0, 0, 100, 600)), new Section('browse', rect(120, 0, 300, 140)), new Section('shelf', rect(120, 180, 300, 140))];
   add(sections[0], 'Home', 0, 0, 'button');
   add(sections[0], 'Movies', 0, 160, 'button');
@@ -218,17 +227,20 @@ test('returning to pinned hero controls does not scroll the media rows back to t
   assert.equal(document.activeElement.scrolled, true);
 });
 
-test('item navigation reveals only the scrolling content and returning to playback preserves its position', () => {
+test('item navigation clears the sticky bar and returning to playback preserves the page position', () => {
   appState.route = { page: 'item', itemId: 101 };
-  const content = { scrollTop: 300, getBoundingClientRect: () => rect(120, 180, 300, 140) };
-  const actionRow = { scrollLeft: 0, getBoundingClientRect: () => rect(120, 500, 180, 100) };
-  sections[1].itemActionRow = actionRow;
-  sections[1].controls[0].bounds = rect(120, 500);
-  sections[1].controls[1].bounds = rect(240, 500);
-  sections[2].itemContent = content;
-  sections[2].bounds = rect(120, 380, 300, 140);
-  sections[2].controls[0].bounds = rect(120, 380);
-  sections[2].controls[1].bounds = rect(240, 380);
+  const bar = { classList: { contains: () => true }, getBoundingClientRect: () => rect(120, 0, 300, 80) };
+  const content = { scrollTop: 300, getBoundingClientRect: () => rect(120, 0, 300, 700), querySelector: () => bar };
+  for (const section of [sections[1], sections[2]]) {
+    section.itemPage = {};
+    section.itemScroller = content;
+  }
+  sections[1].itemBar = bar;
+  sections[1].controls[0].bounds = rect(120, 0, 100, 60);
+  sections[1].controls[1].bounds = rect(240, 0, 100, 60);
+  sections[2].bounds = rect(120, 900, 300, 140);
+  sections[2].controls[0].bounds = rect(120, 900);
+  sections[2].controls[1].bounds = rect(240, 900);
   sections[1].controls[0].focus();
   key('ArrowDown');
   assert.equal(document.activeElement.name, 'Shelf first');
@@ -242,8 +254,55 @@ test('item navigation reveals only the scrolling content and returning to playba
   assert.equal(document.activeElement.scrolled, undefined);
   key('ArrowRight');
   assert.equal(document.activeElement.name, 'Browse second');
-  assert.equal(actionRow.scrollLeft, 40);
   assert.equal(content.scrollTop, position);
+});
+
+test('Escape and controller Back dismiss More before navigating away', () => {
+  sections[1].controls[1].focus();
+  moreMenu = { open: true, querySelector: () => sections[1].controls[0] };
+  assert.equal(key('Escape').defaultPrevented, true);
+  assert.equal(moreMenu.open, false);
+  assert.equal(document.activeElement.name, 'Browse first');
+  assert.equal(backCount, 0);
+  moreMenu.open = true;
+  controllers = [pad([1])]; frame(0);
+  assert.equal(moreMenu.open, false);
+  assert.equal(backCount, 0);
+  controllers = [pad()]; frame(10);
+  controllers = [pad([1])]; frame(20);
+  assert.equal(backCount, 1);
+});
+
+test('Escape and controller Back dismiss held-Resume options and restore their trigger', () => {
+  resumeTrigger = sections[1].controls[0];
+  resumeMenu = { hidden: false };
+  sections[1].controls[1].focus();
+  key('Escape');
+  assert.equal(resumeMenu.hidden, true);
+  assert.equal(document.activeElement, resumeTrigger);
+  assert.equal(resumeTrigger.events.at(-1), 'resume-options-close');
+  assert.equal(backCount, 0);
+  resumeMenu.hidden = false;
+  controllers = [pad([1])]; frame(0);
+  assert.equal(resumeMenu.hidden, true);
+  assert.equal(document.activeElement, resumeTrigger);
+  assert.equal(backCount, 0);
+});
+
+test('directional navigation reveals lower menu actions on short screens without moving the page', () => {
+  const bar = { classList: { contains: () => true }, getBoundingClientRect: () => rect(120, 0, 300, 80) };
+  const scroller = { scrollTop: 500, querySelector: () => bar, getBoundingClientRect: () => rect(120, 0, 300, 300) };
+  const menu = { scrollTop: 0, getBoundingClientRect: () => rect(120, 80, 300, 100) };
+  sections[1].itemPage = {};
+  sections[1].itemScroller = scroller;
+  sections[1].itemBar = bar;
+  sections[1].controls[1].itemMoreMenu = menu;
+  sections[1].controls[1].bounds = rect(120, 240, 100, 48);
+  sections[1].controls[0].focus();
+  key('ArrowDown');
+  assert.equal(document.activeElement.name, 'Browse second');
+  assert.equal(menu.scrollTop, 108);
+  assert.equal(scroller.scrollTop, 500);
 });
 
 test('search suggestions inside the pinned header can still scroll into view', () => {
@@ -406,6 +465,26 @@ test('opening a player stops other controller actions from the same frame', () =
   frame(0);
   assert.equal(appState.isPlayerOpen, true);
   assert.equal(backCount, 0);
+});
+
+test('controller Resume waits for release and cancels when focus moves or the pad disconnects', () => {
+  const control = sections[1].controls[0];
+  control.resumeHold = true;
+  control.focus();
+  controllers = [pad([0])]; frame(0);
+  assert.deepEqual(control.events, ['resume-hold-start']);
+  assert.equal(control.clicks, 0);
+  controllers = [pad()]; frame(100);
+  assert.deepEqual(control.events, ['resume-hold-start', 'resume-hold-end']);
+  controllers = [pad([0])]; frame(200);
+  sections[1].controls[1].focus(); frame(300);
+  assert.equal(control.events.at(-1), 'resume-hold-cancel');
+  controllers = [pad()]; frame(400);
+  control.focus();
+  controllers = [pad([0])]; frame(500);
+  controllers = []; frame(600);
+  assert.equal(control.events.at(-1), 'resume-hold-cancel');
+  assert.equal(control.clicks, 0);
 });
 
 function searchFixture() {

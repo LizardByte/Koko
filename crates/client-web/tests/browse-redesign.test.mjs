@@ -29,7 +29,7 @@ beforeEach(() => {
     home: undefined, selectedItem: undefined, selectedItemMetadata: undefined, selectedPlayback: undefined,
     browsePreferences: { ...preferences.DEFAULT_BROWSE_PREFERENCES }, browseFiltersOpen: false, libraryPage: 0,
     homeTab: 'library', isLoading: false, searchQuery: '', searchResults: [], searchLoading: false, showFullSearchResults: false,
-    itemManagementOpen: false, isTrailerMenuOpen: false,
+    itemManagementOpen: false, itemMoreOpen: false, resumeOptionsOpen: false, isTrailerMenuOpen: false,
     logsResponse: undefined, logsError: undefined, logsLoading: false, error: undefined,
   });
 });
@@ -155,42 +155,85 @@ test('item technical facts and metadata are behind an accessible disclosure', ()
   assert.doesNotMatch(renderItemPage(), /id="metadata-search-form"/);
 });
 
-test('item identity and playback are outside scrolling content with a progress ring and meaningful action icons', () => {
+test('the item opening retains its ring and primary actions while cast and extras follow at full width', () => {
   state.route = { page: 'item', itemId: 101 };
-  state.selectedItem = { ...mock.getMockItem(101), rating: 6.8, playback_position_ms: 90_000, playback_duration_ms: 6_000_000 };
+  state.selectedItem = { ...mock.getMockItem(101), rating: 6.8, playback_position_ms: 90_000, playback_duration_ms: 6_000_000, theme_song_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI' };
   state.selectedItemMetadata = mock.getMockItemMetadata(101);
   const html = renderItemPage();
-  const scrollingStart = html.indexOf('id="item-scroll-content"');
+  const scrollingStart = html.indexOf('id="item-support-content"');
   assert.ok(html.indexOf('class="item-cover-column"') < scrollingStart);
   assert.ok(html.indexOf('class="item-identity"') < scrollingStart);
   assert.ok(html.indexOf('class="item-action-dock"') < scrollingStart);
   assert.ok(html.indexOf('class="media-card-progress"') < html.indexOf('class="item-identity"'));
-  assert.ok(html.indexOf('class="item-description-section"') > scrollingStart);
+  assert.ok(html.indexOf('class="item-description-section"') < scrollingStart);
   assert.ok(html.indexOf('item-people-section') > scrollingStart);
+  assert.doesNotMatch(html, /item-scroll-content|item-playback-summary/);
+  const moreStart = html.indexOf('id="item-more"');
+  assert.equal([...html.matchAll(/data-play-selected-item-start-ms="0"/g)].length, 2);
+  assert.ok(html.indexOf('id="play-youtube-theme-song"') > moreStart);
+  assert.equal([...html.matchAll(/data-play-selected-item-start-ms="90000"/g)].length, 1);
   assert.doesNotMatch(html, />\d+% watched</);
   assert.match(html, /aria-label="Rating: 6\.8"[^]*?data-lucide="star"/);
   assert.match(html, /data-play-selected-item-start-ms="0"[^]*?data-lucide="rotate-ccw"/);
   assert.match(html, /id="play-item-trailer"[^]*?data-lucide="clapperboard"/);
 });
 
-test('the pinned playback summary uses remaining time and completion state without a percentage badge', () => {
+test('remaining time belongs to Resume, completed items play from the start, and shows identify the next episode', () => {
   state.route = { page: 'item', itemId: 101 };
   state.selectedItem = { ...mock.getMockItem(101), duration_ms: 600_000, playback_duration_ms: 600_000, playback_position_ms: 120_000, playback_completed: false, watch_count: 0 };
   let html = renderItemPage();
-  assert.match(html, /<dt>Runtime<\/dt><dd>10:00<\/dd>/);
-  assert.match(html, /<dt>Time remaining<\/dt><dd>8:00<\/dd>/);
-  assert.match(html, /<dt>Status<\/dt><dd>In progress<\/dd>/);
-  assert.ok(html.indexOf('class="item-playback-summary"') < html.indexOf('class="item-identity"'));
+  assert.match(html, /class="tag">10:00/);
+  assert.match(html, /<button[^>]*data-play-selected-item-start-ms="120000"[^]*?class="button-secondary-label">8:00 remaining<\/span>[^]*?<\/button>/);
+  assert.match(html, /data-play-selected-item-start-ms="120000"/);
   state.selectedItem.playback_completed = true;
   html = renderItemPage();
-  assert.match(html, /<dt>Status<\/dt><dd>Watched<\/dd>/);
-  assert.doesNotMatch(html, /<dt>Time remaining<\/dt>/);
+  assert.match(html, /watched-fact[^]*?Watched/);
+  assert.doesNotMatch(html, /remaining|Resume 2:00/);
+  assert.match(html, /data-play-selected-item-start-ms="0"/);
   state.selectedItem = mock.getMockItem(201);
   state.libraryItems = [mock.getMockItem(203)];
   html = renderItemPage();
-  assert.match(html, /<dt>Next up<\/dt><dd>Mock Episode<\/dd>/);
-  assert.match(html, /<dt>Episode runtime<\/dt>/);
-  assert.doesNotMatch(html, /<dt>Runtime<\/dt>|<dt>Status<\/dt>/);
+  assert.match(html, /class="item-playback-context">Next: Mock Episode/);
+  assert.match(html, /data-playback-target-item-id="203"/);
+  assert.doesNotMatch(html, /data-play-selected-item-start-ms|>\d+% watched</);
+});
+
+test('extras precede cast and crew, which share single responsive rows and their own navigation sections', () => {
+  state.selectedItem = mock.getMockItem(101);
+  state.selectedItemMetadata = mock.getMockItemMetadata(101);
+  const html = renderItemPage();
+  assert.match(html, /<h3>Cast <span class="item-row-count">· 3<\/span><\/h3>/);
+  assert.match(html, /<h3>Crew <span class="item-row-count">· 2<\/span><\/h3>/);
+  assert.match(html, /<h3>Extras <span class="item-row-count">· 2<\/span><\/h3>/);
+  const crewStart = html.indexOf('data-nav-section="crew"');
+  assert.ok(html.indexOf('Keanu Reeves') < crewStart);
+  assert.ok(html.indexOf('Lana Wachowski') > crewStart);
+  assert.ok(html.indexOf('item-extras-section') < html.indexOf('item-people-section'));
+  assert.equal([...html.matchAll(/data-item-row="people"/g)].length, 2);
+  assert.match(html, /data-item-row="extras"/);
+  assert.match(html, /data-shelf-row="crew"/);
+  assert.doesNotMatch(html, /item-people-grid|item-extras-grid|<details[^>]*item-crew/);
+});
+
+test('item badges, fading artwork, and the action-row Back button retain visible labels', () => {
+  state.route = { page: 'item', itemId: 101 };
+  state.selectedItem = { ...mock.getMockItem(101), rating: 6.8, content_rating: 'R', backdrop_url: '/art.jpg', playback_position_ms: 90_000 };
+  const html = renderItemPage();
+  assert.match(html, /class="tag">1999/);
+  assert.match(html, /class="tag">R/);
+  assert.match(html, /class="tag rating-tag"/);
+  assert.match(html, /class="tag">Action/);
+  assert.match(html, /class="item-opening-backdrop" aria-hidden="true"/);
+  assert.match(html, /data-resume-hold aria-describedby="resume-hold-hint"/);
+  assert.match(html, /Hold for playback options/);
+  assert.match(html, /id="resume-playback-menu"[^>]*hidden/);
+  const back = html.indexOf('id="back-to-library"');
+  assert.ok(back > html.indexOf('id="item-playback-actions"') && back < html.indexOf('class="item-description-section"'));
+  assert.match(html, /class="secondary-button item-back-button"/);
+  assert.match(html, /data-measure-overflow/);
+  assert.match(html, /data-overflow-toggle/);
+  state.resumeOptionsOpen = true;
+  assert.doesNotMatch(renderItemPage(), /id="resume-playback-menu"[^>]*hidden/);
 });
 
 test('person credits provide explicit buttons for seasons and episodes', () => {

@@ -379,10 +379,16 @@ export function playbackDetailBadgeMarkup(item: MediaItemSummary): string {
   return badges.join('');
 }
 
-export function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: boolean): string {
+interface PlaybackTargetButtonOptions {
+  holdForOptions?: boolean;
+  subtitle?: string;
+  id?: string;
+}
+
+export function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: boolean, { holdForOptions, subtitle, id }: PlaybackTargetButtonOptions = {}): string {
   return `
-    <button type="button" class="${secondary ? 'secondary-button' : ''}" data-playback-target-item-id="${target.item_id}" data-playback-target-start-ms="${target.start_ms}" title="${escapeHtml(target.display_title)}">
-      ${renderButtonContent(target.label, secondary ? 'rotate-ccw' : 'play')}
+    <button type="button" ${id ? `id="${escapeHtml(id)}"` : ''} class="${secondary ? 'secondary-button' : ''}" ${holdForOptions ? `data-resume-hold aria-describedby="resume-hold-hint" aria-controls="resume-playback-menu" aria-expanded="${state.resumeOptionsOpen}"` : ''} data-playback-target-item-id="${target.item_id}" data-playback-target-start-ms="${target.start_ms}" title="${escapeHtml(target.display_title)}">
+      ${renderButtonContent(target.label, secondary ? 'rotate-ccw' : 'play', 'start', subtitle)}
     </button>
   `;
 }

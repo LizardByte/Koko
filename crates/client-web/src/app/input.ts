@@ -41,25 +41,57 @@ function entryControl(section: HTMLElement | undefined): HTMLElement | undefined
   return targets[0];
 }
 
-/** Reveal only inside item content or its action row, leaving the pinned layout untouched. */
+/** Reveal item content below the sticky playback bar without resetting visible actions. */
 function revealItemControl(control: HTMLElement, section: HTMLElement | null, revealSection: boolean): boolean {
-  const content = control.closest<HTMLElement>('.item-scroll-content');
-  const actions = control.closest<HTMLElement>('.item-action-dock .detail-actions');
-  if (!content && !actions) return false;
-  if (content) {
-    const bounds = content.getBoundingClientRect();
-    if (revealSection && section) content.scrollTop += section.getBoundingClientRect().top - bounds.top;
-    const rect = control.getBoundingClientRect();
-    if (rect.top < bounds.top) content.scrollTop += rect.top - bounds.top;
-    else if (rect.bottom > bounds.bottom) content.scrollTop += rect.bottom - bounds.bottom;
+  if (!control.closest('.item-detail-page')) return false;
+  const scroller = control.closest<HTMLElement>('.main-shell');
+  if (!scroller) return false;
+  const bar = scroller.querySelector<HTMLElement>('.item-action-dock');
+  const inBar = Boolean(control.closest('.item-action-dock'));
+  const bounds = scroller.getBoundingClientRect();
+  const top = bounds.top + (inBar ? 0 : (bar?.getBoundingClientRect().height ?? 0) + 12);
+  if (!inBar && revealSection && section) {
+    scroller.scrollTop += section.getBoundingClientRect().top - top;
   }
-  const row = actions ?? control.closest<HTMLElement>('[data-shelf-row]');
+  if (!inBar || !bar?.classList.contains('is-stuck')) {
+    const rect = control.getBoundingClientRect();
+    if (rect.top < top) scroller.scrollTop += rect.top - top;
+    else if (rect.bottom > bounds.bottom) scroller.scrollTop += rect.bottom - bounds.bottom;
+  }
+  const menu = control.closest<HTMLElement>('.item-more-menu');
+  if (menu) {
+    const menuBounds = menu.getBoundingClientRect();
+    const rect = control.getBoundingClientRect();
+    if (rect.top < menuBounds.top) menu.scrollTop += rect.top - menuBounds.top;
+    else if (rect.bottom > menuBounds.bottom) menu.scrollTop += rect.bottom - menuBounds.bottom;
+  }
+  const row = control.closest<HTMLElement>('[data-shelf-row]');
   if (row) {
     const bounds = row.getBoundingClientRect();
     const rect = control.getBoundingClientRect();
     if (rect.left < bounds.left) row.scrollLeft += rect.left - bounds.left;
     else if (rect.right > bounds.right) row.scrollLeft += rect.right - bounds.right;
   }
+  return true;
+}
+
+/** Dismiss secondary actions before Escape or the controller's Back can leave the page. */
+function closeItemActions(): boolean {
+  const menu = document.querySelector<HTMLDetailsElement>('#item-more[open]');
+  if (!menu) return false;
+  menu.open = false;
+  menu.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+  return true;
+}
+
+/** Close held-Resume options and return to their trigger before leaving the page. */
+function closeResumeOptions(): boolean {
+  const menu = document.querySelector<HTMLElement>('#resume-playback-menu:not([hidden])');
+  if (!menu) return false;
+  menu.hidden = true;
+  const trigger = document.querySelector<HTMLElement>('[data-resume-hold]');
+  trigger?.dispatchEvent(new Event('resume-options-close'));
+  trigger?.focus({ preventScroll: true });
   return true;
 }
 
@@ -234,6 +266,10 @@ function handleSectionTab(event: KeyboardEvent, target: HTMLElement | null): boo
 /** Dispatch navigation keys after player and browser-shortcut guards have passed. */
 function handleNavigationKey(event: KeyboardEvent): void {
   setInputMode('keyboard');
+  if (event.key === 'Escape' && (closeResumeOptions() || closeItemActions())) {
+    event.preventDefault();
+    return;
+  }
   const target = event.target as HTMLElement | null;
   if (handleSearchKey(event, target) || handleSectionTab(event, target)) return;
   if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
@@ -253,20 +289,49 @@ export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 
   globalThis.addEventListener('pointerdown', () => setInputMode('pointer'), { passive: true });
   globalThis.addEventListener('focusin', syncNavigationState);
   globalThis.addEventListener('keydown', (event) => {
-    if (suspended() || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (suspended() || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.defaultPrevented) {
+      if ((event.target as HTMLElement | null)?.matches('[data-resume-hold]') && ['Enter', ' '].includes(event.key)) setInputMode('keyboard');
+      return;
+    }
     handleNavigationKey(event);
   });
 
   const readActions = createGamepadNavigationReader();
+  let resumeHold: { control: HTMLElement; gamepadIndex: number } | undefined;
+  const cancelResumeHold = (): void => {
+    resumeHold?.control.dispatchEvent(new Event('resume-hold-cancel'));
+    resumeHold = undefined;
+  };
   const poll = (now: number) => {
-    const actions = readActions(navigator.getGamepads?.() ?? [], now, suspended());
+    const gamepads = navigator.getGamepads?.() ?? [];
+    const actions = readActions(gamepads, now, suspended());
+    if (resumeHold) {
+      const gamepad = Array.from(gamepads).find((pad) => pad?.index === resumeHold!.gamepadIndex);
+      if (suspended() || !resumeHold.control.isConnected || document.activeElement !== resumeHold.control || !gamepad?.connected || actions.some((action) => action !== 'activate')) {
+        cancelResumeHold();
+      } else if (!gamepad.buttons[0]?.pressed) {
+        const control = resumeHold.control;
+        resumeHold = undefined;
+        control.dispatchEvent(new Event('resume-hold-end'));
+      }
+    }
     if (actions.length) setInputMode('gamepad');
     for (const action of actions) {
       if (suspended()) break;
       if (action === 'previous-section' || action === 'next-section') moveSection(action === 'next-section' ? 1 : -1);
-      else if (action === 'activate') activateFocusedElement();
+      else if (action === 'activate') {
+        const focused = document.activeElement as HTMLElement | null;
+        const gamepad = Array.from(gamepads).find((pad) => pad?.connected && pad.buttons[0]?.pressed);
+        if (focused?.matches('[data-resume-hold]') && gamepad) {
+          if (!resumeHold) {
+            resumeHold = { control: focused, gamepadIndex: gamepad.index };
+            focused.dispatchEvent(new Event('resume-hold-start'));
+          }
+        } else activateFocusedElement();
+      }
       else if (action === 'back') {
-        if (!returnToBrowseTabs()) globalThis.history.back();
+        if (!closeResumeOptions() && !closeItemActions() && !returnToBrowseTabs()) globalThis.history.back();
       }
       else moveFocus(action);
     }

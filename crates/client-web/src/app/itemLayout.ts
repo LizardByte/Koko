@@ -59,6 +59,10 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     }
     const padding = Number.parseFloat(getComputedStyle(scroller).paddingTop) || 0;
     setSize('--item-artwork-height', collapsedBottom - pageTop + padding + 160);
+    const viewport = scroller.getBoundingClientRect();
+    setSize('--item-artwork-left', viewport.left);
+    setSize('--item-artwork-top', viewport.top);
+    setSize('--item-artwork-width', scroller.clientWidth);
     if (bar) scroller.style.setProperty('--item-bar-height', `${bar.offsetHeight + 12}px`);
     let rowsChanged = false;
     for (const row of rows) {
@@ -82,7 +86,8 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     observer.disconnect();
     if (frame !== undefined) cancelAnimationFrame(frame);
   }, { once: true });
-  schedule();
+  // Complete the first layout before paint; subsequent resizes are coalesced.
+  measure();
 }
 
 /** Fit a whole number of cards into one row, preserving usable sizes at each viewport width. */

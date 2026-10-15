@@ -4,6 +4,18 @@ import { currentLogFilterRequest } from './activities';
 
 type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getLogs' | 'searchItems'>;
 
+/** Retain restored browsing data when the server's null scope means all libraries. */
+export function prepareBrowseRoute(state: AppState, route: AppRoute): void {
+  if (route.page !== 'home' && route.page !== 'browse-detail') return;
+  if (!state.home || (state.home.library_id ?? undefined) !== route.libraryId) {
+    state.home = undefined;
+    state.libraryItems = [];
+    state.homePreviewItemId = undefined;
+    state.homePreviewCollectionId = undefined;
+  }
+  state.libraryItemsLoading = !state.home;
+}
+
 /** Publish independent sections as they arrive, discarding replies from an abandoned route. */
 export async function loadRouteData(
   state: AppState,
@@ -39,7 +51,7 @@ export async function loadRouteData(
 
   if (route.page === 'home' || route.page === 'browse-detail') {
     load('featured media', source.getHome(route.libraryId), (value) => { state.home = value; });
-    state.libraryItemsLoading = true;
+    state.libraryItemsLoading = !state.home;
     load('library titles', source.getItems(route.libraryId).finally(() => {
       if (isCurrent()) state.libraryItemsLoading = false;
     }), (value) => { state.libraryItems = value; });

@@ -11,10 +11,10 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const preferences = await server.ssrLoadModule('/src/app/browsePreferences.ts');
-const { renderLibraryTab, renderItemCard } = await server.ssrLoadModule('/src/app/homeView.ts');
+const { renderLibraryTab, renderItemCard, renderHomeFeature } = await server.ssrLoadModule('/src/app/homeView.ts');
 const { renderItemPage, renderEpisodeBrowser, renderPersonCreditGroup } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
 const { bindHoverPreview } = await server.ssrLoadModule('/src/app/hoverPreview.ts');
-const { loadRouteData } = await server.ssrLoadModule('/src/app/routeData.ts');
+const { loadRouteData, prepareBrowseRoute } = await server.ssrLoadModule('/src/app/routeData.ts');
 const { renderLoadingCards } = await server.ssrLoadModule('/src/app/loadingView.ts');
 const session = await server.ssrLoadModule('/src/app/browseSession.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
@@ -249,6 +249,17 @@ test('loading placeholders are labelled and introduce no focusable controls', ()
   assert.doesNotMatch(html, /<button|<input|tabindex/);
 });
 
+test('the item placeholder keeps the final page shell and has no navigation targets', () => {
+  state.route = { page: 'item', itemId: 101 };
+  state.isLoading = true;
+  const html = renderItemPage();
+  assert.match(html, /item-detail-page item-detail-loading/);
+  for (const name of ['item-cover-column', 'item-identity', 'item-action-dock', 'item-description-section', 'item-support-content']) {
+    assert.ok(html.includes(name));
+  }
+  assert.doesNotMatch(html, /data-nav-section|<button|<input|tabindex/);
+});
+
 class PreviewElement extends EventTarget {
   isConnected = true;
   hovered = true;
@@ -384,4 +395,107 @@ test('returning to browsing restores the tab, page, scroll, and card focus', () 
   assert.equal(row.scrollLeft, 300);
   assert.equal(card.focused, true);
   assert.equal(session.browsePath({ page: 'browse-detail', libraryId: 1, kind: 'category', key: 'Sci Fi' }), '/libraries/1/items/categories/Sci%20Fi');
+});
+
+test('returning home restores its own media and position before slow revalidation finishes', async () => {
+  const main = { scrollTop: 480 };
+  const frames = [];
+  globalThis.document = { activeElement: null, body: { dataset: {} }, querySelector: () => main, querySelectorAll: () => [] };
+  globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+  const home = { library_id: 1, shelves: [{ id: 'cached-home' }], collections: [] };
+  state.home = home;
+  state.libraryItems = [item(123)];
+  state.homePreviewItemId = 123;
+  state.browsePreferences.genre = 'Drama';
+  session.captureBrowseSession();
+  // Opening an item in another scope replaces shared supporting data.
+  state.home = { library_id: 2, shelves: [] };
+  state.libraryItems = [item(203, { library_id: 2 })];
+  state.homePreviewItemId = undefined;
+  state.browsePreferences = { ...preferences.DEFAULT_BROWSE_PREFERENCES };
+  main.scrollTop = 0;
+  assert.equal(session.restoreBrowseSession(), true);
+  const titles = deferred();
+  const feature = deferred();
+  state.isLoading = true;
+  const pending = loadRouteData(state, state.route, () => {}, () => true, source({ getItems: () => titles.promise, getHome: () => feature.promise }));
+  session.restoreBrowsePosition();
+  frames.forEach((callback) => callback());
+  assert.equal(state.home, home);
+  assert.equal(state.libraryItems[0].id, 123);
+  assert.equal(state.homePreviewItemId, 123);
+  assert.equal(state.browsePreferences.genre, 'Drama');
+  assert.equal(state.libraryItemsLoading, false);
+  assert.equal(main.scrollTop, 480);
+  feature.resolve({ library_id: 1, shelves: [{ id: 'fresh-home' }] });
+  titles.resolve([item(124)]);
+  await pending;
+  assert.equal(state.home.shelves[0].id, 'fresh-home');
+  assert.equal(state.libraryItems[0].id, 124);
+});
+
+test('Home retains server-shaped null-scoped data before delayed revalidation, just like a library', async () => {
+  for (const libraryId of [undefined, 1]) {
+    state.route = libraryId === undefined ? { page: 'home' } : { page: 'home', libraryId };
+    const cached = { library_id: libraryId ?? null, shelves: [{ id: 'cached' }], collections: [] };
+    state.home = cached;
+    state.libraryItems = [item(123)];
+    state.libraryItemsLoading = false;
+    session.captureBrowseSession();
+    state.home = { library_id: 2, shelves: [] };
+    state.libraryItems = [];
+    assert.equal(session.restoreBrowseSession(), true);
+    prepareBrowseRoute(state, state.route);
+    const titles = deferred();
+    const featured = deferred();
+    const pending = loadRouteData(state, state.route, () => {}, () => true, source({ getHome: () => featured.promise, getItems: () => titles.promise }));
+    assert.equal(state.home, cached);
+    assert.equal(state.libraryItems[0].id, 123);
+    assert.equal(state.libraryItemsLoading, false);
+    featured.resolve(cached);
+    titles.resolve([item(124)]);
+    await pending;
+    assert.equal(state.libraryItems[0].id, 124);
+  }
+  assert.equal(mock.getMockHome().library_id, null);
+});
+
+test('changing browsing scopes still clears data from the previous library', () => {
+  for (const home of [{ library_id: 2, shelves: [] }, undefined]) {
+    state.home = home;
+    state.libraryItems = [item(203)];
+    state.homePreviewItemId = 203;
+    prepareBrowseRoute(state, { page: 'home' });
+    assert.equal(state.home, undefined);
+    assert.deepEqual(state.libraryItems, []);
+    assert.equal(state.homePreviewItemId, undefined);
+    assert.equal(state.libraryItemsLoading, true);
+  }
+});
+
+test('item pages reuse the same versioned logo URL as the Home preview', () => {
+  const movie = { ...mock.getMockItem(101), logo_url: 'https://images.example.test/movie-logo.png', artwork_updated_at: 12345 };
+  state.route = { page: 'home' };
+  state.libraryItems = [movie];
+  const preview = renderHomeFeature();
+  state.route = { page: 'item', itemId: movie.id };
+  state.selectedItem = movie;
+  const detail = renderItemPage();
+  const homeLogo = preview.match(/class="home-feature-logo" src="([^"]+)"/)[1];
+  const itemLogo = detail.match(/class="item-title-logo" src="([^"]+)"/)[1];
+  assert.equal(itemLogo, homeLogo);
+  assert.match(itemLogo, /kind=logo&amp;rev=12345/);
+  assert.doesNotMatch(itemLogo, /images\.example\.test/);
+});
+
+test('cached browsing data is isolated by route and account', () => {
+  state.route = { page: 'home', libraryId: 919 };
+  state.home = { library_id: 919, shelves: [] };
+  state.libraryItems = [item(919)];
+  session.captureBrowseSession();
+  state.route = { page: 'home', libraryId: 920 };
+  assert.equal(session.restoreBrowseSession(), false);
+  state.route = { page: 'home', libraryId: 919 };
+  state.bootstrap = { current_user: { id: 2 } };
+  assert.equal(session.restoreBrowseSession(), false);
 });

@@ -12,6 +12,7 @@ interface BrowseVisit {
   focusItem?: string;
   focusClass?: string;
   shelves: Array<[string, number]>;
+  data?: Pick<typeof state, 'home' | 'libraryItems' | 'searchResults' | 'homePreviewItemId' | 'homePreviewCollectionId' | 'browsePreferences'>;
 }
 
 const visits = new Map<string, BrowseVisit>();
@@ -42,6 +43,11 @@ export function captureBrowseSession(): void {
     tab: state.homeTab, page: state.libraryPage, filtersOpen: state.browseFiltersOpen, search: state.searchQuery, fullSearch: state.showFullSearchResults,
     scrollTop: document.querySelector('.main-shell')?.scrollTop ?? 0, windowY: globalThis.scrollY,
     focusItem, focusClass, shelves: Array.from(document.querySelectorAll<HTMLElement>('[data-shelf-row]')).map((row) => [row.dataset.shelfRow!, row.scrollLeft]),
+    data: state.home && !state.libraryItemsLoading ? {
+      home: state.home, libraryItems: state.libraryItems, searchResults: state.searchResults,
+      homePreviewItemId: state.homePreviewItemId, homePreviewCollectionId: state.homePreviewCollectionId,
+      browsePreferences: { ...state.browsePreferences },
+    } : visits.get(key)?.data,
   });
   returnPaths.set(state.bootstrap?.current_user?.id, path);
   if (visits.size > 30) visits.delete(visits.keys().next().value!);
@@ -61,12 +67,16 @@ export function restoreBrowseSession(): boolean {
   state.homeTab = visit.tab;
   state.searchQuery = visit.search;
   state.showFullSearchResults = visit.fullSearch;
+  if (visit.data) {
+    Object.assign(state, visit.data);
+    state.libraryItemsLoading = false;
+  }
   return true;
 }
 
 /** Restore once data is ready, after DOM patching has restored the previous page's snapshot. */
 export function restoreBrowsePosition(): void {
-  if (!pendingRestore || state.isLoading || state.libraryItemsLoading) return;
+  if (!pendingRestore || state.libraryItemsLoading) return;
   const key = pendingRestore;
   const visit = visits.get(key);
   if (!visit || key !== visitKey(state.route)) return;

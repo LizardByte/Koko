@@ -16,9 +16,12 @@ interface SetElementHtmlOptions {
   abortEvents?: () => void;
 }
 
+const pendingSnapshotRestores = new WeakMap<HTMLElement, number>();
+
 const DOM_PATCH_KEY_ATTRIBUTES = [
   'id',
   'data-nav-section',
+  'data-item-page-id',
   'data-shelf-row',
   'data-lazy-shelf-id',
   'data-shelf-scroll',
@@ -129,8 +132,9 @@ function captureRenderSnapshot(): RenderSnapshot {
   };
 }
 
-function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
-  globalThis.requestAnimationFrame(() => {
+function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): void {
+  const frame = globalThis.requestAnimationFrame(() => {
+    pendingSnapshotRestores.delete(root);
     document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
@@ -148,6 +152,7 @@ function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
       activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
     }
   });
+  pendingSnapshotRestores.set(root, frame);
 }
 
 function nodesCanPatch(current: Node, next: Node): boolean {
@@ -175,6 +180,17 @@ function nodesCanPatch(current: Node, next: Node): boolean {
 }
 
 function patchAttributes(current: Element, next: Element): void {
+  // Keep observer-owned dimensions across data patches, rather than painting the
+  // default cover/row sizes again before the next measurement frame.
+  if (current instanceof HTMLElement && next instanceof HTMLElement
+    && current.matches('.item-detail-page, [data-item-row]')
+    && next.matches('.item-detail-page, [data-item-row]')) {
+    for (const name of Array.from(current.style)) {
+      if (name.startsWith('--item-') && !next.style.getPropertyValue(name)) {
+        next.style.setProperty(name, current.style.getPropertyValue(name));
+      }
+    }
+  }
   current.getAttributeNames().forEach((name) => {
     if (!next.hasAttribute(name)) {
       current.removeAttribute(name);
@@ -296,6 +312,12 @@ function patchChildren(parent: Node, nextParent: ParentNode): void {
 
 /** Updates a root element with keyed DOM patching while preserving focus and scroll state. */
 export function setElementHtml(root: HTMLElement, html: string, options: SetElementHtmlOptions = {}): void {
+  // A queued restore belongs to the previous render, never to a newly opened route.
+  const pendingRestore = pendingSnapshotRestores.get(root);
+  if (pendingRestore !== undefined) {
+    globalThis.cancelAnimationFrame(pendingRestore);
+    pendingSnapshotRestores.delete(root);
+  }
   const preserveDom = options.preserveDom ?? true;
   if (!preserveDom || !root.childNodes.length) {
     options.abortEvents?.();
@@ -308,5 +330,5 @@ export function setElementHtml(root: HTMLElement, html: string, options: SetElem
   template.innerHTML = html;
   options.beforePatch?.(template.content);
   patchChildren(root, template.content);
-  restoreRenderSnapshot(snapshot);
+  restoreRenderSnapshot(root, snapshot);
 }

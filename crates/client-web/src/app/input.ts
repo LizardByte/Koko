@@ -11,6 +11,13 @@ let lastBrowseTab: string | undefined;
 
 function isVisible(element: HTMLElement): boolean {
   if (element.closest('[hidden], [inert], [aria-hidden="true"]') || element.matches(':disabled')) return false;
+  // Closed details can retain layout boxes for their inaccessible descendants.
+  // Only the first summary remains a navigation target, including in nested menus.
+  let closedDetails = element.parentElement?.closest<HTMLDetailsElement>('details:not([open])');
+  while (closedDetails) {
+    if (!closedDetails.querySelector(':scope > summary')?.contains(element)) return false;
+    closedDetails = closedDetails.parentElement?.closest<HTMLDetailsElement>('details:not([open])');
+  }
   const rect = element.getBoundingClientRect();
   const style = getComputedStyle(element);
   return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';

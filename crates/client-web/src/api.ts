@@ -411,7 +411,7 @@ export type MediaSearchResult =
   | { result_type: 'playlist'; playlist: MediaPlaylistSearchSummary };
 
 export interface MediaHome {
-  library_id?: number;
+  library_id?: number | null;
   shelves: MediaShelf[];
   collections: MediaCollectionSummary[];
 }

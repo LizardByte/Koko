@@ -754,7 +754,7 @@ function selectedItemPosterUrl(item: MediaItemDetail): string | undefined {
 }
 
 function selectedItemLogoUrl(item: MediaItemDetail): string | undefined {
-  return item.logo_url ? resolveApiUrl(item.logo_url) : undefined;
+  return item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
 }
 
 function selectedItemOverview(item: MediaItemDetail): string {
@@ -1154,7 +1154,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}">
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}" data-item-page-id="${item.id}">
       ${item.backdrop_url || state.selectedItemMetadata?.matches.some((match) => match.backdrop_url || match.cached_backdrop_path) ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at))}');"></div>` : ''}
       ${renderSelectedItemIdentity(
         item,
@@ -1194,7 +1194,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
 export function renderItemPage(): string {
   if (!state.selectedItem) {
     if (!state.isLoading && state.error) return '<div class="empty-state">Item details could not be loaded. Use Retry to try again.</div>';
-    return renderLoadingDetail('Loading item details');
+    return renderLoadingDetail('Loading item details', true);
   }
 
   return renderSelectedItemPage(state.selectedItem);

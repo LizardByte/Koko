@@ -3778,8 +3778,8 @@ legend {
 
 /* Browsing: quiet pointer feedback and distinct keyboard/controller focus. */
 .browse-workspace {
-  --navigation-accent: #e5effa;
-  --navigation-ring: #e5effa;
+  --navigation-accent: var(--accent-soft);
+  --navigation-ring: var(--accent-soft);
 }
 
 .browse-workspace button {
@@ -4300,7 +4300,7 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .item-row-count { color: var(--text-muted); font-size: 0.85em; font-weight: 500; white-space: nowrap; }
 .app-shell:has(.item-detail-page) > .navigation-hint { position: static; grid-column: 2; grid-row: 2; justify-self: end; margin: 0 var(--space-4) var(--space-3); }
 .app-shell:has(.item-detail-page) > .page-backdrop { display: none; }
-.item-opening-backdrop { position: absolute; top: calc(-1 * var(--item-page-padding)); left: calc(-1 * var(--item-page-padding)); right: calc(-1 * var(--item-page-padding)); height: var(--item-artwork-height, 650px); z-index: -1; pointer-events: none; overflow: hidden; mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); }
+.item-opening-backdrop { position: fixed; top: var(--item-artwork-top, 0px); left: var(--item-artwork-left, 0px); width: var(--item-artwork-width, 100%); height: var(--item-artwork-height, 650px); z-index: -1; pointer-events: none; overflow: hidden; mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); }
 .item-opening-backdrop::before { content: ''; position: absolute; inset: 0 0 0 calc(var(--item-cover-width) - var(--item-column-gap) + var(--item-page-padding)); background: var(--page-backdrop-image) center 25% / cover no-repeat; opacity: 0.9; mask-image: linear-gradient(to right, transparent, black clamp(8rem, 18vw, 20rem)); -webkit-mask-image: linear-gradient(to right, transparent, black clamp(8rem, 18vw, 20rem)); }
 .item-opening-backdrop::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(12, 17, 29, 0.94), rgba(12, 17, 29, 0.65) 38%, rgba(12, 17, 29, 0.18) 76%), linear-gradient(0deg, var(--surface-base), transparent 48%); }
 @media (max-width: 1200px) { .item-playback-context { max-width: 14ch; } }

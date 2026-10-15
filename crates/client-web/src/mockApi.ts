@@ -1202,7 +1202,7 @@ export function getMockHome(libraryId?: number): MediaHome {
   const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
 
   return {
-    library_id: libraryId,
+    library_id: libraryId ?? null,
     shelves: [
       { id: 'continue_watching', title: 'Continue watching', items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },

@@ -386,6 +386,46 @@ test('invisible and disabled controls are skipped, including whole empty section
   assert.equal(document.activeElement.name, 'Home');
 });
 
+test('closed menu boxes cannot trap Down before extras, cast, and crew, for keyboard or controller', () => {
+  for (const controller of [false, true]) {
+    const closed = { querySelector: () => ({ contains: (control) => control === summary }) };
+    const summary = add(sections[1], 'More', 360, 0, 'button');
+    const hiddenAction = add(sections[1], 'Hidden start over', 120, 150, 'button');
+    const parent = { closest: () => closed };
+    summary.parentElement = hiddenAction.parentElement = parent;
+    const extras = sections[2];
+    const cast = new Section('people', rect(120, 400, 300, 140));
+    const crew = new Section('crew', rect(120, 600, 300, 140));
+    add(cast, 'First cast member', 120, 400);
+    add(crew, 'First crew member', 120, 600);
+    sections.push(cast, crew);
+    sections[1].controls[0].focus();
+    let now = 0;
+    const down = () => {
+      if (!controller) { key('ArrowDown'); return; }
+      controllers = [pad()]; frame(now += 10);
+      controllers = [pad([13])]; frame(now += 10);
+    };
+    down();
+    assert.equal(document.activeElement.section, extras);
+    down();
+    assert.equal(document.activeElement.section, cast);
+    down();
+    assert.equal(document.activeElement.section, crew);
+    sections.splice(3);
+    sections[1].controls.splice(2);
+  }
+});
+
+test('summaries inside a closed ancestor are excluded even if their own disclosure is open', () => {
+  const ancestor = { querySelector: () => ({ contains: () => false }) };
+  const nested = add(sections[1], 'Hidden nested summary', 120, 150, 'button');
+  nested.parentElement = { closest: () => ancestor };
+  sections[1].controls[0].focus();
+  key('ArrowDown');
+  assert.equal(document.activeElement.section, sections[2]);
+});
+
 test('native editing and modified shortcuts are preserved while Tab switches sections from a field', () => {
   const input = add(sections[1], 'Search', 360, 0, 'input');
   input.focus();

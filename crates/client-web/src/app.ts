@@ -24,7 +24,8 @@ import { bindGlobalInputHandlers, syncNavigationAfterRender } from './app/input'
 import { syncPinnedHomeHeader } from './app/pinnedHeader';
 import { captureBrowseSession, restoreBrowseSession, restoreBrowsePosition } from './app/browseSession';
 import { loadBrowsePreferences } from './app/browsePreferences';
-import { loadRouteData } from './app/routeData';
+import { loadRouteData, prepareBrowseRoute } from './app/routeData';
+import { createRouteRenderer } from './app/routeRenderer';
 import {
   configurePlaybackController,
   renderPlayerOverlay,
@@ -477,18 +478,12 @@ function render(preserveScroll = true): void {
 
 async function refreshData(showLoading = true): Promise<void> {
   cancelPendingHomeSearch();
+  clearPendingLibraryRefresh();
+  clearPendingMetadataRefresh();
   state.route = parseRoute();
   const route = state.route;
   const generation = ++routeLoadGeneration;
   const isCurrent = () => generation === routeLoadGeneration;
-  let dataRenderFrame: number | undefined;
-  const publishReadyData = () => {
-    if (dataRenderFrame !== undefined) return;
-    dataRenderFrame = requestAnimationFrame(() => {
-      dataRenderFrame = undefined;
-      if (isCurrent()) render(true);
-    });
-  };
   state.isLoading = true;
   if (showLoading) {
     state.isPlayerOpen = false;
@@ -519,13 +514,7 @@ async function refreshData(showLoading = true): Promise<void> {
     state.expandedCreditId = undefined;
     state.expandedSeasonCreditId = undefined;
   }
-  if ((route.page === 'home' || route.page === 'browse-detail') && state.home?.library_id !== route.libraryId) {
-    state.home = undefined;
-    state.libraryItems = [];
-    state.homePreviewItemId = undefined;
-    state.homePreviewCollectionId = undefined;
-  }
-  if (route.page === 'home' || route.page === 'browse-detail') state.libraryItemsLoading = true;
+  prepareBrowseRoute(state, route);
   if (route.page === 'settings' && route.section === 'logs') {
     state.logsLoading = true;
     state.logsError = undefined;
@@ -533,9 +522,16 @@ async function refreshData(showLoading = true): Promise<void> {
   }
   state.error = undefined;
   state.apiMode = getApiMode();
-  if (showLoading) {
-    render(false);
-  }
+  const deferItemLoading = showLoading && route.page === 'item' && !state.selectedItem
+    && Boolean(appRoot.querySelector('.browse-workspace'));
+  if (deferItemLoading) appRoot.setAttribute('aria-busy', 'true');
+  const initialRender = deferItemLoading ? 'deferred' : 'immediate';
+  const routeRenderer = createRouteRenderer({
+    initial: showLoading ? initialRender : 'none',
+    isCurrent,
+    isReady: () => route.page !== 'item' || Boolean(state.selectedItem || state.error),
+    render,
+  });
 
   try {
     const bootstrap = await getAppBootstrap().catch(async (error) => {
@@ -576,7 +572,7 @@ async function refreshData(showLoading = true): Promise<void> {
       return;
     }
 
-    await loadRouteData(state, route, publishReadyData, isCurrent);
+    await loadRouteData(state, route, routeRenderer.publish, isCurrent);
     if (isCurrent()) state.apiMode = getApiMode();
   } catch (error) {
     if (isCurrent()) {
@@ -584,14 +580,14 @@ async function refreshData(showLoading = true): Promise<void> {
       state.apiMode = getApiMode();
     }
   } finally {
-    if (dataRenderFrame !== undefined) cancelAnimationFrame(dataRenderFrame);
     if (isCurrent()) {
+      appRoot.removeAttribute('aria-busy');
       state.isLoading = false;
       state.logsLoading = false;
       schedulePendingLibraryRefresh();
       schedulePendingMetadataRefresh();
-      render(true);
     }
+    routeRenderer.finish();
   }
 }
 

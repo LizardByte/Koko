@@ -1,12 +1,7 @@
 mod response;
 
-use std::collections::{
-    HashMap,
-    HashSet,
-};
-use std::sync::Mutex;
+use std::collections::HashSet;
 
-use once_cell::sync::Lazy;
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
@@ -52,11 +47,6 @@ use crate::metadata::{
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
-
-static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static TMDB_COLLECTION_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -729,20 +719,8 @@ fn tmdb_cached_person_detail(
             image_languages,
         ],
     );
-    if !crate::metadata::cache_policy::bypassed() {
-        if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&cache_key).cloned())
-        {
-            return Some(cached);
-        }
-    }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-            if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
-                cache.insert(cache_key.clone(), value.clone());
-            }
             return Some(value);
         }
     }
@@ -765,12 +743,6 @@ fn tmdb_cached_person_detail(
         );
     }
 
-    if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
-        if cache.len() > 5000 {
-            cache.clear();
-        }
-        cache.insert(cache_key.clone(), value.clone());
-    }
     write_metadata_response_cache_text(&cache_key, &value.to_string());
     Some(value)
 }
@@ -788,20 +760,8 @@ fn tmdb_cached_collection_detail(
             language,
         ],
     );
-    if !crate::metadata::cache_policy::bypassed() {
-        if let Some(cached) = TMDB_COLLECTION_DETAIL_CACHE
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(&cache_key).cloned())
-        {
-            return Some(cached);
-        }
-    }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-            if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
-                cache.insert(cache_key.clone(), value.clone());
-            }
             return Some(value);
         }
     }
@@ -811,12 +771,6 @@ fn tmdb_cached_collection_detail(
         .get_collection_details(collection_id, Some(language))
         .ok()?;
     let value = serde_json::to_value(details).ok()?;
-    if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
-        if cache.len() > 5000 {
-            cache.clear();
-        }
-        cache.insert(cache_key.clone(), value.clone());
-    }
     write_metadata_response_cache_text(&cache_key, &value.to_string());
     Some(value)
 }

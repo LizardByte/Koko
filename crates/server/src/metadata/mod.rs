@@ -4755,6 +4755,34 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn metadata_response_cache_expiration_and_clear_are_authoritative() {
+        let root = std::env::temp_dir().join(format!("koko-cache-{}", rand::random::<u64>()));
+        let path = metadata_response_cache_dir(root.to_str().unwrap()).join("a/response.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "cached").unwrap();
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached")
+        );
+        let expired = std::time::SystemTime::now()
+            - Duration::from_secs(METADATA_RESPONSE_CACHE_TTL_SECONDS as u64 + 10);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(expired))
+            .unwrap();
+        assert_eq!(read_metadata_response_cache_file(&path), None);
+        assert!(!path.exists());
+        fs::write(&path, "cached again").unwrap();
+        assert_eq!(
+            clear_metadata_response_cache(root.to_str().unwrap()).unwrap(),
+            1
+        );
+        assert_eq!(read_metadata_response_cache_file(&path), None);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[tokio::test]
     async fn forced_metadata_refresh_bypasses_cached_response_files() {
         let path = std::env::temp_dir().join(format!("koko-response-{}", rand::random::<u64>()));

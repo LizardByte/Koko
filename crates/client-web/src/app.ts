@@ -336,6 +336,7 @@ function renderRail(): string {
   const collapsed = isRailCollapsed();
   const user = currentUser();
   const userRoleLabel = user?.admin ? 'Administrator' : 'Signed in';
+  const settingsActiveClass = state.route.page === 'settings' ? 'active' : '';
   const userCardMarkup = user
     ? `
           <div class="rail-user-card">
@@ -378,7 +379,7 @@ function renderRail(): string {
       </div>
       <div class="library-rail-bottom">
         ${userCardMarkup}
-        ${canManageServer() ? `<button class="rail-button rail-settings ${state.route.page === 'settings' ? 'active' : ''}" type="button" data-nav-settings title="Settings">
+        ${canManageServer() ? `<button class="rail-button rail-settings ${settingsActiveClass}" type="button" data-nav-settings title="Settings">
           ${renderIcon('settings')}
           <span class="rail-label">Settings</span>
         </button>` : ''}

@@ -76,7 +76,6 @@ export function renderLogViewer(): string {
     <section class="panel page-panel settings-log-panel">
       <div class="section-heading section-heading-actions">
         <div><h3>Server events</h3><p class="muted">The latest 200 matching entries from your server.</p></div>
-        <button type="button" class="secondary-button" id="refresh-log-viewer" ${disabled}>${renderButtonContent('Refresh', 'refresh-cw')}</button>
       </div>
       <form id="log-filter-form" class="settings-form log-filter-form">
         <div class="log-search-row">

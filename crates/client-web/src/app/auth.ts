@@ -192,6 +192,7 @@ export function renderUserManagement(): string {
   }
 
   return `
+    ${renderAddUserForm()}
     <section class="settings-form user-management-form">
       <div class="section-heading">
         <h3>Accounts</h3>
@@ -200,9 +201,13 @@ export function renderUserManagement(): string {
         ${userListMarkup}
       </div>
     </section>
+  `;
+}
 
-    <details class="settings-add-user">
-      <summary>${renderButtonContent('Add a user', 'user-plus')}</summary>
+function renderAddUserForm(): string {
+  const hidden = state.settingsCreation === 'users' ? '' : 'hidden';
+  return `
+    <div class="settings-create-panel settings-add-user" id="add-user-panel" ${hidden}>
       <form id="create-user-form" class="settings-form user-management-form">
       <section>
         <div class="section-heading">
@@ -217,9 +222,8 @@ export function renderUserManagement(): string {
         <label>Metadata languages<input name="preferred_metadata_languages" value="en-US" placeholder="en-US, es-ES" /></label>
         </div>
         <label class="checkbox-inline"><input name="admin" type="checkbox" /> Administrator</label>
-        <button type="submit">${renderButtonContent('Create user', 'user-plus')}</button>
       </section>
     </form>
-    </details>
+    </div>
   `;
 }

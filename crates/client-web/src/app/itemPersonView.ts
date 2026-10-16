@@ -878,7 +878,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
   return `
           <div class="detail-actions" id="item-playback-actions">
             <div class="item-primary-action">
-            <div class="item-bar-identity" hidden>
+            <div class="item-bar-identity" data-sticky-identity hidden>
               ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
             </div>
             ${renderResumeButton(item, resumeMs)}

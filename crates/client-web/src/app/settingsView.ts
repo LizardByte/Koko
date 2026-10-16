@@ -4,8 +4,8 @@ import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
 import { renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
-import { renderLogViewer } from './logView';
-import { renderUserManagement } from './auth';
+import { logsAreLoading, renderLogViewer } from './logView';
+import { canManageUsers, renderUserManagement } from './auth';
 import { providerAttributionLogo, providerDisplayName, libraryProviderOptions } from './providers';
 import { persistedLibraryForSettings } from './selectors';
 import { state } from './state';
@@ -41,6 +41,54 @@ export function renderSettingsSectionNav(): string {
       `).join('')}
     </nav>
   `;
+}
+
+function renderSettingsCreationTrigger(section: SettingsSection, disabled: string): string {
+  const library = section === 'libraries';
+  if (!library && (section !== 'users' || !canManageUsers())) return '';
+  const panel = library ? 'add-library-panel' : 'add-user-panel';
+  const label = library ? 'Add a library' : 'Add a user';
+  const icon = library ? 'plus' : 'user-plus';
+  return `<button type="button" class="secondary-button" data-settings-create="${section}" aria-controls="${panel}" aria-expanded="${state.settingsCreation === section}" ${disabled}>${renderButtonContent(label, icon)}</button>`;
+}
+
+/** Keep each page's main actions together and associate Save with its settings form. */
+function renderSettingsActions(section: SettingsSection, title: string, ready: boolean): string {
+  const disabled = ready ? '' : 'disabled';
+  const actions: string[] = [];
+  const creationTrigger = renderSettingsCreationTrigger(section, disabled);
+  if (creationTrigger) actions.push(creationTrigger);
+  if (section === 'providers') {
+    actions.push(`<button type="button" class="secondary-button" id="clear-metadata-cache" ${disabled}>${renderButtonContent('Clear metadata cache', 'trash-2')}</button>`);
+  }
+  if (['general', 'libraries', 'providers', 'scheduled'].includes(section)) {
+    actions.push(`<button type="submit" form="settings-form" ${disabled}>${renderButtonContent('Save settings', 'save')}</button>`);
+  }
+  if (section === 'logs') {
+    const refreshDisabled = logsAreLoading() ? 'disabled' : '';
+    actions.push(`<button type="button" class="secondary-button" id="refresh-log-viewer" ${refreshDisabled}>${renderButtonContent('Refresh', 'refresh-cw')}</button>`);
+  }
+  if (!actions.length) return '';
+  const creating = state.settingsCreation === section;
+  const defaultHidden = creating ? 'hidden' : '';
+  return `<div class="settings-actions-anchor" aria-hidden="true"></div>
+    <div class="settings-action-dock" role="region" aria-label="${escapeHtml(title)} actions">
+      <strong class="settings-action-title" data-sticky-identity hidden>${escapeHtml(title)}</strong>
+      <div class="settings-page-actions" data-settings-default-actions ${defaultHidden}>${actions.join('')}</div>
+      ${renderSettingsCreationActions(section, creating)}
+    </div>`;
+}
+
+function renderSettingsCreationActions(section: SettingsSection, creating: boolean): string {
+  if (section !== 'libraries' && section !== 'users') return '';
+  const hidden = creating ? '' : 'hidden';
+  const form = section === 'libraries' ? 'add-library-form' : 'create-user-form';
+  const label = section === 'libraries' ? 'Add library' : 'Create user';
+  const icon = section === 'libraries' ? 'plus' : 'user-plus';
+  return `<div class="settings-page-actions" data-settings-creation-actions ${hidden}>
+    <button type="button" class="secondary-button" data-close-settings-create>${renderButtonContent('Cancel', 'x')}</button>
+    <button type="submit" form="${form}">${renderButtonContent(label, icon)}</button>
+  </div>`;
 }
 
 export const metadataLanguageOptions: Array<{ value: string; label: string }> = [
@@ -419,9 +467,6 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
             </section>
           </div>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save scheduled tasks', 'save')}</button>
-        </div>
       </form>
     </section>
   `;
@@ -515,14 +560,8 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
           <div class="settings-library-list">
             ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
           </div>
-          <div class="form-row">
-            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
-            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
-          </div>
+          <p class="muted">Provider response cache is kept for 24 hours by default.</p>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save provider settings', 'save')}</button>
-        </div>
       </form>
     </section>
   `;
@@ -563,9 +602,6 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
           </div>
         </section>
 
-        <div class="page-actions settings-save-bar">
-          <button type="submit">${renderButtonContent('Save settings', 'save')}</button>
-        </div>
       </form>
     </section>
   `;
@@ -574,6 +610,7 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
 function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
   return `
     <section class="panel page-panel settings-page-panel">
+      ${renderAddLibraryForm()}
       <form id="settings-form" class="settings-form">
         <section>
           <p class="muted">Expand a library to edit its folders, scanning and metadata preferences.</p>
@@ -581,13 +618,15 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
             ${renderExistingLibrariesSettings(settings)}
           </div>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
-        </div>
       </form>
+    </section>
+  `;
+}
 
-      <details class="settings-add-library">
-        <summary>${renderButtonContent('Add a library', 'plus')}</summary>
+function renderAddLibraryForm(): string {
+  const hidden = state.settingsCreation === 'libraries' ? '' : 'hidden';
+  return `
+      <div class="settings-create-panel settings-add-library" id="add-library-panel" ${hidden}>
         <form id="add-library-form" class="settings-form add-library-form">
         <section>
           <h3>Add library</h3>
@@ -626,10 +665,8 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
             <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
           </fieldset>
         </section>
-        <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
       </form>
-      </details>
-    </section>
+      </div>
   `;
 }
 
@@ -658,8 +695,8 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
   }
   if (section === 'dashboard') {
     return `
-      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
       <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
+      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
     `;
   }
   return '';
@@ -676,6 +713,7 @@ export function renderSettingsPage(): string {
       ${renderSettingsSectionNav()}
       <div class="settings-content">
         ${renderPageNavbar('Settings', heading.label, heading.description)}
+        ${renderSettingsActions(section, heading.label, Boolean(settings))}
         ${settingsContent}
       </div>
     </div>

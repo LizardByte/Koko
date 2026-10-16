@@ -28,6 +28,7 @@ beforeEach(() => {
   globalThis.location.pathname = '/settings';
   state.route = parseRoute();
   state.settingsResponse = getMockSettings();
+  state.settingsCreation = undefined;
   state.metadataProviders = getMockMetadataProviders();
   state.bootstrap = { current_user: { id: 1, username: 'admin', admin: true } };
   state.users = [state.bootstrap.current_user];
@@ -76,8 +77,9 @@ test('log content and inline errors are escaped and empty results stay usable', 
 });
 
 test('loading logs communicates progress and disables duplicate request controls', () => {
+  state.route = { page: 'settings', section: 'logs' };
   state.logsLoading = true;
-  const html = renderLogViewer();
+  const html = renderSettingsPage();
   assert.match(html, /Loading logs/);
   assert.match(html, /aria-busy="true"/);
   assert.match(html, /id="refresh-log-viewer" disabled/);
@@ -156,7 +158,7 @@ test('user management has a dedicated route and navigation current-page indicato
   const usersHtml = renderSettingsPage();
   assert.match(usersHtml, /href="\/settings\/users" aria-current="page"/);
   assert.match(usersHtml, /data-update-user-id="1"/);
-  assert.match(usersHtml, /<details class="settings-add-user">/);
+  assert.match(usersHtml, /id="add-user-panel" hidden/);
   assert.match(usersHtml, /id="create-user-form"/);
   globalThis.location.pathname = '/settings';
   state.route = parseRoute();
@@ -297,7 +299,7 @@ test('collapsed library cards retain the controls for every configured library',
     assert.ok(html.includes(`name="existing_library_paths_${index}"`));
     assert.ok(html.includes(`name="existing_library_name_${index}"`));
   }
-  assert.match(html, /<details class="settings-add-library">/);
+  assert.match(html, /id="add-library-panel" hidden/);
 });
 
 test('saving general settings preserves library, provider and scheduling configuration', () => {
@@ -312,4 +314,57 @@ test('saving general settings preserves library, provider and scheduling configu
   assert.deepEqual(updated.media, original.media);
   assert.deepEqual(updated.metadata, original.metadata);
   assert.deepEqual(updated.scheduled_tasks, original.scheduled_tasks);
+});
+
+test('each configuration page has one top Save action associated with its own form', () => {
+  for (const section of ['general', 'libraries', 'providers', 'scheduled']) {
+    state.route = { page: 'settings', section };
+    const html = renderSettingsPage();
+    assert.equal([...html.matchAll(/type="submit" form="settings-form"/g)].length, 1);
+    assert.ok(html.indexOf('form="settings-form"') < html.indexOf('<form id="settings-form"'));
+    assert.match(html, /class="settings-action-dock"/);
+    assert.match(html, /data-sticky-identity hidden/);
+    assert.doesNotMatch(html, /Save (library settings|provider settings|scheduled tasks)/);
+  }
+  state.settingsResponse = undefined;
+  assert.match(renderSettingsPage(), /type="submit" form="settings-form" disabled/);
+});
+
+test('Add actions expose forms above the lists and retain their open state across renders', () => {
+  for (const [section, panel, form, list] of [
+    ['libraries', 'add-library-panel', 'add-library-form', '<form id="settings-form"'],
+    ['users', 'add-user-panel', 'create-user-form', '<div class="user-list"'],
+  ]) {
+    state.route = { page: 'settings', section };
+    const collapsed = renderSettingsPage();
+    assert.match(collapsed, new RegExp(`data-settings-create="${section}" aria-controls="${panel}" aria-expanded="false"`));
+    assert.match(collapsed, new RegExp(`id="${panel}" hidden`));
+    state.settingsCreation = section;
+    const expanded = renderSettingsPage();
+    assert.match(expanded, /aria-expanded="true"/);
+    assert.doesNotMatch(expanded, new RegExp(`id="${panel}" hidden`));
+    assert.ok(expanded.indexOf(`id="${form}"`) < expanded.indexOf(list));
+    assert.match(expanded, /data-close-settings-create/);
+    assert.match(expanded, new RegExp(`type="submit" form="${form}"`));
+    assert.match(expanded, /data-settings-default-actions hidden/);
+    assert.doesNotMatch(expanded, /data-settings-creation-actions hidden/);
+  }
+});
+
+test('cache clearing and log refresh share the top action bar, with no duplicate controls', () => {
+  state.route = { page: 'settings', section: 'providers' };
+  let html = renderSettingsPage();
+  assert.equal([...html.matchAll(/id="clear-metadata-cache"/g)].length, 1);
+  assert.ok(html.indexOf('id="clear-metadata-cache"') < html.indexOf('<form id="settings-form"'));
+  state.route = { page: 'settings', section: 'logs' };
+  html = renderSettingsPage();
+  assert.equal([...html.matchAll(/id="refresh-log-viewer"/g)].length, 1);
+  assert.ok(html.indexOf('id="refresh-log-viewer"') < html.indexOf('id="log-viewer-panel-root"'));
+});
+
+test('background activity precedes the metadata dashboard', () => {
+  state.route = { page: 'settings', section: 'dashboard' };
+  const html = renderSettingsPage();
+  assert.ok(html.indexOf('id="system-activities-panel-root"') < html.indexOf('id="metadata-dashboard-panel-root"'));
+  assert.ok(html.indexOf('Background activities') < html.indexOf('Metadata dashboard'));
 });

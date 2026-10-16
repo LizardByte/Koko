@@ -9,6 +9,7 @@ import { DEFAULT_BROWSE_PREFERENCES, normalizeBrowsePreferences, saveBrowsePrefe
 import { bindHoverPreview } from './hoverPreview';
 import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
 import { bindResumeHold } from './resumeHold';
+import { bindSettingsActions } from './settingsActions';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -606,6 +607,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();
+  bindSettingsActions(signal);
   const closeMoreActions = bindItemDetailLayout(signal);
   const openResumeOptions = bindResumeOptions(signal);
   document.querySelectorAll<HTMLImageElement>('[data-item-cover-image], [data-episode-still]').forEach((image) => {
@@ -1448,8 +1450,10 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       const request = await createUserRequest(form);
       await createUser(request);
       form.reset();
+      state.settingsCreation = undefined;
       state.users = await getUsers();
       render();
+      document.querySelector<HTMLButtonElement>('[data-settings-create="users"]')?.focus({ preventScroll: true });
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to create the user.';
       render();
@@ -1524,7 +1528,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     try {
       state.settingsResponse = await addLibrary(library);
       form.reset();
+      state.settingsCreation = undefined;
       await refreshData();
+      document.querySelector<HTMLButtonElement>('[data-settings-create="libraries"]')?.focus({ preventScroll: true });
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to add library.';
       render();

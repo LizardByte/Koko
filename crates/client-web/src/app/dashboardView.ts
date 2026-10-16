@@ -247,8 +247,8 @@ export function renderSystemActivitiesPanel(): string {
     <section class="panel page-panel settings-activity-panel">
       <div class="section-heading section-heading-actions">
         <div>
-          <h3>Backend activities</h3>
-          <p class="muted">Active background work that the browser is polling.</p>
+          <h3>Background activities</h3>
+          <p class="muted">Track work running on your server.</p>
         </div>
         <span class="tag">${activities.length} active</span>
       </div>

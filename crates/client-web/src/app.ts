@@ -478,6 +478,7 @@ function render(preserveScroll = true): void {
 
 /** Reset only route-specific state before publishing data for the next page. */
 function prepareRouteState(route: AppRoute, showLoading: boolean): void {
+  if (route.page !== 'settings' || route.section !== state.settingsCreation) state.settingsCreation = undefined;
   if (showLoading) {
     state.isPlayerOpen = false;
     state.activePlaybackItem = undefined;

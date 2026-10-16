@@ -115,6 +115,7 @@ export interface AppState {
   systemActivities: SystemActivity[];
   dashboardItems: MediaItemSummary[];
   settingsResponse?: SettingsResponse;
+  settingsCreation?: 'libraries' | 'users';
   logsResponse?: LogEntriesResponse;
   logsLoading?: boolean;
   logsError?: string;

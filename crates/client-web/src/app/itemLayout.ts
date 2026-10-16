@@ -1,20 +1,4 @@
-/** Reveal the compact identity only when the single playback bar becomes sticky. */
-export function bindItemPlaybackBar(
-  scroller: HTMLElement,
-  anchor: HTMLElement,
-  bar: HTMLElement,
-  signal: AbortSignal,
-): void {
-  const identity = bar.querySelector<HTMLElement>('.item-bar-identity');
-  const update = (): void => {
-    const stuck = anchor.getBoundingClientRect().top < scroller.getBoundingClientRect().top;
-    bar.classList.toggle('is-stuck', stuck);
-    if (identity) identity.hidden = !stuck;
-  };
-  scroller.addEventListener('scroll', update, { passive: true, signal });
-  globalThis.addEventListener('resize', update, { signal });
-  update();
-}
+export { bindStickyActionBar as bindItemPlaybackBar } from './stickyActionBar';
 
 /** Share the responsive cover width and portrait backdrop reference across item types. */
 export function itemCoverDimensions(availableWidth: number): { width: number; height: number } {

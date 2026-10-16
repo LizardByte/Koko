@@ -1446,6 +1446,7 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1470,8 +1471,13 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1484,6 +1490,10 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} metadata fetch is not implemented.",
@@ -1529,18 +1539,39 @@ fn localized_provider_settings(
     (localized_settings, provider_locale)
 }
 
+fn has_metadata_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
 fn snapshot_has_presentable_metadata(snapshot: &StoredMetadataSnapshot) -> bool {
-    snapshot
-        .title
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || snapshot
-            .overview
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || snapshot.artwork_url.is_some()
-        || snapshot.backdrop_url.is_some()
-        || snapshot.provider_payload_json.is_some()
+    has_metadata_text(snapshot.title.as_deref()) || has_metadata_text(snapshot.overview.as_deref())
+}
+
+fn snapshot_needs_text_fallback(snapshot: &StoredMetadataSnapshot) -> bool {
+    !has_metadata_text(snapshot.title.as_deref())
+        || !has_metadata_text(snapshot.overview.as_deref())
+}
+
+fn merge_localized_snapshot(
+    primary: Option<StoredMetadataSnapshot>,
+    fallback: StoredMetadataSnapshot,
+) -> StoredMetadataSnapshot {
+    let Some(mut primary) = primary else {
+        return fallback;
+    };
+    if !has_metadata_text(primary.title.as_deref()) {
+        primary.title = fallback.title;
+    }
+    if !has_metadata_text(primary.overview.as_deref()) {
+        primary.overview = fallback.overview;
+    }
+    if primary.artwork_url.is_none() {
+        primary.artwork_url = fallback.artwork_url;
+    }
+    if primary.backdrop_url.is_none() {
+        primary.backdrop_url = fallback.backdrop_url;
+    }
+    primary
 }
 
 /// Fetch one provider season snapshot for a linked show descendant.
@@ -1661,6 +1692,7 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1686,8 +1718,13 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1701,6 +1738,10 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} season metadata fetch is not implemented.",
@@ -1843,6 +1884,7 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1869,8 +1911,13 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1884,6 +1931,10 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} episode metadata fetch is not implemented.",
@@ -4697,6 +4748,38 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn locale_fallback_requires_text_and_fills_missing_fields() {
+        let primary = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "1".into(),
+            media_type: Some("movie".into()),
+            title: Some("Titulo".into()),
+            overview: None,
+            artwork_url: Some("https://example.test/poster.png".into()),
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "es-ES".into(),
+            provider_locale_key: Some("es-ES".into()),
+            provider_payload_json: Some("{}".into()),
+        };
+        assert!(snapshot_needs_text_fallback(&primary));
+        let mut empty = primary.clone();
+        empty.title = Some(" ".into());
+        assert!(!snapshot_has_presentable_metadata(&empty));
+        let mut fallback = primary.clone();
+        fallback.title = Some("English title".into());
+        fallback.overview = Some("English fallback overview".into());
+        fallback.locale_key = "en-US".into();
+        let merged = merge_localized_snapshot(Some(primary), fallback);
+        assert_eq!(merged.title.as_deref(), Some("Titulo"));
+        assert_eq!(
+            merged.overview.as_deref(),
+            Some("English fallback overview")
+        );
+        assert_eq!(merged.locale_key, "es-ES");
+        assert!(!snapshot_needs_text_fallback(&merged));
+    }
     #[test]
     fn title_cleanup_preserves_unicode_names_and_combining_marks() {
         for title in [

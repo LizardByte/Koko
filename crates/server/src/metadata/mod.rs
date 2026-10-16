@@ -3274,6 +3274,8 @@ pub(crate) fn metadata_response_cache_key(
     parts: &[&str],
 ) -> String {
     let mut hasher = Sha256::new();
+    // Invalidate response snapshots written before endpoint-specific decoding.
+    hasher.update(b"metadata-response-v2\0");
     hasher.update(provider_id.as_storage_value().as_bytes());
     hasher.update([0]);
     hasher.update(kind.as_bytes());

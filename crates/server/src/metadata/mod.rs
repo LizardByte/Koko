@@ -20,6 +20,7 @@ use std::time::Duration;
 // lib imports
 use diesel::{
     BoolExpressionMethods,
+    Connection,
     ExpressionMethods,
     JoinOnDsl,
     OptionalExtension,
@@ -2421,12 +2422,56 @@ pub fn set_item_metadata_refresh_state(
     refresh_state: &str,
     refresh_error: Option<&str>,
 ) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as links;
+    conn.transaction(|conn| {
+        let mut locales = links::item_metadata_links
+            .filter(links::media_item_id.eq(item_id))
+            .filter(links::provider_id.eq(provider_id.as_storage_value()))
+            .filter(links::relation_kind.eq("primary"))
+            .select(links::locale_key)
+            .load::<String>(conn)?;
+        if locales.is_empty() {
+            locales.push(DEFAULT_METADATA_LOCALE.into());
+        }
+        let mut result = None;
+        for locale in locales {
+            let summary = set_item_metadata_refresh_state_for_locale(
+                conn,
+                item_id,
+                provider_id.clone(),
+                external_id,
+                media_type,
+                &locale,
+                refresh_state,
+                refresh_error,
+            )?;
+            if result.is_none() {
+                result = Some(summary);
+            }
+        }
+        result.ok_or(diesel::result::Error::NotFound)
+    })
+}
+
+/// Set refresh state on one primary provider translation, preserving other locales.
+pub fn set_item_metadata_refresh_state_for_locale(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+    external_id: &str,
+    media_type: Option<&str>,
+    locale_key: &str,
+    refresh_state: &str,
+    refresh_error: Option<&str>,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
     configure_sqlite_connection(conn)?;
     retry_sqlite_write(|| {
         let existing = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::locale_key.eq(locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)
             .optional()?;
@@ -2470,10 +2515,7 @@ pub fn set_item_metadata_refresh_state(
             genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
             rating: existing.as_ref().and_then(|row| row.rating),
             content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
-            locale_key: existing
-                .as_ref()
-                .map(|row| row.locale_key.clone())
-                .unwrap_or_else(|| DEFAULT_METADATA_LOCALE.to_string()),
+            locale_key: locale_key.to_string(),
             provider_locale_key: existing
                 .as_ref()
                 .and_then(|row| row.provider_locale_key.clone()),
@@ -2526,6 +2568,8 @@ pub fn set_item_metadata_refresh_state(
         let row = metadata_links_dsl::item_metadata_links
             .filter(metadata_links_dsl::media_item_id.eq(item_id))
             .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+            .filter(metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(metadata_links_dsl::locale_key.eq(locale_key))
             .select(ItemMetadataLink::as_select())
             .first(conn)?;
 

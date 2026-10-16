@@ -13,6 +13,7 @@ use std::sync::atomic::{
     Ordering,
 };
 
+use diesel::Connection;
 use once_cell::sync::Lazy;
 use rocket::delete;
 use rocket::fs::NamedFile;
@@ -155,6 +156,7 @@ use crate::metadata::{
     search_metadata_people_with_preferred_languages,
     search_provider,
     set_item_metadata_refresh_state,
+    set_item_metadata_refresh_state_for_locale,
     sort_item_metadata_summaries_for_languages,
     try_cache_item_artwork,
     update_cached_artwork_path,
@@ -1074,6 +1076,7 @@ impl MetadataRefreshFetchKind {
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshTarget {
+    locale_key: Option<String>,
     item_id: i32,
     library_id: i32,
     provider_id: MetadataProviderId,
@@ -1599,6 +1602,7 @@ fn metadata_refresh_target_for_show_season(
     let season_number = provider_target.season_number;
     match provider_id {
         MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
+            locale_key: None,
             item_id: season.id,
             library_id: season.library_id,
             provider_id,
@@ -1613,6 +1617,7 @@ fn metadata_refresh_target_for_show_season(
             },
         }),
         MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            locale_key: None,
             item_id: season.id,
             library_id: season.library_id,
             provider_id,
@@ -1644,6 +1649,7 @@ fn metadata_refresh_target_for_show_episode(
     let episode_number = provider_target.episode_number;
     match provider_id {
         MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
+            locale_key: None,
             item_id: episode.id,
             library_id: episode.library_id,
             provider_id,
@@ -1661,6 +1667,7 @@ fn metadata_refresh_target_for_show_episode(
             },
         }),
         MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            locale_key: None,
             item_id: episode.id,
             library_id: episode.library_id,
             provider_id,
@@ -1687,27 +1694,43 @@ async fn mark_metadata_refresh_target_pending(
     db: &DbConn,
     target: &MetadataRefreshTarget,
 ) -> Result<ItemMetadataSummary, Status> {
+    let languages = if let Some(locale) = &target.locale_key {
+        vec![locale.clone()]
+    } else {
+        metadata_locales_for_provider(
+            target.provider_id.clone(),
+            &load_refresh_target_metadata_languages(db, target.item_id)
+                .await
+                .map_err(|_| Status::InternalServerError)?,
+        )
+    };
     db.run({
         let target = target.clone();
         move |conn| {
-            set_item_metadata_refresh_state(
-                conn,
-                target.item_id,
-                target.provider_id,
-                &target.external_id,
-                Some(&target.media_type),
-                "pending",
-                None,
-            )
+            conn.transaction(|conn| {
+                let mut result = None;
+                for locale in languages {
+                    let summary = set_item_metadata_refresh_state_for_locale(
+                        conn,
+                        target.item_id,
+                        target.provider_id.clone(),
+                        &target.external_id,
+                        Some(&target.media_type),
+                        &locale,
+                        "pending",
+                        None,
+                    )?;
+                    if result.is_none() {
+                        result = Some(summary);
+                    }
+                }
+                result.ok_or(diesel::result::Error::NotFound)
+            })
         }
     })
     .await
     .map_err(|error| {
-        log::error!(
-            "Failed to mark media item {} metadata refresh pending: {}",
-            target.item_id,
-            error
-        );
+        log::error!("Failed to mark metadata pending: {error}");
         Status::InternalServerError
     })
 }
@@ -1733,15 +1756,28 @@ async fn record_metadata_refresh_error(
             let target = target.clone();
             let message = message.to_string();
             move |conn| {
-                set_item_metadata_refresh_state(
-                    conn,
-                    target.item_id,
-                    target.provider_id,
-                    &target.external_id,
-                    Some(&target.media_type),
-                    "error",
-                    Some(&message),
-                )
+                if let Some(locale) = target.locale_key {
+                    set_item_metadata_refresh_state_for_locale(
+                        conn,
+                        target.item_id,
+                        target.provider_id,
+                        &target.external_id,
+                        Some(&target.media_type),
+                        &locale,
+                        "error",
+                        Some(&message),
+                    )
+                } else {
+                    set_item_metadata_refresh_state(
+                        conn,
+                        target.item_id,
+                        target.provider_id,
+                        &target.external_id,
+                        Some(&target.media_type),
+                        "error",
+                        Some(&message),
+                    )
+                }
             }
         })
         .await
@@ -1850,8 +1886,14 @@ async fn fetch_metadata_refresh_snapshots(
     settings: &crate::config::Settings,
     target: &MetadataRefreshTarget,
 ) -> Result<Vec<StoredMetadataSnapshot>, String> {
-    let languages = load_refresh_target_metadata_languages(db, target.item_id).await?;
-    let languages = metadata_locales_for_provider(target.provider_id.clone(), &languages);
+    let languages = if let Some(locale) = &target.locale_key {
+        vec![locale.clone()]
+    } else {
+        metadata_locales_for_provider(
+            target.provider_id.clone(),
+            &load_refresh_target_metadata_languages(db, target.item_id).await?,
+        )
+    };
     let mut snapshots = Vec::new();
     for language in languages {
         snapshots.push(
@@ -2058,6 +2100,7 @@ fn pending_metadata_refresh_target(
     };
 
     Some(MetadataRefreshTarget {
+        locale_key: Some(link.locale_key),
         item_id: item.id,
         library_id: item.library_id,
         provider_id,
@@ -2201,6 +2244,7 @@ async fn build_metadata_refresh_job(
     media_type: &str,
 ) -> Result<MetadataRefreshJob, Status> {
     let root = MetadataRefreshTarget {
+        locale_key: None,
         item_id: item.id,
         library_id: item.library_id,
         provider_id,
@@ -4176,6 +4220,7 @@ pub async fn link_item_metadata(
     }
 
     let root_target = MetadataRefreshTarget {
+        locale_key: None,
         item_id: item.id,
         library_id: item.library_id,
         provider_id: request.provider_id.clone(),

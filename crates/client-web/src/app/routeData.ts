@@ -36,6 +36,12 @@ export async function loadRouteData(
       render();
     }));
   };
+  const loadItemSupportingData = (item: api.MediaItemDetail): Promise<unknown[]> => Promise.all([
+    source.getHome(item.library_id).then((value) => { if (isCurrent()) { state.home = value; render(); } }),
+    source.getItems(item.library_id).then((value) => { if (isCurrent()) state.libraryItems = value; }).finally(() => {
+      if (isCurrent()) { state.libraryItemsLoading = false; render(); }
+    }),
+  ]);
 
   load('server capabilities', source.getCapabilities(), (value) => { state.capabilities = value; });
   load('libraries', source.getLibraries(), (value) => { state.libraries = value; });
@@ -68,12 +74,7 @@ export async function loadRouteData(
       state.selectedItem = item;
       state.libraryItemsLoading = true;
       render();
-      await Promise.all([
-        source.getHome(item.library_id).then((value) => { if (isCurrent()) { state.home = value; render(); } }),
-        source.getItems(item.library_id).then((value) => { if (isCurrent()) state.libraryItems = value; }).finally(() => {
-          if (isCurrent()) { state.libraryItemsLoading = false; render(); }
-        }),
-      ]);
+      await loadItemSupportingData(item);
       return item;
     }), () => { /* The overview was published before its supporting sections. */ });
     load('linked metadata', source.getItemMetadata(route.itemId).finally(() => {

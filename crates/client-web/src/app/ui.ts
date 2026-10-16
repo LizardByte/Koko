@@ -13,9 +13,12 @@ export function renderCollapsibleText(text: string, key: string, className = 'he
   const stateClass = (shouldCollapse || measureOverflow) && !isExpanded ? 'is-collapsed' : '';
   const toggleExpanded = isExpanded ? 'true' : 'false';
   const toggleLabel = isExpanded ? 'show less' : '... see more';
-  const toggle = shouldCollapse || measureOverflow
-    ? `<button type="button" class="text-toggle-button" ${measureOverflow ? 'data-overflow-toggle' : ''} ${measureOverflow && !shouldCollapse ? 'hidden' : ''} data-toggle-text="${escapeHtml(key)}" aria-expanded="${toggleExpanded}">${toggleLabel}</button>`
-    : '';
+  let toggle = '';
+  if (shouldCollapse || measureOverflow) {
+    const overflowAttribute = measureOverflow ? 'data-overflow-toggle' : '';
+    const hiddenAttribute = measureOverflow && !shouldCollapse ? 'hidden' : '';
+    toggle = `<button type="button" class="text-toggle-button" ${overflowAttribute} ${hiddenAttribute} data-toggle-text="${escapeHtml(key)}" aria-expanded="${toggleExpanded}">${toggleLabel}</button>`;
+  }
 
   return `
     <div class="collapsible-text ${className} ${stateClass}" ${measureOverflow ? 'data-measure-overflow' : ''} data-collapsible-text="${escapeHtml(key)}">${escapeHtml(normalized)}</div>
@@ -62,9 +65,12 @@ export function renderButtonContent(label: string, iconName?: AppIconName, iconP
     return escapeHtml(label);
   }
 
-  const labelContent = label
-    ? subtitle ? `<span class="button-copy"><span>${escapeHtml(label)}</span><span class="button-secondary-label">${escapeHtml(subtitle)}</span></span>` : `<span>${escapeHtml(label)}</span>`
-    : '';
+  let labelContent = '';
+  if (label) {
+    labelContent = subtitle
+      ? `<span class="button-copy"><span>${escapeHtml(label)}</span><span class="button-secondary-label">${escapeHtml(subtitle)}</span></span>`
+      : `<span>${escapeHtml(label)}</span>`;
+  }
   return `
     <span class="button-content${iconPosition === 'end' ? ' icon-end' : ''}">
       ${renderIcon(iconName, 'button-icon')}

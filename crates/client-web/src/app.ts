@@ -476,15 +476,8 @@ function render(preserveScroll = true): void {
   restoreBrowsePosition();
 }
 
-async function refreshData(showLoading = true): Promise<void> {
-  cancelPendingHomeSearch();
-  clearPendingLibraryRefresh();
-  clearPendingMetadataRefresh();
-  state.route = parseRoute();
-  const route = state.route;
-  const generation = ++routeLoadGeneration;
-  const isCurrent = () => generation === routeLoadGeneration;
-  state.isLoading = true;
+/** Reset only route-specific state before publishing data for the next page. */
+function prepareRouteState(route: AppRoute, showLoading: boolean): void {
   if (showLoading) {
     state.isPlayerOpen = false;
     state.activePlaybackItem = undefined;
@@ -520,6 +513,18 @@ async function refreshData(showLoading = true): Promise<void> {
     state.logsError = undefined;
     state.logPage = 0;
   }
+}
+
+async function refreshData(showLoading = true): Promise<void> {
+  cancelPendingHomeSearch();
+  clearPendingLibraryRefresh();
+  clearPendingMetadataRefresh();
+  state.route = parseRoute();
+  const route = state.route;
+  const generation = ++routeLoadGeneration;
+  const isCurrent = () => generation === routeLoadGeneration;
+  state.isLoading = true;
+  prepareRouteState(route, showLoading);
   state.error = undefined;
   state.apiMode = getApiMode();
   const deferItemLoading = showLoading && route.page === 'item' && !state.selectedItem

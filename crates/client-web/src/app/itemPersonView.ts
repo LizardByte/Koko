@@ -545,12 +545,7 @@ export function renderPersonPage(): string {
     return renderLoadingDetail('Loading person details');
   }
 
-  let personImageUrl: string | undefined;
-  if (response.person.cached_image_path) {
-    personImageUrl = getPersonImageUrl(response.person.id);
-  } else if (response.person.image_url) {
-    personImageUrl = resolveApiUrl(response.person.image_url);
-  }
+  const personImageUrl = personPortraitUrl(response.person);
   const credits = response.credits;
   const creditGroups = personCreditGroups(credits);
   const age = personAgeLabel(response.person.birthday, response.person.deathday);
@@ -594,6 +589,11 @@ export function renderPersonPage(): string {
       </section>
     </section>
   `;
+}
+
+function personPortraitUrl(person: NonNullable<typeof state.selectedPerson>['person']): string | undefined {
+  if (person.cached_image_path) return getPersonImageUrl(person.id);
+  return person.image_url ? resolveApiUrl(person.image_url) : undefined;
 }
 
 export function directGridChildren(grid: HTMLElement, selector: string): HTMLElement[] {
@@ -800,7 +800,8 @@ function renderSelectedItemHeroMeta(item: MediaItemDetail, genres: string[]): st
   }
   tags.push(renderRating(item));
   if (item.playable && item.duration_ms) tags.push(`<span class="tag">${escapeHtml(formatDuration(item.duration_ms))}</span>`);
-  return `<div class="hero-meta-row">${tags.join('')}${genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('')}</div>`;
+  const genreTags = genres.map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
+  return `<div class="hero-meta-row">${tags.join('')}${genreTags}</div>`;
 }
 
 function renderResumeButton(item: MediaItemDetail, resumeMs: number): string {
@@ -821,7 +822,8 @@ function renderPrimaryPlayButton(item: MediaItemDetail, resumeMs: number, id?: s
   const playButtonClass = isRestart ? 'secondary-button' : '';
   let playButtonLabel = 'Play';
   if (isRestart) playButtonLabel = item.item_type === 'episode' ? 'Restart episode' : 'Start over';
-  return `<button type="button" ${id ? `id="${escapeHtml(id)}"` : ''} class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, isRestart ? 'rotate-ccw' : 'play')}</button>`;
+  const idAttribute = id ? `id="${escapeHtml(id)}"` : '';
+  return `<button type="button" ${idAttribute} class="${playButtonClass}" data-play-selected-item-start-ms="0">${renderButtonContent(playButtonLabel, isRestart ? 'rotate-ccw' : 'play')}</button>`;
 }
 
 function renderTrailerActionButton(preferredTrailer: TrailerOption | undefined, trailerButtonTitle: string): string {
@@ -847,6 +849,18 @@ interface SelectedItemActionsOptions {
   hasMultipleTrailers: boolean;
 }
 
+function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTarget?: MediaPlaybackTarget): string {
+  const canResume = resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0;
+  if (!canResume) return '';
+  const restartButton = item.playable
+    ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over')
+    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent('Restart episode', 'rotate-ccw')}</button>`;
+  return `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
+    <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
+      ${restartButton}
+    </section>`;
+}
+
 function renderSelectedItemActions(options: SelectedItemActionsOptions): string {
   const {
     item,
@@ -870,10 +884,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             ${renderResumeButton(item, resumeMs)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
             ${playbackTarget ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
-            ${resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0 ? `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
-              <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
-                ${item.playable ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over') : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent('Restart episode', 'rotate-ccw')}</button>`}
-              </section>` : ''}
+            ${renderResumeOptions(item, resumeMs, playbackTarget)}
             </div>
             ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
             <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
@@ -1043,6 +1054,7 @@ function renderSelectedItemSupportGrid(
   metadataRefreshButtonMarkup: string,
   metadataSearchPanel: string,
 ): string {
+  const metadataHeading = supportsManualLinking ? 'Link metadata' : 'Metadata';
   return `
       <details class="item-management" id="item-management" ${state.itemManagementOpen ? 'open' : ''} data-nav-section="management" data-nav-label="Media details">
         <summary>${renderButtonContent(canManageUsers() ? 'Details and management' : 'Media details', 'settings')}${renderIcon('chevron-down', 'disclosure-chevron')}</summary>
@@ -1076,7 +1088,7 @@ function renderSelectedItemSupportGrid(
 
         ${canManageUsers() ? `<section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
           <div class="section-heading section-heading-actions">
-            <h3>${supportsManualLinking ? 'Link metadata' : 'Metadata'}</h3>
+            <h3>${metadataHeading}</h3>
             ${metadataRefreshButtonMarkup}
           </div>
           ${renderLinkedMetadataSummary()}

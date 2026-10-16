@@ -148,15 +148,15 @@ test('ratings use actual local attribution images and label inherited values wit
 });
 
 test('episode cards retain a circular ring, rating attribution, and escaped title and description', () => {
-  const html = tv.renderTvEpisodeCard({ ...episode, overview: '<script>spoiler</script>', rating: 8.1, rating_provider_id: 'tmdb' });
+  const html = tv.renderTvEpisodeCard({ ...episode, overview: '<ScRiPt>spoiler</ScRiPt>', rating: 8.1, rating_provider_id: 'tmdb' });
   assert.match(html, /class="media-card-progress"/);
   assert.match(html, /episode-number-badge">S01E02/);
   assert.match(html, /rating-source-logo/);
   assert.match(html, /data-episode-still/);
   assert.match(html, /episode-still-fallback" hidden/);
   assert.match(html, /The middle &lt;episode&gt;/);
-  assert.match(html, /&lt;script&gt;spoiler&lt;\/script&gt;/);
-  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;ScRiPt&gt;spoiler&lt;\/ScRiPt&gt;/);
+  assert.doesNotMatch(html, /<script\b/i);
 });
 
 test('TV items without a show ancestor keep one clear heading', () => {

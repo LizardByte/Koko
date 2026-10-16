@@ -460,37 +460,19 @@ export function getWebClientProfile(): ClientProfile {
   const supportedVideoCodecs = new Set<string>();
   const supportedAudioCodecs = new Set<string>();
 
-  if (supportsVideoType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedContainers.add('m4v');
-    supportedVideoCodecs.add('h264');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedContainers.add('m4v');
-    supportedVideoCodecs.add('hevc');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/mp4; codecs="av01.0.05M.08, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedVideoCodecs.add('av1');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/webm; codecs="vp8, vorbis"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('vp8');
-    supportedAudioCodecs.add('vorbis');
-  }
-  if (supportsVideoType('video/webm; codecs="vp9, opus"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('vp9');
-    supportedAudioCodecs.add('opus');
-  }
-  if (supportsVideoType('video/webm; codecs="av01.0.05M.08, opus"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('av1');
-    supportedAudioCodecs.add('opus');
+  const videoCapabilities = [
+    { type: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', containers: ['mp4', 'm4v'], video: 'h264', audio: 'aac' },
+    { type: 'video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"', containers: ['mp4', 'm4v'], video: 'hevc', audio: 'aac' },
+    { type: 'video/mp4; codecs="av01.0.05M.08, mp4a.40.2"', containers: ['mp4'], video: 'av1', audio: 'aac' },
+    { type: 'video/webm; codecs="vp8, vorbis"', containers: ['webm'], video: 'vp8', audio: 'vorbis' },
+    { type: 'video/webm; codecs="vp9, opus"', containers: ['webm'], video: 'vp9', audio: 'opus' },
+    { type: 'video/webm; codecs="av01.0.05M.08, opus"', containers: ['webm'], video: 'av1', audio: 'opus' },
+  ];
+  for (const capability of videoCapabilities) {
+    if (!supportsVideoType(capability.type)) continue;
+    capability.containers.forEach((container) => supportedContainers.add(container));
+    supportedVideoCodecs.add(capability.video);
+    supportedAudioCodecs.add(capability.audio);
   }
   if (supportsAudioType('audio/mpeg')) {
     supportedContainers.add('mp3');

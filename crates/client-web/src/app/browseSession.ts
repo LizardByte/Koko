@@ -38,7 +38,7 @@ export function captureBrowseSession(): void {
   const path = browsePath(state.route)!;
   const focusItem = (document.activeElement as HTMLElement | null)?.dataset.itemId;
   const active = document.activeElement;
-  const focusClass = active?.matches('.media-card') ? '.media-card' : active?.matches('.search-result-row') ? '.search-result-row' : '.home-feature-action';
+  const focusClass = ['.media-card', '.search-result-row'].find((selector) => active?.matches(selector)) ?? '.home-feature-action';
   visits.set(key, {
     tab: state.homeTab, page: state.libraryPage, filtersOpen: state.browseFiltersOpen, search: state.searchQuery, fullSearch: state.showFullSearchResults,
     scrollTop: document.querySelector('.main-shell')?.scrollTop ?? 0, windowY: globalThis.scrollY,

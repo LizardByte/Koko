@@ -15,9 +15,15 @@ export function renderRating(item: MediaItemSummary | MediaItemDetail): string {
   const providerName = providerId ? providerDisplayName(providerId) : undefined;
   const logo = providerId ? providerAttributionLogo(providerId) : undefined;
   const value = item.rating.toFixed(1);
-  const label = `${inheritedLabel ? `${inheritedLabel} rating` : 'Rating'}${providerName ? ` from ${providerName}` : ''}: ${value}`;
-  const attribution = logo
-    ? `<img class="rating-source-logo" src="${escapeHtml(logo)}" alt="" aria-hidden="true" />`
-    : providerName ? `<span class="rating-source-name">${escapeHtml(providerName)}</span>` : '';
-  return `<span class="tag rating-tag" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${inheritedLabel ? `<span>${inheritedLabel}</span>` : ''}${attribution}<span>${value}</span></span>`;
+  const ratingLabel = inheritedLabel ? `${inheritedLabel} rating` : 'Rating';
+  const sourceLabel = providerName ? ` from ${providerName}` : '';
+  const label = `${ratingLabel}${sourceLabel}: ${value}`;
+  let attribution = '';
+  if (logo) {
+    attribution = `<img class="rating-source-logo" src="${escapeHtml(logo)}" alt="" aria-hidden="true" />`;
+  } else if (providerName) {
+    attribution = `<span class="rating-source-name">${escapeHtml(providerName)}</span>`;
+  }
+  const inheritedMarkup = inheritedLabel ? `<span>${inheritedLabel}</span>` : '';
+  return `<span class="tag rating-tag" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${inheritedMarkup}${attribution}<span>${value}</span></span>`;
 }

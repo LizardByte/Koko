@@ -394,8 +394,8 @@ legend {
   object-fit: contain;
 }
 
-.is-hidden {
-  display: none !important;
+.metadata-provider-option.is-hidden {
+  display: none;
 }
 
 .brand-icon,
@@ -4254,7 +4254,7 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .item-action-dock .detail-actions { align-items: center; flex-wrap: wrap; gap: var(--space-3); margin: 0; min-height: 3rem; }
 .item-action-dock :is(button, summary) { min-height: 3.75rem; white-space: nowrap; }
 .item-primary-action { position: relative; display: flex; align-items: center; gap: var(--space-4); min-width: 0; }
-.item-primary-action > button { flex-shrink: 0; font-weight: 600; }
+.item-primary-action > button { flex-shrink: 0; font-weight: 600; max-width: min(100%, 34rem); }
 .item-primary-action > button:hover:not(:disabled) { background: var(--action-hover); }
 .button-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; min-width: 0; }
 .button-copy > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -4310,7 +4310,6 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .episode-card .rating-tag { padding: 0.2rem 0.4rem; font-size: 0.72rem; }
 .item-action-dock .season-tabs { margin: var(--space-3) 0 0; padding: var(--space-1); max-width: 100%; scrollbar-width: thin; }
 .item-action-dock .season-tab { min-height: 2.6rem; padding: 0.45rem 0.8rem; }
-.item-primary-action > button { max-width: min(100%, 34rem); }
 .item-primary-action .button-secondary-label { max-width: 36ch; white-space: normal; }
 .app-shell:has(.item-detail-page) > .navigation-hint { position: static; grid-column: 2; grid-row: 2; justify-self: end; margin: 0 var(--space-4) var(--space-3); }
 .app-shell:has(.item-detail-page) > .page-backdrop { display: none; }

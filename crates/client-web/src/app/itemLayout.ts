@@ -22,6 +22,23 @@ export function itemCoverDimensions(availableWidth: number): { width: number; he
   return { width, height: width * 1.5 };
 }
 
+/** Size each horizontal shelf to show only complete cards. */
+function sizeItemRows(rows: HTMLElement[]): boolean {
+  let changed = false;
+  for (const row of rows) {
+    const gap = Number.parseFloat(getComputedStyle(row).columnGap) || 16;
+    let minimumWidth = row.clientWidth < 400 ? 120 : 135;
+    if (['extras', 'episodes'].includes(row.dataset.itemRow ?? '')) minimumWidth = 230;
+    else if (row.dataset.itemRow === 'seasons') minimumWidth = 180;
+    const count = String(completeRowCardCount(row.clientWidth, minimumWidth, gap));
+    if (row.style.getPropertyValue('--item-row-count') !== count) {
+      row.style.setProperty('--item-row-count', count);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /** Measure wrapped descriptions and keep shared artwork dimensions stable as content changes. */
 export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, onRowsSized?: () => void): void {
   const identity = page.querySelector<HTMLElement>('.item-identity');
@@ -62,22 +79,10 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     setSize('--item-artwork-top', viewport.top);
     setSize('--item-artwork-width', scroller.clientWidth);
     if (bar) scroller.style.setProperty('--item-bar-height', `${bar.offsetHeight + 12}px`);
-    let rowsChanged = false;
-    for (const row of rows) {
-      const gap = Number.parseFloat(getComputedStyle(row).columnGap) || 16;
-      let minimumWidth = row.clientWidth < 400 ? 120 : 135;
-      if (['extras', 'episodes'].includes(row.dataset.itemRow ?? '')) minimumWidth = 230;
-      else if (row.dataset.itemRow === 'seasons') minimumWidth = 180;
-      const count = String(completeRowCardCount(row.clientWidth, minimumWidth, gap));
-      if (row.style.getPropertyValue('--item-row-count') !== count) {
-        row.style.setProperty('--item-row-count', count);
-        rowsChanged = true;
-      }
-    }
-    if (rowsChanged) onRowsSized?.();
+    if (sizeItemRows(rows)) onRowsSized?.();
   };
   const schedule = (): void => {
-    if (frame === undefined) frame = requestAnimationFrame(measure);
+    frame ??= requestAnimationFrame(measure);
   };
   const observer = new ResizeObserver(schedule);
   [identity, description, scroller, ...rows, ...(bar ? [bar] : [])].forEach((element) => observer.observe(element));

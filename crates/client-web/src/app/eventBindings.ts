@@ -178,6 +178,20 @@ function setAuthFormBusy(form: HTMLFormElement, busy: boolean): void {
   });
 }
 
+/** Share account field parsing between initial setup and administrator-created users. */
+async function createUserRequest(form: HTMLFormElement, firstUser = false): Promise<CreateUserRequest> {
+  const formData = new FormData(form);
+  return {
+    username: formDataString(formData.get('username')).trim(),
+    password: formDataString(formData.get('password')),
+    pin: formDataString(formData.get('pin')).trim() || undefined,
+    admin: firstUser || formData.get('admin') === 'on',
+    birthday: formDataString(formData.get('birthday')).trim() || undefined,
+    profile_image_upload: await readProfileImageUpload(formData),
+    preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
+  };
+}
+
 
 
 /** Refresh results without rebuilding the filter form or rebinding the entire app. */
@@ -656,16 +670,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
 
     try {
-      const formData = new FormData(form);
-      const request: CreateUserRequest = {
-        username: formDataString(formData.get('username')).trim(),
-        password: formDataString(formData.get('password')),
-        pin: formDataString(formData.get('pin')).trim() || undefined,
-        admin: true,
-        birthday: formDataString(formData.get('birthday')).trim() || undefined,
-        profile_image_upload: await readProfileImageUpload(formData),
-        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-      };
+      const request = await createUserRequest(form, true);
       setAuthFormBusy(form, true);
       await createUser(request);
       const token = await loginUser({ username: request.username, password: request.password });
@@ -1164,7 +1169,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
         render();
       }
     };
-    if (button.hasAttribute('data-resume-hold')) bindResumeHold(button, openResumeOptions, signal);
+    if (button.dataset.resumeHold !== undefined) bindResumeHold(button, openResumeOptions, signal);
     button.addEventListener('click', () => { void playFrom(Number(button.dataset.playSelectedItemStartMs)); });
   });
 
@@ -1184,7 +1189,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
         render();
       }
     };
-    if (button.hasAttribute('data-resume-hold')) bindResumeHold(button, openResumeOptions, signal);
+    if (button.dataset.resumeHold !== undefined) bindResumeHold(button, openResumeOptions, signal);
     button.addEventListener('click', () => { void playFrom(Number(button.dataset.playbackTargetStartMs)); });
   });
 
@@ -1440,16 +1445,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
 
     try {
-      const formData = new FormData(form);
-      const request: CreateUserRequest = {
-        username: formDataString(formData.get('username')).trim(),
-        password: formDataString(formData.get('password')),
-        pin: formDataString(formData.get('pin')).trim() || undefined,
-        admin: formData.get('admin') === 'on',
-        birthday: formDataString(formData.get('birthday')).trim() || undefined,
-        profile_image_upload: await readProfileImageUpload(formData),
-        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-      };
+      const request = await createUserRequest(form);
       await createUser(request);
       form.reset();
       state.users = await getUsers();

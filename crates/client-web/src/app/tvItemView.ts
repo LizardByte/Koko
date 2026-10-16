@@ -26,7 +26,7 @@ export function itemArtwork(item: MediaItemDetail): { poster?: string; logo?: st
   const metadataBackdrop = state.selectedItemMetadata?.item_id === item.id
     && state.selectedItemMetadata.matches.some((match) => match.backdrop_url || match.cached_backdrop_path);
   let backdropItem: MediaItemSummary | undefined = item.backdrop_url || metadataBackdrop ? item : undefined;
-  if (!backdropItem) backdropItem = [...item.hierarchy].reverse().find((ancestor) => ancestor.backdrop_url);
+  backdropItem ??= [...item.hierarchy].reverse().find((ancestor) => ancestor.backdrop_url);
   return { poster, logo, backdrop: backdropItem ? getArtworkUrl(backdropItem.id, 'backdrop', backdropItem.artwork_updated_at) : undefined };
 }
 
@@ -64,7 +64,8 @@ export function renderEpisodeNavigation(item: MediaItemDetail): string {
   return [{ episode: episodes[index - 1], label: 'Previous episode', icon: 'chevron-left' as const }, { episode: episodes[index + 1], label: 'Next episode', icon: 'chevron-right' as const }]
     .map(({ episode, label, icon }) => {
       if (!episode) return '';
-      return `<button type="button" class="secondary-button episode-navigation-button" data-item-id="${episode.id}" title="${escapeHtml(`${label}: ${episodeCode(episode)} · ${episode.display_title}`)}">${renderButtonContent(label, icon)}</button>`;
+      const title = `${label}: ${episodeCode(episode)} · ${episode.display_title}`;
+      return `<button type="button" class="secondary-button episode-navigation-button" data-item-id="${episode.id}" title="${escapeHtml(title)}">${renderButtonContent(label, icon)}</button>`;
     }).join('');
 }
 
@@ -77,17 +78,28 @@ export function tvRestartTargets(item: MediaItemDetail): MediaPlaybackTarget[] {
   const targets: MediaPlaybackTarget[] = [];
   for (const container of [season, show]) {
     if (!container) continue;
-    const supplied = container.id === item.id ? item.restart_playback_target : undefined;
-    // A partial catalog cannot identify an ancestor's first episode reliably.
-    if (!supplied && (state.libraryItemsLoading || !state.libraryItems.some((entry) => entry.id === container.id))) continue;
-    const seasonIds = new Set(catalog.filter((entry) => entry.item_type === 'season' && entry.parent_id === container.id).map((entry) => entry.id));
-    if (season && container.item_type === 'show') seasonIds.add(season.id);
-    const first = catalog.filter((entry) => entry.item_type === 'episode' && entry.playable && !entry.missing_since
-      && entry.library_id === item.library_id && (container.item_type === 'season' ? entry.parent_id === container.id : seasonIds.has(entry.parent_id!))).sort(episodeOrder)[0];
-    const target = supplied ?? (first ? { item_id: first.id, start_ms: 0, display_title: first.display_title, season_number: first.season_number, episode_number: first.episode_number, resume: false, label: '' } : undefined);
-    if (target) targets.push({ ...target, start_ms: 0, label: container.item_type === 'show' ? 'Restart show' : 'Restart season' });
+    const target = restartTargetForContainer(container, item, catalog, season);
+    if (target) targets.push(target);
   }
   return targets;
+}
+
+function restartTargetForContainer(container: MediaItemSummary, item: MediaItemDetail, catalog: MediaItemSummary[], season?: MediaItemSummary): MediaPlaybackTarget | undefined {
+  const supplied = container.id === item.id ? item.restart_playback_target : undefined;
+  // A partial catalog cannot identify an ancestor's first episode reliably.
+  if (!supplied && (state.libraryItemsLoading || !state.libraryItems.some((entry) => entry.id === container.id))) return undefined;
+  const first = firstRestartEpisode(container, item.library_id, catalog, season);
+  const target = supplied ?? (first ? { item_id: first.id, start_ms: 0, display_title: first.display_title, season_number: first.season_number, episode_number: first.episode_number, resume: false, label: '' } : undefined);
+  if (!target) return undefined;
+  return { ...target, start_ms: 0, label: container.item_type === 'show' ? 'Restart show' : 'Restart season' };
+}
+
+/** Find an available episode within the requested season or series. */
+function firstRestartEpisode(container: MediaItemSummary, libraryId: number, catalog: MediaItemSummary[], season?: MediaItemSummary): MediaItemSummary | undefined {
+  const seasonIds = new Set(catalog.filter((entry) => entry.item_type === 'season' && entry.parent_id === container.id).map((entry) => entry.id));
+  if (season && container.item_type === 'show') seasonIds.add(season.id);
+  return catalog.filter((entry) => entry.item_type === 'episode' && entry.playable && !entry.missing_since
+    && entry.library_id === libraryId && (container.item_type === 'season' ? entry.parent_id === container.id : seasonIds.has(entry.parent_id!))).sort(episodeOrder)[0];
 }
 
 export function tvPlaybackLabel(item: MediaItemDetail, target: MediaPlaybackTarget): string {
@@ -103,7 +115,8 @@ export function renderSeasonTabs(item: MediaItemDetail): string {
   const seasons = state.libraryItems.filter((entry) => entry.item_type === 'season' && entry.parent_id === item.parent_id && entry.library_id === item.library_id);
   if (!seasons.some((season) => season.id === item.id)) seasons.push(item);
   seasons.sort((left, right) => (left.season_number ?? 0) - (right.season_number ?? 0) || left.id - right.id);
-  return `<nav class="season-tabs" aria-label="Seasons" data-nav-section="season-tabs" data-nav-label="Seasons">${seasons.map((season) => `<button type="button" class="season-tab secondary-button ${season.id === item.id ? 'active' : ''}" data-item-id="${season.id}" ${season.id === item.id ? 'aria-current="page"' : ''}>${escapeHtml(season.display_title)}</button>`).join('')}</nav>`;
+  const tabs = seasons.map((season) => `<button type="button" class="season-tab secondary-button ${season.id === item.id ? 'active' : ''}" data-item-id="${season.id}" ${season.id === item.id ? 'aria-current="page"' : ''}>${escapeHtml(season.display_title)}</button>`).join('');
+  return `<nav class="season-tabs" aria-label="Seasons" data-nav-section="season-tabs" data-nav-label="Seasons">${tabs}</nav>`;
 }
 
 export function renderTvEpisodeCard(episode: MediaItemSummary): string {

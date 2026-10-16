@@ -1,5 +1,5 @@
 /** Renders home, browse, shelf, and media-card markup. */
-import type { MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
+import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
@@ -460,14 +460,24 @@ export function renderHomeFeature(): string {
   }
 
   if (preview.kind === 'collection') {
-    const collection = preview.collection;
-    const backdropUrl = pageBackdropUrlForCollection(collection);
-    return `
-      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+    return renderCollectionFeature(preview.collection);
+  }
+  return renderItemFeature(preview.item);
+}
+
+function featureArtworkStyle(backdropUrl?: string): string {
+  return backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : '';
+}
+
+function renderCollectionFeature(collection: MediaCollectionSummary): string {
+  const backdropUrl = pageBackdropUrlForCollection(collection);
+  const overview = collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`;
+  return `
+      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
         <div class="home-feature-copy">
           <p class="eyebrow">Collection</p>
           <h2>${escapeHtml(collection.name)}</h2>
-          <p>${escapeHtml(collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`)}</p>
+          <p>${escapeHtml(overview)}</p>
           <div class="hero-meta-row">
             <span class="tag">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
           </div>
@@ -477,21 +487,22 @@ export function renderHomeFeature(): string {
         </button>
       </section>
     `;
-  }
+}
 
-  const item = preview.item;
+function renderItemFeature(item: MediaItemSummary): string {
   const backdropUrl = pageBackdropUrlForItem(item);
   const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
+  const overview = item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`;
 
   return `
-    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
       <div class="home-feature-copy">
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
           : `<h2>${escapeHtml(item.display_title)}</h2>`}
-        <p>${escapeHtml(item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`)}</p>
+        <p>${escapeHtml(overview)}</p>
         <div class="hero-meta-row">
           ${genreMarkup}
           <span class="tag">${escapeHtml(formatChildCount(item))}</span>
@@ -779,7 +790,8 @@ export function renderLibraryOverview(): string {
 }
 
 function browseSelect(name: string, label: string, value: string, options: Array<[string, string]>): string {
-  return `<label>${label}<select name="${name}">${options.map(([key, text]) => `<option value="${escapeHtml(key)}" ${key === value ? 'selected' : ''}>${escapeHtml(text)}</option>`).join('')}</select></label>`;
+  const optionMarkup = options.map(([key, text]) => `<option value="${escapeHtml(key)}" ${key === value ? 'selected' : ''}>${escapeHtml(text)}</option>`).join('');
+  return `<label>${label}<select name="${name}">${optionMarkup}</select></label>`;
 }
 
 export function renderLibraryToolbar(): string {
@@ -804,39 +816,53 @@ export function visibleLibraryItems(): MediaItemSummary[] {
   return browseItems(filteredTopLevelLibraryItems(), state.browsePreferences);
 }
 
+function renderEmptyLibrary(library?: MediaLibrary): string {
+  if (filteredTopLevelLibraryItems().length) {
+    return '<div class="empty-state">No titles match these filters. Try another selection or reset the filters.</div>';
+  }
+  if (state.browseFilter) {
+    return `<div class="empty-state">No items matched the current ${escapeHtml(state.browseFilter.kind)} filter.</div>`;
+  }
+  if (library?.status === 'never_scanned') {
+    return '<div class="empty-state">This library has not been scanned yet. Titles will appear after its first scan.</div>';
+  }
+  if (library?.status && library.status !== 'available') {
+    return `<div class="empty-state">This library is not ready yet: ${escapeHtml(libraryStatusLabel(library.status))}.</div>`;
+  }
+  return '<div class="empty-state">No titles are available in this library yet.</div>';
+}
+
+function renderLibraryPagination(count: number, page: number, lastPage: number): string {
+  if (lastPage <= 0) return '';
+  const start = page * LIBRARY_PAGE_SIZE;
+  return `<nav class="browse-pagination" aria-label="Library pages">
+    <button type="button" class="secondary-button" data-library-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>${renderButtonContent('Previous', 'chevron-left')}</button>
+    <span>${start + 1}–${Math.min(count, start + LIBRARY_PAGE_SIZE)} of ${count} titles · Page ${page + 1} of ${lastPage + 1}</span>
+    <button type="button" class="secondary-button" data-library-page="${page + 1}" ${page === lastPage ? 'disabled' : ''}>${renderButtonContent('Next', 'chevron-right')}</button>
+  </nav>`;
+}
+
 export function renderLibraryTab(): string {
   const items = visibleLibraryItems();
   const library = activeLibrary();
   const isSpecificLibrary = state.route.page === 'home' && typeof state.route.libraryId === 'number';
   const browseFilterKind = state.browseFilter ? browseFilterKindLabel(state.browseFilter.kind) : '';
   const filterCount = activeBrowseFilterCount(state.browsePreferences);
-  const filterStatus = filterCount ? `${filterCount} active filter${filterCount === 1 ? '' : 's'}` : 'No filters applied';
+  const filterSuffix = filterCount === 1 ? '' : 's';
+  const filterStatus = filterCount ? `${filterCount} active filter${filterSuffix}` : 'No filters applied';
+  const filterLabel = filterCount ? `Filters · ${filterCount} active` : 'Filters';
 
   let content = '';
   if (state.libraryItemsLoading && !state.libraryItems.length) {
     content = renderLoadingCards('Loading library items');
   } else if (!items.length) {
-    if (filteredTopLevelLibraryItems().length) {
-      content = '<div class="empty-state">No titles match these filters. Try another selection or reset the filters.</div>';
-    } else if (state.browseFilter) {
-      content = `<div class="empty-state">No items matched the current ${escapeHtml(state.browseFilter.kind)} filter.</div>`;
-    } else if (library?.status === 'never_scanned') {
-      content = '<div class="empty-state">This library has not been scanned yet. Titles will appear after its first scan.</div>';
-    } else if (library?.status && library.status !== 'available') {
-      content = `<div class="empty-state">This library is not ready yet: ${escapeHtml(libraryStatusLabel(library.status))}.</div>`;
-    } else {
-      content = '<div class="empty-state">No titles are available in this library yet.</div>';
-    }
+    content = renderEmptyLibrary(library);
   } else {
     const lastPage = Math.max(0, Math.ceil(items.length / LIBRARY_PAGE_SIZE) - 1);
     const page = Math.min(lastPage, state.libraryPage);
     const start = page * LIBRARY_PAGE_SIZE;
     content = `<div class="item-grid library-item-grid density-${state.browsePreferences.density}">${items.slice(start, start + LIBRARY_PAGE_SIZE).map(renderItemCard).join('')}</div>
-      ${lastPage > 0 ? `<nav class="browse-pagination" aria-label="Library pages">
-        <button type="button" class="secondary-button" data-library-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>${renderButtonContent('Previous', 'chevron-left')}</button>
-        <span>${start + 1}–${Math.min(items.length, start + LIBRARY_PAGE_SIZE)} of ${items.length} titles · Page ${page + 1} of ${lastPage + 1}</span>
-        <button type="button" class="secondary-button" data-library-page="${page + 1}" ${page === lastPage ? 'disabled' : ''}>${renderButtonContent('Next', 'chevron-right')}</button>
-      </nav>` : ''}`;
+      ${renderLibraryPagination(items.length, page, lastPage)}`;
   }
 
   return `
@@ -845,7 +871,7 @@ export function renderLibraryTab(): string {
         <h3>${isSpecificLibrary ? escapeHtml(library?.name ?? 'Library') : 'All libraries'}</h3>
         <div class="browse-header-actions">
           <span role="status">${items.length} title${items.length === 1 ? '' : 's'}</span>
-          <button type="button" class="secondary-button browse-filter-toggle ${filterCount ? 'has-filters' : ''}" id="toggle-library-filters" aria-expanded="${state.browseFiltersOpen}" aria-controls="library-browse-form" aria-label="Filters: ${filterStatus}" title="${filterStatus}">${renderButtonContent(filterCount ? `Filters · ${filterCount} active` : 'Filters', 'sliders-horizontal')}</button>
+          <button type="button" class="secondary-button browse-filter-toggle ${filterCount ? 'has-filters' : ''}" id="toggle-library-filters" aria-expanded="${state.browseFiltersOpen}" aria-controls="library-browse-form" aria-label="Filters: ${filterStatus}" title="${filterStatus}">${renderButtonContent(filterLabel, 'sliders-horizontal')}</button>
         </div>
       </div>
       ${renderLibraryToolbar()}

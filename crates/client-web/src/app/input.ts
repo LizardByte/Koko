@@ -1,5 +1,5 @@
 import type { AppState } from './types';
-import { createGamepadNavigationReader } from './gamepadNavigation';
+import { createGamepadNavigationReader, type GamepadNavigationAction } from './gamepadNavigation';
 import { findSpatialTarget, type NavigationDirection } from './spatialNavigation';
 
 const SECTION_SELECTOR = '[data-nav-section]';
@@ -65,6 +65,12 @@ function revealItemControl(control: HTMLElement, section: HTMLElement | null, re
     if (rect.top < top) scroller.scrollTop += rect.top - top;
     else if (rect.bottom > bounds.bottom) scroller.scrollTop += rect.bottom - bounds.bottom;
   }
+  revealMenuControl(control);
+  revealShelfControl(control);
+  return true;
+}
+
+function revealMenuControl(control: HTMLElement): void {
   const menu = control.closest<HTMLElement>('.item-more-menu');
   if (menu) {
     const menuBounds = menu.getBoundingClientRect();
@@ -72,6 +78,9 @@ function revealItemControl(control: HTMLElement, section: HTMLElement | null, re
     if (rect.top < menuBounds.top) menu.scrollTop += rect.top - menuBounds.top;
     else if (rect.bottom > menuBounds.bottom) menu.scrollTop += rect.bottom - menuBounds.bottom;
   }
+}
+
+function revealShelfControl(control: HTMLElement): void {
   const row = control.closest<HTMLElement>('[data-shelf-row]');
   if (row) {
     const bounds = row.getBoundingClientRect();
@@ -79,7 +88,6 @@ function revealItemControl(control: HTMLElement, section: HTMLElement | null, re
     if (rect.left < bounds.left) row.scrollLeft += rect.left - bounds.left;
     else if (rect.right > bounds.right) row.scrollLeft += rect.right - bounds.right;
   }
-  return true;
 }
 
 /** Dismiss secondary actions before Escape or the controller's Back can leave the page. */
@@ -191,18 +199,22 @@ function moveSection(direction: 1 | -1): void {
   focusControl(entryControl(sections[next]), true);
 }
 
+/** Left and right adjust a select without leaving its section. */
+function adjustFocusedSelect(active: HTMLElement | null, direction: NavigationDirection): boolean {
+  if (active?.tagName !== 'SELECT' || (direction !== 'left' && direction !== 'right')) return false;
+  const select = active as HTMLSelectElement;
+  const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + (direction === 'right' ? 1 : -1)));
+  if (nextIndex !== select.selectedIndex) {
+    select.selectedIndex = nextIndex;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return true;
+}
+
 function moveFocus(direction: NavigationDirection): void {
   const sections = navigationSections();
   const active = document.activeElement as HTMLElement | null;
-  if (active?.tagName === 'SELECT' && (direction === 'left' || direction === 'right')) {
-    const select = active as HTMLSelectElement;
-    const nextIndex = Math.max(0, Math.min(select.options.length - 1, select.selectedIndex + (direction === 'right' ? 1 : -1)));
-    if (nextIndex !== select.selectedIndex) {
-      select.selectedIndex = nextIndex;
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    return;
-  }
+  if (adjustFocusedSelect(active, direction)) return;
   if (direction === 'left' && active?.matches('#search-input') && returnToBrowseTabs()) return;
   const section = active?.closest<HTMLElement>(SECTION_SELECTOR);
   if (!section || !active || !isVisible(active)) {
@@ -310,9 +322,7 @@ export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 
     resumeHold?.control.dispatchEvent(new Event('resume-hold-cancel'));
     resumeHold = undefined;
   };
-  const poll = (now: number) => {
-    const gamepads = navigator.getGamepads?.() ?? [];
-    const actions = readActions(gamepads, now, suspended());
+  const updateResumeHold = (gamepads: readonly (Gamepad | null)[], actions: GamepadNavigationAction[]): void => {
     if (resumeHold) {
       const gamepad = Array.from(gamepads).find((pad) => pad?.index === resumeHold!.gamepadIndex);
       if (suspended() || !resumeHold.control.isConnected || document.activeElement !== resumeHold.control || !gamepad?.connected || actions.some((action) => action !== 'activate')) {
@@ -323,24 +333,34 @@ export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 
         control.dispatchEvent(new Event('resume-hold-end'));
       }
     }
+  };
+  const activateGamepadControl = (gamepads: readonly (Gamepad | null)[]): void => {
+    const focused = document.activeElement as HTMLElement | null;
+    const gamepad = Array.from(gamepads).find((pad) => pad?.connected && pad.buttons[0]?.pressed);
+    if (!focused?.matches('[data-resume-hold]') || !gamepad) {
+      activateFocusedElement();
+      return;
+    }
+    if (!resumeHold) {
+      resumeHold = { control: focused, gamepadIndex: gamepad.index };
+      focused.dispatchEvent(new Event('resume-hold-start'));
+    }
+  };
+  const dispatchGamepadAction = (action: GamepadNavigationAction, gamepads: readonly (Gamepad | null)[]): void => {
+    if (action === 'previous-section' || action === 'next-section') moveSection(action === 'next-section' ? 1 : -1);
+    else if (action === 'activate') activateGamepadControl(gamepads);
+    else if (action === 'back') {
+      if (!closeResumeOptions() && !closeItemActions() && !returnToBrowseTabs()) globalThis.history.back();
+    } else moveFocus(action);
+  };
+  const poll = (now: number) => {
+    const gamepads = navigator.getGamepads?.() ?? [];
+    const actions = readActions(gamepads, now, suspended());
+    updateResumeHold(gamepads, actions);
     if (actions.length) setInputMode('gamepad');
     for (const action of actions) {
       if (suspended()) break;
-      if (action === 'previous-section' || action === 'next-section') moveSection(action === 'next-section' ? 1 : -1);
-      else if (action === 'activate') {
-        const focused = document.activeElement as HTMLElement | null;
-        const gamepad = Array.from(gamepads).find((pad) => pad?.connected && pad.buttons[0]?.pressed);
-        if (focused?.matches('[data-resume-hold]') && gamepad) {
-          if (!resumeHold) {
-            resumeHold = { control: focused, gamepadIndex: gamepad.index };
-            focused.dispatchEvent(new Event('resume-hold-start'));
-          }
-        } else activateFocusedElement();
-      }
-      else if (action === 'back') {
-        if (!closeResumeOptions() && !closeItemActions() && !returnToBrowseTabs()) globalThis.history.back();
-      }
-      else moveFocus(action);
+      dispatchGamepadAction(action, gamepads);
     }
     globalThis.requestAnimationFrame(poll);
   };

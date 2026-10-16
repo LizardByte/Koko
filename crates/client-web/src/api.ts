@@ -924,7 +924,7 @@ function getMockDeleteResponse<T>(method: string, url: URL): T {
 }
 
 function getMockJsonResponse<T>(method: string, path: string, body?: unknown): T {
-  const url = new URL(path, 'http://koko.local');
+  const url = new URL(path, 'https://koko.local');
 
   switch (method) {
     case 'GET':

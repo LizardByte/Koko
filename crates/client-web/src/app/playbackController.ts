@@ -23,7 +23,7 @@ type RenderCallback = (preserveScroll?: boolean) => void;
 type RefreshDataCallback = (showLoading?: boolean) => Promise<void>;
 
 let renderApp: RenderCallback = () => undefined;
-let refreshAppData: RefreshDataCallback = async () => undefined;
+let refreshAppData: RefreshDataCallback = () => Promise.resolve();
 
 /** Connects playback side effects back to the application coordinator. */
 export function configurePlaybackController(callbacks: { render: RenderCallback; refreshData: RefreshDataCallback }): void {

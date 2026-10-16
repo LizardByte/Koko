@@ -66,7 +66,18 @@ static TVDB_AUTH_TOKEN: once_cell::sync::Lazy<tokio::sync::Mutex<Option<TvdbCach
 #[derive(Debug, Clone)]
 struct TvdbCachedToken {
     token: String,
+    credential_fingerprint: Vec<u8>,
     expires_at: Instant,
+}
+
+impl TvdbCachedToken {
+    fn matches(
+        &self,
+        fingerprint: &[u8],
+        now: Instant,
+    ) -> bool {
+        self.expires_at > now && self.credential_fingerprint == fingerprint
+    }
 }
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
@@ -415,14 +426,6 @@ async fn wait_for_rate_limit() {
 }
 
 async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, String> {
-    let now = Instant::now();
-    {
-        let cache = TVDB_AUTH_TOKEN.lock().await;
-        if let Some(cached) = cache.as_ref().filter(|cached| cached.expires_at > now) {
-            return Ok(cached.token.clone());
-        }
-    }
-
     let api_key = provider
         .api_key
         .clone()
@@ -431,6 +434,17 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
         .to_string();
     if api_key.is_empty() {
         return Err("TheTVDB is enabled but no API key is configured.".into());
+    }
+    use sha2::Digest;
+    let credential_fingerprint = sha2::Sha256::digest(api_key.as_bytes()).to_vec();
+    {
+        let cache = TVDB_AUTH_TOKEN.lock().await;
+        if let Some(cached) = cache
+            .as_ref()
+            .filter(|cached| cached.matches(&credential_fingerprint, Instant::now()))
+        {
+            return Ok(cached.token.clone());
+        }
     }
 
     wait_for_rate_limit().await;
@@ -458,6 +472,7 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
 
     let cached = TvdbCachedToken {
         token: token.clone(),
+        credential_fingerprint,
         expires_at: Instant::now() + Duration::from_secs(60 * 60 * 24 * 25),
     };
     let mut cache = TVDB_AUTH_TOKEN.lock().await;
@@ -863,6 +878,21 @@ fn push_language_preference(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_auth_tokens_are_bound_to_the_resolved_api_key() {
+        use sha2::Digest;
+        let first = sha2::Sha256::digest(b"first key").to_vec();
+        let second = sha2::Sha256::digest(b"replacement key").to_vec();
+        let now = std::time::Instant::now();
+        let cached = super::TvdbCachedToken {
+            token: "token".into(),
+            credential_fingerprint: first.clone(),
+            expires_at: now + std::time::Duration::from_secs(10),
+        };
+        assert!(cached.matches(&first, now));
+        assert!(!cached.matches(&second, now));
+        assert!(!cached.matches(&first, now + std::time::Duration::from_secs(11)));
+    }
     #[test]
     fn popularity_is_never_persisted_as_a_user_rating() {
         let response: super::Response<tvdb4::models::MovieExtendedRecord> =

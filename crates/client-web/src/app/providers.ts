@@ -15,7 +15,8 @@ export function providerStatus(providerId: string): MetadataProviderStatus | und
 }
 
 export function providerDisplayName(providerId: string): string {
-  return providerStatus(providerId)?.display_name ?? providerId;
+  return state.selectedItemMetadata?.providers.find((provider) => provider.id === providerId)?.display_name
+    ?? providerStatus(providerId)?.display_name ?? providerId;
 }
 
 export function libraryProviderOptions(libraryKind?: string): MetadataProviderStatus[] {

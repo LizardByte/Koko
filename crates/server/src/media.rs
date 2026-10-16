@@ -101,6 +101,8 @@ struct SecondaryMetadataReferenceCandidate {
 #[derive(Debug, Clone)]
 struct SummaryMetadataLink {
     media_item_id: i32,
+    provider_id: String,
+    rating: Option<f32>,
     title: Option<String>,
     overview: Option<String>,
     genres_json: Option<String>,
@@ -252,7 +254,7 @@ pub struct PersistedMediaFileSummary {
 }
 
 /// Summary of a browser-visible media item.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemSummary {
     /// Stable database identifier for the item.
     pub id: i32,
@@ -294,6 +296,10 @@ pub struct MediaItemSummary {
     pub release_year: Option<i32>,
     /// Description or overview from linked metadata, when available.
     pub overview: Option<String>,
+    /// Community rating supplied by the item's own preferred metadata provider.
+    pub rating: Option<f32>,
+    /// Provider that supplied the community rating.
+    pub rating_provider_id: Option<String>,
     /// Local or managed backdrop artwork URL, when available.
     pub backdrop_url: Option<String>,
     /// Local or managed title logo URL, when available.
@@ -408,6 +414,10 @@ pub struct MediaItemDetail {
     pub logo_url: Option<String>,
     /// Provider-supplied user/community rating, when available.
     pub rating: Option<f32>,
+    /// Provider that supplied the displayed community rating.
+    pub rating_provider_id: Option<String>,
+    /// Item type that owns the rating, including inherited show or season ratings.
+    pub rating_source_item_type: Option<String>,
     /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
     pub content_rating: Option<String>,
     /// Linked metadata media type such as movie or tv.
@@ -482,7 +492,7 @@ pub struct ShowMetadataDescendantPlan {
 }
 
 /// Local rows created or found for provider-known show descendants.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ShowMetadataDescendantItems {
     /// Season item rows keyed by season number.
     pub seasons_by_number: HashMap<i32, MediaItemSummary>,
@@ -562,7 +572,7 @@ pub struct MediaSubtitleTrack {
 }
 
 /// One media shelf on the browser home screen.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaShelf {
     /// Stable shelf identifier.
     pub id: String,
@@ -573,7 +583,7 @@ pub struct MediaShelf {
 }
 
 /// Browser-facing home response.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaHome {
     /// Library filter currently applied.
     pub library_id: Option<i32>,
@@ -2912,6 +2922,10 @@ pub fn get_media_item_with_preferred_languages(
             detail.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item_id));
         }
         detail.rating = presentation.rating;
+        if let Some(link) = metadata_links.iter().find(|link| link.rating.is_some()) {
+            detail.rating_provider_id = Some(link.provider_id.clone());
+            detail.rating_source_item_type = Some(detail.item_type.clone());
+        }
         detail.content_rating = presentation.content_rating;
         detail.linked_media_type = presentation.media_type;
         detail.has_metadata = true;
@@ -2961,6 +2975,18 @@ pub fn get_media_item_with_preferred_languages(
                 url: format!("/api/v1/items/{}/subtitles/{}", item_id, index),
             })
             .collect();
+    }
+    if detail.rating.is_none() && matches!(detail.item_type.as_str(), "season" | "episode") {
+        if let Some(ancestor) = detail
+            .hierarchy
+            .iter()
+            .rev()
+            .find(|ancestor| ancestor.rating.is_some())
+        {
+            detail.rating = ancestor.rating;
+            detail.rating_provider_id = ancestor.rating_provider_id.clone();
+            detail.rating_source_item_type = Some(ancestor.item_type.clone());
+        }
     }
     if detail.theme_song_url.is_none() {
         detail.theme_song_url =
@@ -5245,6 +5271,8 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         genres: Vec::new(),
         release_year: None,
         overview: None,
+        rating: None,
+        rating_provider_id: None,
         backdrop_url: None,
         logo_url: None,
         has_metadata: false,
@@ -5404,6 +5432,8 @@ fn media_item_summary_with_preferred_languages(
 fn summary_metadata_link_from_full_link(link: &ItemMetadataLink) -> SummaryMetadataLink {
     SummaryMetadataLink {
         media_item_id: link.media_item_id,
+        provider_id: link.provider_id.clone(),
+        rating: link.rating,
         title: link.title.clone(),
         overview: link.overview.clone(),
         genres_json: link.genres_json.clone(),
@@ -5441,6 +5471,8 @@ fn apply_primary_metadata_link(
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default();
     summary.overview = link.overview.clone();
+    summary.rating = link.rating;
+    summary.rating_provider_id = link.rating.map(|_| link.provider_id.clone());
     summary.release_year = link.release_year;
     if link.cached_backdrop_path.is_some() || link.backdrop_url.is_some() {
         summary.backdrop_url = Some(format!(
@@ -5490,6 +5522,8 @@ fn preferred_metadata_links_by_item_id(
             item_metadata_links_dsl::refresh_error,
             item_metadata_links_dsl::updated_at,
             item_metadata_links_dsl::locale_key,
+            item_metadata_links_dsl::provider_id,
+            item_metadata_links_dsl::rating,
         ))
         .load::<(
             i32,
@@ -5505,6 +5539,8 @@ fn preferred_metadata_links_by_item_id(
             Option<String>,
             Option<i64>,
             String,
+            String,
+            Option<f32>,
         )>(conn)?
         .into_iter()
         .map(
@@ -5522,8 +5558,12 @@ fn preferred_metadata_links_by_item_id(
                 refresh_error,
                 updated_at,
                 locale_key,
+                provider_id,
+                rating,
             )| SummaryMetadataLink {
                 media_item_id,
+                provider_id,
+                rating,
                 title,
                 overview,
                 genres_json,
@@ -5890,6 +5930,8 @@ fn to_media_item_detail(
         release_year: None,
         logo_url: None,
         rating: None,
+        rating_provider_id: None,
+        rating_source_item_type: None,
         content_rating: None,
         linked_media_type: None,
         has_metadata: false,
@@ -6309,6 +6351,8 @@ mod tests {
             genres: Vec::new(),
             release_year: None,
             overview: None,
+            rating: None,
+            rating_provider_id: None,
             backdrop_url: None,
             logo_url: None,
             has_metadata: false,
@@ -6331,6 +6375,8 @@ mod tests {
         assert_eq!(item.release_year, None);
         let link = SummaryMetadataLink {
             media_item_id: 1,
+            provider_id: "tmdb".into(),
+            rating: Some(8.2),
             title: None,
             overview: None,
             genres_json: None,
@@ -6346,6 +6392,8 @@ mod tests {
         };
         apply_primary_metadata_link(&mut item, Some(&link));
         assert_eq!(item.release_year, Some(1999));
+        assert_eq!(item.rating, Some(8.2));
+        assert_eq!(item.rating_provider_id.as_deref(), Some("tmdb"));
         assert_eq!(serde_json::to_value(&item).unwrap()["release_year"], 1999);
     }
 

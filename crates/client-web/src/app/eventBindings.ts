@@ -594,7 +594,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   bindApiKeyPickers();
   const closeMoreActions = bindItemDetailLayout(signal);
   const openResumeOptions = bindResumeOptions(signal);
-  document.querySelectorAll<HTMLImageElement>('[data-item-cover-image]').forEach((image) => {
+  document.querySelectorAll<HTMLImageElement>('[data-item-cover-image], [data-episode-still]').forEach((image) => {
     const showFallback = () => {
       image.hidden = true;
       image.parentElement?.classList.remove('has-image');

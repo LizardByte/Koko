@@ -178,6 +178,7 @@ export type AppIconName =
   | 'chevron-left'
   | 'chevron-right'
   | 'chevron-up'
+  | 'check'
   | 'circle-check'
   | 'clapperboard'
   | 'database-zap'

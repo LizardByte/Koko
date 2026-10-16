@@ -346,37 +346,21 @@ export function missingItemDetailBadgeMarkup(item: MediaItemSummary): string {
 }
 
 export function playbackStatusBadgeMarkup(item: MediaItemSummary): string {
-  const badges: string[] = [renderWatchProgress(item)];
-  const watchCount = item.watch_count ?? 0;
-  if (watchCount > 0) {
-    const countLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount} times`;
-    badges.push(`
-      <span class="media-card-status is-watched icon-only" title="${escapeHtml(countLabel)}" aria-label="${escapeHtml(countLabel)}">
-        ${renderIcon('circle-check', 'status-icon')}
-      </span>
-    `);
-  }
-
-  return badges.join('');
+  return renderWatchProgress(item);
 }
 
+/** One artwork indicator: current playback progress, otherwise a completed watch. */
 export function renderWatchProgress(item: MediaItemSummary): string {
   const progress = playbackProgressPercent(item);
-  if (progress === undefined) return '';
-  const label = `In progress: ${progress}% watched`;
-  return `<span class="media-card-progress" style="--watch-progress: ${progress}%" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
-}
-
-export function playbackDetailBadgeMarkup(item: MediaItemSummary): string {
-  const watchCount = item.watch_count ?? 0;
-  const badges: string[] = [];
-  if (watchCount > 0) {
-    const watchedLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount}x`;
-    const watchedTitle = item.last_watched_at ? `Last watched ${formatTimestamp(item.last_watched_at)}` : watchedLabel;
-    badges.push(`<span class="tag success status-tag" title="${escapeHtml(watchedTitle)}">${renderIcon('circle-check', 'status-icon')}<span>${escapeHtml(watchedLabel)}</span></span>`);
+  if (progress !== undefined) {
+    const label = `In progress: ${progress}% watched`;
+    return `<span class="media-card-progress" style="--watch-progress: ${progress}%" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
   }
-
-  return badges.join('');
+  const watchCount = item.watch_count ?? 0;
+  if (!item.playback_completed && watchCount <= 0) return '';
+  const label = watchCount > 1 ? `Watched ${watchCount} times` : 'Watched';
+  const title = item.last_watched_at ? `${label} · Last watched ${formatTimestamp(item.last_watched_at)}` : label;
+  return `<span class="media-card-progress is-watched" style="--watch-progress: 100%" title="${escapeHtml(title)}" aria-label="${escapeHtml(label)}">${renderIcon('check', 'watch-completed-icon')}</span>`;
 }
 
 interface PlaybackTargetButtonOptions {

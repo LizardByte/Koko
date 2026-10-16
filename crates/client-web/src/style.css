@@ -2,6 +2,7 @@
   --surface-base: #0c111d;
   --surface-raised: #222b3d;
   --surface-panel: #121b2b;
+  --media-badge-background: rgba(9, 14, 24, 0.82);
   --text-muted: #afc0db;
   --accent: #76d68a;
   --accent-soft: #b7efc6;
@@ -1066,7 +1067,8 @@ legend {
 .media-card-duration {
   padding: 0.35rem 0.55rem;
   border-radius: 999px;
-  background: rgba(10, 14, 24, 0.36);
+  background: var(--media-badge-background);
+  color: #f4f7fb;
   font-size: 0.76rem;
   white-space: nowrap;
 }
@@ -1106,7 +1108,7 @@ legend {
 
 .media-card-status.is-unmatched {
   padding: 0.24rem 0.34rem;
-  background: rgba(10, 14, 24, 0.52);
+  background: var(--media-badge-background);
   color: #ffe5b5;
 }
 
@@ -1123,7 +1125,7 @@ legend {
 
 .media-card-dynamic-badges .media-card-status.is-loading {
   justify-content: center;
-  background: rgba(10, 14, 24, 0.52);
+  background: var(--media-badge-background);
 }
 
 .media-card-status.is-missing {
@@ -1132,19 +1134,9 @@ legend {
   padding: 0.24rem 0.42rem;
   justify-content: center;
   gap: 0.28rem;
-  background: rgba(10, 14, 24, 0.52);
+  background: var(--media-badge-background);
   color: #ffd78a;
   white-space: nowrap;
-}
-
-.media-card-status.is-watched {
-  background: rgba(10, 14, 24, 0.58);
-  color: var(--accent-soft);
-}
-
-.media-card-status.is-watched .status-icon svg {
-  width: 1.12rem;
-  height: 1.12rem;
 }
 
 .media-card-progress {
@@ -1164,8 +1156,11 @@ legend {
   position: absolute;
   inset: 0.25rem;
   border-radius: inherit;
-  background: rgba(10, 14, 24, 0.82);
+  background: var(--media-badge-background);
 }
+
+.watch-completed-icon { position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; width: 60%; height: 60%; color: var(--accent-soft); }
+.watch-completed-icon svg { width: 100%; height: 100%; }
 
 .status-icon {
   display: inline-flex;
@@ -1583,13 +1578,15 @@ legend {
 .item-breadcrumbs {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
   padding: 0.85rem 1rem;
 }
 
 .breadcrumb-button {
-  padding: 0;
+  padding: var(--space-2) var(--space-3);
+  min-height: 2.5rem;
+  border-radius: var(--radius-control);
   background: transparent;
   box-shadow: none;
   color: #b7cae6;
@@ -1597,6 +1594,7 @@ legend {
 
 .breadcrumb-button:hover {
   color: #fff;
+  background: var(--surface-raised);
 }
 
 .breadcrumb-separator,
@@ -2044,7 +2042,8 @@ legend {
   padding: 0.35rem 0.55rem;
   border-radius: 999px;
   font-size: 0.76rem;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--media-badge-background);
+  color: #f4f7fb;
 }
 
 .tag.success {
@@ -4218,9 +4217,10 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
   padding: 0 0 var(--space-8);
   align-items: start;
 }
-.item-cover-column { grid-column: 1; grid-row: 1 / 4; min-width: 0; align-self: stretch; position: relative; }
+.item-cover-column { grid-column: 1; grid-row: 1 / 4; min-width: 0; min-height: calc(var(--item-cover-height) + var(--item-cover-top, 0px)); align-self: stretch; position: relative; }
 .item-cover-column .item-poster { position: absolute; top: var(--item-cover-top, 0px); width: 100%; height: var(--item-cover-height); aspect-ratio: auto; margin: 0; }
 .item-cover-column .item-poster img { object-fit: cover; }
+.episode-detail-page .item-cover-column .item-poster img { object-fit: contain; }
 .item-cover-column :is(img, .item-cover-fallback)[hidden] { display: none; }
 .item-cover-column .media-card-progress { position: absolute; bottom: var(--space-4); right: var(--space-4); width: 2.4rem; height: 2.4rem; }
 .item-identity { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; padding-top: 0; }
@@ -4229,10 +4229,10 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .item-identity .hero-tagline { margin: 0; color: #f4f7fb; }
 .item-identity .item-breadcrumbs { background: transparent; border: 0; backdrop-filter: none; padding: 0; font-size: 0.8rem; }
 .item-identity .hero-meta-row { gap: var(--space-2); }
-.watched-fact { display: inline-flex; align-items: center; gap: var(--space-2); }
-.rating-tag, .rating-icon { display: inline-flex; align-items: center; }
-.rating-icon { color: #f2cc76; }
-.rating-icon svg { width: 1rem; height: 1rem; fill: currentColor; }
+.rating-tag { display: inline-flex; align-items: center; gap: var(--space-2); }
+.rating-source-logo { height: 1rem; width: auto; max-width: 3rem; object-fit: contain; }
+.rating-source-name { color: var(--text-muted); font-size: 0.75em; }
+.item-context-title { margin: 0; font-size: clamp(1.2rem, 2vw, 1.8rem); line-height: 1.3; }
 .item-actions-anchor { grid-column: 2; grid-row: 2; height: 1px; width: 1px; pointer-events: none; }
 .item-action-dock {
   grid-column: 2; grid-row: 2;
@@ -4296,8 +4296,22 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .item-row-shell { width: min(100%, 1280px); }
 .item-responsive-row { display: grid; grid-auto-flow: column; grid-template-rows: auto; grid-auto-columns: calc((100% - (var(--item-row-count, 1) - 1) * var(--space-4)) / var(--item-row-count, 1)); gap: var(--space-4); padding: 0; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .item-responsive-row::-webkit-scrollbar { display: none; }
-.item-detail-page .item-responsive-row > :is(.person-card, .media-extra-card) { width: 100%; min-width: 0; scroll-snap-align: start; scroll-margin-inline: 0; }
+.item-detail-page .item-responsive-row > :is(.media-card, .person-card, .media-extra-card) { width: 100%; min-width: 0; scroll-snap-align: start; scroll-margin-inline: 0; }
 .item-row-count { color: var(--text-muted); font-size: 0.85em; font-weight: 500; white-space: nowrap; }
+.tv-item-section { min-width: 0; }
+.tv-item-row { align-items: start; }
+.episode-card .media-extra-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.episode-card .media-extra-thumbnail { position: relative; aspect-ratio: 16 / 9; }
+.episode-thumbnail > [hidden] { display: none; }
+.episode-number-badge { position: absolute; top: var(--space-3); left: var(--space-3); padding: var(--space-1) var(--space-2); border-radius: var(--radius-control); background: var(--media-badge-background); color: #f4f7fb; font-size: 0.75rem; }
+.episode-thumbnail .media-card-progress { position: absolute; right: var(--space-3); bottom: var(--space-3); }
+.episode-card-overview { color: var(--text-muted); font-size: 0.8rem; text-align: left; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.episode-card .media-extra-meta { align-items: center; gap: var(--space-2); }
+.episode-card .rating-tag { padding: 0.2rem 0.4rem; font-size: 0.72rem; }
+.item-action-dock .season-tabs { margin: var(--space-3) 0 0; padding: var(--space-1); max-width: 100%; scrollbar-width: thin; }
+.item-action-dock .season-tab { min-height: 2.6rem; padding: 0.45rem 0.8rem; }
+.item-primary-action > button { max-width: min(100%, 34rem); }
+.item-primary-action .button-secondary-label { max-width: 36ch; white-space: normal; }
 .app-shell:has(.item-detail-page) > .navigation-hint { position: static; grid-column: 2; grid-row: 2; justify-self: end; margin: 0 var(--space-4) var(--space-3); }
 .app-shell:has(.item-detail-page) > .page-backdrop { display: none; }
 .item-opening-backdrop { position: fixed; top: var(--item-artwork-top, 0px); left: var(--item-artwork-left, 0px); width: var(--item-artwork-width, 100%); height: var(--item-artwork-height, 650px); z-index: -1; pointer-events: none; overflow: hidden; mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); -webkit-mask-image: linear-gradient(to bottom, black 0%, black 68%, transparent 100%); }
@@ -4309,7 +4323,7 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
   .main-shell:has(.item-detail-page) { --item-page-padding: var(--space-4); height: 100%; min-height: 0; padding: var(--item-page-padding); }
   .app-shell:has(.item-detail-page) > .navigation-hint { grid-column: 1; grid-row: 3; }
   .item-detail-page { --item-match-cover: 0; --item-cover-width: clamp(110px, 23vw, 190px); --item-column-gap: var(--space-4); row-gap: var(--space-4); grid-template-rows: auto auto auto auto; }
-  .item-cover-column { grid-row: 1; }
+  .item-cover-column { grid-row: 1; min-height: 0; }
   .item-cover-column .item-poster { position: relative; top: 0; height: auto; aspect-ratio: 2 / 3; }
   .episode-detail-page .item-cover-column .item-poster { aspect-ratio: 16 / 9; }
   .item-identity { padding: 0; gap: var(--space-3); }
@@ -4329,8 +4343,8 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
   .item-detail-page { --item-cover-width: clamp(110px, 30vw, 170px); }
   .item-identity .item-title-logo { max-height: 105px; }
   .item-identity .hero-tagline { display: none; }
-  .item-breadcrumbs { gap: var(--space-1); }
-  .item-breadcrumbs .breadcrumb-button { padding: var(--space-1); font-size: 0.7rem; }
+  .item-breadcrumbs { gap: var(--space-2); }
+  .item-breadcrumbs .breadcrumb-button { padding: var(--space-2) var(--space-3); font-size: 0.75rem; }
   .item-action-dock .detail-actions { gap: var(--space-2); }
   .item-primary-action { flex: 1 0 100%; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
   .item-primary-action > button { flex: 1; min-width: 0; padding-inline: var(--space-3); font-size: 0.85rem; }
@@ -4338,6 +4352,7 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
   .item-primary-action .button-content > span:not(.button-icon) { overflow: hidden; text-overflow: ellipsis; }
   .item-playback-context { max-width: 100%; font-size: 0.65rem; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
   #play-item-trailer, .item-more > summary { padding-inline: var(--space-3); }
+  .item-more-menu { left: 0; right: auto; min-width: min(15rem, calc(100vw - 2 * var(--item-page-padding))); }
   :is(#play-item-trailer, .item-more > summary) .button-content > span:not(.button-icon) { display: none; }
   .item-support-content { padding-top: 0; }
   .item-back-button { flex: 1; }

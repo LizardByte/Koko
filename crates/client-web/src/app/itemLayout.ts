@@ -16,13 +16,13 @@ export function bindItemPlaybackBar(
   update();
 }
 
-/** Size a proportional cover from the collapsed copy, within the responsive width budget. */
-export function itemCoverDimensions(copyHeight: number, availableWidth: number, ratio = 2 / 3): { width: number; height: number } {
-  const width = Math.max(0, Math.min(copyHeight * ratio, 320, availableWidth * 0.28));
-  return { width, height: width / ratio };
+/** Share the responsive cover width and portrait backdrop reference across item types. */
+export function itemCoverDimensions(availableWidth: number): { width: number; height: number } {
+  const width = Math.max(0, Math.min(300, availableWidth * 0.24));
+  return { width, height: width * 1.5 };
 }
 
-/** Measure wrapped descriptions and match the cover and fading artwork to the opening copy. */
+/** Measure wrapped descriptions and keep shared artwork dimensions stable as content changes. */
 export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, onRowsSized?: () => void): void {
   const identity = page.querySelector<HTMLElement>('.item-identity');
   const description = page.querySelector<HTMLElement>('.item-description-section');
@@ -46,19 +46,17 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     const title = identity.querySelector<HTMLElement>('.item-title-logo, .item-title-fallback') ?? identity;
     const pageTop = page.getBoundingClientRect().top;
     const titleTop = title.getBoundingClientRect().top;
-    const expandedHeight = Math.max(0, text.getBoundingClientRect().height - collapsedHeight);
-    const collapsedBottom = description.getBoundingClientRect().bottom - expandedHeight;
+    const cover = itemCoverDimensions(page.clientWidth);
     if (getComputedStyle(page).getPropertyValue('--item-match-cover').trim() === '1') {
-      const ratio = page.classList.contains('episode-detail-page') ? 16 / 9 : 2 / 3;
-      const cover = itemCoverDimensions(collapsedBottom - titleTop, page.clientWidth, ratio);
       setSize('--item-cover-width', cover.width);
-      setSize('--item-cover-height', cover.height);
+      const coverHeight = page.classList.contains('episode-detail-page') ? cover.width * 9 / 16 : cover.height;
+      setSize('--item-cover-height', coverHeight);
       setSize('--item-cover-top', titleTop - pageTop);
     } else {
       page.style.removeProperty('--item-cover-width');
     }
     const padding = Number.parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-    setSize('--item-artwork-height', collapsedBottom - pageTop + padding + 160);
+    setSize('--item-artwork-height', Math.max(520, cover.height + padding * 2 + 160));
     const viewport = scroller.getBoundingClientRect();
     setSize('--item-artwork-left', viewport.left);
     setSize('--item-artwork-top', viewport.top);
@@ -67,7 +65,9 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     let rowsChanged = false;
     for (const row of rows) {
       const gap = Number.parseFloat(getComputedStyle(row).columnGap) || 16;
-      const minimumWidth = row.dataset.itemRow === 'extras' ? 230 : row.clientWidth < 400 ? 120 : 135;
+      let minimumWidth = row.clientWidth < 400 ? 120 : 135;
+      if (['extras', 'episodes'].includes(row.dataset.itemRow ?? '')) minimumWidth = 230;
+      else if (row.dataset.itemRow === 'seasons') minimumWidth = 180;
       const count = String(completeRowCardCount(row.clientWidth, minimumWidth, gap));
       if (row.style.getPropertyValue('--item-row-count') !== count) {
         row.style.setProperty('--item-row-count', count);
@@ -88,6 +88,14 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
   }, { once: true });
   // Complete the first layout before paint; subsequent resizes are coalesced.
   measure();
+  const activeSeason = page.querySelector<HTMLElement>('.season-tab[aria-current="page"]');
+  const seasonTabs = activeSeason?.parentElement;
+  if (activeSeason && seasonTabs) {
+    const activeBounds = activeSeason.getBoundingClientRect();
+    const tabBounds = seasonTabs.getBoundingClientRect();
+    if (activeBounds.left < tabBounds.left) seasonTabs.scrollLeft += activeBounds.left - tabBounds.left;
+    else if (activeBounds.right > tabBounds.right) seasonTabs.scrollLeft += activeBounds.right - tabBounds.right;
+  }
 }
 
 /** Fit a whole number of cards into one row, preserving usable sizes at each viewport width. */

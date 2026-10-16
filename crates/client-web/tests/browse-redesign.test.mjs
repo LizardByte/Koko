@@ -11,7 +11,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const preferences = await server.ssrLoadModule('/src/app/browsePreferences.ts');
-const { renderLibraryTab, renderItemCard, renderHomeFeature } = await server.ssrLoadModule('/src/app/homeView.ts');
+const { renderLibraryTab, renderItemCard, renderHomeFeature, renderWatchProgress, playbackStatusBadgeMarkup } = await server.ssrLoadModule('/src/app/homeView.ts');
 const { renderItemPage, renderEpisodeBrowser, renderPersonCreditGroup } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
 const { bindHoverPreview } = await server.ssrLoadModule('/src/app/hoverPreview.ts');
 const { loadRouteData, prepareBrowseRoute } = await server.ssrLoadModule('/src/app/routeData.ts');
@@ -116,7 +116,8 @@ test('show pages render a card for each season instead of an episode list', () =
   state.route = { page: 'item', itemId: 201 };
   state.selectedItem = { ...mock.getMockItem(201), children: [item(204, { item_type: 'season', season_number: 2, display_title: 'Season 2' }), item(202, { item_type: 'season', season_number: 1, display_title: 'Season 1' })] };
   const html = renderItemPage();
-  assert.match(html, /<h3>Seasons<\/h3>/);
+  assert.match(html, /<h3>Seasons <span class="item-row-count">· 2<\/span><\/h3>/);
+  assert.match(html, /data-item-row="seasons"/);
   assert.match(html, /class="media-card [^"]*"[^>]*data-item-id="202"/);
   assert.match(html, /class="media-card [^"]*"[^>]*data-item-id="204"/);
   assert.ok(html.indexOf('data-item-id="202"') < html.indexOf('data-item-id="204"'));
@@ -126,7 +127,9 @@ test('show pages render a card for each season instead of an episode list', () =
 test('season pages show sibling season tabs and only their own episodes', () => {
   const season = { ...mock.getMockItem(202), library_id: 1, children: [item(205, { parent_id: 202, item_type: 'episode', episode_number: 2, overview: '<script>bad</script>' })] };
   state.libraryItems = [item(204, { parent_id: season.parent_id, item_type: 'season', season_number: 2, display_title: 'Season 2' }), item(203, { parent_id: 204, item_type: 'episode' }), item(888, { parent_id: 999, item_type: 'season', display_title: 'Unrelated season' })];
-  const html = renderEpisodeBrowser(season);
+  state.route = { page: 'item', itemId: season.id };
+  state.selectedItem = season;
+  const html = renderItemPage();
   assert.match(html, /class="season-tab [^"]*active" data-item-id="202" aria-current="page"/);
   assert.match(html, /class="season-tab [^"]*" data-item-id="204"/);
   assert.match(html, /data-item-id="205"/);
@@ -157,7 +160,7 @@ test('item technical facts and metadata are behind an accessible disclosure', ()
 
 test('the item opening retains its ring and primary actions while cast and extras follow at full width', () => {
   state.route = { page: 'item', itemId: 101 };
-  state.selectedItem = { ...mock.getMockItem(101), rating: 6.8, playback_position_ms: 90_000, playback_duration_ms: 6_000_000, theme_song_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI' };
+  state.selectedItem = { ...mock.getMockItem(101), rating: 6.8, rating_provider_id: 'tmdb', playback_position_ms: 90_000, playback_duration_ms: 6_000_000, theme_song_url: 'https://www.youtube.com/watch?v=SLBACEP6LsI' };
   state.selectedItemMetadata = mock.getMockItemMetadata(101);
   const html = renderItemPage();
   const scrollingStart = html.indexOf('id="item-support-content"');
@@ -173,7 +176,8 @@ test('the item opening retains its ring and primary actions while cast and extra
   assert.ok(html.indexOf('id="play-youtube-theme-song"') > moreStart);
   assert.equal([...html.matchAll(/data-play-selected-item-start-ms="90000"/g)].length, 1);
   assert.doesNotMatch(html, />\d+% watched</);
-  assert.match(html, /aria-label="Rating: 6\.8"[^]*?data-lucide="star"/);
+  assert.match(html, /aria-label="Rating from TheMovieDB: 6\.8"[^]*?class="rating-source-logo"/);
+  assert.doesNotMatch(html, /data-lucide="star"/);
   assert.match(html, /data-play-selected-item-start-ms="0"[^]*?data-lucide="rotate-ccw"/);
   assert.match(html, /id="play-item-trailer"[^]*?data-lucide="clapperboard"/);
 });
@@ -187,15 +191,33 @@ test('remaining time belongs to Resume, completed items play from the start, and
   assert.match(html, /data-play-selected-item-start-ms="120000"/);
   state.selectedItem.playback_completed = true;
   html = renderItemPage();
-  assert.match(html, /watched-fact[^]*?Watched/);
+  assert.match(html, /media-card-progress is-watched[^>]*aria-label="Watched"/);
+  assert.doesNotMatch(html, /watched-fact|class="tag[^>]*>[^<]*Watched/);
   assert.doesNotMatch(html, /remaining|Resume 2:00/);
   assert.match(html, /data-play-selected-item-start-ms="0"/);
   state.selectedItem = mock.getMockItem(201);
   state.libraryItems = [mock.getMockItem(203)];
   html = renderItemPage();
-  assert.match(html, /class="item-playback-context">Next: Mock Episode/);
+  assert.match(html, /class="button-secondary-label">Mock Episode/);
+  assert.doesNotMatch(html, /class="item-playback-context"/);
   assert.match(html, /data-playback-target-item-id="203"/);
   assert.doesNotMatch(html, /data-play-selected-item-start-ms|>\d+% watched</);
+});
+
+test('watched cards use one circular checkmark while an active rewatch keeps its progress ring', () => {
+  const watched = item(1, { playback_completed: true, watch_count: 2, playback_position_ms: 600_000, duration_ms: 600_000 });
+  const indicator = renderWatchProgress(watched);
+  assert.match(indicator, /media-card-progress is-watched/);
+  assert.match(indicator, /aria-label="Watched 2 times"/);
+  assert.match(indicator, /data-lucide="check"/);
+  assert.equal(playbackStatusBadgeMarkup(watched), indicator);
+  const card = renderItemCard(watched);
+  assert.equal([...card.matchAll(/class="media-card-progress/g)].length, 1);
+  assert.doesNotMatch(card, /media-card-status is-watched/);
+  assert.match(renderWatchProgress({ ...watched, watch_count: 0 }), /aria-label="Watched"/);
+  assert.match(renderWatchProgress({ ...watched, playback_completed: false, playback_position_ms: 120_000 }), /In progress: 20% watched/);
+  assert.doesNotMatch(renderWatchProgress({ ...watched, playback_completed: false, playback_position_ms: 120_000 }), /data-lucide="check"/);
+  assert.equal(renderWatchProgress(item(2)), '');
 });
 
 test('extras precede cast and crew, which share single responsive rows and their own navigation sections', () => {

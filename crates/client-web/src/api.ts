@@ -149,6 +149,8 @@ export interface MediaItemSummary {
   height?: number;
   genres: string[];
   overview?: string;
+  rating?: number | null;
+  rating_provider_id?: string | null;
   release_year?: number | null;
   backdrop_url?: string;
   logo_url?: string;
@@ -192,7 +194,9 @@ export interface MediaItemDetail extends MediaItemSummary {
   genres: string[];
   release_year?: number;
   logo_url?: string;
-  rating?: number;
+  rating?: number | null;
+  rating_provider_id?: string | null;
+  rating_source_item_type?: string | null;
   content_rating?: string;
   linked_media_type?: string;
   trailer_title?: string;

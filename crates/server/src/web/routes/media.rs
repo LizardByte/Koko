@@ -51,7 +51,10 @@ use serde::Serialize;
 use strsim::normalized_levenshtein;
 
 // local imports
-use crate::auth::UserGuard;
+use crate::auth::{
+    AdminGuard,
+    UserGuard,
+};
 use crate::config::{
     MetadataProviderId,
     Settings,
@@ -90,7 +93,6 @@ use crate::media::{
     library_exists,
     list_automatic_metadata_candidates,
     list_automatic_metadata_refresh_candidates,
-    list_library_settings,
     list_media_item_children,
     list_media_items,
     list_media_items_for_user_with_preferred_languages,
@@ -2857,6 +2859,53 @@ async fn run_automatic_movie_metadata_linking(
     }
 }
 
+async fn require_item_access(
+    db: &DbConn,
+    item_id: i32,
+    user: &UserGuard,
+) -> Result<(), Status> {
+    let user_id = current_user_id(Some(user))?;
+    let allowed = db
+        .run(move |conn| {
+            use crate::db::schema::media_items::dsl as items;
+            use diesel::{
+                ExpressionMethods,
+                OptionalExtension,
+                QueryDsl,
+                RunQueryDsl,
+            };
+            let library_id = items::media_items
+                .find(item_id)
+                .filter(items::deleted_at.is_null())
+                .select(items::library_id)
+                .first::<i32>(conn)
+                .optional()?;
+            let Some(library_id) = library_id else {
+                return Ok(false);
+            };
+            user_can_access_library(conn, library_id, user_id)
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    if allowed { Ok(()) } else { Err(Status::NotFound) }
+}
+
+fn person_is_accessible(
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    person_id: i32,
+    user_id: Option<i32>,
+) -> Result<bool, diesel::result::Error> {
+    let peers = get_metadata_person_locale_peer_ids(conn, person_id)?;
+    for credit in list_metadata_person_credit_summaries_for_person_ids(conn, &peers)? {
+        if let Some(item) = get_media_item_summary(conn, credit.media_item_id)? {
+            if user_can_access_library(conn, item.library_id, user_id)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn current_user_id(user_guard: Option<&UserGuard>) -> Result<Option<i32>, Status> {
     user_guard
         .map(|user_guard| {
@@ -3028,12 +3077,14 @@ async fn load_library_summary(
 #[openapi(tag = "Media")]
 #[get("/api/v1/system/capabilities")]
 pub async fn get_server_capabilities(
-    db: DbConn
+    user_guard: UserGuard,
+    db: DbConn,
 ) -> Result<Json<ServerCapabilitiesResponse>, Status> {
     let settings = current_settings();
     let transcoding = inspect_transcoding_capability(&settings.ffmpeg);
+    let user_id = current_user_id(Some(&user_guard))?;
     let libraries_configured = db
-        .run(|conn| list_library_settings(conn).map(|libraries| libraries.len()))
+        .run(move |conn| crate::media::accessible_library_ids(conn, user_id).map(|ids| ids.len()))
         .await
         .map_err(|error| {
             log::error!("Failed to count persisted libraries: {}", error);
@@ -3055,6 +3106,7 @@ pub async fn get_server_capabilities(
 #[openapi(tag = "Media")]
 #[post("/api/v1/libraries/<library_id>/scan")]
 pub async fn scan_library(
+    _admin: AdminGuard,
     db: DbConn,
     library_id: i32,
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
@@ -3128,6 +3180,7 @@ pub async fn scan_library(
 #[openapi(tag = "Media")]
 #[delete("/api/v1/libraries/<library_id>/missing")]
 pub async fn delete_library_missing_items(
+    _admin: AdminGuard,
     db: DbConn,
     library_id: i32,
 ) -> Result<Json<MissingItemsCleanupResponse>, Status> {
@@ -3171,7 +3224,7 @@ pub async fn delete_library_missing_items(
 /// Return active backend activities such as metadata refresh work.
 #[openapi(tag = "Media")]
 #[get("/api/v1/system/activities")]
-pub async fn get_system_activities() -> Json<SystemActivitiesResponse> {
+pub async fn get_system_activities(_admin: AdminGuard) -> Json<SystemActivitiesResponse> {
     Json(SystemActivitiesResponse {
         generated_at: current_timestamp(),
         activities: current_system_activities().await,
@@ -3181,14 +3234,14 @@ pub async fn get_system_activities() -> Json<SystemActivitiesResponse> {
 /// Return metadata provider status for the current server configuration.
 #[openapi(tag = "Media")]
 #[get("/api/v1/metadata/providers")]
-pub fn get_metadata_providers() -> Json<Vec<MetadataProviderStatus>> {
+pub fn get_metadata_providers(_user: UserGuard) -> Json<Vec<MetadataProviderStatus>> {
     Json(list_provider_statuses(&current_settings().metadata))
 }
 
 /// Return known locale keys and provider-specific mappings.
 #[openapi(tag = "Media")]
 #[get("/api/v1/metadata/locales")]
-pub fn get_metadata_locales() -> Json<Vec<MetadataLocale>> {
+pub fn get_metadata_locales(_user: UserGuard) -> Json<Vec<MetadataLocale>> {
     Json(vec![
         MetadataLocale {
             key: "en-US".into(),
@@ -3245,10 +3298,10 @@ pub fn get_metadata_locales() -> Json<Vec<MetadataLocale>> {
 #[openapi(tag = "Media")]
 #[get("/api/v1/libraries")]
 pub async fn get_libraries(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
 ) -> Result<Json<Vec<PersistedLibrarySummary>>, Status> {
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
 
     let libraries = db
         .run(move |conn| {
@@ -3277,11 +3330,11 @@ pub async fn get_libraries(
 #[openapi(tag = "Media")]
 #[get("/api/v1/home?<library_id>")]
 pub async fn get_home(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     library_id: Option<i32>,
 ) -> Result<Json<MediaHome>, Status> {
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     if let Some(library_id) = library_id {
         let can_access = db
             .run(move |conn| user_can_access_library(conn, library_id, user_id))
@@ -3317,6 +3370,7 @@ pub async fn get_home(
 #[openapi(tag = "Media")]
 #[get("/api/v1/libraries/<library_id>/files")]
 pub async fn get_library_inventory(
+    _admin: AdminGuard,
     db: DbConn,
     library_id: i32,
 ) -> Result<Json<Vec<PersistedMediaFileSummary>>, Status> {
@@ -3357,11 +3411,11 @@ pub async fn get_library_inventory(
 #[openapi(tag = "Media")]
 #[get("/api/v1/items?<library_id>")]
 pub async fn get_items(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     library_id: Option<i32>,
 ) -> Result<Json<Vec<MediaItemSummary>>, Status> {
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     if let Some(library_id) = library_id {
         let can_access = db
             .run(move |conn| user_can_access_library(conn, library_id, user_id))
@@ -3399,13 +3453,14 @@ pub async fn get_items(
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>")]
 pub async fn get_item(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     item_id: i32,
 ) -> Result<Json<MediaItemDetail>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let settings = current_settings();
     let data_dir = settings.general.data_dir.clone();
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
 
     let item = db
         .run(move |conn| {
@@ -3458,12 +3513,13 @@ pub async fn get_item(
 #[openapi(tag = "Media")]
 #[post("/api/v1/sessions", format = "json", data = "<request>")]
 pub async fn create_session(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     request: Json<CreateSessionRequest>,
 ) -> Result<Json<crate::media::PlaybackSession>, Status> {
     let payload = request.into_inner();
-    let user_id = current_user_id(user_guard.as_ref()).unwrap_or(None);
+    require_item_access(&db, payload.item_id, &user_guard).await?;
+    let user_id = current_user_id(Some(&user_guard))?;
     let preferred_languages = db
         .run(move |conn| user_preferred_metadata_languages(conn, user_id))
         .await
@@ -3509,8 +3565,22 @@ pub async fn create_session(
 /// Delete a playback session.
 #[openapi(tag = "Media")]
 #[delete("/api/v1/sessions/<session_id>")]
-pub async fn delete_session(session_id: String) -> Status {
-    let removed = ACTIVE_PLAYBACK_SESSIONS.write().await.remove(&session_id);
+pub async fn delete_session(
+    user_guard: UserGuard,
+    session_id: String,
+) -> Status {
+    let Ok(user_id) = current_user_id(Some(&user_guard)) else {
+        return Status::Unauthorized;
+    };
+    let mut sessions = ACTIVE_PLAYBACK_SESSIONS.write().await;
+    if !sessions
+        .get(&session_id)
+        .is_some_and(|session| session.user_id == user_id)
+    {
+        return Status::NotFound;
+    }
+    let removed = sessions.remove(&session_id);
+    drop(sessions);
 
     if removed.is_some() {
         stop_active_transcode(&session_id).await;
@@ -3534,6 +3604,7 @@ pub async fn delete_session(session_id: String) -> Status {
 /// Stream content for a session (handles transcode or direct play).
 #[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>&<audio_stream_index>")]
 pub async fn get_session_stream(
+    user_guard: UserGuard,
     db: DbConn,
     range: RangeHeader,
     session_id: String,
@@ -3546,6 +3617,10 @@ pub async fn get_session_stream(
         .get(&session_id)
         .cloned()
         .ok_or(Status::NotFound)?;
+    if session.user_id != current_user_id(Some(&user_guard))? {
+        return Err(Status::NotFound);
+    }
+    require_item_access(&db, session.item_id, &user_guard).await?;
     let selected_audio_stream_index = audio_stream_index.or(session.audio_stream_index);
 
     if session.decision.can_direct_play && selected_audio_stream_index.unwrap_or_default() == 0 {
@@ -3662,9 +3737,11 @@ pub async fn get_session_stream(
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>/playback")]
 pub async fn get_item_playback(
+    user_guard: UserGuard,
     db: DbConn,
     item_id: i32,
 ) -> Result<Json<PlaybackDecision>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let decision = db
         .run(move |conn| get_playback_decision(conn, item_id, None))
         .await
@@ -3683,10 +3760,12 @@ pub async fn get_item_playback(
 /// Serve a direct-play file stream for a browser-compatible media item.
 #[get("/api/v1/items/<item_id>/stream")]
 pub async fn stream_item(
+    user_guard: UserGuard,
     db: DbConn,
     range: RangeHeader,
     item_id: i32,
 ) -> Result<RangedFile, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let decision = db
         .run(move |conn| get_playback_decision(conn, item_id, None))
         .await
@@ -3728,11 +3807,12 @@ pub async fn stream_item(
     data = "<request>"
 )]
 pub async fn update_item_progress(
-    db: DbConn,
     user_guard: UserGuard,
+    db: DbConn,
     item_id: i32,
     request: Json<PlaybackProgressRequest>,
 ) -> Result<Status, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let payload = request.into_inner();
     let user_id = current_user_id(Some(&user_guard))?.ok_or(Status::Unauthorized)?;
 
@@ -3763,12 +3843,13 @@ pub async fn update_item_progress(
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>/metadata")]
 pub async fn get_item_metadata(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     item_id: i32,
 ) -> Result<Json<ItemMetadataResponse>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let data_dir = current_settings().general.data_dir;
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
 
     let item_exists = db
         .run(move |conn| get_media_item(conn, item_id, &data_dir))
@@ -3814,11 +3895,11 @@ pub async fn get_item_metadata(
 #[openapi(tag = "Media")]
 #[get("/api/v1/people/<person_id>")]
 pub async fn get_person(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     person_id: i32,
 ) -> Result<Json<MetadataPersonResponse>, Status> {
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     let response = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
@@ -3838,12 +3919,18 @@ pub async fn get_person(
                         &languages,
                     )?
                 {
+                    if !user_can_access_library(conn, item.library_id, user_id)? {
+                        continue;
+                    }
                     credits.push(MetadataPersonItemCredit {
                         credit,
                         item,
                         hierarchy,
                     });
                 }
+            }
+            if credits.is_empty() {
+                return Err(diesel::result::Error::NotFound);
             }
             Ok::<_, diesel::result::Error>(MetadataPersonResponse { person, credits })
         })
@@ -3866,14 +3953,17 @@ pub async fn get_person(
 /// Serve a cached local person profile image.
 #[get("/api/v1/people/<person_id>/image")]
 pub async fn get_person_image(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     person_id: i32,
 ) -> Result<NamedFile, Status> {
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     let data_dir = current_settings().general.data_dir;
     let image_path = db
         .run(move |conn| {
+            if !person_is_accessible(conn, person_id, user_id)? {
+                return Err(diesel::result::Error::NotFound);
+            }
             let languages = user_preferred_metadata_languages(conn, user_id)?;
             let person = get_metadata_person_for_languages(conn, person_id, &languages)?
                 .ok_or(diesel::result::Error::NotFound)?;
@@ -3911,6 +4001,7 @@ pub async fn get_person_image(
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>/metadata/search?<query>&<providers>&<year>&<language>")]
 pub async fn search_item_metadata(
+    _admin: AdminGuard,
     db: DbConn,
     item_id: i32,
     query: Option<String>,
@@ -4045,6 +4136,7 @@ pub async fn search_item_metadata(
     data = "<request>"
 )]
 pub async fn link_item_metadata(
+    _admin: AdminGuard,
     db: DbConn,
     item_id: i32,
     request: Json<LinkMetadataRequest>,
@@ -4171,6 +4263,7 @@ pub async fn link_item_metadata(
 #[openapi(tag = "Media")]
 #[post("/api/v1/items/<item_id>/metadata/refresh")]
 pub async fn refresh_item_metadata(
+    _admin: AdminGuard,
     db: DbConn,
     item_id: i32,
 ) -> Result<Json<ItemMetadataSummary>, Status> {
@@ -4332,6 +4425,7 @@ async fn run_manual_library_metadata_refresh(
 #[openapi(tag = "Media")]
 #[post("/api/v1/libraries/<library_id>/metadata/refresh")]
 pub async fn refresh_library_metadata(
+    _admin: AdminGuard,
     db: DbConn,
     library_id: i32,
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
@@ -4381,13 +4475,14 @@ pub async fn refresh_library_metadata(
 /// Serve poster or backdrop artwork for a linked media item, caching it locally on demand.
 #[get("/api/v1/items/<item_id>/artwork?<kind>")]
 pub async fn get_item_artwork(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     item_id: i32,
     kind: Option<String>,
 ) -> Result<NamedFile, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let artwork_kind = ArtworkKind::from_query_value(kind.as_deref());
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     let data_dir = current_settings().general.data_dir;
     let data_dir_for_local_resolve = data_dir.clone();
 
@@ -4534,9 +4629,11 @@ pub async fn get_item_artwork(
 /// Serve a discovered theme-song asset for a media item.
 #[get("/api/v1/items/<item_id>/theme")]
 pub async fn get_item_theme(
+    user_guard: UserGuard,
     db: DbConn,
     item_id: i32,
 ) -> Result<NamedFile, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let data_dir = current_settings().general.data_dir;
     let theme_path = db
         .run(move |conn| resolve_item_theme_song_path(conn, item_id, &data_dir))
@@ -4559,10 +4656,12 @@ pub async fn get_item_theme(
 /// Serve a discovered subtitle sidecar for a media item.
 #[get("/api/v1/items/<item_id>/subtitles/<track_index>")]
 pub async fn get_item_subtitle(
+    user_guard: UserGuard,
     db: DbConn,
     item_id: i32,
     track_index: usize,
 ) -> Result<NamedFile, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
     let data_dir = current_settings().general.data_dir;
     let subtitle_path = db
         .run(move |conn| resolve_item_subtitle_path(conn, item_id, track_index, &data_dir))
@@ -4587,12 +4686,12 @@ pub async fn get_item_subtitle(
 #[openapi(tag = "Media")]
 #[get("/api/v1/search?<query>")]
 pub async fn search_items(
+    user_guard: UserGuard,
     db: DbConn,
-    user_guard: Option<UserGuard>,
     query: Option<&str>,
 ) -> Result<Json<Vec<MediaSearchResult>>, Status> {
     let query = query.unwrap_or_default().to_string();
-    let user_id = current_user_id(user_guard.as_ref())?;
+    let user_id = current_user_id(Some(&user_guard))?;
     let results = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
@@ -4604,6 +4703,12 @@ pub async fn search_items(
             .map(|item| MediaSearchResult::Item { item })
             .collect::<Vec<_>>();
             if !normalized_query.is_empty() {
+                let visible_item_ids = list_media_items_for_user_with_preferred_languages(
+                    conn, user_id, None, &languages,
+                )?
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<HashSet<_>>();
                 results.extend(
                     list_metadata_collection_summaries_with_preferred_languages(
                         conn,
@@ -4612,14 +4717,24 @@ pub async fn search_items(
                         &[],
                     )?
                     .into_iter()
-                    .filter(|collection| collection_matches_query(collection, &normalized_query))
+                    .filter_map(|mut collection| {
+                        collection
+                            .item_ids
+                            .retain(|id| visible_item_ids.contains(id));
+                        collection.item_count = collection.item_ids.len();
+                        (!collection.item_ids.is_empty()
+                            && collection_matches_query(&collection, &normalized_query))
+                        .then_some(collection)
+                    })
                     .map(|collection| MediaSearchResult::Collection { collection }),
                 );
-                results.extend(
+                for person in
                     search_metadata_people_with_preferred_languages(conn, &query, &languages)?
-                        .into_iter()
-                        .map(|person| MediaSearchResult::Person { person }),
-                );
+                {
+                    if person_is_accessible(conn, person.id, user_id)? {
+                        results.push(MediaSearchResult::Person { person });
+                    }
+                }
             }
             Ok::<_, diesel::result::Error>(results)
         })

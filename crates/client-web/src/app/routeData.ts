@@ -1,6 +1,7 @@
 import * as api from '../api';
 import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
+import { clearBrowseSessions } from './browseSession';
 
 type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getLogs' | 'searchItems'>;
 
@@ -24,6 +25,15 @@ export async function loadRouteData(
   isCurrent: () => boolean,
   source: RouteApi = api,
 ): Promise<void> {
+  const admin = state.bootstrap?.current_user?.admin === true;
+  if (!admin) {
+    state.settingsResponse = undefined;
+    state.users = [];
+    state.systemActivities = [];
+    state.logsResponse = undefined;
+    state.dashboardItems = [];
+    if (route.page === 'settings') return;
+  }
   const tasks: Promise<void>[] = [];
   const load = <T>(label: string, request: Promise<T>, apply: (value: T) => void) => {
     tasks.push(request.then((value) => {
@@ -32,6 +42,28 @@ export async function loadRouteData(
       render();
     }).catch((error: unknown) => {
       if (!isCurrent()) return;
+      if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) {
+        clearBrowseSessions();
+        state.home = undefined;
+        state.libraryItems = [];
+        state.searchResults = [];
+        state.selectedItem = undefined;
+        state.selectedItemMetadata = undefined;
+        state.selectedPlayback = undefined;
+        state.selectedPerson = undefined;
+        if (error.status === 401) {
+          state.libraries = [];
+          if (state.bootstrap) state.bootstrap = { ...state.bootstrap, current_user: undefined };
+        }
+        if (error.status === 401 || error.status === 403) {
+          if (state.bootstrap?.current_user) state.bootstrap.current_user.admin = false;
+          state.settingsResponse = undefined;
+          state.users = [];
+          state.logsResponse = undefined;
+          state.systemActivities = [];
+          state.dashboardItems = [];
+        }
+      }
       state.error = `Unable to load ${label}: ${error instanceof Error ? error.message : 'request failed'}`;
       render();
     }));
@@ -46,9 +78,9 @@ export async function loadRouteData(
   load('server capabilities', source.getCapabilities(), (value) => { state.capabilities = value; });
   load('libraries', source.getLibraries(), (value) => { state.libraries = value; });
   load('metadata providers', source.getMetadataProviders(), (value) => { state.metadataProviders = value; });
-  load('background activity', source.getSystemActivities(), (value) => { state.systemActivities = value.activities; });
+  if (admin) load('background activity', source.getSystemActivities(), (value) => { state.systemActivities = value.activities; });
   // Settings supply per-library language preferences on item pages; other browsing pages do not need them.
-  if (route.page === 'settings' || route.page === 'item') {
+  if (admin && (route.page === 'settings' || route.page === 'item')) {
     load('settings', source.getSettings(), (value) => { state.settingsResponse = value; });
   }
   if (route.page === 'settings' && route.section === 'users' && state.bootstrap?.current_user?.admin) {

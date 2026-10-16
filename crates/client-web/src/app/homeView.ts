@@ -8,6 +8,7 @@ import { renderLoadingCards, renderLoadingDetail } from './loadingView';
 import { currentThemeSongYouTubeTarget } from './mediaTargets';
 import { playbackProgressPercent } from './playbackProgress';
 import { state } from './state';
+import { canManageServer } from './auth';
 import type { BrowseFilter, HomeBrowseTab } from './types';
 import {
   activeLibrary,
@@ -1043,7 +1044,7 @@ export function renderHomeNavbar(): string {
   const searchIcon = hasSearch ? 'x' : 'search';
   const scanButtonDisabled = libraryScanPending ? 'disabled' : '';
   const refreshButtonDisabled = libraryRefreshPending ? 'disabled' : '';
-  const libraryActionButtons = library
+  const libraryActionButtons = library && canManageServer()
     ? `
             <button type="button" class="icon-button secondary-button" id="scan-active-library" title="Scan library" aria-label="Scan library" ${scanButtonDisabled}>${renderIcon('folder-sync')}</button>
             <button type="button" class="icon-button secondary-button" id="refresh-active-library-metadata" title="Refresh metadata" aria-label="Refresh metadata" ${refreshButtonDisabled}>${renderIcon('database-zap')}</button>

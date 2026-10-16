@@ -11,6 +11,7 @@ use bcrypt::{
     verify,
 };
 use diesel::{
+    OptionalExtension,
     QueryDsl,
     RunQueryDsl,
 };
@@ -25,7 +26,12 @@ use jsonwebtoken::{
 };
 use once_cell::sync::Lazy;
 use rand::RngExt;
-use rocket::http::Status;
+use rocket::http::{
+    Cookie,
+    CookieJar,
+    SameSite,
+    Status,
+};
 use rocket::outcome::Outcome;
 use rocket::request::{
     self,
@@ -64,6 +70,9 @@ impl Role {
 }
 
 /// Generic authorization guard that can handle different roles
+///
+/// Place this before `DbConn` in route arguments so its account lookup releases
+/// the connection before the handler acquires its own.
 pub struct AuthGuard<const ROLE: u8> {
     claims: Claims,
 }
@@ -102,12 +111,7 @@ impl<'r, const ROLE: u8> FromRequest<'r> for AuthGuard<ROLE> {
 
         let role = Self::role();
 
-        // For User role, just having valid claims is enough
-        if role == Role::User {
-            return Outcome::Success(AuthGuard { claims });
-        }
-
-        // For other roles, we need to check additional permissions
+        // Resolve every token against the current account, including ordinary users.
         let db = match request.guard::<DbConn>().await {
             Outcome::Success(db) => db,
             _ => return Outcome::Error((Status::InternalServerError, ())),
@@ -118,18 +122,33 @@ impl<'r, const ROLE: u8> FromRequest<'r> for AuthGuard<ROLE> {
             Err(_) => return Outcome::Error((Status::Unauthorized, ())),
         };
 
-        let has_permission = match role {
-            Role::Admin => db
-                .run(move |conn| {
-                    use crate::db::schema::users::dsl::*;
-                    users.find(user_id).select(admin).first::<bool>(conn)
-                })
-                .await
-                .unwrap_or(false),
-            Role::User => true, // Already handled above
+        let account = db
+            .run(move |conn| {
+                use crate::db::schema::users::dsl::*;
+                users
+                    .find(user_id)
+                    .select(admin)
+                    .first::<bool>(conn)
+                    .optional()
+            })
+            .await;
+        let is_admin = match account {
+            Ok(Some(is_admin)) => is_admin,
+            Ok(None) => return Outcome::Error((Status::Unauthorized, ())),
+            Err(_) => return Outcome::Error((Status::InternalServerError, ())),
         };
 
-        if has_permission {
+        if role == Role::User || is_admin {
+            // Restore native media authentication for clients with an existing bearer token.
+            if request.uri().path() == "/api/v1/bootstrap" {
+                if let Some(token) = request
+                    .headers()
+                    .get_one("Authorization")
+                    .and_then(|header| header.strip_prefix(BEARER))
+                {
+                    set_media_auth_cookie(request.cookies(), token);
+                }
+            }
             Outcome::Success(AuthGuard { claims })
         } else {
             Outcome::Error((Status::Forbidden, ()))
@@ -186,6 +205,22 @@ pub struct Claims {
 }
 
 const BEARER: &str = "Bearer ";
+pub(crate) const MEDIA_AUTH_COOKIE: &str = "koko_media_auth";
+
+pub(crate) fn set_media_auth_cookie(
+    cookies: &CookieJar<'_>,
+    token: &str,
+) {
+    cookies.add(
+        Cookie::build((MEDIA_AUTH_COOKIE, token.to_string()))
+            .path("/api/v1")
+            .http_only(true)
+            .same_site(SameSite::Strict)
+            .secure(crate::config::current_settings().server.use_https)
+            .max_age(rocket::time::Duration::hours(24))
+            .build(),
+    );
+}
 
 /// Create a JWT token.
 pub fn create_token(
@@ -231,15 +266,37 @@ impl<'r> FromRequest<'r> for Claims {
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
         let keys: Vec<_> = request.headers().get("Authorization").collect();
-        if keys.len() != 1 {
+        if keys.len() > 1 {
             return Outcome::Error((rocket::http::Status::Unauthorized, ()));
         }
 
-        if !keys[0].starts_with(BEARER) {
-            return Outcome::Error((rocket::http::Status::Unauthorized, ()));
-        }
-
-        let token = &keys[0][BEARER.len()..];
+        // Native image/audio/video elements cannot attach Authorization headers.
+        // Accept the HttpOnly login cookie only for read-only media asset routes.
+        let path = request.uri().path().as_str();
+        let media_asset = matches!(
+            request.method(),
+            rocket::http::Method::Get | rocket::http::Method::Head
+        ) && ((path.starts_with("/api/v1/items/")
+            && (path.ends_with("/artwork")
+                || path.ends_with("/theme")
+                || path.ends_with("/stream")
+                || path.contains("/subtitles/")))
+            || (path.starts_with("/api/v1/people/") && path.ends_with("/image"))
+            || (path.starts_with("/api/v1/sessions/") && path.ends_with("/stream"))
+            || path.starts_with("/api/v1/user-profile-images/"));
+        let token = if let Some(header) = keys.first() {
+            header.strip_prefix(BEARER)
+        } else if media_asset {
+            request
+                .cookies()
+                .get(MEDIA_AUTH_COOKIE)
+                .map(|cookie| cookie.value())
+        } else {
+            None
+        };
+        let Some(token) = token else {
+            return Outcome::Error((Status::Unauthorized, ()));
+        };
         let secret = get_jwt_secret();
 
         match decode_token(token, secret) {

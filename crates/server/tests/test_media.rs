@@ -1454,10 +1454,13 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
     }];
 
     let (mut connection, db_path) = create_test_connection("show_recently_added_collapsed_db");
+    diesel::sql_query("INSERT INTO users (username, password, admin) VALUES ('viewer', 'hash', 0)")
+        .execute(&mut connection)
+        .unwrap();
     let persisted =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
-    let home = get_media_home(&mut connection, None, Some(library.id)).unwrap();
+    let home = get_media_home(&mut connection, Some(1), Some(library.id)).unwrap();
     let recently_added = home
         .shelves
         .iter()
@@ -1516,6 +1519,9 @@ fn test_home_includes_real_collection_summaries() {
     }];
 
     let (mut connection, db_path) = create_test_connection("home_collection_summaries_db");
+    diesel::sql_query("INSERT INTO users (username, password, admin) VALUES ('viewer', 'hash', 0)")
+        .execute(&mut connection)
+        .unwrap();
     let persisted =
         sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
     let library = &persisted[0];
@@ -1584,14 +1590,14 @@ fn test_home_includes_real_collection_summaries() {
     )
     .unwrap();
 
-    let home = get_media_home(&mut connection, None, Some(library.id)).unwrap();
+    let home = get_media_home(&mut connection, Some(1), Some(library.id)).unwrap();
     assert_eq!(home.collections.len(), 1);
     assert_eq!(home.collections[0].name, "Test Saga");
     assert_eq!(home.collections[0].item_count, 2);
     assert_eq!(home.collections[0].item_ids.len(), 2);
     let spanish_home = get_media_home_with_preferred_languages(
         &mut connection,
-        None,
+        Some(1),
         Some(library.id),
         &["es-ES".into()],
     )
@@ -1679,7 +1685,8 @@ fn test_home_includes_real_collection_summaries() {
     .unwrap()
     .value;
     assert_eq!(repaired_themerr_collection_name, None);
-    let merged_home_after_theme = get_media_home(&mut connection, None, Some(library.id)).unwrap();
+    let merged_home_after_theme =
+        get_media_home(&mut connection, Some(1), Some(library.id)).unwrap();
     assert_eq!(merged_home_after_theme.collections[0].name, "Test Saga");
 
     drop(connection);

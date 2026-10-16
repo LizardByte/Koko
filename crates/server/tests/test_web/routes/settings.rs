@@ -6,21 +6,21 @@ use rocket::serde::json::{
 };
 
 use crate::test_utils::{
-    create_test_client,
+    create_admin_test_client,
     make_request,
 };
 use koko::globals;
 
 #[rocket::async_test]
 async fn test_get_settings_route() {
-    let client = create_test_client(Some("settings_route_get")).await;
+    let (client, token) = create_admin_test_client(Some("settings_route_get")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -33,13 +33,13 @@ async fn test_get_settings_route() {
 
 #[rocket::async_test]
 async fn test_provider_request_policy_is_not_configurable() {
-    let client = create_test_client(Some("settings_provider_request_policy")).await;
+    let (client, token) = create_admin_test_client(Some("settings_provider_request_policy")).await;
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -57,7 +57,7 @@ async fn test_provider_request_policy_is_not_configurable() {
         "put",
         "/api/v1/settings",
         Some(settings),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -82,14 +82,14 @@ async fn test_provider_request_policy_is_not_configurable() {
 
 #[rocket::async_test]
 async fn test_add_and_remove_library_routes() {
-    let client = create_test_client(Some("settings_route_add_remove")).await;
+    let (client, token) = create_admin_test_client(Some("settings_route_add_remove")).await;
 
     let before_response = make_request(
         Some(&client),
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -114,7 +114,7 @@ async fn test_add_and_remove_library_routes() {
                 "metadata_providers": ["tmdb"]
             }
         })),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -138,7 +138,7 @@ async fn test_add_and_remove_library_routes() {
         "delete",
         &format!("/api/v1/settings/libraries/{}", initial_library_count),
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -153,7 +153,7 @@ async fn test_add_and_remove_library_routes() {
 
 #[rocket::async_test]
 async fn test_add_library_route_allows_duplicate_root_paths() {
-    let client = create_test_client(Some("settings_route_add_duplicate")).await;
+    let (client, token) = create_admin_test_client(Some("settings_route_add_duplicate")).await;
 
     make_request(
         Some(&client),
@@ -169,7 +169,7 @@ async fn test_add_library_route_allows_duplicate_root_paths() {
                 "metadata_providers": ["tmdb"]
             }
         })),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -189,7 +189,7 @@ async fn test_add_library_route_allows_duplicate_root_paths() {
                 "metadata_providers": ["tmdb", "tvdb"]
             }
         })),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -206,7 +206,8 @@ async fn test_add_library_route_allows_duplicate_root_paths() {
 
 #[rocket::async_test]
 async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
-    let client = create_test_client(Some("settings_route_update_preserves_libraries")).await;
+    let (client, token) =
+        create_admin_test_client(Some("settings_route_update_preserves_libraries")).await;
 
     make_request(
         Some(&client),
@@ -222,7 +223,7 @@ async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
                 "metadata_providers": ["tmdb"]
             }
         })),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -233,7 +234,7 @@ async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -246,7 +247,7 @@ async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
         "put",
         "/api/v1/settings",
         Some(settings_json["settings"].clone()),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -265,7 +266,7 @@ async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -282,8 +283,8 @@ async fn test_update_settings_with_empty_libraries_does_not_delete_catalog() {
 
 #[rocket::async_test]
 async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_rows() {
-    let client =
-        create_test_client(Some("settings_route_update_preserves_omitted_libraries")).await;
+    let (client, token) =
+        create_admin_test_client(Some("settings_route_update_preserves_omitted_libraries")).await;
 
     for (name, kind) in [
         ("Movies", "movies"),
@@ -303,7 +304,7 @@ async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_r
                     "metadata_providers": ["tmdb"]
                 }
             })),
-            None,
+            Some(format!("Bearer {}", token)),
             Some(Status::Ok),
             Some(false),
         )
@@ -315,7 +316,7 @@ async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_r
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -329,7 +330,7 @@ async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_r
         "put",
         "/api/v1/settings",
         Some(settings_json["settings"].clone()),
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -348,7 +349,7 @@ async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_r
         "get",
         "/api/v1/settings",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -365,14 +366,14 @@ async fn test_update_settings_with_partial_libraries_preserves_omitted_catalog_r
 
 #[rocket::async_test]
 async fn test_remove_missing_library_route() {
-    let client = create_test_client(Some("settings_route_remove_missing")).await;
+    let (client, token) = create_admin_test_client(Some("settings_route_remove_missing")).await;
 
     make_request(
         Some(&client),
         "delete",
         "/api/v1/settings/libraries/999",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::NotFound),
         Some(false),
     )
@@ -381,7 +382,7 @@ async fn test_remove_missing_library_route() {
 
 #[rocket::async_test]
 async fn test_get_logs_route_filters_and_normalizes_paths() {
-    let client = create_test_client(Some("settings_route_logs")).await;
+    let (client, token) = create_admin_test_client(Some("settings_route_logs")).await;
     let unique = "settings_route_logs_unique_marker";
 
     std::fs::write(
@@ -403,7 +404,7 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
             "/api/v1/settings/logs?search={unique}&since=2026-04-22T11%3A06%3A00-04%3A00&limit=10"
         ),
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -423,7 +424,7 @@ async fn test_get_logs_route_filters_and_normalizes_paths() {
         "get",
         &format!("/api/v1/settings/logs?search={unique}&module=rocket::server&limit=10"),
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )

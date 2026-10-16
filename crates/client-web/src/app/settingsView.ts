@@ -703,6 +703,7 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
 }
 
 export function renderSettingsPage(): string {
+  if (!canManageUsers()) return '<div class="empty-state">Administrator access is required to manage this server.</div>';
   const settings = state.settingsResponse?.settings;
   const section = activeSettingsSection();
   const settingsContent = renderSettingsSectionContent(section, settings);

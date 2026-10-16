@@ -35,8 +35,8 @@
 - [x] database: add a type for extras (support all the types from trailerdb.org at a minimum as well as a theme song type)
 - [x] database: keep track of watched items, how many times they were watched, and when they were watched last... for each user... if watched we should show a watched icon on the item and maybe a (circular?) progress bar for partially watched items
 
-- [ ] permissions: properly guard api endpoints... many need to be admin only, while others would be allowed for standard users... users who have not been granted access to a library should not be able to see any information about that library or the items in it from the api or ui
-- [ ] permissions: ensure non admins do not have admin functions in the UI (no scanning, no metadata refresh, no user management, etc...)
+- [x] permissions: properly guard api endpoints... many need to be admin only, while others would be allowed for standard users... users who have not been granted access to a library should not be able to see any information about that library or the items in it from the api or ui
+- [x] permissions: ensure non admins do not have admin functions in the UI (no scanning, no metadata refresh, no user management, etc...)
 
 - [ ] extras: add external players for extras
   - [ ] yt-dlp (https://github.com/yt-dlp/yt-dlp)

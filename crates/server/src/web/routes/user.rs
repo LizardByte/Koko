@@ -103,8 +103,8 @@ pub struct BootstrapResponse {
 #[openapi(tag = "Users")]
 #[get("/api/v1/bootstrap")]
 pub async fn get_bootstrap(
-    db: DbConn,
     user_guard: Option<UserGuard>,
+    db: DbConn,
 ) -> Result<Json<BootstrapResponse>, Status> {
     use crate::db::schema::users::dsl::*;
 
@@ -143,8 +143,8 @@ pub async fn get_bootstrap(
 #[openapi(tag = "Users")]
 #[get("/api/v1/users")]
 pub async fn list_users(
-    db: DbConn,
     _admin_guard: AdminGuard,
+    db: DbConn,
 ) -> Result<Json<Vec<UserSummary>>, Status> {
     use crate::db::schema::users::dsl::*;
 
@@ -168,8 +168,8 @@ pub async fn list_users(
     data = "<user_form>"
 )]
 pub async fn update_user(
-    db: DbConn,
     _admin_guard: AdminGuard,
+    db: DbConn,
     target_user_id: i32,
     user_form: Json<UpdateUserForm>,
 ) -> Result<Json<UserSummary>, Status> {
@@ -283,9 +283,9 @@ pub async fn update_user(
 #[openapi(tag = "Users")]
 #[post("/create_user", format = "json", data = "<user_form>")]
 pub async fn create_user(
+    auth_guard: Option<AdminGuard>,
     db: DbConn,
     user_form: Json<CreateUserForm>,
-    auth_guard: Option<AdminGuard>,
 ) -> Result<&'static str, Status> {
     use crate::db::schema::users::dsl::*;
 
@@ -293,7 +293,7 @@ pub async fn create_user(
     let existing_count = db
         .run(|conn| users.count().get_result::<i64>(conn))
         .await
-        .unwrap_or(0);
+        .map_err(|_| Status::InternalServerError)?;
 
     // If there are existing users, require admin privileges
     if existing_count > 0 && auth_guard.is_none() {
@@ -354,20 +354,39 @@ pub async fn create_user(
 
     // Insert new user
     let insert_result = db
-        .run(move |conn| diesel::insert_into(users).values(&user).execute(conn))
+        .run(move |conn| {
+            conn.immediate_transaction::<_, diesel::result::Error, _>(|conn| {
+                let count = users.count().get_result::<i64>(conn)?;
+                if count > 0 && auth_guard.is_none() {
+                    return Err(diesel::result::Error::NotFound);
+                }
+                let mut user = user;
+                user.admin = count == 0 || user.admin;
+                diesel::insert_into(users).values(&user).execute(conn)
+            })
+        })
         .await;
     if insert_result.is_err() {
         if let Some(uploaded_path) = next_profile_image_path.as_deref() {
             let _ = remove_managed_profile_image(uploaded_path).await;
         }
-        return Err(Status::InternalServerError);
+        return Err(
+            if matches!(insert_result, Err(diesel::result::Error::NotFound)) {
+                Status::Unauthorized
+            } else {
+                Status::InternalServerError
+            },
+        );
     }
 
     Ok("User created")
 }
 
 #[get("/api/v1/user-profile-images/<filename>")]
-pub async fn get_user_profile_image(filename: &str) -> Result<NamedFile, Status> {
+pub async fn get_user_profile_image(
+    _user: UserGuard,
+    filename: &str,
+) -> Result<NamedFile, Status> {
     if !is_safe_profile_image_filename(filename) {
         return Err(Status::NotFound);
     }

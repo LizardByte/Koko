@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde::Deserialize;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
@@ -123,7 +123,7 @@ pub(crate) fn item_lookup_reference_priority(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 struct YoutubeOEmbedMetadata {
     title: Option<String>,
     thumbnail_url: Option<String>,
@@ -143,11 +143,7 @@ async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadat
         return None;
     }
     let payload = response.text().await.ok()?;
-    let payload = serde_json::from_str::<Value>(&payload).ok()?;
-    Some(YoutubeOEmbedMetadata {
-        title: text_field(&payload, &["title"]),
-        thumbnail_url: text_field(&payload, &["thumbnail_url"]),
-    })
+    serde_json::from_str(&payload).ok()
 }
 
 fn database_path_for_item_type(item_type: &str) -> Option<&'static str> {
@@ -178,28 +174,18 @@ fn normalize_database_id(
     }
 }
 
-fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
-    serde_json::from_str::<Value>(payload_json)
-        .ok()?
-        .get("youtube_theme_url")?
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(youtube_watch_url)
+/// ThemerrDB movie, show, and collection records expose this same theme field.
+#[derive(Deserialize)]
+struct ThemeResponse {
+    youtube_theme_url: Option<String>,
 }
 
-fn text_field(
-    value: &Value,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
+fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
+    serde_json::from_str::<ThemeResponse>(payload_json)
+        .ok()?
+        .youtube_theme_url
+        .as_deref()
+        .and_then(youtube_watch_url)
 }
 
 #[cfg(test)]

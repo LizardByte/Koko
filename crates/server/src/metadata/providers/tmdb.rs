@@ -566,7 +566,8 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    let fresh = crate::metadata::cache_policy::bypassed();
+    tokio::task::spawn_blocking(move || crate::metadata::cache_policy::blocking(fresh, operation))
         .await
         .map_err(|error| format!("TMDB request task failed: {}", error))?
 }
@@ -728,12 +729,14 @@ fn tmdb_cached_person_detail(
             image_languages,
         ],
     );
-    if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&cache_key).cloned())
-    {
-        return Some(cached);
+    if !crate::metadata::cache_policy::bypassed() {
+        if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&cache_key).cloned())
+        {
+            return Some(cached);
+        }
     }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
@@ -785,12 +788,14 @@ fn tmdb_cached_collection_detail(
             language,
         ],
     );
-    if let Some(cached) = TMDB_COLLECTION_DETAIL_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&cache_key).cloned())
-    {
-        return Some(cached);
+    if !crate::metadata::cache_policy::bypassed() {
+        if let Some(cached) = TMDB_COLLECTION_DETAIL_CACHE
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&cache_key).cloned())
+        {
+            return Some(cached);
+        }
     }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
@@ -1733,6 +1738,17 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn blocking_tmdb_requests_inherit_the_refresh_cache_policy() {
+        let bypassed = crate::metadata::cache_policy::fresh(async {
+            super::run_tmdb_blocking(|| Ok(crate::metadata::cache_policy::bypassed()))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(bypassed);
+        assert!(!crate::metadata::cache_policy::bypassed());
+    }
     #[test]
     fn response_fields_are_selected_by_endpoint_type() {
         let movie = serde_json::json!({

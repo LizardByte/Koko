@@ -1474,11 +1474,11 @@ async fn load_show_descendant_refresh_targets(
     provider_id: MetadataProviderId,
     show_external_id: &str,
 ) -> Result<Vec<MetadataRefreshTarget>, Status> {
-    let lookup = load_provider_show_descendant_targets(
+    let lookup = crate::metadata::cache_policy::fresh(load_provider_show_descendant_targets(
         &settings.metadata,
         provider_id.clone(),
         show_external_id,
-    )
+    ))
     .await
     .map_err(|error| {
         log::error!(
@@ -1953,7 +1953,10 @@ async fn execute_metadata_refresh_target_inner(
         target.external_id,
         target.media_type
     );
-    let snapshot_result = fetch_metadata_refresh_snapshots(db, settings, target).await;
+    let snapshot_result = crate::metadata::cache_policy::fresh(fetch_metadata_refresh_snapshots(
+        db, settings, target,
+    ))
+    .await;
 
     match snapshot_result {
         Ok(snapshots) => {

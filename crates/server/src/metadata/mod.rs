@@ -46,6 +46,7 @@ use sha2::{
 use strsim::normalized_levenshtein;
 
 mod artwork;
+pub(crate) mod cache_policy;
 pub(crate) mod http;
 mod providers;
 pub use providers::{
@@ -3479,7 +3480,13 @@ fn write_metadata_snapshot_cache(
 }
 
 pub(crate) fn read_metadata_response_cache_text(cache_key: &str) -> Option<String> {
-    let path = metadata_response_cache_path(cache_key);
+    read_metadata_response_cache_file(&metadata_response_cache_path(cache_key))
+}
+
+fn read_metadata_response_cache_file(path: &Path) -> Option<String> {
+    if cache_policy::bypassed() {
+        return None;
+    }
     let contents = fs::read_to_string(&path).ok()?;
     let created_at = fs::metadata(&path)
         .ok()
@@ -4748,6 +4755,24 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn forced_metadata_refresh_bypasses_cached_response_files() {
+        let path = std::env::temp_dir().join(format!("koko-response-{}", rand::random::<u64>()));
+        fs::write(&path, "cached response").unwrap();
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached response")
+        );
+        cache_policy::fresh(async {
+            assert_eq!(read_metadata_response_cache_file(&path), None);
+        })
+        .await;
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached response")
+        );
+        fs::remove_file(path).unwrap();
+    }
     #[test]
     fn locale_fallback_requires_text_and_fills_missing_fields() {
         let primary = StoredMetadataSnapshot {

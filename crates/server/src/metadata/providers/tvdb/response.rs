@@ -98,7 +98,6 @@ pub(super) struct Fields<'a> {
     pub ratings: &'a [ContentRating],
     pub trailers: &'a [Trailer],
     pub remote_ids: &'a [RemoteId],
-    pub score: Option<f32>,
 }
 
 pub(super) trait Record: Serialize {
@@ -130,7 +129,6 @@ impl Record for MovieExtendedRecord {
             ratings: self.content_ratings.as_deref().unwrap_or_default(),
             trailers: self.trailers.as_deref().unwrap_or_default(),
             remote_ids: self.remote_ids.as_deref().unwrap_or_default(),
-            score: self.score.map(|score| score as f32),
             ..Fields::default()
         }
     }
@@ -160,7 +158,6 @@ impl Record for SeriesExtendedRecord {
             ratings: self.content_ratings.as_deref().unwrap_or_default(),
             trailers: self.trailers.as_deref().unwrap_or_default(),
             remote_ids: self.remote_ids.as_deref().unwrap_or_default(),
-            score: self.score.map(|score| score as f32),
             ..Fields::default()
         }
     }
@@ -554,7 +551,8 @@ pub(super) fn details<T: Record>(
             .iter()
             .filter_map(|genre| text(genre.name.as_deref()))
             .collect(),
-        rating: fields.score,
+        // TheTVDB's score is relative popularity, not a user rating.
+        rating: None,
         content_rating: fields
             .ratings
             .iter()

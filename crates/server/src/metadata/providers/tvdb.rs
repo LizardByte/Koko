@@ -884,6 +884,20 @@ fn push_language_preference(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn popularity_is_never_persisted_as_a_user_rating() {
+        let response: super::Response<tvdb4::models::MovieExtendedRecord> =
+            serde_json::from_value(serde_json::json!({
+                "data": {
+                    "id": 901,
+                    "name": "Movie",
+                    "score": 123456
+                }
+            }))
+            .unwrap();
+        let snapshot = super::response::snapshot(&response, "901", "movie", "eng");
+        assert_eq!(super::metadata_details(&snapshot).rating, None);
+    }
+    #[test]
     fn descendants_only_use_the_series_default_season_order() {
         let series =
             serde_json::from_value::<tvdb4::models::SeriesExtendedRecord>(serde_json::json!({

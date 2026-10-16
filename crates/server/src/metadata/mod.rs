@@ -3626,7 +3626,7 @@ impl ArtworkKind {
     }
 }
 
-/// Download and cache one artwork asset to disk.
+/// Validate an existing provider artwork cache entry.
 pub(crate) fn cached_artwork_is_valid(path: &Path) -> bool {
     fs::read(path)
         .ok()
@@ -3933,7 +3933,21 @@ pub(crate) async fn try_cache_item_artwork(
                 url,
                 error
             );
-            None
+            // The managed directory is specific to this provider identity and
+            // locale. Keep serving its previous image until replacement succeeds.
+            let prefix = format!("{}-", sanitize_cache_key(cache_key));
+            fs::read_dir(item_dir)
+                .ok()?
+                .filter_map(Result::ok)
+                .find_map(|entry| {
+                    let path = entry.path();
+                    let matches_key = entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(&prefix));
+                    (matches_key && path.is_file() && cached_artwork_is_valid(&path))
+                        .then_some(path)
+                })
         }
     }
 }

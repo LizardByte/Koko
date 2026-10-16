@@ -99,17 +99,23 @@ async fn metadata_artwork_rejects_http_errors_and_invalid_images() {
 async fn metadata_artwork_refetches_previously_corrupted_cache_entries() {
     let dir = artwork_dir();
     let bytes = png();
-    let (url, server) = serve_artwork(200, bytes.clone());
-    let path = koko::metadata::expected_artwork_cache_path(&url, &dir, "poster");
-    std::fs::write(&path, b"old cached 404").unwrap();
-    assert_eq!(
-        koko::metadata::cache_artwork(&url, &dir, "poster")
-            .await
-            .unwrap(),
-        path
-    );
-    server.join().unwrap();
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    // A truncated PNG can still have a valid dimensions header.
+    for corrupted in [
+        b"old cached 404".as_slice(),
+        &bytes[..33],
+    ] {
+        let (url, server) = serve_artwork(200, bytes.clone());
+        let path = koko::metadata::expected_artwork_cache_path(&url, &dir, "poster");
+        std::fs::write(&path, corrupted).unwrap();
+        assert_eq!(
+            koko::metadata::cache_artwork(&url, &dir, "poster")
+                .await
+                .unwrap(),
+            path
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -139,6 +145,44 @@ async fn metadata_artwork_keeps_working_images_until_a_replacement_is_ready() {
     assert!(replacement.is_file());
     assert!(!old.exists());
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn metadata_asset_persistence_keeps_serving_the_previous_artwork_on_failure() {
+    let dir = artwork_dir();
+    let data_dir = dir.to_str().unwrap();
+    let mut record = snapshot("en-US");
+    let item_dir = koko::metadata::managed_metadata_asset_dir(
+        data_dir,
+        record.provider_id.clone(),
+        &record.external_id,
+        record.media_type.as_deref(),
+        &record.locale_key,
+    );
+    std::fs::create_dir_all(&item_dir).unwrap();
+    let old = koko::metadata::expected_artwork_cache_path(
+        "http://old.example/poster.png",
+        &item_dir,
+        "tmdb_poster",
+    );
+    std::fs::write(&old, png()).unwrap();
+    let (url, server) = serve_artwork(503, Vec::new());
+    record.artwork_url = Some(url);
+    let (poster, _, _) = koko::metadata::persist_item_metadata_assets(&record, 1, data_dir)
+        .await
+        .unwrap();
+    server.join().unwrap();
+    assert_eq!(poster, Some(old.clone()));
+
+    let (url, server) = serve_artwork(200, png());
+    record.artwork_url = Some(url);
+    let (poster, _, _) = koko::metadata::persist_item_metadata_assets(&record, 1, data_dir)
+        .await
+        .unwrap();
+    server.join().unwrap();
+    assert!(poster.unwrap().is_file());
+    assert!(!old.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

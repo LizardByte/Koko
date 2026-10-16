@@ -10,6 +10,10 @@ use koko::metadata::{
     set_item_metadata_refresh_state_for_locale,
     upsert_item_metadata_snapshot,
 };
+use std::io::{
+    Read,
+    Write,
+};
 
 fn connection() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
@@ -37,6 +41,76 @@ fn snapshot(locale: &str) -> StoredMetadataSnapshot {
         provider_locale_key: Some(locale.into()),
         provider_payload_json: None,
     }
+}
+
+fn artwork_dir() -> std::path::PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("koko-metadata-artwork-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn png() -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(1, 1)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
+fn serve_artwork(
+    status: u16,
+    body: Vec<u8>,
+) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/poster.png", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0; 2048];
+        stream.read(&mut buffer).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 {status} Result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap();
+    });
+    (url, server)
+}
+
+#[tokio::test]
+async fn metadata_artwork_rejects_http_errors_and_invalid_images() {
+    let dir = artwork_dir();
+    for status in [404, 503, 200] {
+        let (url, server) = serve_artwork(status, b"<html>unavailable</html>".to_vec());
+        assert!(
+            koko::metadata::cache_artwork(&url, &dir, "poster")
+                .await
+                .is_err()
+        );
+        server.join().unwrap();
+        assert!(!koko::metadata::expected_artwork_cache_path(&url, &dir, "poster").exists());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn metadata_artwork_refetches_previously_corrupted_cache_entries() {
+    let dir = artwork_dir();
+    let bytes = png();
+    let (url, server) = serve_artwork(200, bytes.clone());
+    let path = koko::metadata::expected_artwork_cache_path(&url, &dir, "poster");
+    std::fs::write(&path, b"old cached 404").unwrap();
+    assert_eq!(
+        koko::metadata::cache_artwork(&url, &dir, "poster")
+            .await
+            .unwrap(),
+        path
+    );
+    server.join().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

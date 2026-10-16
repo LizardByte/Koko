@@ -45,6 +45,7 @@ use sha2::{
 };
 use strsim::normalized_levenshtein;
 
+mod artwork;
 pub(crate) mod http;
 mod providers;
 pub use providers::{
@@ -3501,7 +3502,13 @@ pub async fn cache_artwork(
         .to_string();
     purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
     if cache_path.is_file() {
-        return Ok(cache_path);
+        if fs::read(&cache_path)
+            .ok()
+            .is_some_and(|bytes| artwork::validate(&bytes).is_ok())
+        {
+            return Ok(cache_path);
+        }
+        fs::remove_file(&cache_path).map_err(|error| error.to_string())?;
     }
 
     let bytes = http::client()
@@ -3509,9 +3516,12 @@ pub async fn cache_artwork(
         .send()
         .await
         .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
         .bytes()
         .await
         .map_err(|error| error.to_string())?;
+    artwork::validate(&bytes)?;
     fs::write(&cache_path, bytes).map_err(|error| error.to_string())?;
 
     Ok(cache_path)

@@ -4626,7 +4626,9 @@ pub async fn get_item_artwork(
         if let Some(url) = current_artwork_url {
             let expected_path =
                 expected_artwork_cache_path(url, &expected_item_asset_dir, &cache_key);
-            if existing_path.is_file() && existing_path == expected_path {
+            if existing_path == expected_path
+                && crate::metadata::cached_artwork_is_valid(&existing_path)
+            {
                 return NamedFile::open(existing_path)
                     .await
                     .map_err(|_| Status::NotFound);

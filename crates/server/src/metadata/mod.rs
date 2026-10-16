@@ -3604,6 +3604,13 @@ impl ArtworkKind {
 }
 
 /// Download and cache one artwork asset to disk.
+pub(crate) fn cached_artwork_is_valid(path: &Path) -> bool {
+    fs::read(path)
+        .ok()
+        .is_some_and(|bytes| artwork::validate(&bytes).is_ok())
+}
+
+/// Download and cache one artwork asset to disk.
 pub async fn cache_artwork(
     url: &str,
     cache_dir: &Path,
@@ -3618,10 +3625,7 @@ pub async fn cache_artwork(
         .ok_or_else(|| "Invalid artwork cache file name".to_string())?
         .to_string();
     if cache_path.is_file() {
-        if fs::read(&cache_path)
-            .ok()
-            .is_some_and(|bytes| artwork::validate(&bytes).is_ok())
-        {
+        if cached_artwork_is_valid(&cache_path) {
             purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
             return Ok(cache_path);
         }

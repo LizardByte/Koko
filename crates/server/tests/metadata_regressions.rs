@@ -362,3 +362,87 @@ fn metadata_secondary_misses_clear_only_the_affected_provider_and_locale() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].locale_key, "en-US");
 }
+
+#[test]
+fn secondary_collection_themes_are_cleared_after_a_miss_or_rematch() {
+    use diesel::RunQueryDsl;
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    let mut conn = connection();
+    let details = koko::metadata::ProviderMetadataDetails {
+        collections: ["234", "235"]
+            .map(|id| koko::metadata::ProviderMetadataCollection {
+                external_id: id.into(),
+                name: Some(format!("Collection {id}")),
+                overview: None,
+                artwork_url: None,
+                backdrop_url: None,
+                theme_song_url: None,
+            })
+            .into(),
+        ..Default::default()
+    };
+    koko::metadata::upsert_item_metadata_link(
+        &mut conn,
+        1,
+        &snapshot("en-US"),
+        &details,
+        "primary",
+        None,
+    )
+    .unwrap();
+    let references = koko::media::get_item_youtube_theme_collection_references(
+        &mut conn,
+        1,
+        MetadataProviderId::Themerr,
+    )
+    .unwrap();
+    assert_eq!(references.len(), 2);
+    for (id, item_type, database_id, external_id) in &references {
+        koko::metadata::upsert_secondary_collection_theme_song_url(
+            &mut conn,
+            *id,
+            MetadataProviderId::Themerr,
+            item_type,
+            database_id,
+            external_id,
+            "https://www.youtube.com/watch?v=abcdefghijk",
+        )
+        .unwrap();
+    }
+    let secondary_memberships = |conn: &mut SqliteConnection| {
+        diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM metadata_collection_items i JOIN metadata_collections \
+             c ON c.id = i.collection_id WHERE i.media_item_id = 1 AND c.relation_kind = \
+             'secondary'",
+        )
+        .get_result::<CountRow>(conn)
+        .unwrap()
+        .count
+    };
+    assert_eq!(secondary_memberships(&mut conn), 2);
+    koko::metadata::clear_secondary_collection_metadata(
+        &mut conn,
+        references[0].0,
+        MetadataProviderId::Themerr,
+    )
+    .unwrap();
+    assert_eq!(secondary_memberships(&mut conn), 1);
+    assert_eq!(
+        diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM metadata_collections WHERE relation_kind = 'primary'"
+        )
+        .get_result::<CountRow>(&mut conn)
+        .unwrap()
+        .count,
+        2
+    );
+
+    let mut corrected = snapshot("en-US");
+    corrected.external_id = "604".into();
+    upsert_item_metadata_snapshot(&mut conn, 1, &corrected).unwrap();
+    assert_eq!(secondary_memberships(&mut conn), 0);
+}

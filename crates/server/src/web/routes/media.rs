@@ -811,7 +811,21 @@ async fn persist_secondary_metadata_for_item(
                     })?;
                     break;
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    let provider_id = provider_id.clone();
+                    db.run(move |conn| {
+                        crate::metadata::clear_secondary_collection_metadata(
+                            conn,
+                            collection_id,
+                            provider_id,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        log::error!("Failed to clear stale secondary collection metadata: {error}");
+                        Status::InternalServerError
+                    })?;
+                }
                 Err(error) => {
                     log::warn!(
                         "Failed to load {} secondary collection metadata for media item {} ({} {} \

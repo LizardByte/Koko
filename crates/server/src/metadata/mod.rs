@@ -2252,6 +2252,20 @@ fn invalidate_item_secondary_metadata(
     item_id: i32,
 ) -> Result<(), diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as links;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items;
+    use crate::db::schema::metadata_collections::dsl as collections;
+    diesel::delete(
+        collection_items::metadata_collection_items
+            .filter(collection_items::media_item_id.eq(item_id))
+            .filter(
+                collection_items::collection_id.eq_any(
+                    collections::metadata_collections
+                        .filter(collections::relation_kind.eq("secondary"))
+                        .select(collections::id),
+                ),
+            ),
+    )
+    .execute(conn)?;
     diesel::delete(
         links::item_metadata_links
             .filter(links::media_item_id.eq(item_id))
@@ -2962,6 +2976,28 @@ fn first_collection_extra_url(
     collections
         .iter()
         .find_map(|collection| urls_by_collection_id.get(&collection.id).cloned())
+}
+
+/// Clear a secondary collection after the provider definitively reports no theme.
+pub fn clear_secondary_collection_metadata(
+    conn: &mut SqliteConnection,
+    source_collection_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_collections::dsl as collections;
+    let source = collections::metadata_collections
+        .find(source_collection_id)
+        .select(MetadataCollection::as_select())
+        .first::<MetadataCollection>(conn)?;
+    diesel::delete(
+        collections::metadata_collections
+            .filter(collections::provider_id.eq(provider_id.as_storage_value()))
+            .filter(collections::relation_kind.eq("secondary"))
+            .filter(collections::source_provider_id.eq(source.source_provider_id))
+            .filter(collections::source_external_id.eq(source.source_external_id)),
+    )
+    .execute(conn)?;
+    Ok(())
 }
 
 /// Upsert a secondary collection metadata row with a provider-supplied theme-song URL.

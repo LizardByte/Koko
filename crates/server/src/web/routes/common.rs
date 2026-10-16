@@ -36,6 +36,15 @@ pub async fn index() -> Result<NamedFile, RawHtml<String>> {
     Err(RawHtml(web_client_missing_html()))
 }
 
+/// Serve the application icon even when the web-client bundle is unavailable.
+#[get("/favicon.ico")]
+pub fn favicon() -> (ContentType, &'static [u8]) {
+    (
+        ContentType::Icon,
+        include_bytes!("../../../../../assets/icon.ico"),
+    )
+}
+
 /// Serve only the provider logos embedded in the backend, independently of the web-client bundle.
 #[get("/assets/providers/<filename>")]
 pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Status> {
@@ -168,6 +177,7 @@ fn web_client_missing_html() -> String {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <title>{0}</title>
     <style>
       body {{

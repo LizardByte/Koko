@@ -80,6 +80,21 @@ async fn test_root_route_serves_built_asset_when_available() {
 }
 
 #[rocket::async_test]
+async fn test_favicon_serves_application_icon_without_authentication() {
+    let client = create_test_client(Some("favicon")).await;
+    let response = client.get("/favicon.ico").dispatch().await;
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.content_type(), Some(ContentType::Icon));
+    let bytes = response.into_bytes().await.expect("Expected icon bytes");
+    assert_eq!(bytes, include_bytes!("../../../../../assets/icon.ico"));
+
+    let response = client.head("/favicon.ico").dispatch().await;
+    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.content_type(), Some(ContentType::Icon));
+    assert!(response.into_bytes().await.unwrap_or_default().is_empty());
+}
+
+#[rocket::async_test]
 async fn test_all_provider_descriptors_serve_local_logo_assets() {
     let client = create_test_client(Some("provider_logo_assets")).await;
     let providers_response = client.get("/api/v1/metadata/providers").dispatch().await;

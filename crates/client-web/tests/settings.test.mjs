@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
 import { createServer as createHttpServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 
 // Load the actual TypeScript views through the existing Vite dependency.
@@ -47,6 +48,21 @@ beforeEach(() => {
       message: `event-${index}`,
     })),
   };
+});
+
+test('pages explicitly request the application favicon, which is served as icon bytes', async () => {
+  const base = `http://127.0.0.1:${assetServer.address().port}`;
+  const html = await (await fetch(`${base}/settings/libraries`)).text();
+  assert.match(html, /<link\b[^>]*rel="icon"[^>]*href="\/favicon\.ico"/);
+  const response = await fetch(`${base}/favicon.ico`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/x-icon');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.deepEqual(bytes, await readFile(new URL('../../../assets/icon.ico', import.meta.url)));
+  const head = await fetch(`${base}/favicon.ico`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-type'), 'image/x-icon');
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
 });
 
 test('log pages bound the rendered entries and retain every result in order', () => {

@@ -1,4 +1,4 @@
-/** Renders metadata dashboard, system activity, and log viewer panels. */
+/** Renders metadata dashboard and system activity panels. */
 import type { MediaItemSummary } from '../api';
 import { escapeHtml, formatTimestamp } from './format';
 import { activityProgress, itemHasActiveMetadataRefresh, itemIsMetadataPending } from './activities';
@@ -161,12 +161,12 @@ export function renderMetadataDashboard(): string {
 
   return `
     <section class="panel page-panel metadata-dashboard-panel">
-      <div class="section-heading section-heading-actions">
+      <div class="section-heading metadata-dashboard-heading">
         <div>
           <h3>Metadata dashboard</h3>
           <p class="muted">Browse every item, identify failed refreshes, and spot pending items that no longer have an active worker.</p>
         </div>
-        <div class="provider-tags">
+        <div class="provider-tags metadata-dashboard-summary">
           <span class="tag">${state.dashboardItems.length} total</span>
           <span class="tag ${summary.failed ? 'danger-tag' : ''}">${summary.failed} failed</span>
           <span class="tag warning">${summary.pending} active</span>
@@ -247,86 +247,12 @@ export function renderSystemActivitiesPanel(): string {
     <section class="panel page-panel settings-activity-panel">
       <div class="section-heading section-heading-actions">
         <div>
-          <h3>Backend activities</h3>
-          <p class="muted">Active background work that the browser is polling.</p>
+          <h3>Background activities</h3>
+          <p class="muted">Track work running on your server.</p>
         </div>
         <span class="tag">${activities.length} active</span>
       </div>
       ${activitiesContent}
-    </section>
-  `;
-}
-
-export function renderLogViewer(): string {
-  const logEntries = state.logsResponse?.entries ?? [];
-  let logEntriesContent = '<div class="empty-state tight">No log entries matched the current filters.</div>';
-  if (logEntries.length) {
-    logEntriesContent = `<div class="table-shell">
-            <table class="data-table log-entries-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Level</th>
-                  <th>Module</th>
-                  <th>Source</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>${logEntries.map((entry) => {
-                let levelTagClass = '';
-                if (entry.level === 'ERROR') {
-                  levelTagClass = 'danger-tag';
-                } else if (entry.level === 'WARN') {
-                  levelTagClass = 'warning';
-                }
-                return `
-                <tr>
-                  <td>${escapeHtml(entry.timestamp)}</td>
-                  <td><span class="tag ${levelTagClass}">${escapeHtml(entry.level)}</span></td>
-                  <td>${escapeHtml(entry.module)}</td>
-                  <td class="muted">${escapeHtml(entry.source_file_path)}${typeof entry.line_number === 'number' ? `:${entry.line_number}` : ''}</td>
-                  <td><pre class="log-entry-message">${escapeHtml(entry.message)}</pre></td>
-                </tr>
-              `;
-              }).join('')}</tbody>
-            </table>
-          </div>`;
-  }
-
-  return `
-    <section class="panel page-panel settings-log-panel">
-      <div class="section-heading section-heading-actions">
-        <div>
-          <h3>Logs</h3>
-          <p class="muted">Structured logs from ${escapeHtml(state.logsResponse?.log_path ?? 'the current log file')}.</p>
-        </div>
-        <button type="button" class="secondary-button" id="refresh-log-viewer">${renderButtonContent('Refresh logs', 'refresh-cw')}</button>
-      </div>
-      <form id="log-filter-form" class="settings-form log-filter-form">
-        <div class="form-row log-filter-row">
-          <label>Level
-            <select name="log_level">
-              <option value="" ${state.logFilters.level ? '' : 'selected'}>All levels</option>
-              ${['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR'].map((level) => `<option value="${level}" ${state.logFilters.level === level ? 'selected' : ''}>${level}</option>`).join('')}
-            </select>
-          </label>
-          <label>Module<input name="log_module" value="${escapeHtml(state.logFilters.module)}" placeholder="koko::web::routes::media" /></label>
-        </div>
-        <div class="form-row log-filter-row">
-          <label>From
-            <input name="log_since" type="datetime-local" value="${escapeHtml(state.logFilters.since)}" />
-          </label>
-          <label>Until
-            <input name="log_until" type="datetime-local" value="${escapeHtml(state.logFilters.until)}" />
-          </label>
-        </div>
-        <label>Search<input name="log_search" value="${escapeHtml(state.logFilters.search)}" placeholder="message text, source path, or module" /></label>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Apply filters', 'search')}</button>
-          <button type="button" class="secondary-button" id="clear-log-filters">${renderButtonContent('Clear filters', 'x')}</button>
-        </div>
-      </form>
-      ${logEntriesContent}
     </section>
   `;
 }

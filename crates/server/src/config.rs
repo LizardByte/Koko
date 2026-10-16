@@ -294,18 +294,6 @@ fn default_provider_enabled() -> bool {
     true
 }
 
-fn default_provider_rate_limit_per_second() -> u32 {
-    4
-}
-
-fn default_provider_retry_attempts() -> u32 {
-    3
-}
-
-fn default_provider_retry_backoff_ms() -> u32 {
-    1_000
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -365,9 +353,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
         MetadataProviderId::MusicBrainz => MetadataProviderSettings {
             id: MetadataProviderId::MusicBrainz,
@@ -377,9 +362,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
         MetadataProviderId::OpenLibrary => MetadataProviderSettings {
             id: MetadataProviderId::OpenLibrary,
@@ -389,9 +371,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
         MetadataProviderId::LocalNfo => MetadataProviderSettings {
             id: MetadataProviderId::LocalNfo,
@@ -401,9 +380,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
         MetadataProviderId::Themerr => MetadataProviderSettings {
             id: MetadataProviderId::Themerr,
@@ -413,9 +389,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
         MetadataProviderId::TrailerDb => MetadataProviderSettings {
             id: MetadataProviderId::TrailerDb,
@@ -425,9 +398,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         },
     }
 }
@@ -663,15 +633,6 @@ pub struct MetadataProviderSettings {
     /// Preferred language for metadata results.
     #[serde(default = "default_metadata_language")]
     pub language: String,
-    /// Maximum request rate the provider should use when making API calls.
-    #[serde(default = "default_provider_rate_limit_per_second")]
-    pub rate_limit_per_second: u32,
-    /// Maximum number of retry attempts after transient provider failures.
-    #[serde(default = "default_provider_retry_attempts")]
-    pub retry_attempts: u32,
-    /// Base retry backoff in milliseconds.
-    #[serde(default = "default_provider_retry_backoff_ms")]
-    pub retry_backoff_ms: u32,
 }
 
 /// Metadata acquisition settings.
@@ -876,9 +837,6 @@ impl Default for MetadataProviderSettings {
             api_key_configured: false,
             clear_api_key: false,
             language: default_metadata_language(),
-            rate_limit_per_second: default_provider_rate_limit_per_second(),
-            retry_attempts: default_provider_retry_attempts(),
-            retry_backoff_ms: default_provider_retry_backoff_ms(),
         }
     }
 }
@@ -1024,8 +982,6 @@ pub fn normalize_settings(settings: &mut Settings) {
             let trimmed = provider.language.trim();
             if trimmed.is_empty() { default_metadata_language() } else { trimmed.to_string() }
         };
-        provider.rate_limit_per_second = provider.rate_limit_per_second.max(1);
-        provider.retry_backoff_ms = provider.retry_backoff_ms.max(1);
         provider.api_key = normalized_secret_value(provider.api_key.as_ref());
         provider.api_key_secret_ref = normalized_secret_value(provider.api_key_secret_ref.as_ref());
         provider.api_key_configured = metadata_provider_has_api_key_value(provider);

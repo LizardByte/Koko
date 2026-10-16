@@ -1,8 +1,10 @@
 /** Renders home, browse, shelf, and media-card markup. */
-import type { MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
+import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
+import { activeBrowseFilterCount, browseItems } from './browsePreferences';
+import { renderLoadingCards, renderLoadingDetail } from './loadingView';
 import { currentThemeSongYouTubeTarget } from './mediaTargets';
 import { playbackProgressPercent } from './playbackProgress';
 import { state } from './state';
@@ -37,6 +39,8 @@ import {
   renderIcon,
   selectedLibraryIcon,
 } from './ui';
+
+export const LIBRARY_PAGE_SIZE = 60;
 
 export function browseDetailPath(kind: BrowseFilter['kind'], key: string): string {
   let segment = 'categories';
@@ -113,7 +117,7 @@ export function renderBrowseFilterDetail(): string {
   const filter = state.route.page === 'browse-detail' ? browseFilterForRoute() : state.browseFilter;
   if (!filter) {
     if (state.libraryItemsLoading) {
-      return '<div class="empty-state">Loading library items…</div>';
+      return renderLoadingCards('Loading library items');
     }
     return '<div class="empty-state">This page is no longer available for the current library.</div>';
   }
@@ -129,7 +133,7 @@ export function renderBrowseFilterDetail(): string {
 
   return `
     <section class="browse-filter-detail">
-      <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" ${artworkStyle}>
+      <div class="home-feature ${filter.artworkUrl ? 'has-artwork' : ''}" data-nav-section="featured" data-nav-label="Overview" ${artworkStyle}>
         <div class="home-feature-copy">
           <p class="eyebrow">${escapeHtml(filterKindLabel)}</p>
           <h2>${escapeHtml(filter.label)}</h2>
@@ -145,7 +149,7 @@ export function renderBrowseFilterDetail(): string {
           </button>
         </div>
       </div>
-      <div class="item-grid">${items.map(renderItemCard).join('')}</div>
+      <div class="item-grid" data-nav-section="items" data-nav-label="Items">${items.map(renderItemCard).join('')}</div>
     </section>
   `;
 }
@@ -154,7 +158,7 @@ export function renderCollectionDetailPage(): string {
   const collection = collectionForRoute();
   if (!collection) {
     if (state.libraryItemsLoading) {
-      return '<div class="empty-state">Loading collection…</div>';
+      return renderLoadingDetail('Loading collection');
     }
     return '<div class="empty-state">This collection is no longer available for the current library.</div>';
   }
@@ -166,7 +170,7 @@ export function renderCollectionDetailPage(): string {
 
   return `
     <section class="item-page collection-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster ${posterUrl ? 'has-image' : ''}">
           ${posterUrl ? `<img src="${escapeHtml(posterUrl)}" alt="${escapeHtml(collection.name)} poster" />` : renderIcon('image', 'audio-player-art-icon')}
         </div>
@@ -184,7 +188,7 @@ export function renderCollectionDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">${items.length} item${items.length === 1 ? '' : 's'}</span>
@@ -201,7 +205,7 @@ export function renderCategoryDetailPage(): string {
   const category = categoryForRoute();
   if (!category) {
     if (state.libraryItemsLoading) {
-      return '<div class="empty-state">Loading genre…</div>';
+      return renderLoadingDetail('Loading genre');
     }
     return '<div class="empty-state">This genre is no longer available for the current library.</div>';
   }
@@ -211,7 +215,7 @@ export function renderCategoryDetailPage(): string {
 
   return `
     <section class="item-page grouped-page category-detail-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster">
           ${renderIcon('layout-grid', 'audio-player-art-icon')}
         </div>
@@ -228,7 +232,7 @@ export function renderCategoryDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">${category.items.length} item${category.items.length === 1 ? '' : 's'}</span>
@@ -249,7 +253,7 @@ export function renderPlaylistDetailPage(): string {
 
   return `
     <section class="item-page grouped-page playlist-detail-page">
-      <section class="item-hero collection-hero">
+      <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
         <div class="detail-art item-poster collection-poster">
           ${renderIcon('play', 'audio-player-art-icon')}
         </div>
@@ -266,7 +270,7 @@ export function renderPlaylistDetailPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section">
+      <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
           <h3>Items</h3>
           <span class="muted">0 items</span>
@@ -342,56 +346,40 @@ export function missingItemDetailBadgeMarkup(item: MediaItemSummary): string {
 }
 
 export function playbackStatusBadgeMarkup(item: MediaItemSummary): string {
-  const badges: string[] = [];
-  const progressPercent = playbackProgressPercent(item);
-  if (progressPercent !== undefined) {
-    const label = `In progress: ${progressPercent}% watched`;
-    badges.push(`
-      <span class="media-card-progress" style="--watch-progress: ${progressPercent}%;" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>
-    `);
-  }
-
-  const watchCount = item.watch_count ?? 0;
-  if (watchCount > 0) {
-    const countLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount} times`;
-    badges.push(`
-      <span class="media-card-status is-watched icon-only" title="${escapeHtml(countLabel)}" aria-label="${escapeHtml(countLabel)}">
-        ${renderIcon('circle-check', 'status-icon')}
-      </span>
-    `);
-  }
-
-  return badges.join('');
+  return renderWatchProgress(item);
 }
 
-export function playbackDetailBadgeMarkup(item: MediaItemSummary): string {
+/** One artwork indicator: current playback progress, otherwise a completed watch. */
+export function renderWatchProgress(item: MediaItemSummary): string {
+  const progress = playbackProgressPercent(item);
+  if (progress !== undefined) {
+    const label = `In progress: ${progress}% watched`;
+    return `<span class="media-card-progress" style="--watch-progress: ${progress}%" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
+  }
   const watchCount = item.watch_count ?? 0;
-  const progressPercent = playbackProgressPercent(item);
-  const badges: string[] = [];
-  if (watchCount > 0) {
-    const watchedLabel = watchCount === 1 ? 'Watched' : `Watched ${watchCount}x`;
-    const watchedTitle = item.last_watched_at ? `Last watched ${formatTimestamp(item.last_watched_at)}` : watchedLabel;
-    badges.push(`<span class="tag success status-tag" title="${escapeHtml(watchedTitle)}">${renderIcon('circle-check', 'status-icon')}<span>${escapeHtml(watchedLabel)}</span></span>`);
-  }
-  if (progressPercent !== undefined) {
-    const progressLabel = `${progressPercent}% watched`;
-    badges.push(`<span class="tag status-tag">${escapeHtml(progressLabel)}</span>`);
-  }
-
-  return badges.join('');
+  if (!item.playback_completed && watchCount <= 0) return '';
+  const label = watchCount > 1 ? `Watched ${watchCount} times` : 'Watched';
+  const title = item.last_watched_at ? `${label} · Last watched ${formatTimestamp(item.last_watched_at)}` : label;
+  return `<span class="media-card-progress is-watched" style="--watch-progress: 100%" title="${escapeHtml(title)}" aria-label="${escapeHtml(label)}">${renderIcon('check', 'watch-completed-icon')}</span>`;
 }
 
-export function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: boolean): string {
+interface PlaybackTargetButtonOptions {
+  holdForOptions?: boolean;
+  subtitle?: string;
+  id?: string;
+}
+
+export function renderPlaybackTargetButton(target: MediaPlaybackTarget, secondary: boolean, { holdForOptions, subtitle, id }: PlaybackTargetButtonOptions = {}): string {
   return `
-    <button type="button" class="${secondary ? 'secondary-button' : ''}" data-playback-target-item-id="${target.item_id}" data-playback-target-start-ms="${target.start_ms}" title="${escapeHtml(target.display_title)}">
-      ${renderButtonContent(target.label, 'play')}
+    <button type="button" ${id ? `id="${escapeHtml(id)}"` : ''} class="${secondary ? 'secondary-button' : ''}" ${holdForOptions ? `data-resume-hold aria-describedby="resume-hold-hint" aria-controls="resume-playback-menu" aria-expanded="${state.resumeOptionsOpen}"` : ''} data-playback-target-item-id="${target.item_id}" data-playback-target-start-ms="${target.start_ms}" title="${escapeHtml(target.display_title)}">
+      ${renderButtonContent(target.label, secondary ? 'rotate-ccw' : 'play', 'start', subtitle)}
     </button>
   `;
 }
 
 export function itemCardSubtitle(item: MediaItemSummary): string | undefined {
   if (item.display_subtitle) {
-    return item.display_subtitle;
+    return item.display_subtitle === item.display_title ? undefined : item.display_subtitle;
   }
 
   if (item.item_type === 'episode' && typeof item.episode_number === 'number') {
@@ -399,7 +387,8 @@ export function itemCardSubtitle(item: MediaItemSummary): string | undefined {
   }
 
   if (item.item_type === 'season' && typeof item.season_number === 'number') {
-    return `Season ${item.season_number}`;
+    const subtitle = `Season ${item.season_number}`;
+    return subtitle === item.display_title ? undefined : subtitle;
   }
 
   return undefined;
@@ -440,12 +429,8 @@ export function renderItemCard(item: MediaItemSummary): string {
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
     && item.item_type === 'episode';
-  let secondaryMeta: string | undefined;
-  if (!isSeasonEpisodeCard) {
-    secondaryMeta = state.route.page === 'home' && typeof state.route.libraryId === 'number'
-      ? humanizeItemType(item.item_type)
-      : `${library?.name ?? 'Library'} · ${humanizeItemType(item.item_type)}`;
-  }
+  const showLibrary = activeLibraryId() === undefined;
+  const secondaryMeta = isSeasonEpisodeCard ? '' : [showLibrary ? library?.name : '', item.release_year].filter(Boolean).join(' · ');
   const metricMarkup = item.missing_since
     ? missingItemBadgeMarkup(item)
     : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
@@ -455,7 +440,7 @@ export function renderItemCard(item: MediaItemSummary): string {
     <button class="media-card ${useEpisodeLayout ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
       <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(artworkTypeClass)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
-          <span class="media-card-kind">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>
+          ${showLibrary ? `<span class="media-card-kind" title="${escapeHtml(humanizeItemType(item.item_type))}">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>` : ''}
           ${metricMarkup}
         </span>
         ${dynamicBadges}
@@ -470,18 +455,29 @@ export function renderItemCard(item: MediaItemSummary): string {
 export function renderHomeFeature(): string {
   const preview = homeFeaturePreview();
   if (!preview) {
-    return '';
+    if (state.isLoading) return '<section class="home-feature home-feature-loading" aria-label="Loading preview" aria-busy="true"><div class="home-feature-copy" aria-hidden="true"><div class="loading-line skeleton"></div><div class="loading-line short skeleton"></div></div></section>';
+    return `<section class="home-feature home-feature-empty"><div class="home-feature-copy"><h2>${state.homeTab === 'library' ? 'No matching titles' : 'No preview available'}</h2><p>${state.homeTab === 'library' ? 'Change a filter below to find something to watch.' : 'Details will appear here when media is available.'}</p></div></section>`;
   }
 
   if (preview.kind === 'collection') {
-    const collection = preview.collection;
-    const backdropUrl = pageBackdropUrlForCollection(collection);
-    return `
-      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+    return renderCollectionFeature(preview.collection);
+  }
+  return renderItemFeature(preview.item);
+}
+
+function featureArtworkStyle(backdropUrl?: string): string {
+  return backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : '';
+}
+
+function renderCollectionFeature(collection: MediaCollectionSummary): string {
+  const backdropUrl = pageBackdropUrlForCollection(collection);
+  const overview = collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`;
+  return `
+      <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
         <div class="home-feature-copy">
           <p class="eyebrow">Collection</p>
           <h2>${escapeHtml(collection.name)}</h2>
-          <p>${escapeHtml(collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`)}</p>
+          <p>${escapeHtml(overview)}</p>
           <div class="hero-meta-row">
             <span class="tag">${collection.item_count} title${collection.item_count === 1 ? '' : 's'}</span>
           </div>
@@ -491,21 +487,22 @@ export function renderHomeFeature(): string {
         </button>
       </section>
     `;
-  }
+}
 
-  const item = preview.item;
+function renderItemFeature(item: MediaItemSummary): string {
   const backdropUrl = pageBackdropUrlForItem(item);
   const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
+  const overview = item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`;
 
   return `
-    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" ${backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : ''}>
+    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
       <div class="home-feature-copy">
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
           : `<h2>${escapeHtml(item.display_title)}</h2>`}
-        <p>${escapeHtml(item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`)}</p>
+        <p>${escapeHtml(overview)}</p>
         <div class="hero-meta-row">
           ${genreMarkup}
           <span class="tag">${escapeHtml(formatChildCount(item))}</span>
@@ -603,12 +600,13 @@ export function renderSearchResultRow(result: MediaSearchResult, compact: boolea
 }
 
 export function renderSearchResults(): string {
+  if (state.searchLoading) return renderLoadingCards('Searching your library');
   if (!state.searchResults.length) {
     return '<section class="shelf"><div class="empty-state">No library content matched the current search.</div></section>';
   }
 
   return `
-    <section class="search-results-section">
+    <section class="search-results-section" data-nav-section="search-results" data-nav-label="Search results">
       <div class="shelf-header">
         <h3>Search results</h3>
         <span>${state.searchResults.length} matches</span>
@@ -627,12 +625,13 @@ export function visibleShelfItems(shelf: MediaShelf): MediaItemSummary[] {
 export function renderShelfStack(): string {
   const shelves = (state.home?.shelves ?? []).filter((shelf) => shelf.items.length);
   if (!shelves.length) {
+    if (state.isLoading) return renderLoadingCards('Loading your media');
     return '<section class="shelf"><div class="empty-state">No shelves are available yet. Add a library to get started.</div></section>';
   }
 
   return shelves
     .map((shelf) => `
-      <section class="shelf">
+      <section class="shelf" data-nav-section="shelf:${escapeHtml(shelf.id)}" data-nav-label="${escapeHtml(shelf.title)}" aria-label="${escapeHtml(shelf.title)}">
         <div class="shelf-header">
           <h3>${escapeHtml(shelf.title)}</h3>
           <span>${shelf.items.length} items</span>
@@ -680,7 +679,7 @@ type MetadataRefreshProgress = NonNullable<ReturnType<typeof metadataRefreshActi
 
 function renderEmptyLibraryOverview(): string {
   return `
-    <section class="panel page-panel library-overview-panel">
+    <section class="panel page-panel library-overview-panel" data-nav-section="library-status" data-nav-label="Library status">
       <div class="library-overview-grid">
         <article class="library-stat-card">
           <span class="label">Libraries</span>
@@ -749,7 +748,7 @@ export function renderLibraryOverview(): string {
   const stalePendingNote = renderStalePendingNote(stalePending);
 
   return `
-    <section class="panel page-panel library-overview-panel">
+    <section class="panel page-panel library-overview-panel" data-nav-section="library-status" data-nav-label="Library status">
       <div class="library-overview-header">
         <div>
           <p class="eyebrow">Library overview</p>
@@ -790,38 +789,92 @@ export function renderLibraryOverview(): string {
   `;
 }
 
+function browseSelect(name: string, label: string, value: string, options: Array<[string, string]>): string {
+  const optionMarkup = options.map(([key, text]) => `<option value="${escapeHtml(key)}" ${key === value ? 'selected' : ''}>${escapeHtml(text)}</option>`).join('');
+  return `<label>${label}<select name="${name}">${optionMarkup}</select></label>`;
+}
+
+export function renderLibraryToolbar(): string {
+  const allItems = filteredTopLevelLibraryItems();
+  const preferences = state.browsePreferences;
+  const genres = [...new Set(allItems.flatMap((item) => item.genres))].sort((left, right) => left.localeCompare(right));
+  const years = [...new Set(allItems.flatMap((item) => item.release_year ? [String(item.release_year)] : []))].sort((left, right) => Number(right) - Number(left));
+  // Keep a saved filter visible even when the current library no longer has matching items.
+  if (preferences.genre && !genres.includes(preferences.genre)) genres.push(preferences.genre);
+  if (preferences.year && !years.includes(preferences.year)) years.push(preferences.year);
+  return `<form id="library-browse-form" class="browse-toolbar" data-nav-section="library-filters" data-nav-label="Sort and filter" ${state.browseFiltersOpen ? '' : 'hidden'}>
+    ${browseSelect('sort', 'Sort', preferences.sort, [['title', 'Title A–Z'], ['recent', 'Last modified'], ['year', 'Release year']])}
+    ${browseSelect('watched', 'Watch status', preferences.watched, [['all', 'All titles'], ['unwatched', 'Unwatched'], ['in-progress', 'In progress'], ['watched', 'Watched']])}
+    ${browseSelect('genre', 'Genre', preferences.genre, [['', 'All genres'], ...genres.map((genre): [string, string] => [genre, genre])])}
+    ${browseSelect('year', 'Year', preferences.year, [['', 'All years'], ...years.map((year): [string, string] => [year, year])])}
+    ${browseSelect('density', 'Card size', preferences.density, [['comfortable', 'Medium'], ['compact', 'Small'], ['spacious', 'Large']])}
+    <button type="button" class="secondary-button" id="reset-library-filters">${renderButtonContent('Reset', 'x')}</button>
+  </form>`;
+}
+
+export function visibleLibraryItems(): MediaItemSummary[] {
+  return browseItems(filteredTopLevelLibraryItems(), state.browsePreferences);
+}
+
+function renderEmptyLibrary(library?: MediaLibrary): string {
+  if (filteredTopLevelLibraryItems().length) {
+    return '<div class="empty-state">No titles match these filters. Try another selection or reset the filters.</div>';
+  }
+  if (state.browseFilter) {
+    return `<div class="empty-state">No items matched the current ${escapeHtml(state.browseFilter.kind)} filter.</div>`;
+  }
+  if (library?.status === 'never_scanned') {
+    return '<div class="empty-state">This library has not been scanned yet. Titles will appear after its first scan.</div>';
+  }
+  if (library?.status && library.status !== 'available') {
+    return `<div class="empty-state">This library is not ready yet: ${escapeHtml(libraryStatusLabel(library.status))}.</div>`;
+  }
+  return '<div class="empty-state">No titles are available in this library yet.</div>';
+}
+
+function renderLibraryPagination(count: number, page: number, lastPage: number): string {
+  if (lastPage <= 0) return '';
+  const start = page * LIBRARY_PAGE_SIZE;
+  return `<nav class="browse-pagination" aria-label="Library pages">
+    <button type="button" class="secondary-button" data-library-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>${renderButtonContent('Previous', 'chevron-left')}</button>
+    <span>${start + 1}–${Math.min(count, start + LIBRARY_PAGE_SIZE)} of ${count} titles · Page ${page + 1} of ${lastPage + 1}</span>
+    <button type="button" class="secondary-button" data-library-page="${page + 1}" ${page === lastPage ? 'disabled' : ''}>${renderButtonContent('Next', 'chevron-right')}</button>
+  </nav>`;
+}
+
 export function renderLibraryTab(): string {
-  const items = filteredTopLevelLibraryItems();
+  const items = visibleLibraryItems();
   const library = activeLibrary();
   const isSpecificLibrary = state.route.page === 'home' && typeof state.route.libraryId === 'number';
   const browseFilterKind = state.browseFilter ? browseFilterKindLabel(state.browseFilter.kind) : '';
+  const filterCount = activeBrowseFilterCount(state.browsePreferences);
+  const filterSuffix = filterCount === 1 ? '' : 's';
+  const filterStatus = filterCount ? `${filterCount} active filter${filterSuffix}` : 'No filters applied';
+  const filterLabel = filterCount ? `Filters · ${filterCount} active` : 'Filters';
 
-  if (!items.length) {
-    if (state.libraryItemsLoading) {
-      return '<div class="empty-state">Loading library items…</div>';
-    }
-
-    if (state.browseFilter) {
-      return `<div class="empty-state">No items matched the current ${escapeHtml(state.browseFilter.kind)} filter.</div>`;
-    }
-
-    if (library?.status === 'never_scanned') {
-      return '<div class="empty-state">This library has not been scanned yet. The show, season, and episode hierarchy will appear after the first scan completes.</div>';
-    }
-
-    if (library?.status && library.status !== 'available') {
-      return `<div class="empty-state">This library is not ready yet: ${escapeHtml(libraryStatusLabel(library.status))}.</div>`;
-    }
-
-    return '<div class="empty-state">No browseable items are available yet for this library.</div>';
+  let content = '';
+  if (state.libraryItemsLoading && !state.libraryItems.length) {
+    content = renderLoadingCards('Loading library items');
+  } else if (!items.length) {
+    content = renderEmptyLibrary(library);
+  } else {
+    const lastPage = Math.max(0, Math.ceil(items.length / LIBRARY_PAGE_SIZE) - 1);
+    const page = Math.min(lastPage, state.libraryPage);
+    const start = page * LIBRARY_PAGE_SIZE;
+    content = `<div class="item-grid library-item-grid density-${state.browsePreferences.density}">${items.slice(start, start + LIBRARY_PAGE_SIZE).map(renderItemCard).join('')}</div>
+      ${renderLibraryPagination(items.length, page, lastPage)}`;
   }
 
   return `
-    <section class="browse-section">
-      <div class="shelf-header browse-section-header">
-        <h3>${isSpecificLibrary ? 'All items' : 'All libraries'}</h3>
-        <span>${items.length} top-level item${items.length === 1 ? '' : 's'}</span>
+    <section class="browse-section" id="library-browse-root">
+      <div class="shelf-header browse-section-header" data-nav-section="library-tools" data-nav-label="Library controls">
+        <h3>${isSpecificLibrary ? escapeHtml(library?.name ?? 'Library') : 'All libraries'}</h3>
+        <div class="browse-header-actions">
+          <span role="status">${items.length} title${items.length === 1 ? '' : 's'}</span>
+          <button type="button" class="secondary-button browse-filter-toggle ${filterCount ? 'has-filters' : ''}" id="toggle-library-filters" aria-expanded="${state.browseFiltersOpen}" aria-controls="library-browse-form" aria-label="Filters: ${filterStatus}" title="${filterStatus}">${renderButtonContent(filterLabel, 'sliders-horizontal')}</button>
+        </div>
       </div>
+      ${renderLibraryToolbar()}
       ${state.browseFilter ? `
         <div class="active-filter-bar">
           <span class="tag success">${escapeHtml(browseFilterKind)}</span>
@@ -829,7 +882,7 @@ export function renderLibraryTab(): string {
           <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Clear filter', 'x')}</button>
         </div>
       ` : ''}
-      <div class="item-grid">${items.map(renderItemCard).join('')}</div>
+      <div data-nav-section="items" data-nav-label="Library titles">${content}</div>
     </section>
   `;
 }
@@ -837,11 +890,12 @@ export function renderLibraryTab(): string {
 export function renderCollectionsTab(): string {
   const collections = collectionSummaries();
   if (!collections.length) {
+    if (state.isLoading) return renderLoadingCards('Loading collections');
     return '<div class="empty-state">No linked collection data is available yet for this library.</div>';
   }
 
   return `
-    <section class="item-grid">
+    <section class="item-grid" data-nav-section="collections" data-nav-label="Collections" aria-label="Collections">
       ${collections.map((collection) => {
         const posterUrl = collection.artwork_url ?? collection.backdrop_url;
         return `
@@ -867,7 +921,7 @@ export function renderCollectionsTab(): string {
 
 export function renderPlaylistsTab(): string {
   return `
-    <section class="category-grid">
+    <section class="category-grid" data-nav-section="playlists" data-nav-label="Playlists" aria-label="Playlists">
       <button
         type="button"
         class="category-card panel filter-card-button"
@@ -886,11 +940,12 @@ export function renderPlaylistsTab(): string {
 export function renderCategoriesTab(): string {
   const categories = categorySummaries();
   if (!categories.length) {
+    if (state.libraryItemsLoading) return renderLoadingCards('Loading genres', 4, 'tiles');
     return '<div class="empty-state">No genre metadata is available yet for the current library.</div>';
   }
 
   return `
-    <section class="category-grid">
+    <section class="category-grid" data-nav-section="categories" data-nav-label="Categories" aria-label="Categories">
       ${categories.map((category) => `
         <button
           type="button"
@@ -945,8 +1000,10 @@ export function renderHomePage(): string {
   }
 
   return `
-    ${renderHomeNavbar()}
-    ${renderHomeFeature()}
+    <div class="home-pinned-header">
+      ${renderHomeNavbar()}
+      ${renderHomeFeature()}
+    </div>
     <section class="shelf-stack panel page-panel">${renderHomeTabContent()}</section>
   `;
 }
@@ -956,12 +1013,14 @@ export function renderSearchPopover(): string {
     return '';
   }
 
+  if (state.searchLoading) return '<div class="search-popover panel"><div class="search-loading-status" role="status">Searching your library…</div></div>';
+
   if (!state.searchResults.length) {
     return '<div class="search-popover panel"><div class="empty-state tight">No library content matched the current search.</div></div>';
   }
 
   return `
-    <div class="search-popover panel">
+    <div class="search-popover panel" data-nav-section="search-preview" data-nav-label="Search results">
       <div class="search-popover-header">
         <strong>Search results</strong>
         <span>${state.searchResults.length} match${state.searchResults.length === 1 ? '' : 'es'}</span>
@@ -992,7 +1051,7 @@ export function renderHomeNavbar(): string {
     : '';
 
   return `
-    <header class="home-navbar">
+    <header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Browse and search">
       ${renderHomeTabs()}
       <div class="home-navbar-tools">
         <form id="search-form" class="search-form">

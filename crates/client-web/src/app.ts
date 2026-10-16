@@ -5,13 +5,11 @@ import {
   activeLibraryScanActivities,
   activeLibraryPendingRefreshCount,
   activeMetadataRefreshActivities,
-  currentLogFilterRequest,
   itemIsMetadataPending,
   libraryRefreshProgress,
   snapshotJson,
 } from './app/activities';
 import {
-  canManageUsers,
   currentUser,
   renderLoginScreen,
   renderAuthShell,
@@ -20,9 +18,14 @@ import {
   requiresSetup,
 } from './app/auth';
 import { setElementHtml as patchElementHtml } from './app/domPatcher';
-import { abortRenderEvents, bindEvents, type AppEventBindingContext } from './app/eventBindings';
+import { abortRenderEvents, bindEvents, cancelPendingHomeSearch, type AppEventBindingContext } from './app/eventBindings';
 import { escapeHtml } from './app/format';
-import { bindGlobalInputHandlers } from './app/input';
+import { bindGlobalInputHandlers, syncNavigationAfterRender } from './app/input';
+import { syncPinnedHomeHeader } from './app/pinnedHeader';
+import { captureBrowseSession, restoreBrowseSession, restoreBrowsePosition } from './app/browseSession';
+import { loadBrowsePreferences } from './app/browsePreferences';
+import { loadRouteData, prepareBrowseRoute } from './app/routeData';
+import { createRouteRenderer } from './app/routeRenderer';
 import {
   configurePlaybackController,
   renderPlayerOverlay,
@@ -46,6 +49,7 @@ import {
   renderPersonPage,
 } from './app/itemPersonView';
 import { renderSettingsPage } from './app/settingsView';
+import type { AppRoute } from './app/types';
 import {
   renderIcon,
   renderUserAvatar,
@@ -56,20 +60,13 @@ import {
   getAppBootstrap,
   getApiMode,
   getArtworkUrl,
-  getCapabilities,
   getHome,
   getItem,
   getItemMetadata,
   getItems,
   getLibraries,
-  getPerson,
-  getMetadataProviders,
-  getLogs,
-  getPlaybackDecision,
   getSystemActivities,
-  getSettings,
   getStoredAuthToken,
-  getUsers,
   searchItems,
   type MediaLibrary,
 } from './api';
@@ -82,6 +79,7 @@ const appRoot = app;
 let pendingLibraryRefreshHandle: number | undefined;
 let pendingMetadataRefreshHandle: number | undefined;
 let appStarted = false;
+let routeLoadGeneration = 0;
 
 function expandLazyShelfRowsForPatch(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>('[data-lazy-shelf-id]').forEach((row) => {
@@ -117,6 +115,7 @@ function setElementHtml(root: HTMLElement, html: string, preserveDom = true): vo
     abortEvents: abortRenderEvents,
     beforePatch: expandLazyShelfRowsForPatch,
   });
+  syncPinnedHomeHeader();
 }
 
 function shouldDeferAutoRefreshRender(): boolean {
@@ -263,17 +262,22 @@ function navigateTo(path: string, replace = false): void {
   }
 
   if (replace) {
+    captureBrowseSession();
     globalThis.history.replaceState({}, '', path);
   } else {
+    captureBrowseSession();
     globalThis.history.pushState({}, '', path);
   }
   state.route = parseRoute();
   if (state.route.page === 'home') {
-    state.homeTab = defaultHomeTab(state.route);
+    if (!restoreBrowseSession()) state.homeTab = defaultHomeTab(state.route);
     state.browseFilter = undefined;
+  } else if (state.route.page === 'browse-detail') {
+    restoreBrowseSession();
   }
   state.isTrailerMenuOpen = false;
   void refreshData();
+  globalThis.scrollTo({ top: 0 });
 }
 
 function eventBindingContext(): AppEventBindingContext {
@@ -313,45 +317,6 @@ function isRailCollapsed(): boolean {
   return state.route.page === 'item';
 }
 
-async function loadLibraryItemsForCurrentRoute(): Promise<void> {
-  const route = parseRoute();
-  if (route.page !== 'home' && route.page !== 'browse-detail') {
-    return;
-  }
-  const libraryId = route.libraryId;
-  const searchQuery = state.searchQuery.trim();
-  state.libraryItemsLoading = true;
-  render(true);
-
-  try {
-    const [libraryItems, searchResults] = await Promise.all([
-      getItems(libraryId),
-      searchQuery ? searchItems(searchQuery) : Promise.resolve([]),
-    ]);
-    const nextRoute = parseRoute();
-    if (
-      (nextRoute.page !== 'home' && nextRoute.page !== 'browse-detail')
-      || nextRoute.libraryId !== libraryId
-    ) {
-      return;
-    }
-    state.libraryItems = libraryItems;
-    state.searchResults = searchResults;
-    state.error = undefined;
-  } catch (error) {
-    state.error = error instanceof Error ? error.message : 'Failed to load library items.';
-  } finally {
-    const nextRoute = parseRoute();
-    if (
-      (nextRoute.page === 'home' || nextRoute.page === 'browse-detail')
-      && nextRoute.libraryId === libraryId
-    ) {
-      state.libraryItemsLoading = false;
-      render(true);
-    }
-  }
-}
-
 function renderCurrentPage(): string {
   switch (state.route.page) {
     case 'item':
@@ -383,7 +348,7 @@ function renderRail(): string {
     : '';
 
   return `
-    <aside class="library-rail${collapsed ? ' collapsed' : ''}">
+    <aside class="library-rail${collapsed ? ' collapsed' : ''}" data-nav-section="libraries" data-nav-label="Libraries" aria-label="Libraries">
       <div class="library-rail-top">
         <div class="brand-block">
           <div class="brand-mark logo-brand-mark"><img class="brand-logo" src="${escapeHtml(kokoLogoUrl)}" alt="" /></div>
@@ -422,6 +387,32 @@ function renderRail(): string {
         </button>
       </div>
     </aside>
+    <header class="mobile-library-navigation" data-nav-section="libraries" data-nav-label="Libraries" aria-label="Libraries">
+      <span class="mobile-brand"><img src="${escapeHtml(kokoLogoUrl)}" alt="Koko" /></span>
+      <form id="mobile-library-form" class="mobile-library-form">
+        <label for="mobile-library-picker" class="sr-only">Library</label>
+        <select id="mobile-library-picker">
+          <option value="/" ${activeLibraryIdValue === undefined ? 'selected' : ''}>Home</option>
+          ${state.libraries.map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
+        </select>
+        <button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>
+        <button type="button" class="secondary-button icon-button" data-mobile-sign-out title="Sign out" aria-label="Sign out">${renderIcon('log-out')}</button>
+      </form>
+    </header>
+  `;
+}
+
+function renderNavigationHint(): string {
+  if (state.route.page === 'settings' || state.isPlayerOpen || state.activeTrailer) {
+    return '';
+  }
+  return `
+    <div class="navigation-hint">
+      <strong data-navigation-section-label role="status">Browse</strong>
+      <span class="keyboard-navigation-hint"><kbd>↑ ↓ ← →</kbd> Move <kbd>Tab</kbd> Next section <kbd>Shift Tab</kbd> Previous section <span data-search-navigation-hint hidden><kbd>Esc</kbd> Browse tabs</span></span>
+      <span class="gamepad-navigation-hint"><kbd>D-pad</kbd> Move <kbd>LB / RB</kbd> Sections <kbd>A</kbd> Open <kbd>B</kbd> <span data-gamepad-back-label>Back</span></span>
+      <span data-select-navigation-hint hidden><kbd>← →</kbd> Change selection</span>
+    </div>
   `;
 }
 
@@ -463,36 +454,93 @@ function render(preserveScroll = true): void {
     : '';
 
   setElementHtml(appRoot, `
-    <div class="app-shell${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
+    <div class="app-shell${state.route.page !== 'settings' ? ' browse-workspace' : ''}${pageBackdropUrl ? ' has-page-backdrop' : ''}${pageBackdropScopeClass}${railCollapsed ? ' rail-collapsed' : ''}">
       ${pageBackdropUrl ? `<div class="page-backdrop" style="--page-backdrop-image: url('${escapeHtml(pageBackdropUrl)}');"></div>` : ''}
       ${renderRail()}
       <div class="main-shell">
         <div class="main-shell-inner">
-          ${state.error ? `<section class="panel error-panel page-panel">${escapeHtml(state.error)}</section>` : ''}
+          ${state.error ? `<section class="panel error-panel page-panel" role="alert" data-nav-section="page-feedback" data-nav-label="Page status"><span>${escapeHtml(state.error)}</span><button type="button" class="secondary-button" data-retry-page>Retry</button></section>` : ''}
           ${renderCurrentPage()}
         </div>
       </div>
+      ${renderNavigationHint()}
       ${renderPlayerOverlay()}
     </div>
   `, preserveScroll);
 
   createIcons({ icons });
   bindEvents(eventBindingContext());
+  syncNavigationAfterRender();
   syncVisibleSpinners();
   syncThemeSongPlayer();
+  restoreBrowsePosition();
+}
+
+/** Reset only route-specific state before publishing data for the next page. */
+function prepareRouteState(route: AppRoute, showLoading: boolean): void {
+  if (route.page !== 'settings' || route.section !== state.settingsCreation) state.settingsCreation = undefined;
+  if (showLoading) {
+    state.isPlayerOpen = false;
+    state.activePlaybackItem = undefined;
+    state.activePlaybackSession = undefined;
+    state.activePlaybackStartMs = 0;
+    state.activeAudioStreamIndex = undefined;
+    state.isAudioTrackMenuOpen = false;
+    state.isTrailerMenuOpen = false;
+    state.activeTrailer = undefined;
+  }
+  if (route.page === 'item' && state.selectedItem?.id !== route.itemId) {
+    state.selectedItem = undefined;
+    state.selectedItemMetadata = undefined;
+    state.selectedPlayback = undefined;
+    state.itemManagementOpen = false;
+    state.itemMoreOpen = false;
+    state.resumeOptionsOpen = false;
+    state.libraryItems = [];
+    state.metadataSearchResults = [];
+    state.metadataSearchQuery = '';
+    state.metadataSearchYear = '';
+    state.metadataSearchLanguage = '';
+    state.metadataSearchProviders = [];
+  }
+  if (route.page === 'person' && state.selectedPerson?.person.id !== route.personId) {
+    state.selectedPerson = undefined;
+    state.expandedCreditId = undefined;
+    state.expandedSeasonCreditId = undefined;
+  }
+  prepareBrowseRoute(state, route);
+  if (route.page === 'settings' && route.section === 'logs') {
+    state.logsLoading = true;
+    state.logsError = undefined;
+    state.logPage = 0;
+  }
 }
 
 async function refreshData(showLoading = true): Promise<void> {
+  cancelPendingHomeSearch();
+  clearPendingLibraryRefresh();
+  clearPendingMetadataRefresh();
   state.route = parseRoute();
+  const route = state.route;
+  const generation = ++routeLoadGeneration;
+  const isCurrent = () => generation === routeLoadGeneration;
   state.isLoading = true;
+  prepareRouteState(route, showLoading);
   state.error = undefined;
   state.apiMode = getApiMode();
-  if (showLoading) {
-    render(false);
-  }
+  const deferItemLoading = showLoading && route.page === 'item' && !state.selectedItem
+    && Boolean(appRoot.querySelector('.browse-workspace'));
+  if (deferItemLoading) appRoot.setAttribute('aria-busy', 'true');
+  const initialRender = deferItemLoading ? 'deferred' : 'immediate';
+  const routeRenderer = createRouteRenderer({
+    initial: showLoading ? initialRender : 'none',
+    isCurrent,
+    isReady: () => route.page !== 'item' || Boolean(state.selectedItem || state.error),
+    render,
+  });
 
   try {
-    state.bootstrap = await getAppBootstrap().catch(async (error) => {
+    const bootstrap = await getAppBootstrap().catch(async (error) => {
       if (!getStoredAuthToken()) {
         throw error;
       }
@@ -500,6 +548,11 @@ async function refreshData(showLoading = true): Promise<void> {
       clearStoredAuthToken();
       return getAppBootstrap();
     });
+    if (!isCurrent()) return;
+    state.bootstrap = bootstrap;
+    if (route.page === 'home' || route.page === 'browse-detail') {
+      state.browsePreferences = loadBrowsePreferences(bootstrap.current_user?.id, route.libraryId);
+    }
 
     if (requiresSetup() || requiresLogin()) {
       clearPendingLibraryRefresh();
@@ -525,149 +578,22 @@ async function refreshData(showLoading = true): Promise<void> {
       return;
     }
 
-    const [capabilities, libraries, metadataProviders, settingsResponse, systemActivitiesResponse] = await Promise.all([
-      getCapabilities(),
-      getLibraries(),
-      getMetadataProviders(),
-      getSettings(),
-      getSystemActivities(),
-    ]);
-
-    state.capabilities = capabilities;
-    state.libraries = libraries;
-    state.metadataProviders = metadataProviders;
-    state.settingsResponse = settingsResponse;
-    state.systemActivities = systemActivitiesResponse.activities;
-    state.users = canManageUsers() ? await getUsers() : [];
-
-    if (state.route.page === 'home' || state.route.page === 'browse-detail') {
-      const libraryId = state.route.libraryId;
-      const home = await getHome(libraryId);
-      state.home = home;
-      state.libraryItems = [];
-      state.searchResults = [];
-      state.libraryItemsLoading = true;
-      state.selectedItem = undefined;
-      state.selectedItemMetadata = undefined;
-      state.selectedPerson = undefined;
-      state.selectedPlayback = undefined;
-      state.metadataSearchResults = [];
-      state.metadataSearchQuery = '';
-      state.metadataSearchYear = '';
-      state.metadataSearchLanguage = '';
-      state.metadataSearchProviders = [];
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      state.activePlaybackSession = undefined;
-      state.activePlaybackStartMs = 0;
-      state.activeAudioStreamIndex = undefined;
-      state.isAudioTrackMenuOpen = false;
-      state.isTrailerMenuOpen = false;
-      state.activeTrailer = undefined;
-      state.hasDeferredAutoRefreshRender = false;
-      state.dashboardItems = [];
-      state.logsResponse = undefined;
-      void loadLibraryItemsForCurrentRoute();
-    } else if (state.route.page === 'item') {
-      state.home = undefined;
-      state.libraryItems = [];
-      state.libraryItemsLoading = false;
-      state.searchResults = [];
-      state.showFullSearchResults = false;
-      state.metadataSearchResults = [];
-      state.metadataSearchQuery = '';
-      state.metadataSearchYear = '';
-      state.metadataSearchLanguage = '';
-      state.metadataSearchProviders = [];
-      state.isTrailerMenuOpen = false;
-      state.activeTrailer = undefined;
-      state.dashboardItems = [];
-      state.logsResponse = undefined;
-      const [item, metadata, playback] = await Promise.all([
-        getItem(state.route.itemId),
-        getItemMetadata(state.route.itemId),
-        getPlaybackDecision(state.route.itemId),
-      ]);
-      const [home, libraryItems] = await Promise.all([
-        getHome(item.library_id),
-        getItems(item.library_id),
-      ]);
-      state.home = home;
-      state.libraryItems = libraryItems;
-      state.selectedItem = item;
-      state.selectedItemMetadata = metadata;
-      state.selectedPlayback = playback;
-      state.selectedPerson = undefined;
-    } else if (state.route.page === 'person') {
-      state.home = undefined;
-      state.libraryItems = [];
-      state.libraryItemsLoading = false;
-      state.searchResults = [];
-      state.showFullSearchResults = false;
-      state.selectedItem = undefined;
-      state.selectedItemMetadata = undefined;
-      state.selectedPlayback = undefined;
-      state.metadataSearchResults = [];
-      state.metadataSearchQuery = '';
-      state.metadataSearchYear = '';
-      state.metadataSearchLanguage = '';
-      state.metadataSearchProviders = [];
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      state.activePlaybackSession = undefined;
-      state.activePlaybackStartMs = 0;
-      state.activeAudioStreamIndex = undefined;
-      state.isAudioTrackMenuOpen = false;
-      state.isTrailerMenuOpen = false;
-      state.activeTrailer = undefined;
-      state.dashboardItems = [];
-      state.logsResponse = undefined;
-      state.selectedPerson = await getPerson(state.route.personId);
-    } else {
-      state.home = undefined;
-      state.libraryItems = [];
-      state.libraryItemsLoading = false;
-      state.searchResults = [];
-      state.showFullSearchResults = false;
-      state.selectedItem = undefined;
-      state.selectedItemMetadata = undefined;
-      state.selectedPerson = undefined;
-      state.selectedPlayback = undefined;
-      state.metadataSearchResults = [];
-      state.metadataSearchQuery = '';
-      state.metadataSearchYear = '';
-      state.metadataSearchLanguage = '';
-      state.metadataSearchProviders = [];
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      state.activePlaybackSession = undefined;
-      state.activePlaybackStartMs = 0;
-      state.activeAudioStreamIndex = undefined;
-      state.isAudioTrackMenuOpen = false;
-      state.isTrailerMenuOpen = false;
-      state.activeTrailer = undefined;
-      state.hasDeferredAutoRefreshRender = false;
-      if (state.route.section === 'dashboard') {
-        state.logsResponse = undefined;
-        state.dashboardItems = await getItems();
-      } else if (state.route.section === 'logs') {
-        state.dashboardItems = [];
-        state.logsResponse = await getLogs(currentLogFilterRequest());
-      } else {
-        state.dashboardItems = [];
-        state.logsResponse = undefined;
-      }
-    }
-
-    state.apiMode = getApiMode();
+    await loadRouteData(state, route, routeRenderer.publish, isCurrent);
+    if (isCurrent()) state.apiMode = getApiMode();
   } catch (error) {
-    state.error = error instanceof Error ? error.message : 'Failed to load server data.';
-    state.apiMode = getApiMode();
+    if (isCurrent()) {
+      state.error = error instanceof Error ? error.message : 'Failed to load server data.';
+      state.apiMode = getApiMode();
+    }
   } finally {
-    state.isLoading = false;
-    schedulePendingLibraryRefresh();
-    schedulePendingMetadataRefresh();
-    render(true);
+    if (isCurrent()) {
+      appRoot.removeAttribute('aria-busy');
+      state.isLoading = false;
+      state.logsLoading = false;
+      schedulePendingLibraryRefresh();
+      schedulePendingMetadataRefresh();
+    }
+    routeRenderer.finish();
   }
 }
 
@@ -721,114 +647,127 @@ async function refreshPendingLibraryData(): Promise<void> {
   }
 }
 
+async function refreshSelectedItemMetadata(itemId: number, previousError: string | undefined): Promise<boolean> {
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    selectedItem: state.selectedItem,
+    selectedItemMetadata: state.selectedItemMetadata,
+  });
+  const [activitiesResponse, libraries, item, metadata] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    getItem(itemId),
+    getItemMetadata(itemId),
+  ]);
+  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+    return false;
+  }
+  const [home, libraryItems] = await Promise.all([
+    getHome(item.library_id),
+    getItems(item.library_id),
+  ]);
+  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+    return false;
+  }
+
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.home = home;
+  state.libraryItems = libraryItems;
+  state.selectedItem = item;
+  state.selectedItemMetadata = metadata;
+  state.error = undefined;
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    selectedItem: state.selectedItem,
+    selectedItemMetadata: state.selectedItemMetadata,
+  }) || previousError !== state.error;
+}
+
+async function refreshHomeMetadata(libraryId: number | undefined, previousError: string | undefined): Promise<boolean> {
+  const searchQuery = state.searchQuery.trim();
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    searchResults: state.searchResults,
+  });
+  const [activitiesResponse, libraries, home, libraryItems, searchResults] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    getHome(libraryId),
+    getItems(libraryId),
+    searchQuery ? searchItems(searchQuery) : Promise.resolve([]),
+  ]);
+  if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
+    return false;
+  }
+
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.home = home;
+  state.libraryItems = libraryItems;
+  state.searchResults = searchResults;
+  state.error = undefined;
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    home: state.home,
+    libraryItems: state.libraryItems,
+    searchResults: state.searchResults,
+  }) || previousError !== state.error;
+}
+
+async function refreshOverviewMetadata(route: AppRoute, previousError: string | undefined): Promise<boolean> {
+  const previousSnapshot = snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    dashboardItems: state.dashboardItems,
+  });
+  const [activitiesResponse, libraries, dashboardItems] = await Promise.all([
+    getSystemActivities(),
+    getLibraries(),
+    route.page === 'settings' && route.section === 'dashboard' ? getItems() : Promise.resolve(state.dashboardItems),
+  ]);
+  if (state.route.page !== route.page || (state.route.page === 'settings' && route.page === 'settings' && state.route.section !== route.section)) {
+    return false;
+  }
+  state.systemActivities = activitiesResponse.activities;
+  state.libraries = libraries;
+  state.dashboardItems = dashboardItems;
+  state.error = undefined;
+  if (route.page === 'settings' && route.section !== 'dashboard' && route.section !== 'libraries') {
+    return false;
+  }
+  return previousSnapshot !== snapshotJson({
+    systemActivities: state.systemActivities,
+    libraries: state.libraries,
+    dashboardItems: state.dashboardItems,
+  }) || previousError !== state.error;
+}
+
 async function refreshPendingMetadataData(): Promise<void> {
   const route = parseRoute();
   let shouldRender = false;
   const previousError = state.error;
 
   try {
-    if (route.page === 'item') {
-      const itemId = route.itemId;
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        selectedItem: state.selectedItem,
-        selectedItemMetadata: state.selectedItemMetadata,
-      });
-      const [activitiesResponse, libraries, item, metadata] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        getItem(itemId),
-        getItemMetadata(itemId),
-      ]);
-      if (state.route.page !== 'item' || state.route.itemId !== itemId) {
-        return;
-      }
-      const [home, libraryItems] = await Promise.all([
-        getHome(item.library_id),
-        getItems(item.library_id),
-      ]);
-      if (state.route.page !== 'item' || state.route.itemId !== itemId) {
-        return;
-      }
-
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.home = home;
-      state.libraryItems = libraryItems;
-      state.selectedItem = item;
-      state.selectedItemMetadata = metadata;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        selectedItem: state.selectedItem,
-        selectedItemMetadata: state.selectedItemMetadata,
-      }) || previousError !== state.error;
-    } else if (route.page === 'home') {
-      const libraryId = route.libraryId;
-      const searchQuery = state.searchQuery.trim();
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        searchResults: state.searchResults,
-      });
-      const [activitiesResponse, libraries, home, libraryItems, searchResults] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        getHome(libraryId),
-        getItems(libraryId),
-        searchQuery
-          ? searchItems(searchQuery)
-          : Promise.resolve([]),
-      ]);
-      if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
-        return;
-      }
-
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.home = home;
-      state.libraryItems = libraryItems;
-      state.searchResults = searchResults;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        home: state.home,
-        libraryItems: state.libraryItems,
-        searchResults: state.searchResults,
-      }) || previousError !== state.error;
-    } else {
-      const previousSnapshot = snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        logsResponse: state.logsResponse,
-        dashboardItems: state.dashboardItems,
-      });
-      const [activitiesResponse, libraries, logsResponse, dashboardItems] = await Promise.all([
-        getSystemActivities(),
-        getLibraries(),
-        getLogs(currentLogFilterRequest()),
-        getItems(),
-      ]);
-      state.systemActivities = activitiesResponse.activities;
-      state.libraries = libraries;
-      state.logsResponse = logsResponse;
-      state.dashboardItems = dashboardItems;
-      state.error = undefined;
-      shouldRender = previousSnapshot !== snapshotJson({
-        systemActivities: state.systemActivities,
-        libraries: state.libraries,
-        logsResponse: state.logsResponse,
-        dashboardItems: state.dashboardItems,
-      }) || previousError !== state.error;
+    switch (route.page) {
+      case 'item':
+        shouldRender = await refreshSelectedItemMetadata(route.itemId, previousError);
+        break;
+      case 'home':
+        shouldRender = await refreshHomeMetadata(route.libraryId, previousError);
+        break;
+      default:
+        shouldRender = await refreshOverviewMetadata(route, previousError);
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : 'Failed to refresh media metadata.';
@@ -850,13 +789,15 @@ export function startApp(): void {
   bindGlobalInputHandlers(state);
 
   globalThis.addEventListener('popstate', () => {
+    captureBrowseSession();
     state.route = parseRoute();
     if (state.route.page === 'home' || state.route.page === 'browse-detail') {
-      state.homeTab = defaultHomeTab(state.route);
+      if (!restoreBrowseSession()) state.homeTab = defaultHomeTab(state.route);
       state.browseFilter = undefined;
     }
     state.isTrailerMenuOpen = false;
     void refreshData();
+    globalThis.scrollTo({ top: 0 });
   });
 
   render();

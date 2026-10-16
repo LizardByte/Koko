@@ -31,7 +31,7 @@ export type AppRoute =
 export type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
 
 /** Settings subsections addressable from navigation and direct URLs. */
-export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'dashboard' | 'logs';
+export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
 
 /** Describes a resolved browse filter used by category, collection, and playlist detail pages. */
 export interface BrowseFilter {
@@ -115,9 +115,14 @@ export interface AppState {
   systemActivities: SystemActivity[];
   dashboardItems: MediaItemSummary[];
   settingsResponse?: SettingsResponse;
+  settingsCreation?: 'libraries' | 'users';
   logsResponse?: LogEntriesResponse;
+  logsLoading?: boolean;
+  logsError?: string;
+  logPage: number;
   selectedItem?: MediaItemDetail;
   selectedItemMetadata?: ItemMetadataResponse;
+  itemMetadataLoading: boolean;
   selectedPerson?: MetadataPersonResponse;
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
@@ -128,6 +133,15 @@ export interface AppState {
   metadataSearchProviders: string[];
   showFullSearchResults: boolean;
   homeTab: HomeBrowseTab;
+  browsePreferences: import('./browsePreferences').BrowsePreferences;
+  browseFiltersOpen: boolean;
+  libraryPage: number;
+  itemManagementOpen: boolean;
+  itemMoreOpen: boolean;
+  resumeOptionsOpen: boolean;
+  expandedCreditId?: number;
+  expandedSeasonCreditId?: number;
+  searchLoading: boolean;
   browseFilter?: BrowseFilter;
   isLoading: boolean;
   isPlayerOpen: boolean;
@@ -161,12 +175,17 @@ export type AppIconName =
   | 'arrow-left'
   | 'arrow-right'
   | 'book'
+  | 'chevron-down'
   | 'chevron-left'
   | 'chevron-right'
+  | 'chevron-up'
+  | 'check'
   | 'circle-check'
   | 'clapperboard'
   | 'database-zap'
+  | 'ellipsis'
   | 'film'
+  | 'folder-open'
   | 'folder-sync'
   | 'house'
   | 'image'
@@ -183,11 +202,14 @@ export type AppIconName =
   | 'play'
   | 'plus'
   | 'refresh-cw'
+  | 'rotate-ccw'
   | 'save'
   | 'search'
   | 'settings'
   | 'skip-back'
   | 'skip-forward'
+  | 'sliders-horizontal'
+  | 'star'
   | 'trash-2'
   | 'tv'
   | 'triangle-alert'

@@ -30,8 +30,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         extends_provider_ids: vec![MetadataProviderId::Tmdb],
         attribution_text: "Trailer metadata provided by The Trailer Database.".into(),
         attribution_url: "https://trailerdb.org/".into(),
-        logo_light_url: None,
-        logo_dark_url: None,
+        logo_light_url: Some("/assets/providers/trailerdb-light.svg".into()),
+        logo_dark_url: Some("/assets/providers/trailerdb-dark.svg".into()),
     }
 }
 

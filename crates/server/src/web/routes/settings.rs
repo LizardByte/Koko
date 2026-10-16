@@ -1,5 +1,14 @@
 //! Settings and library-management routes.
 
+#[cfg(test)]
+mod log_tests;
+
+use std::io::{
+    Read,
+    Seek,
+    SeekFrom,
+};
+
 // lib imports
 use chrono::{
     DateTime,
@@ -203,7 +212,22 @@ fn read_structured_log_entries(
     until: Option<&str>,
     limit: usize,
 ) -> Vec<LogEntry> {
-    let contents = std::fs::read_to_string(&globals::APP_PATHS.log_path).unwrap_or_default();
+    let Ok(file) = std::fs::File::open(&globals::APP_PATHS.log_path) else {
+        return Vec::new();
+    };
+    read_filtered_log_entries(file, level, module, search, since, until, limit).unwrap_or_default()
+}
+
+/// Read backwards in fixed-size blocks, stopping as soon as the requested matches are found.
+fn read_filtered_log_entries(
+    mut reader: impl Read + Seek,
+    level: Option<&str>,
+    module: Option<&str>,
+    search: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+    limit: usize,
+) -> std::io::Result<Vec<LogEntry>> {
     let level_filter = level
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
@@ -216,44 +240,35 @@ fn read_structured_log_entries(
     let since_filter = parse_log_filter_timestamp(since);
     let until_filter = parse_log_filter_timestamp(until);
 
-    let mut entries = contents
-        .lines()
-        .filter_map(|line| {
-            let captures = STRUCTURED_LOG_LINE_REGEX.captures(line)?;
-            let timestamp = captures.name("timestamp")?.as_str().to_string();
-            let level = captures.name("level")?.as_str().to_string();
-            let module_name = captures.name("module")?.as_str().to_string();
-            let source = captures.name("source")?.as_str().to_string();
-            let message = captures.name("message")?.as_str().to_string();
-            let (source_file_path, line_number) = parse_log_source(&source);
-
-            Some(LogEntry {
-                timestamp,
-                level,
-                module: module_name,
-                source_file_path,
-                line_number,
-                message,
+    let parse_entry = |line: &str| {
+        let captures = STRUCTURED_LOG_LINE_REGEX.captures(line)?;
+        let timestamp = captures.name("timestamp")?.as_str();
+        let level = captures.name("level")?.as_str();
+        let module_name = captures.name("module")?.as_str();
+        let source = captures.name("source")?.as_str();
+        let message = captures.name("message")?.as_str();
+        let level_matches = level_filter
+            .as_ref()
+            .map(|filter| level.eq_ignore_ascii_case(filter))
+            .unwrap_or(true);
+        let module_matches = module_filter
+            .as_ref()
+            .map(|filter| module_name.to_ascii_lowercase().contains(filter))
+            .unwrap_or(true);
+        if !level_matches || !module_matches {
+            return None;
+        }
+        let (source_file_path, line_number) = parse_log_source(source);
+        let search_matches = search_filter
+            .as_ref()
+            .map(|filter| {
+                message.to_ascii_lowercase().contains(filter)
+                    || module_name.to_ascii_lowercase().contains(filter)
+                    || source_file_path.to_ascii_lowercase().contains(filter)
             })
-        })
-        .filter(|entry| {
-            let level_matches = level_filter
-                .as_ref()
-                .map(|filter| entry.level.to_ascii_lowercase() == *filter)
-                .unwrap_or(true);
-            let module_matches = module_filter
-                .as_ref()
-                .map(|filter| entry.module.to_ascii_lowercase().contains(filter))
-                .unwrap_or(true);
-            let search_matches = search_filter
-                .as_ref()
-                .map(|filter| {
-                    entry.message.to_ascii_lowercase().contains(filter)
-                        || entry.module.to_ascii_lowercase().contains(filter)
-                        || entry.source_file_path.to_ascii_lowercase().contains(filter)
-                })
-                .unwrap_or(true);
-            let timestamp_matches = parse_log_entry_timestamp(&entry.timestamp)
+            .unwrap_or(true);
+        let timestamp_matches = (since_filter.is_none() && until_filter.is_none())
+            || parse_log_entry_timestamp(timestamp)
                 .map(|timestamp| {
                     let after_since = since_filter
                         .as_ref()
@@ -266,13 +281,51 @@ fn read_structured_log_entries(
                     after_since && before_until
                 })
                 .unwrap_or(since_filter.is_none() && until_filter.is_none());
-            level_matches && module_matches && search_matches && timestamp_matches
+        if !search_matches || !timestamp_matches {
+            return None;
+        }
+        Some(LogEntry {
+            timestamp: timestamp.to_string(),
+            level: level.to_string(),
+            module: module_name.to_string(),
+            source_file_path,
+            line_number,
+            message: message.to_string(),
         })
-        .collect::<Vec<_>>();
+    };
 
-    entries.reverse();
-    entries.truncate(limit);
-    entries
+    let mut entries = Vec::new();
+    let mut position = reader.seek(SeekFrom::End(0))?;
+    let mut block = [0_u8; 64 * 1024];
+    let mut line = Vec::new();
+    while position > 0 && entries.len() < limit {
+        let length = position.min(block.len() as u64) as usize;
+        position -= length as u64;
+        reader.seek(SeekFrom::Start(position))?;
+        reader.read_exact(&mut block[..length])?;
+        for byte in block[..length].iter().rev() {
+            if *byte != b'\n' {
+                line.push(*byte);
+                continue;
+            }
+            line.reverse();
+            if let Some(entry) = parse_entry(String::from_utf8_lossy(&line).trim_end_matches('\r'))
+            {
+                entries.push(entry);
+            }
+            line.clear();
+            if entries.len() == limit {
+                break;
+            }
+        }
+    }
+    if entries.len() < limit && !line.is_empty() {
+        line.reverse();
+        if let Some(entry) = parse_entry(String::from_utf8_lossy(&line).trim_end_matches('\r')) {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
 }
 
 /// Return the current server settings snapshot.

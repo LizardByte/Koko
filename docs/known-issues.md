@@ -132,6 +132,4 @@
   - if a person reacts with an emoji, show that emoji animating on all the clients (that are part of the watch together party) in real time
 
 - [x] licensing: add LB license
-- [ ] licensing: figure out how to monetize
-  - https://polar.sh/
-  - https://dodopayments.com/blogs/polar-alternatives-saas-billing
+- [ ] licensing: monetize with https://polar.sh/ (determine which features to paywall)

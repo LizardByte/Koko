@@ -149,6 +149,9 @@ export interface MediaItemSummary {
   height?: number;
   genres: string[];
   overview?: string;
+  rating?: number | null;
+  rating_provider_id?: string | null;
+  release_year?: number | null;
   backdrop_url?: string;
   logo_url?: string;
   has_metadata?: boolean;
@@ -191,7 +194,9 @@ export interface MediaItemDetail extends MediaItemSummary {
   genres: string[];
   release_year?: number;
   logo_url?: string;
-  rating?: number;
+  rating?: number | null;
+  rating_provider_id?: string | null;
+  rating_source_item_type?: string | null;
   content_rating?: string;
   linked_media_type?: string;
   trailer_title?: string;
@@ -410,7 +415,7 @@ export type MediaSearchResult =
   | { result_type: 'playlist'; playlist: MediaPlaylistSearchSummary };
 
 export interface MediaHome {
-  library_id?: number;
+  library_id?: number | null;
   shelves: MediaShelf[];
   collections: MediaCollectionSummary[];
 }
@@ -455,37 +460,19 @@ export function getWebClientProfile(): ClientProfile {
   const supportedVideoCodecs = new Set<string>();
   const supportedAudioCodecs = new Set<string>();
 
-  if (supportsVideoType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedContainers.add('m4v');
-    supportedVideoCodecs.add('h264');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedContainers.add('m4v');
-    supportedVideoCodecs.add('hevc');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/mp4; codecs="av01.0.05M.08, mp4a.40.2"')) {
-    supportedContainers.add('mp4');
-    supportedVideoCodecs.add('av1');
-    supportedAudioCodecs.add('aac');
-  }
-  if (supportsVideoType('video/webm; codecs="vp8, vorbis"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('vp8');
-    supportedAudioCodecs.add('vorbis');
-  }
-  if (supportsVideoType('video/webm; codecs="vp9, opus"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('vp9');
-    supportedAudioCodecs.add('opus');
-  }
-  if (supportsVideoType('video/webm; codecs="av01.0.05M.08, opus"')) {
-    supportedContainers.add('webm');
-    supportedVideoCodecs.add('av1');
-    supportedAudioCodecs.add('opus');
+  const videoCapabilities = [
+    { type: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"', containers: ['mp4', 'm4v'], video: 'h264', audio: 'aac' },
+    { type: 'video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"', containers: ['mp4', 'm4v'], video: 'hevc', audio: 'aac' },
+    { type: 'video/mp4; codecs="av01.0.05M.08, mp4a.40.2"', containers: ['mp4'], video: 'av1', audio: 'aac' },
+    { type: 'video/webm; codecs="vp8, vorbis"', containers: ['webm'], video: 'vp8', audio: 'vorbis' },
+    { type: 'video/webm; codecs="vp9, opus"', containers: ['webm'], video: 'vp9', audio: 'opus' },
+    { type: 'video/webm; codecs="av01.0.05M.08, opus"', containers: ['webm'], video: 'av1', audio: 'opus' },
+  ];
+  for (const capability of videoCapabilities) {
+    if (!supportsVideoType(capability.type)) continue;
+    capability.containers.forEach((container) => supportedContainers.add(container));
+    supportedVideoCodecs.add(capability.video);
+    supportedAudioCodecs.add(capability.audio);
   }
   if (supportsAudioType('audio/mpeg')) {
     supportedContainers.add('mp3');
@@ -549,9 +536,6 @@ export interface MetadataProviderSettings {
   api_key_configured?: boolean;
   clear_api_key?: boolean;
   language: string;
-  rate_limit_per_second: number;
-  retry_attempts: number;
-  retry_backoff_ms: number;
 }
 
 export interface SystemActivity {

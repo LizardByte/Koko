@@ -35,6 +35,7 @@ use koko::media::{
     get_media_item,
     get_media_item_with_preferred_languages,
     get_persisted_library_summaries,
+    get_preferred_item_artwork_metadata_link_for_languages,
     get_preferred_item_metadata_link,
     get_user_playback_progress,
     infer_episode_number,
@@ -1893,6 +1894,8 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         Some("/api/v1/items/1/artwork?kind=logo")
     );
     assert_eq!(detail.rating, Some(8.2));
+    assert_eq!(detail.rating_provider_id.as_deref(), Some("tmdb"));
+    assert_eq!(detail.rating_source_item_type.as_deref(), Some("movie"));
     assert_eq!(detail.content_rating.as_deref(), Some("R"));
     assert!(detail.artwork_updated_at.is_some());
     assert_eq!(detail.trailer_title.as_deref(), Some("Official Trailer"));
@@ -1909,6 +1912,127 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         Some(expected_backdrop_url.as_str())
     );
 
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(db_path).unwrap();
+}
+
+#[test]
+fn test_tv_ratings_keep_provider_and_inheritance_scope_and_season_artwork() {
+    let root = unique_temp_dir("tv_rating_provenance");
+    let season_path = root.join("Mock Show").join("Season 1");
+    fs::create_dir_all(&season_path).unwrap();
+    fs::write(season_path.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
+    let libraries = vec![MediaLibrarySettings {
+        name: "Shows".into(),
+        path: root.to_string_lossy().to_string(),
+        paths: vec![root.to_string_lossy().to_string()],
+        recursive: true,
+        kind: MediaLibraryKind::Shows,
+        scanner: Default::default(),
+        metadata_providers: vec![
+            MetadataProviderId::Tmdb,
+            MetadataProviderId::Tvdb,
+        ],
+        metadata_language_mode: koko::config::MediaLibraryMetadataLanguageMode::Auto,
+        metadata_languages: vec![],
+        allowed_user_ids: vec![],
+    }];
+    let (mut connection, db_path) = create_test_connection("tv_rating_provenance");
+    let persisted =
+        sync_library_catalog(&mut connection, &libraries, &FfmpegSettings::default()).unwrap();
+    let items = list_media_items(&mut connection, Some(persisted[0].id)).unwrap();
+    let show = items.iter().find(|item| item.item_type == "show").unwrap();
+    let season = items
+        .iter()
+        .find(|item| item.item_type == "season")
+        .unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode")
+        .unwrap();
+    let show_snapshot = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: "1396".into(),
+        media_type: Some("tv".into()),
+        title: Some("Mock Show".into()),
+        overview: None,
+        artwork_url: Some("https://example.test/show.jpg".into()),
+        backdrop_url: None,
+        release_year: Some(2010),
+        locale_key: "en-US".into(),
+        provider_locale_key: Some("en-US".into()),
+        provider_payload_json: Some(serde_json::json!({"vote_average": 8.2}).to_string()),
+    };
+    upsert_item_metadata_snapshot(&mut connection, show.id, &show_snapshot).unwrap();
+    let inherited = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    assert_eq!(inherited.rating, Some(8.2));
+    assert_eq!(inherited.rating_provider_id.as_deref(), Some("tmdb"));
+    assert_eq!(inherited.rating_source_item_type.as_deref(), Some("show"));
+
+    let season_snapshot = StoredMetadataSnapshot {
+        external_id: "tv:1396:season:1".into(),
+        media_type: Some("tv_season".into()),
+        title: Some("Season 1".into()),
+        artwork_url: Some("https://example.test/season-1.jpg".into()),
+        provider_payload_json: Some(serde_json::json!({"vote_average": 7.8}).to_string()),
+        ..show_snapshot.clone()
+    };
+    upsert_item_metadata_snapshot(&mut connection, season.id, &season_snapshot).unwrap();
+    let inherited = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    assert_eq!(inherited.rating, Some(7.8));
+    assert_eq!(inherited.rating_source_item_type.as_deref(), Some("season"));
+    let artwork = get_preferred_item_artwork_metadata_link_for_languages(
+        &mut connection,
+        season.id,
+        &[],
+        ArtworkKind::Poster,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(artwork.media_item_id, season.id);
+    assert_eq!(
+        artwork.artwork_url.as_deref(),
+        Some("https://example.test/season-1.jpg")
+    );
+
+    let episode_snapshot = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tvdb,
+        external_id: "series:1:season:11:episode:111".into(),
+        media_type: Some("episode".into()),
+        title: Some("Pilot".into()),
+        provider_payload_json: Some(serde_json::json!({"data": {"score": 9.1}}).to_string()),
+        ..show_snapshot.clone()
+    };
+    upsert_item_metadata_snapshot(&mut connection, episode.id, &episode_snapshot).unwrap();
+    let own = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    assert_eq!(own.rating, Some(9.1));
+    assert_eq!(own.rating_provider_id.as_deref(), Some("tvdb"));
+    assert_eq!(own.rating_source_item_type.as_deref(), Some("episode"));
+
+    let preferred_episode = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Tmdb,
+        external_id: "tv:1396:season:1:episode:1".into(),
+        media_type: Some("tv_episode".into()),
+        provider_payload_json: Some(serde_json::json!({"vote_average": 9.3}).to_string()),
+        ..episode_snapshot
+    };
+    upsert_item_metadata_snapshot(&mut connection, episode.id, &preferred_episode).unwrap();
+    let own = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    assert_eq!(own.rating, Some(9.3));
+    assert_eq!(own.rating_provider_id.as_deref(), Some("tmdb"));
+    let summaries = list_media_items(&mut connection, Some(persisted[0].id)).unwrap();
+    let episode_summary = summaries.iter().find(|item| item.id == episode.id).unwrap();
+    assert_eq!(episode_summary.rating, Some(9.3));
+    assert_eq!(episode_summary.rating_provider_id.as_deref(), Some("tmdb"));
     drop(connection);
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();

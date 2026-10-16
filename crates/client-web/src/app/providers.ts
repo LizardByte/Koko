@@ -1,10 +1,13 @@
 import type { MetadataProviderStatus } from '../api';
+import { resolveApiUrl } from '../api';
 import { state } from './state';
 
+/** Resolve the backend-provided attribution logo against the configured API server. */
 export function providerAttributionLogo(providerId: string): string | undefined {
   const provider = (state.selectedItemMetadata?.providers ?? state.metadataProviders)
     .find((entry) => entry.id === providerId);
-  return provider?.logo_dark_url ?? provider?.logo_light_url;
+  const logoUrl = provider?.logo_dark_url ?? provider?.logo_light_url;
+  return logoUrl ? resolveApiUrl(logoUrl) : undefined;
 }
 
 export function providerStatus(providerId: string): MetadataProviderStatus | undefined {
@@ -12,7 +15,8 @@ export function providerStatus(providerId: string): MetadataProviderStatus | und
 }
 
 export function providerDisplayName(providerId: string): string {
-  return providerStatus(providerId)?.display_name ?? providerId;
+  return state.selectedItemMetadata?.providers.find((provider) => provider.id === providerId)?.display_name
+    ?? providerStatus(providerId)?.display_name ?? providerId;
 }
 
 export function libraryProviderOptions(libraryKind?: string): MetadataProviderStatus[] {

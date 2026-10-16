@@ -16,8 +16,12 @@ interface SetElementHtmlOptions {
   abortEvents?: () => void;
 }
 
+const pendingSnapshotRestores = new WeakMap<HTMLElement, number>();
+
 const DOM_PATCH_KEY_ATTRIBUTES = [
   'id',
+  'data-nav-section',
+  'data-item-page-id',
   'data-shelf-row',
   'data-lazy-shelf-id',
   'data-shelf-scroll',
@@ -26,6 +30,11 @@ const DOM_PATCH_KEY_ATTRIBUTES = [
   'data-preview-collection-id',
   'data-person-id',
   'data-home-tab',
+  'data-library-page',
+  'data-expand-credit',
+  'data-expand-season-credit',
+  'data-person-credit-id',
+  'data-person-season-credit-id',
   'data-settings-section-path',
   'data-nav-library-id',
   'data-category-filter',
@@ -62,9 +71,13 @@ function elementSelectorForFocus(element: Element | null): string | undefined {
     : undefined;
   const name = namedControl?.name;
   const formId = namedControl?.form?.id;
-  return name && formId
-    ? `#${CSS.escape(formId)} [name="${CSS.escape(name)}"]`
-    : undefined;
+  if (name && formId) return `#${CSS.escape(formId)} [name="${CSS.escape(name)}"]`;
+  const keyAttribute = DOM_PATCH_KEY_ATTRIBUTES.find((attribute) => element.hasAttribute(attribute));
+  const section = element.closest<HTMLElement>('[data-nav-section]');
+  if (keyAttribute && section) {
+    return `[data-nav-section="${CSS.escape(section.dataset.navSection!)}"] [${keyAttribute}="${CSS.escape(element.getAttribute(keyAttribute)!)}"]`;
+  }
+  return undefined;
 }
 
 function domPatchKey(node: Node): string | undefined {
@@ -105,7 +118,7 @@ function captureRenderSnapshot(): RenderSnapshot {
       ? { start: activeElement.selectionStart, end: activeElement.selectionEnd }
       : undefined;
   const scrollPositions = new Map<string, ScrollPosition>();
-  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
     const key = scrollPositionKey(element, index);
     if (key) {
       scrollPositions.set(key, { top: element.scrollTop, left: element.scrollLeft });
@@ -119,9 +132,10 @@ function captureRenderSnapshot(): RenderSnapshot {
   };
 }
 
-function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
-  globalThis.requestAnimationFrame(() => {
-    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell').forEach((element, index) => {
+function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): void {
+  const frame = globalThis.requestAnimationFrame(() => {
+    pendingSnapshotRestores.delete(root);
+    document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
       if (position) {
@@ -138,6 +152,7 @@ function restoreRenderSnapshot(snapshot: RenderSnapshot): void {
       activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
     }
   });
+  pendingSnapshotRestores.set(root, frame);
 }
 
 function nodesCanPatch(current: Node, next: Node): boolean {
@@ -165,6 +180,17 @@ function nodesCanPatch(current: Node, next: Node): boolean {
 }
 
 function patchAttributes(current: Element, next: Element): void {
+  // Keep observer-owned dimensions across data patches, rather than painting the
+  // default cover/row sizes again before the next measurement frame.
+  if (current instanceof HTMLElement && next instanceof HTMLElement
+    && current.matches('.item-detail-page, [data-item-row]')
+    && next.matches('.item-detail-page, [data-item-row]')) {
+    for (const name of Array.from(current.style)) {
+      if (name.startsWith('--item-') && !next.style.getPropertyValue(name)) {
+        next.style.setProperty(name, current.style.getPropertyValue(name));
+      }
+    }
+  }
   current.getAttributeNames().forEach((name) => {
     if (!next.hasAttribute(name)) {
       current.removeAttribute(name);
@@ -181,6 +207,13 @@ function patchAttributes(current: Element, next: Element): void {
 function syncFormControlState(current: Element, next: Element): void {
   const isActive = current === document.activeElement;
   if (current instanceof HTMLInputElement && next instanceof HTMLInputElement) {
+    // Preserve pending image and credential edits until the user saves the form.
+    if (current.type === 'file'
+      || current.dataset.profileImageRemoval !== undefined
+      || current.dataset.apiKeyDraft !== undefined
+      || current.dataset.apiKeyRemoval !== undefined) {
+      return;
+    }
     current.defaultValue = next.defaultValue;
     current.defaultChecked = next.defaultChecked;
     if (!isActive) {
@@ -217,9 +250,14 @@ function patchNode(current: Node, next: Node): Node {
   }
 
   if (current instanceof Element && next instanceof Element) {
+    // A results refresh must preserve the user's expanded settings cards.
+    const detailsOpen = current instanceof HTMLDetailsElement ? current.open : undefined;
     patchAttributes(current, next);
     patchChildren(current, next);
     syncFormControlState(current, next);
+    if (current instanceof HTMLDetailsElement && detailsOpen !== undefined) {
+      current.open = detailsOpen;
+    }
   }
 
   return current;
@@ -274,6 +312,12 @@ function patchChildren(parent: Node, nextParent: ParentNode): void {
 
 /** Updates a root element with keyed DOM patching while preserving focus and scroll state. */
 export function setElementHtml(root: HTMLElement, html: string, options: SetElementHtmlOptions = {}): void {
+  // A queued restore belongs to the previous render, never to a newly opened route.
+  const pendingRestore = pendingSnapshotRestores.get(root);
+  if (pendingRestore !== undefined) {
+    globalThis.cancelAnimationFrame(pendingRestore);
+    pendingSnapshotRestores.delete(root);
+  }
   const preserveDom = options.preserveDom ?? true;
   if (!preserveDom || !root.childNodes.length) {
     options.abortEvents?.();
@@ -286,5 +330,5 @@ export function setElementHtml(root: HTMLElement, html: string, options: SetElem
   template.innerHTML = html;
   options.beforePatch?.(template.content);
   patchChildren(root, template.content);
-  restoreRenderSnapshot(snapshot);
+  restoreRenderSnapshot(root, snapshot);
 }

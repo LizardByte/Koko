@@ -3,38 +3,92 @@ import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, Meta
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
-import { renderLogViewer, renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
-import { renderUserManagement } from './auth';
-import { providerDisplayName, libraryProviderOptions } from './providers';
+import { renderMetadataDashboard, renderSystemActivitiesPanel } from './dashboardView';
+import { logsAreLoading, renderLogViewer } from './logView';
+import { canManageUsers, renderUserManagement } from './auth';
+import { providerAttributionLogo, providerDisplayName, libraryProviderOptions } from './providers';
 import { persistedLibraryForSettings } from './selectors';
 import { state } from './state';
-import type { SettingsSection } from './types';
+import type { AppIconName, SettingsSection } from './types';
 import { renderButtonContent, renderIcon, renderPageNavbar } from './ui';
 
 export function activeSettingsSection(): SettingsSection {
   return state.route.page === 'settings' ? state.route.section ?? 'general' : 'general';
 }
 
+/** Shared navigation and headings for the settings workspace. */
+const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description: string; icon: AppIconName }> = [
+  { id: 'general', label: 'General', description: 'Server, storage and media tools', icon: 'settings' },
+  { id: 'libraries', label: 'Libraries', description: 'Media folders, scanning and access', icon: 'layers' },
+  { id: 'providers', label: 'Metadata providers', description: 'Credentials and metadata sources', icon: 'link-2' },
+  { id: 'scheduled', label: 'Scheduled tasks', description: 'Automated refresh and maintenance', icon: 'refresh-cw' },
+  { id: 'users', label: 'Users', description: 'Accounts and permissions', icon: 'user-plus' },
+  { id: 'dashboard', label: 'Activity', description: 'Metadata status and background tasks', icon: 'layout-grid' },
+  { id: 'logs', label: 'Logs', description: 'Search and inspect server events', icon: 'search' },
+];
+
+/** Render section links with an accessible current-page indicator. */
 export function renderSettingsSectionNav(): string {
   const activeSection = activeSettingsSection();
-  const sections: Array<{ id: SettingsSection; label: string; path: string }> = [
-    { id: 'general', label: 'General', path: '/settings' },
-    { id: 'libraries', label: 'Libraries', path: '/settings/libraries' },
-    { id: 'providers', label: 'Providers', path: '/settings/providers' },
-    { id: 'scheduled', label: 'Scheduled', path: '/settings/scheduled' },
-    { id: 'dashboard', label: 'Dashboard', path: '/settings/dashboard' },
-    { id: 'logs', label: 'Logs', path: '/settings/logs' },
-  ];
-
   return `
-    <nav class="settings-section-nav panel page-panel" aria-label="Settings sections">
-      ${sections.map((section) => `
-        <button type="button" class="secondary-button ${activeSection === section.id ? 'active' : ''}" data-settings-section-path="${section.path}">
-          ${escapeHtml(section.label)}
-        </button>
+    <nav class="settings-section-nav" aria-label="Settings sections">
+      <p class="eyebrow settings-nav-label">Settings</p>
+      ${SETTINGS_SECTIONS.map((section) => `
+        <a class="settings-nav-link ${activeSection === section.id ? 'active' : ''}" href="/settings${section.id === 'general' ? '' : `/${section.id}`}" ${activeSection === section.id ? 'aria-current="page"' : ''}>
+          ${renderIcon(section.icon, 'settings-nav-icon')}
+          <span><strong>${escapeHtml(section.label)}</strong><small>${escapeHtml(section.description)}</small></span>
+        </a>
       `).join('')}
     </nav>
   `;
+}
+
+function renderSettingsCreationTrigger(section: SettingsSection, disabled: string): string {
+  const library = section === 'libraries';
+  if (!library && (section !== 'users' || !canManageUsers())) return '';
+  const panel = library ? 'add-library-panel' : 'add-user-panel';
+  const label = library ? 'Add a library' : 'Add a user';
+  const icon = library ? 'plus' : 'user-plus';
+  return `<button type="button" class="secondary-button" data-settings-create="${section}" aria-controls="${panel}" aria-expanded="${state.settingsCreation === section}" ${disabled}>${renderButtonContent(label, icon)}</button>`;
+}
+
+/** Keep each page's main actions together and associate Save with its settings form. */
+function renderSettingsActions(section: SettingsSection, title: string, ready: boolean): string {
+  const disabled = ready ? '' : 'disabled';
+  const actions: string[] = [];
+  const creationTrigger = renderSettingsCreationTrigger(section, disabled);
+  if (creationTrigger) actions.push(creationTrigger);
+  if (section === 'providers') {
+    actions.push(`<button type="button" class="secondary-button" id="clear-metadata-cache" ${disabled}>${renderButtonContent('Clear metadata cache', 'trash-2')}</button>`);
+  }
+  if (['general', 'libraries', 'providers', 'scheduled'].includes(section)) {
+    actions.push(`<button type="submit" form="settings-form" ${disabled}>${renderButtonContent('Save settings', 'save')}</button>`);
+  }
+  if (section === 'logs') {
+    const refreshDisabled = logsAreLoading() ? 'disabled' : '';
+    actions.push(`<button type="button" class="secondary-button" id="refresh-log-viewer" ${refreshDisabled}>${renderButtonContent('Refresh', 'refresh-cw')}</button>`);
+  }
+  if (!actions.length) return '';
+  const creating = state.settingsCreation === section;
+  const defaultHidden = creating ? 'hidden' : '';
+  return `<div class="settings-actions-anchor" aria-hidden="true"></div>
+    <div class="settings-action-dock" role="region" aria-label="${escapeHtml(title)} actions">
+      <strong class="settings-action-title" data-sticky-identity hidden>${escapeHtml(title)}</strong>
+      <div class="settings-page-actions" data-settings-default-actions ${defaultHidden}>${actions.join('')}</div>
+      ${renderSettingsCreationActions(section, creating)}
+    </div>`;
+}
+
+function renderSettingsCreationActions(section: SettingsSection, creating: boolean): string {
+  if (section !== 'libraries' && section !== 'users') return '';
+  const hidden = creating ? '' : 'hidden';
+  const form = section === 'libraries' ? 'add-library-form' : 'create-user-form';
+  const label = section === 'libraries' ? 'Add library' : 'Create user';
+  const icon = section === 'libraries' ? 'plus' : 'user-plus';
+  return `<div class="settings-page-actions" data-settings-creation-actions ${hidden}>
+    <button type="button" class="secondary-button" data-close-settings-create>${renderButtonContent('Cancel', 'x')}</button>
+    <button type="submit" form="${form}">${renderButtonContent(label, icon)}</button>
+  </div>`;
 }
 
 export const metadataLanguageOptions: Array<{ value: string; label: string }> = [
@@ -100,8 +154,8 @@ function renderPrimaryProviderMoveButtons(label: string, isSecondary: boolean): 
   return isSecondary
     ? ''
     : `
-            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-left')}</button>
-            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-right')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-up')}</button>
+            <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-down')}</button>
           `;
 }
 
@@ -210,18 +264,20 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
   const persistedLibraryActions = renderPersistedLibraryActions(persistedLibrary, refreshPending, scanPending);
 
   return `
-      <section class="settings-library-card">
-        <div class="settings-library-header">
-          <div>
-            <p class="eyebrow">Library ${index + 1}</p>
-            <h3>${escapeHtml(library.name || `Library ${index + 1}`)}</h3>
+      <details class="settings-library-card library-settings-disclosure" id="library-settings-${index}">
+        <summary>
+          <div class="library-settings-summary-copy">
+            <strong>${escapeHtml(library.name || `Library ${index + 1}`)}</strong>
+            <span class="muted">${escapeHtml(library.kind.replace(/_/g, ' '))} · ${Math.max(1, library.paths.length)} folder${library.paths.length > 1 ? 's' : ''}</span>
             ${persistedLibraryTags}
           </div>
+          ${renderIcon('chevron-right', 'settings-disclosure-icon')}
+        </summary>
+        <div class="library-settings-body">
           <div class="settings-library-actions">
             ${persistedLibraryActions}
             <button type="button" class="secondary-button danger-button" data-remove-library-index="${index}">${renderButtonContent('Remove library', 'trash-2')}</button>
           </div>
-        </div>
         <div class="form-row">
           <label>Name<input name="existing_library_name_${index}" value="${escapeHtml(library.name)}" /></label>
           <label>Type
@@ -258,7 +314,8 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
           <legend>Metadata sources</legend>
           ${metadataProviderCheckboxes(`existing_library_metadata_provider_${index}`, library.metadata_providers, library.kind)}
         </fieldset>
-      </section>
+        </div>
+      </details>
     `;
 }
 
@@ -316,9 +373,6 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Scheduled tasks</h3>
-          </div>
           <div class="settings-library-card">
             <div class="settings-library-header">
               <div>
@@ -385,7 +439,7 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                 <label>Days missing
                   <input name="scheduled_trash_cleanup_days" type="number" min="1" max="3650" value="${trashCleanupDays}" />
                 </label>
-                <label>Run interval
+                <label>Run interval (days)
                   <input name="scheduled_trash_cleanup_interval_days" type="number" min="1" max="365" value="${scheduled.trash_cleanup.interval_days}" />
                 </label>
               </div>
@@ -406,16 +460,13 @@ export function renderScheduledTasksPage(settings: SettingsSnapshot): string {
                 <label><input name="scheduled_database_maintenance_enabled" type="checkbox" ${scheduled.database_maintenance.enabled ? 'checked' : ''} /> Checkpoint, vacuum, and optimize automatically</label>
               </div>
               <div class="form-row">
-                <label>Run interval
+                <label>Run interval (days)
                   <input name="scheduled_database_maintenance_interval_days" type="number" min="1" max="365" value="${scheduled.database_maintenance.interval_days}" />
                 </label>
               </div>
             </section>
           </div>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save scheduled tasks', 'save')}</button>
-        </div>
       </form>
     </section>
   `;
@@ -451,34 +502,34 @@ export function libraryScannerOptions(selectedScanner: string): string {
 export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
   const label = providerDisplayName(provider.id);
   const status = state.metadataProviders.find((entry) => entry.id === provider.id);
-  const logoUrl = status?.logo_dark_url ?? status?.logo_light_url;
+  const logoUrl = providerAttributionLogo(provider.id);
   const showApiKey = Boolean(status?.requires_api_key);
   const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
-  const showRequestSettings = provider.id !== 'local_nfo';
-  const logoMarkup = logoUrl ? `<img class="provider-settings-logo" src="${escapeHtml(logoUrl)}" alt="" />` : '';
+  const logoMarkup = logoUrl ? `<span class="provider-settings-logo" aria-hidden="true">
+    ${renderIcon('link-2', 'provider-logo-fallback')}
+    <img data-provider-logo src="${escapeHtml(logoUrl)}" alt="" />
+  </span>` : '';
   const providerRoleLabel = status?.role === 'secondary' ? 'Secondary' : 'Primary';
   const providerRoleTag = status?.role ? `<span class="tag">${escapeHtml(providerRoleLabel)}</span>` : '';
   const providerDescription = status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : '';
   const providerAttribution = status?.attribution_text ? `<p class="muted">${escapeHtml(status.attribution_text)}</p>` : '';
+  const apiKeyId = `${provider.id}-api-key`;
   const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
+  const apiKeyDisabled = apiKeyConfigured ? '' : 'disabled';
   const apiKeyField = showApiKey
-    ? `<label>API key<input name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" /></label>`
+    ? `<div class="api-key-field">
+        <label for="${apiKeyId}">API key</label>
+        <div class="input-group api-key-picker" role="group" aria-label="${escapeHtml(label)} API key" data-api-key-configured="${apiKeyConfigured}">
+          <input id="${apiKeyId}" class="input-group-field" name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" data-api-key-draft />
+          <input name="${provider.id}_clear_api_key" type="checkbox" data-api-key-removal hidden />
+          <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyDisabled}>${renderIcon('x')}</button>
+        </div>
+        <small class="muted" data-api-key-status aria-live="polite" hidden>Saved API key will be cleared on save.</small>
+      </div>`
     : '';
-  const clearApiKeyField = showApiKey && apiKeyConfigured
-    ? `<label class="checkbox-inline"><input name="${provider.id}_clear_api_key" type="checkbox" /> Clear saved API key</label>`
-    : '';
-  const requestSettingsFields = showRequestSettings
-    ? `
-        <label>Rate limit (requests/second)<input name="${provider.id}_rate_limit_per_second" type="number" min="1" value="${provider.rate_limit_per_second}" /></label>
-        <label>Retry attempts<input name="${provider.id}_retry_attempts" type="number" min="0" value="${provider.retry_attempts}" /></label>
-        <label>Retry backoff (ms)<input name="${provider.id}_retry_backoff_ms" type="number" min="1" step="1" value="${provider.retry_backoff_ms}" /></label>
-        `
-    : '';
-  const providerSettingsFields = showApiKey || showRequestSettings
-    ? `<div class="form-row">
+  const providerSettingsFields = showApiKey
+    ? `<div class="form-row provider-credentials">
         ${apiKeyField}
-        ${clearApiKeyField}
-        ${requestSettingsFields}
       </div>`
     : '<p class="muted">This provider does not require provider-specific settings.</p>';
   return `
@@ -505,21 +556,12 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Metadata providers</h3>
-          </div>
-          <p class="muted">Provider credentials and retry behavior are configured here. Metadata languages are selected per library.</p>
+          <p class="muted">Manage provider credentials here. Metadata languages are selected per library.</p>
           <div class="settings-library-list">
             ${settings.metadata.providers.map(renderProviderSettingsCard).join('')}
           </div>
-          <div class="form-row">
-            <button type="button" class="secondary-button" id="clear-metadata-cache">${renderButtonContent('Clear metadata cache', 'trash-2')}</button>
-            <p class="muted">Provider response cache is kept for 24 hours by default.</p>
-          </div>
+          <p class="muted">Provider response cache is kept for 24 hours by default.</p>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save provider settings', 'save')}</button>
-        </div>
       </form>
     </section>
   `;
@@ -531,16 +573,15 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
   return `
     <section class="panel page-panel settings-page-panel">
       <form id="settings-form" class="settings-form">
-        <section>
-          <h3>Server</h3>
-          <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Connection</h3><p class="muted">Choose how devices connect to your server.</p></div>
           <div class="form-row">
-            <label>Address<input name="address" value="${escapeHtml(settings.server.address)}" /></label>
-            <label>Port<input name="port" type="number" min="1" value="${settings.server.port}" /></label>
+            <label>Listen address<input name="address" value="${escapeHtml(settings.server.address)}" /><small class="muted">Use 0.0.0.0 to listen on all network interfaces.</small></label>
+            <label>Port<input name="port" type="number" min="1" max="65535" value="${settings.server.port}" /></label>
           </div>
           <div class="form-row checkbox-row">
-            <label><input name="use_https" type="checkbox" ${useHttpsChecked} /> Use HTTPS</label>
-            <label><input name="use_custom_certs" type="checkbox" ${useCustomCertsChecked} /> Use custom certificates</label>
+            <label class="checkbox-inline"><input name="use_https" type="checkbox" ${useHttpsChecked} /> Use HTTPS</label>
+            <label class="checkbox-inline"><input name="use_custom_certs" type="checkbox" ${useCustomCertsChecked} /> Use custom certificates</label>
           </div>
           <div class="form-row">
             <label>Certificate path<input name="cert_path" value="${escapeHtml(settings.server.cert_path)}" /></label>
@@ -548,28 +589,20 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
           </div>
         </section>
 
-        <section>
-          <h3>FFmpeg</h3>
-          <p class="muted">Leave a path blank to use the bundled tool.</p>
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Storage</h3><p class="muted">Where Koko keeps its database and cached metadata.</p></div>
+          <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+        </section>
+
+        <section class="settings-group">
+          <div class="settings-group-heading"><h3>Media tools</h3><p class="muted">Leave a path blank to use the bundled tool.</p></div>
           <div class="form-row">
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
           </div>
         </section>
 
-        <section>
-          <h3>Metadata providers</h3>
-          <p class="muted">Provider credentials and refresh behavior are configured on their own settings page.</p>
-          <button type="button" class="secondary-button" data-settings-section-path="/settings/providers">${renderButtonContent('Open provider settings', 'settings')}</button>
-        </section>
-
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save settings', 'save')}</button>
-          <button type="button" class="secondary-button" id="go-home-from-settings">${renderButtonContent('Back home', 'house')}</button>
-        </div>
       </form>
-
-      ${renderUserManagement()}
     </section>
   `;
 }
@@ -577,22 +610,24 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
 function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
   return `
     <section class="panel page-panel settings-page-panel">
+      ${renderAddLibraryForm()}
       <form id="settings-form" class="settings-form">
         <section>
-          <div class="section-heading">
-            <h3>Libraries</h3>
-          </div>
-          <p class="muted">Each logical library can now contain multiple folders. Enter one folder per line.</p>
+          <p class="muted">Expand a library to edit its folders, scanning and metadata preferences.</p>
           <div class="settings-library-list">
             ${renderExistingLibrariesSettings(settings)}
           </div>
         </section>
-        <div class="page-actions">
-          <button type="submit">${renderButtonContent('Save library settings', 'save')}</button>
-        </div>
       </form>
+    </section>
+  `;
+}
 
-      <form id="add-library-form" class="settings-form add-library-form">
+function renderAddLibraryForm(): string {
+  const hidden = state.settingsCreation === 'libraries' ? '' : 'hidden';
+  return `
+      <div class="settings-create-panel settings-add-library" id="add-library-panel" ${hidden}>
+        <form id="add-library-form" class="settings-form add-library-form">
         <section>
           <h3>Add library</h3>
           <label>Name<input name="library_name" placeholder="Movies" required /></label>
@@ -630,13 +665,19 @@ function renderLibrarySettingsPage(settings: SettingsSnapshot): string {
             <div id="add-library-metadata-providers">${metadataProviderCheckboxes('library_metadata_provider', ['tmdb'])}</div>
           </fieldset>
         </section>
-        <button type="submit">${renderButtonContent('Add library', 'plus')}</button>
       </form>
-    </section>
+      </div>
   `;
 }
 
-function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot): string {
+function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot | undefined): string {
+  if (section === 'logs') {
+    return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
+  }
+  if (!settings) {
+    if (!state.isLoading && state.error) return '<section class="panel page-panel settings-page-panel"><div class="empty-state">These settings could not be loaded. Use Retry to try again.</div></section>';
+    return '<section class="panel page-panel settings-page-panel"><div class="empty-state" role="status">Settings are still loading…</div></section>';
+  }
   if (section === 'general') {
     return renderGeneralSettingsPage(settings);
   }
@@ -649,35 +690,33 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
   if (section === 'libraries') {
     return renderLibrarySettingsPage(settings);
   }
+  if (section === 'users') {
+    return `<section class="panel page-panel settings-page-panel">${renderUserManagement()}</section>`;
+  }
   if (section === 'dashboard') {
     return `
-      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
       <div id="system-activities-panel-root">${renderSystemActivitiesPanel()}</div>
+      <div id="metadata-dashboard-panel-root">${renderMetadataDashboard()}</div>
     `;
-  }
-  if (section === 'logs') {
-    return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
   }
   return '';
 }
 
 export function renderSettingsPage(): string {
   const settings = state.settingsResponse?.settings;
-  if (!settings) {
-    return '<section class="panel page-panel"><div class="empty-state">Settings are still loading…</div></section>';
-  }
-
   const section = activeSettingsSection();
   const settingsContent = renderSettingsSectionContent(section, settings);
+  const heading = SETTINGS_SECTIONS.find((entry) => entry.id === section)!;
 
   return `
-    ${renderPageNavbar(
-      'Settings',
-      'Program configuration',
-      `Saved to ${state.settingsResponse?.settings_path ?? ''}`,
-    )}
-    ${renderSettingsSectionNav()}
-    ${settingsContent}
+    <div class="settings-workspace">
+      ${renderSettingsSectionNav()}
+      <div class="settings-content">
+        ${renderPageNavbar('Settings', heading.label, heading.description)}
+        ${renderSettingsActions(section, heading.label, Boolean(settings))}
+        ${settingsContent}
+      </div>
+    </div>
   `;
 }
 
@@ -743,9 +782,6 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
         if (
           !formData.has(`${prefix}_api_key`)
           && !formData.has(`${prefix}_clear_api_key`)
-          && !formData.has(`${prefix}_rate_limit_per_second`)
-          && !formData.has(`${prefix}_retry_attempts`)
-          && !formData.has(`${prefix}_retry_backoff_ms`)
         ) {
           return provider;
         }
@@ -759,9 +795,6 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
           ...provider,
           api_key: submittedApiKey && !clearApiKey ? submittedApiKey : null,
           clear_api_key: clearApiKey,
-          rate_limit_per_second: Math.max(1, Number(formData.get(`${prefix}_rate_limit_per_second`) ?? provider.rate_limit_per_second)),
-          retry_attempts: Math.max(0, Number(formData.get(`${prefix}_retry_attempts`) ?? provider.retry_attempts)),
-          retry_backoff_ms: Math.max(1, Number(formData.get(`${prefix}_retry_backoff_ms`) ?? provider.retry_backoff_ms)),
         };
       }),
     },

@@ -612,8 +612,8 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
             extends_provider_ids: Vec::new(),
             attribution_text: "MusicBrainz metadata is provided by MusicBrainz.".into(),
             attribution_url: "https://musicbrainz.org/".into(),
-            logo_light_url: None,
-            logo_dark_url: None,
+            logo_light_url: Some("/assets/providers/musicbrainz.svg".into()),
+            logo_dark_url: Some("/assets/providers/musicbrainz.svg".into()),
         }
     }
 }
@@ -631,8 +631,8 @@ impl MetadataProvider for OpenLibraryMetadataProvider {
             extends_provider_ids: Vec::new(),
             attribution_text: "Book metadata is provided by Open Library.".into(),
             attribution_url: "https://openlibrary.org/".into(),
-            logo_light_url: None,
-            logo_dark_url: None,
+            logo_light_url: Some("/assets/providers/open-library.png".into()),
+            logo_dark_url: Some("/assets/providers/open-library.png".into()),
         }
     }
 }
@@ -656,8 +656,8 @@ impl MetadataProvider for LocalNfoMetadataProvider {
             extends_provider_ids: Vec::new(),
             attribution_text: "Local metadata is provided by files in your library.".into(),
             attribution_url: String::new(),
-            logo_light_url: None,
-            logo_dark_url: None,
+            logo_light_url: Some("/assets/providers/local-nfo.svg".into()),
+            logo_dark_url: Some("/assets/providers/local-nfo.svg".into()),
         }
     }
 }

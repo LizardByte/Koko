@@ -1,3 +1,4 @@
+import kokoLogoUrl from '../../../assets/Koko.png';
 import type {
   AppBootstrapResponse,
   BootstrapUser,
@@ -445,6 +446,23 @@ const items: MediaItemDetail[] = [
   },
 ];
 
+type PlannedProviderDetails = Pick<MetadataProviderStatus,
+  'id' | 'display_name' | 'description' | 'supported_kinds'
+  | 'attribution_text' | 'attribution_url' | 'logo_light_url' | 'logo_dark_url'>;
+
+function plannedMetadataProvider(details: PlannedProviderDetails): MetadataProviderStatus {
+  return {
+    ...details,
+    requires_api_key: false,
+    implemented: false,
+    role: 'primary',
+    extends_provider_ids: [],
+    enabled: false,
+    configured: true,
+    language: 'en-US',
+  };
+}
+
 const metadataProviders: MetadataProviderStatus[] = [
   {
     id: 'tmdb',
@@ -460,8 +478,8 @@ const metadataProviders: MetadataProviderStatus[] = [
     language: 'en-US',
     attribution_text: 'Metadata and artwork provided by The Movie Database (TMDB).',
     attribution_url: 'https://www.themoviedb.org/',
-    logo_light_url: undefined,
-    logo_dark_url: undefined,
+    logo_light_url: '/assets/providers/tmdb.svg',
+    logo_dark_url: '/assets/providers/tmdb.svg',
   },
   {
     id: 'tvdb',
@@ -477,26 +495,19 @@ const metadataProviders: MetadataProviderStatus[] = [
     language: 'en-US',
     attribution_text: 'Metadata and artwork provided by TheTVDB.',
     attribution_url: 'https://thetvdb.com/',
-    logo_light_url: undefined,
-    logo_dark_url: undefined,
+    logo_light_url: '/assets/providers/tvdb-light.png',
+    logo_dark_url: '/assets/providers/tvdb-dark.png',
   },
-  {
+  plannedMetadataProvider({
     id: 'musicbrainz',
     display_name: 'MusicBrainz',
     description: 'Planned music metadata provider for albums, artists, and tracks.',
     supported_kinds: ['music'],
-    requires_api_key: false,
-    implemented: false,
-    role: 'primary',
-    extends_provider_ids: [],
-    enabled: false,
-    configured: true,
-    language: 'en-US',
     attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
     attribution_url: 'https://musicbrainz.org/',
-    logo_light_url: undefined,
-    logo_dark_url: undefined,
-  },
+    logo_light_url: '/assets/providers/musicbrainz.svg',
+    logo_dark_url: '/assets/providers/musicbrainz.svg',
+  }),
   {
     id: 'themerr',
     display_name: 'ThemerrDB',
@@ -511,9 +522,46 @@ const metadataProviders: MetadataProviderStatus[] = [
     language: 'en-US',
     attribution_text: 'Theme metadata provided by ThemerrDB.',
     attribution_url: 'https://app.lizardbyte.dev/ThemerrDB',
-    logo_light_url: undefined,
-    logo_dark_url: undefined,
+    logo_light_url: '/assets/providers/themerr.png',
+    logo_dark_url: '/assets/providers/themerr.png',
   },
+  {
+    id: 'trailerdb',
+    display_name: 'TrailerDB',
+    description: 'Secondary provider for localized movie and show trailer metadata.',
+    supported_kinds: ['movies', 'shows'],
+    requires_api_key: false,
+    implemented: true,
+    role: 'secondary',
+    extends_provider_ids: ['tmdb'],
+    enabled: true,
+    configured: true,
+    language: 'en-US',
+    attribution_text: 'Trailer metadata provided by The Trailer Database.',
+    attribution_url: 'https://trailerdb.org/',
+    logo_light_url: '/assets/providers/trailerdb-light.svg',
+    logo_dark_url: '/assets/providers/trailerdb-dark.svg',
+  },
+  plannedMetadataProvider({
+    id: 'open_library',
+    display_name: 'Open Library',
+    description: 'Planned book metadata provider for ebooks, PDFs, and comics.',
+    supported_kinds: ['books'],
+    attribution_text: 'Book metadata is provided by Open Library.',
+    attribution_url: 'https://openlibrary.org/',
+    logo_light_url: '/assets/providers/open-library.png',
+    logo_dark_url: '/assets/providers/open-library.png',
+  }),
+  plannedMetadataProvider({
+    id: 'local_nfo',
+    display_name: 'Local NFO',
+    description: 'Planned sidecar metadata provider for locally curated libraries.',
+    supported_kinds: ['movies', 'shows', 'music', 'books', 'home_videos'],
+    attribution_text: 'Local metadata is provided by files in your library.',
+    attribution_url: '',
+    logo_light_url: '/assets/providers/local-nfo.svg',
+    logo_dark_url: '/assets/providers/local-nfo.svg',
+  }),
 ];
 
 const metadataSearchResults: Record<number, MetadataSearchResult[]> = {
@@ -550,7 +598,7 @@ const users: MockUserRecord[] = [
     password: 'adminpass',
     admin: true,
     birthday: '1990-01-01',
-    profile_image_url: undefined,
+    profile_image_url: kokoLogoUrl,
     preferred_metadata_languages: ['en-US'],
   },
 ];
@@ -797,9 +845,6 @@ let settings: SettingsSnapshot = {
         api_key: null,
         api_key_configured: true,
         language: 'en-US',
-        rate_limit_per_second: 4,
-        retry_attempts: 3,
-        retry_backoff_ms: 1000,
       },
       {
         id: 'tvdb',
@@ -807,9 +852,6 @@ let settings: SettingsSnapshot = {
         api_key: null,
         api_key_configured: false,
         language: 'en-US',
-        rate_limit_per_second: 4,
-        retry_attempts: 3,
-        retry_backoff_ms: 1000,
       },
       {
         id: 'themerr',
@@ -817,9 +859,6 @@ let settings: SettingsSnapshot = {
         api_key: null,
         api_key_configured: false,
         language: 'en-US',
-        rate_limit_per_second: 4,
-        retry_attempts: 3,
-        retry_backoff_ms: 1000,
       },
     ],
     refresh_interval_days: 30,
@@ -1163,7 +1202,7 @@ export function getMockHome(libraryId?: number): MediaHome {
   const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
 
   return {
-    library_id: libraryId,
+    library_id: libraryId ?? null,
     shelves: [
       { id: 'continue_watching', title: 'Continue watching', items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
@@ -1235,8 +1274,19 @@ export function getMockSettings(): SettingsResponse {
   };
 }
 
+/** Apply credential edits without returning saved keys or transient removal flags. */
 export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResponse {
   settings = structuredClone(nextSettings);
+  for (const provider of settings.metadata.providers) {
+    if (provider.clear_api_key) {
+      provider.api_key_configured = false;
+      delete provider.api_key_secret_ref;
+    } else if (provider.api_key?.trim()) {
+      provider.api_key_configured = true;
+    }
+    delete provider.api_key;
+    delete provider.clear_api_key;
+  }
   return getMockSettings();
 }
 

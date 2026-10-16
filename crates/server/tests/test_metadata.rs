@@ -116,9 +116,6 @@ fn test_metadata_provider_statuses_respect_api_key_configuration() {
             api_key_configured: false,
             clear_api_key: false,
             language: "en-US".into(),
-            rate_limit_per_second: 4,
-            retry_attempts: 3,
-            retry_backoff_ms: 1_000,
         }],
         refresh_interval_days: Some(30),
     };
@@ -211,9 +208,6 @@ fn test_settings_persistence_includes_tvdb_provider_and_redacts_api_key() {
         api_key_configured: false,
         clear_api_key: false,
         language: "en-US".into(),
-        rate_limit_per_second: 4,
-        retry_attempts: 3,
-        retry_backoff_ms: 1_000,
     }];
 
     let persisted = settings_for_persistence(&settings);
@@ -285,9 +279,6 @@ fn test_database_settings_round_trip_runtime_sections() {
         api_key_configured: false,
         clear_api_key: false,
         language: "en-US".into(),
-        rate_limit_per_second: 4,
-        retry_attempts: 3,
-        retry_backoff_ms: 1_000,
     }];
 
     seed_database_settings(&mut conn, &settings).unwrap();

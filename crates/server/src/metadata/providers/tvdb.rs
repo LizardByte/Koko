@@ -44,6 +44,12 @@ use std::time::{
 };
 
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
+/// Fixed request policy for TheTVDB, independent of saved provider settings.
+const TVDB_REQUESTS_PER_SECOND: u32 = 4;
+/// Retry transient failures up to three times after the initial request.
+const TVDB_RETRY_ATTEMPTS: usize = 3;
+/// Initial retry delay before applying exponential backoff or Retry-After.
+const TVDB_RETRY_BACKOFF: Duration = Duration::from_millis(1_000);
 
 static TVDB_RATE_LIMITER: once_cell::sync::Lazy<tokio::sync::Mutex<Instant>> =
     once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(Instant::now()));
@@ -73,8 +79,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         extends_provider_ids: Vec::new(),
         attribution_text: "Metadata and artwork provided by TheTVDB.".into(),
         attribution_url: "https://thetvdb.com/".into(),
-        logo_light_url: Some("https://thetvdb.com/images/attribution/logo2.png".into()),
-        logo_dark_url: Some("https://thetvdb.com/images/attribution/logo1.png".into()),
+        logo_light_url: Some("/assets/providers/tvdb-light.png".into()),
+        logo_dark_url: Some("/assets/providers/tvdb-dark.png".into()),
     }
 }
 
@@ -428,9 +434,8 @@ fn parse_tvdb_external_id(
     })
 }
 
-async fn wait_for_rate_limit(provider: &MetadataProviderSettings) {
-    let requests_per_second = provider.rate_limit_per_second.max(1);
-    let interval = Duration::from_secs_f64(1.0 / f64::from(requests_per_second));
+async fn wait_for_rate_limit() {
+    let interval = Duration::from_secs_f64(1.0 / f64::from(TVDB_REQUESTS_PER_SECOND));
     let mut next_available_at = TVDB_RATE_LIMITER.lock().await;
     let now = Instant::now();
     if *next_available_at > now {
@@ -459,7 +464,7 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
         return Err("TheTVDB is enabled but no API key is configured.".into());
     }
 
-    wait_for_rate_limit(provider).await;
+    wait_for_rate_limit().await;
     let config = tvdb_configuration(None);
     let response = login_api::login_post(&config, LoginPostRequest::new(api_key))
         .await
@@ -512,11 +517,11 @@ async fn get_text(
         return Ok(payload);
     }
 
-    let retry_attempts = usize::try_from(provider.retry_attempts).unwrap_or(0);
-    let base_backoff = Duration::from_millis(u64::from(provider.retry_backoff_ms.max(1)));
+    let retry_attempts = TVDB_RETRY_ATTEMPTS;
+    let base_backoff = TVDB_RETRY_BACKOFF;
 
     for attempt in 0..=retry_attempts {
-        wait_for_rate_limit(provider).await;
+        wait_for_rate_limit().await;
         let token = auth_token(provider).await?;
         let config = tvdb_configuration(Some(token));
         let request_url = format!("{}/{}", TVDB_API_BASE, path.trim_start_matches('/'));

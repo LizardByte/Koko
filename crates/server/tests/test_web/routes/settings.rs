@@ -32,6 +32,55 @@ async fn test_get_settings_route() {
 }
 
 #[rocket::async_test]
+async fn test_provider_request_policy_is_not_configurable() {
+    let client = create_test_client(Some("settings_provider_request_policy")).await;
+    let response = make_request(
+        Some(&client),
+        "get",
+        "/api/v1/settings",
+        None,
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let mut settings: Value =
+        serde_json::from_str::<Value>(&response.body).unwrap()["settings"].clone();
+    // An older client or saved snapshot may still submit these removed fields.
+    for provider in settings["metadata"]["providers"].as_array_mut().unwrap() {
+        provider["rate_limit_per_second"] = json!(999);
+        provider["retry_attempts"] = json!(999);
+        provider["retry_backoff_ms"] = json!(1);
+    }
+    let response = make_request(
+        Some(&client),
+        "put",
+        "/api/v1/settings",
+        Some(settings),
+        None,
+        Some(Status::Ok),
+        Some(false),
+    )
+    .await;
+    let updated: Value = serde_json::from_str(&response.body).unwrap();
+    for provider in updated["settings"]["metadata"]["providers"]
+        .as_array()
+        .unwrap()
+    {
+        for field in [
+            "rate_limit_per_second",
+            "retry_attempts",
+            "retry_backoff_ms",
+        ] {
+            assert!(
+                provider.get(field).is_none(),
+                "{field} should not be exposed"
+            );
+        }
+    }
+}
+
+#[rocket::async_test]
 async fn test_add_and_remove_library_routes() {
     let client = create_test_client(Some("settings_route_add_remove")).await;
 

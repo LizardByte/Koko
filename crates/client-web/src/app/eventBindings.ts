@@ -2,8 +2,14 @@
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';
-import { readProfileImageUpload } from './auth';
-import { renderLogViewer, renderMetadataDashboard } from './dashboardView';
+import { bindProfileImagePickers, readProfileImageUpload } from './auth';
+import { renderMetadataDashboard } from './dashboardView';
+import { LOG_PAGE_SIZE, logsAreLoading, renderLogResults } from './logView';
+import { DEFAULT_BROWSE_PREFERENCES, normalizeBrowsePreferences, saveBrowsePreferences } from './browsePreferences';
+import { bindHoverPreview } from './hoverPreview';
+import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
+import { bindResumeHold } from './resumeHold';
+import { bindSettingsActions } from './settingsActions';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -35,7 +41,7 @@ import {
 import { syncVisibleSpinners } from './spinners';
 import { state } from './state';
 import type { HomeBrowseTab } from './types';
-import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard } from './homeView';
+import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
 import {
   bindPersonCreditTrays,
   defaultMetadataSearchLanguage,
@@ -62,6 +68,7 @@ import {
   runScheduledTask,
   scanLibrary,
   searchItemMetadata,
+  searchItems,
   setStoredAuthToken,
   updateSettings,
   updateUser,
@@ -108,17 +115,54 @@ export function abortRenderEvents(): void {
 
 /** Debounce handle for incremental home search updates. */
 let pendingLiveSearchHandle: number | undefined;
+let liveSearchGeneration = 0;
 
-function clearHomeSearch(): boolean {
-  const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+/** Navigation invalidates both queued searches and replies from the previous page. */
+export function cancelPendingHomeSearch(): void {
+  liveSearchGeneration += 1;
   if (pendingLiveSearchHandle !== undefined) {
     globalThis.clearTimeout(pendingLiveSearchHandle);
     pendingLiveSearchHandle = undefined;
   }
+  state.searchLoading = false;
+}
+
+function clearHomeSearch(): boolean {
+  const hadSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+  cancelPendingHomeSearch();
   state.searchQuery = '';
   state.searchResults = [];
   state.showFullSearchResults = false;
   return hadSearch;
+}
+
+/** Live search refreshes its results without reloading settings or the media library. */
+async function refreshHomeSearch(context: AppEventBindingContext): Promise<void> {
+  if (pendingLiveSearchHandle !== undefined) clearTimeout(pendingLiveSearchHandle);
+  pendingLiveSearchHandle = undefined;
+  const generation = ++liveSearchGeneration;
+  const query = state.searchQuery.trim();
+  const route = state.route;
+  state.searchLoading = Boolean(query);
+  if (!query) {
+    state.searchResults = [];
+    context.render(true);
+    return;
+  }
+  context.render(true);
+  try {
+    const results = await searchItems(query);
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) state.searchResults = results;
+  } catch (error) {
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) {
+      state.error = error instanceof Error ? error.message : 'Failed to search the library.';
+    }
+  } finally {
+    if (generation === liveSearchGeneration && state.route === route && state.searchQuery.trim() === query) {
+      state.searchLoading = false;
+      context.render(true);
+    }
+  }
 }
 
 /** Tracks the one global resize listener used to refresh shelf controls. */
@@ -135,31 +179,65 @@ function setAuthFormBusy(form: HTMLFormElement, busy: boolean): void {
   });
 }
 
+/** Share account field parsing between initial setup and administrator-created users. */
+async function createUserRequest(form: HTMLFormElement, firstUser = false): Promise<CreateUserRequest> {
+  const formData = new FormData(form);
+  return {
+    username: formDataString(formData.get('username')).trim(),
+    password: formDataString(formData.get('password')),
+    pin: formDataString(formData.get('pin')).trim() || undefined,
+    admin: firstUser || formData.get('admin') === 'on',
+    birthday: formDataString(formData.get('birthday')).trim() || undefined,
+    profile_image_upload: await readProfileImageUpload(formData),
+    preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
+  };
+}
 
 
+
+/** Refresh results without rebuilding the filter form or rebinding the entire app. */
 async function refreshLogsView(context: AppEventBindingContext): Promise<void> {
-  const { render, setElementHtml } = context;
-  if (state.route.page !== 'settings') {
+  if (state.route.page !== 'settings' || state.route.section !== 'logs' || logsAreLoading()) {
     return;
   }
-
+  const route = state.route;
+  state.logsLoading = true;
+  state.logsError = undefined;
+  updateLogResults(context);
   try {
-    state.logsResponse = await getLogs(currentLogFilterRequest());
-    state.error = undefined;
+    const response = await getLogs(currentLogFilterRequest());
+    if (state.route === route) {
+      state.logsResponse = response;
+      state.logPage = 0;
+    }
   } catch (error) {
-    state.error = error instanceof Error ? error.message : 'Failed to load logs.';
+    if (state.route === route) {
+      state.logsError = error instanceof Error ? error.message : 'Failed to load logs.';
+    }
   } finally {
-    const root = document.querySelector<HTMLElement>('#log-viewer-panel-root');
-    if (root) {
-      setElementHtml(root, renderLogViewer());
-      createIcons({ icons });
-      bindEvents(context);
-    } else {
-      render();
+    state.logsLoading = false;
+    if (state.route.page === 'settings' && state.route.section === 'logs') {
+      updateLogResults(context);
     }
   }
 }
 
+/** Patch the bounded result list and synchronize controls while a request is running. */
+function updateLogResults(context: AppEventBindingContext): void {
+  const root = document.querySelector<HTMLElement>('#log-results');
+  if (!root) {
+    return;
+  }
+  context.setElementHtml(root, renderLogResults());
+  createIcons({ icons, root });
+  document.querySelectorAll<HTMLButtonElement>('#refresh-log-viewer, #log-filter-form button').forEach((button) => {
+    button.disabled = logsAreLoading();
+  });
+  const path = document.querySelector<HTMLElement>('.log-file-path code');
+  if (path) {
+    path.textContent = state.logsResponse?.log_path ?? 'Unavailable';
+  }
+}
 
 
 function updatePageBackdrop(backdropUrl: string | undefined): void {
@@ -262,8 +340,7 @@ function bindPreviewItemElement(element: HTMLElement): void {
   const updatePreview = (): void => {
     activatePreviewItem(Number(element.dataset.previewItemId));
   };
-  element.addEventListener('mouseenter', updatePreview);
-  element.addEventListener('focus', updatePreview);
+  bindHoverPreview(element, updatePreview);
 }
 
 
@@ -276,8 +353,7 @@ function bindPreviewCollectionElement(element: HTMLElement): void {
   const updatePreview = (): void => {
     activatePreviewCollection(element.dataset.previewCollectionId);
   };
-  element.addEventListener('mouseenter', updatePreview);
-  element.addEventListener('focus', updatePreview);
+  bindHoverPreview(element, updatePreview);
 }
 
 
@@ -427,7 +503,7 @@ export function bindEvents(context: AppEventBindingContext): void {
   };
 
   try {
-    bindRenderEvents(context);
+    bindRenderEvents(context, signal);
   } finally {
     EventTarget.prototype.addEventListener = originalAddEventListener;
   }
@@ -435,8 +511,159 @@ export function bindEvents(context: AppEventBindingContext): void {
 
 
 
-function bindRenderEvents(context: AppEventBindingContext): void {
+/** Bind item layout and disclosures, returning a shared way to dismiss secondary actions. */
+function bindItemDetailLayout(signal: AbortSignal): () => void {
+  const itemPage = document.querySelector<HTMLElement>('.item-detail-page');
+  if (itemPage) bindItemOpeningLayout(itemPage, signal, () => {
+    itemPage.querySelectorAll<HTMLElement>('[data-item-row]').forEach(updateShelfScrollControls);
+  });
+  const itemBar = document.querySelector<HTMLElement>('.item-action-dock');
+  const itemAnchor = document.querySelector<HTMLElement>('.item-actions-anchor');
+  const itemScroller = itemBar?.closest<HTMLElement>('.main-shell');
+  if (itemBar && itemAnchor && itemScroller) bindItemPlaybackBar(itemScroller, itemAnchor, itemBar, signal);
+  const moreActions = document.querySelector<HTMLDetailsElement>('#item-more');
+  const updateMoreActions = (): void => {
+    if (!moreActions) return;
+    state.itemMoreOpen = moreActions.open;
+    const menu = moreActions.querySelector<HTMLElement>('.item-more-menu');
+    if (!moreActions.open || !menu || !itemScroller || !itemBar) return;
+    menu.style.maxHeight = `${Math.max(48, itemScroller.clientHeight - itemBar.offsetHeight - 16)}px`;
+    const overflow = menu.getBoundingClientRect().bottom - itemScroller.getBoundingClientRect().bottom;
+    if (overflow > 0) {
+      const roomToScroll = Math.max(0, itemBar.getBoundingClientRect().top - itemScroller.getBoundingClientRect().top);
+      itemScroller.scrollTop += Math.min(overflow + 8, roomToScroll);
+    }
+  };
+  moreActions?.addEventListener('toggle', updateMoreActions);
+  updateMoreActions();
+  const closeMoreActions = (): void => {
+    if (moreActions) moreActions.open = false;
+    state.itemMoreOpen = false;
+  };
+  if (moreActions) {
+    globalThis.addEventListener('resize', updateMoreActions, { signal });
+    moreActions.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('button')) closeMoreActions();
+    }, { capture: true });
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !moreActions.contains(event.target)) closeMoreActions();
+    });
+    document.addEventListener('focusin', (event) => {
+      if (event.target instanceof Node && !moreActions.contains(event.target)) closeMoreActions();
+    });
+  }
+  document.querySelector<HTMLButtonElement>('#show-item-details')?.addEventListener('click', () => {
+    closeMoreActions();
+    const details = document.querySelector<HTMLDetailsElement>('#item-management');
+    if (details) {
+      details.open = true;
+      state.itemManagementOpen = true;
+      details.scrollIntoView({ block: 'start' });
+      details.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+    }
+  });
+  return closeMoreActions;
+}
+
+/** Open a distinct playback-options section without starting playback or rebuilding the page. */
+function bindResumeOptions(signal: AbortSignal): () => void {
+  const trigger = document.querySelector<HTMLButtonElement>('[data-resume-hold]');
+  const menu = document.querySelector<HTMLElement>('#resume-playback-menu');
+  const close = (): void => {
+    state.resumeOptionsOpen = false;
+    if (menu) menu.hidden = true;
+    trigger?.setAttribute('aria-expanded', 'false');
+  };
+  if (trigger && menu) {
+    trigger.addEventListener('resume-options-close', close);
+    menu.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('button')) close();
+    }, { capture: true });
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !menu.contains(event.target) && !trigger.contains(event.target)) close();
+    });
+    document.addEventListener('focusin', (event) => {
+      if (event.target instanceof Node && !menu.contains(event.target) && !trigger.contains(event.target)) close();
+    });
+  }
+  return () => {
+    if (!trigger || !menu || signal.aborted) return;
+    state.resumeOptionsOpen = true;
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    const scroller = menu.closest<HTMLElement>('.main-shell');
+    const bar = menu.closest<HTMLElement>('.item-action-dock');
+    if (scroller && bar) {
+      menu.style.maxHeight = `${Math.max(48, scroller.clientHeight - bar.offsetHeight - 16)}px`;
+      const overflow = menu.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
+      if (overflow > 0) scroller.scrollTop += Math.min(overflow + 8, Math.max(0, bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top));
+    }
+    menu.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+  };
+}
+
+function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal): void {
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
+  bindProfileImagePickers();
+  bindProviderLogos();
+  bindApiKeyPickers();
+  bindSettingsActions(signal);
+  const closeMoreActions = bindItemDetailLayout(signal);
+  const openResumeOptions = bindResumeOptions(signal);
+  document.querySelectorAll<HTMLImageElement>('[data-item-cover-image], [data-episode-still]').forEach((image) => {
+    const showFallback = () => {
+      image.hidden = true;
+      image.parentElement?.classList.remove('has-image');
+      const fallback = image.parentElement?.querySelector<HTMLElement>('.item-cover-fallback');
+      if (fallback) fallback.hidden = false;
+    };
+    image.addEventListener('error', showFallback);
+    if (image.complete && image.naturalWidth === 0) showFallback();
+  });
+  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void refreshData(); });
+  document.querySelector<HTMLFormElement>('#mobile-library-form')?.addEventListener('submit', (event) => event.preventDefault());
+  document.querySelector<HTMLSelectElement>('#mobile-library-picker')?.addEventListener('change', (event) => {
+    navigateTo((event.currentTarget as HTMLSelectElement).value);
+  });
+  document.querySelector<HTMLButtonElement>('[data-mobile-settings]')?.addEventListener('click', () => navigateTo('/settings'));
+  document.querySelector<HTMLButtonElement>('[data-mobile-sign-out]')?.addEventListener('click', () => {
+    document.querySelector<HTMLButtonElement>('[data-sign-out]')?.click();
+  });
+  document.querySelector<HTMLButtonElement>('#toggle-library-filters')?.addEventListener('click', () => {
+    state.browseFiltersOpen = !state.browseFiltersOpen;
+    render(true);
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#toggle-library-filters')?.focus({ preventScroll: true }));
+  });
+  document.querySelector<HTMLFormElement>('#library-browse-form')?.addEventListener('change', (event) => {
+    const form = event.currentTarget as HTMLFormElement;
+    const values = Object.fromEntries(new FormData(form));
+    state.browsePreferences = normalizeBrowsePreferences(values);
+    state.libraryPage = 0;
+    saveBrowsePreferences(state.browsePreferences, state.bootstrap?.current_user?.id, activeLibraryId());
+    render(true);
+  });
+  document.querySelector<HTMLFormElement>('#library-browse-form')?.addEventListener('submit', (event) => event.preventDefault());
+  document.querySelector<HTMLButtonElement>('#reset-library-filters')?.addEventListener('click', () => {
+    state.browsePreferences = { ...DEFAULT_BROWSE_PREFERENCES, density: state.browsePreferences.density };
+    state.libraryPage = 0;
+    saveBrowsePreferences(state.browsePreferences, state.bootstrap?.current_user?.id, activeLibraryId());
+    render(true);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-library-page]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const lastPage = Math.max(0, Math.ceil(visibleLibraryItems().length / LIBRARY_PAGE_SIZE) - 1);
+      state.libraryPage = Math.max(0, Math.min(lastPage, Number(button.dataset.libraryPage)));
+      render(true);
+      requestAnimationFrame(() => {
+        const card = document.querySelector<HTMLElement>('.library-item-grid .media-card');
+        card?.focus({ preventScroll: true });
+        card?.scrollIntoView({ block: 'nearest' });
+      });
+    });
+  });
+  document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
+    state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
+  });
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement | null;
@@ -445,16 +672,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     }
 
     try {
-      const formData = new FormData(form);
-      const request: CreateUserRequest = {
-        username: formDataString(formData.get('username')).trim(),
-        password: formDataString(formData.get('password')),
-        pin: formDataString(formData.get('pin')).trim() || undefined,
-        admin: true,
-        birthday: formDataString(formData.get('birthday')).trim() || undefined,
-        profile_image_upload: await readProfileImageUpload(formData),
-        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-      };
+      const request = await createUserRequest(form, true);
       setAuthFormBusy(form, true);
       await createUser(request);
       const token = await loginUser({ username: request.username, password: request.password });
@@ -526,6 +744,14 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       }
     });
   });
+  document.querySelectorAll<HTMLAnchorElement>('.settings-nav-link').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        navigateTo(link.pathname);
+      }
+    });
+  });
 
   document.querySelectorAll<HTMLButtonElement>('[data-provider-settings]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -542,11 +768,13 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       if (!option || !list) {
         return;
       }
-      if (button.dataset.providerMove === 'up' && option.previousElementSibling) {
-        list.insertBefore(option, option.previousElementSibling);
+      const primaryOptions = visiblePrimaryProviderOptions(list);
+      const index = primaryOptions.indexOf(option);
+      if (button.dataset.providerMove === 'up' && index > 0) {
+        list.insertBefore(option, primaryOptions[index - 1]);
       }
-      if (button.dataset.providerMove === 'down' && option.nextElementSibling) {
-        list.insertBefore(option.nextElementSibling, option);
+      if (button.dataset.providerMove === 'down' && index >= 0 && index < primaryOptions.length - 1) {
+        list.insertBefore(option, primaryOptions[index + 1].nextSibling);
       }
       syncProviderDependencyOptions(list);
     });
@@ -566,20 +794,23 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     const input = document.querySelector<HTMLInputElement>('#search-input');
     state.searchQuery = input?.value ?? '';
     state.showFullSearchResults = Boolean(state.searchQuery.trim());
-    void refreshData();
+    void refreshHomeSearch(context);
   });
 
   document.querySelector<HTMLInputElement>('#search-input')?.addEventListener('input', (event) => {
+    liveSearchGeneration += 1;
     const input = event.currentTarget as HTMLInputElement;
     state.searchQuery = input.value;
+    state.searchLoading = Boolean(input.value.trim());
     state.showFullSearchResults = false;
     if (pendingLiveSearchHandle !== undefined) {
       globalThis.clearTimeout(pendingLiveSearchHandle);
     }
     pendingLiveSearchHandle = globalThis.setTimeout(() => {
       pendingLiveSearchHandle = undefined;
-      void refreshData(false);
+      void refreshHomeSearch(context);
     }, 250);
+    render(true);
   });
 
   document.querySelector<HTMLButtonElement>('[data-clear-search]')?.addEventListener('click', () => {
@@ -824,7 +1055,19 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       suppressNextTrailerClick = true;
       state.isTrailerMenuOpen = true;
       render();
+      requestAnimationFrame(() => {
+        const option = document.querySelector<HTMLButtonElement>('[data-play-trailer-index]');
+        option?.scrollIntoView({ block: 'center' });
+        option?.focus({ preventScroll: true });
+      });
     };
+
+    document.querySelector<HTMLButtonElement>('#choose-item-trailer')?.addEventListener('click', () => {
+      closeMoreActions();
+      openTrailerChooser();
+      // The chooser button doesn't generate a click on the main trailer button.
+      suppressNextTrailerClick = false;
+    });
 
     trailerButton.addEventListener('click', () => {
       if (suppressNextTrailerClick) {
@@ -874,6 +1117,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
   document.querySelector<HTMLButtonElement>('#close-trailer-picker')?.addEventListener('click', () => {
     state.isTrailerMenuOpen = false;
     render();
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#play-item-trailer')?.focus({ preventScroll: true }));
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-play-trailer-index]').forEach((button) => {
@@ -912,38 +1156,44 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     }
   });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => button.addEventListener('click', async () => {
-    if (!state.selectedItem) {
-      return;
-    }
+  document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => {
+    const playFrom = async (startMs: number): Promise<void> => {
+      if (!state.selectedItem) {
+        return;
+      }
 
-    try {
-      const startMs = Number(button.dataset.playSelectedItemStartMs);
-      await startPlayback(state.selectedItem, Number.isFinite(startMs) ? startMs : 0);
-    } catch (error) {
-      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      render();
-    }
-  }));
+      try {
+        await startPlayback(state.selectedItem, Number.isFinite(startMs) ? startMs : 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+        state.isPlayerOpen = false;
+        state.activePlaybackItem = undefined;
+        render();
+      }
+    };
+    if (button.dataset.resumeHold !== undefined) bindResumeHold(button, openResumeOptions, signal);
+    button.addEventListener('click', () => { void playFrom(Number(button.dataset.playSelectedItemStartMs)); });
+  });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-playback-target-item-id]').forEach((button) => button.addEventListener('click', async () => {
+  document.querySelectorAll<HTMLButtonElement>('[data-playback-target-item-id]').forEach((button) => {
     const itemId = Number(button.dataset.playbackTargetItemId);
-    const startMs = Number(button.dataset.playbackTargetStartMs);
-    if (!Number.isFinite(itemId)) {
-      return;
-    }
+    const playFrom = async (startMs: number): Promise<void> => {
+      if (!Number.isFinite(itemId)) {
+        return;
+      }
 
-    try {
-      await startPlaybackForItemId(itemId, Number.isFinite(startMs) ? startMs : 0);
-    } catch (error) {
-      state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
-      state.isPlayerOpen = false;
-      state.activePlaybackItem = undefined;
-      render();
-    }
-  }));
+      try {
+        await startPlaybackForItemId(itemId, Number.isFinite(startMs) ? startMs : 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start playback session.';
+        state.isPlayerOpen = false;
+        state.activePlaybackItem = undefined;
+        render();
+      }
+    };
+    if (button.dataset.resumeHold !== undefined) bindResumeHold(button, openResumeOptions, signal);
+    button.addEventListener('click', () => { void playFrom(Number(button.dataset.playbackTargetStartMs)); });
+  });
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
     closeActivePlaybackSession();
@@ -963,6 +1213,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
     try {
       state.settingsResponse = await updateSettings(nextSettings);
+      form.reset();
       await refreshData();
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to save settings.';
@@ -1053,6 +1304,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
   document.querySelector<HTMLFormElement>('#log-filter-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (logsAreLoading()) {
+      return;
+    }
     const form = event.currentTarget as HTMLFormElement | null;
     if (!form) {
       return;
@@ -1077,11 +1331,25 @@ function bindRenderEvents(context: AppEventBindingContext): void {
       since: '',
       until: '',
     };
+    document.querySelector<HTMLFormElement>('#log-filter-form')?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select').forEach((control) => {
+      control.value = '';
+    });
     await refreshLogsView(context);
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-log-viewer')?.addEventListener('click', async () => {
     await refreshLogsView(context);
+  });
+  document.querySelector<HTMLElement>('#log-viewer-panel-root')?.addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-log-page]') : null;
+    if (!button || button.disabled) {
+      return;
+    }
+    const page = Number(button.dataset.logPage);
+    const lastPage = Math.max(0, Math.ceil((state.logsResponse?.entries.length ?? 0) / LOG_PAGE_SIZE) - 1);
+    state.logPage = Math.min(Math.max(0, page), lastPage);
+    updateLogResults(context);
+    document.querySelector<HTMLElement>('#log-results')?.scrollIntoView({ block: 'nearest' });
   });
 
   document.querySelectorAll<HTMLButtonElement>('[data-shelf-scroll]').forEach((button) => {
@@ -1158,6 +1426,7 @@ function bindRenderEvents(context: AppEventBindingContext): void {
           preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
         };
         const updatedUser = await updateUser(userId, request);
+        form.reset();
         state.users = state.users.map((user) => (user.id === updatedUser.id ? updatedUser : user));
         if (state.bootstrap?.current_user?.id === updatedUser.id) {
           state.bootstrap.current_user = updatedUser;
@@ -1178,20 +1447,13 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     }
 
     try {
-      const formData = new FormData(form);
-      const request: CreateUserRequest = {
-        username: formDataString(formData.get('username')).trim(),
-        password: formDataString(formData.get('password')),
-        pin: formDataString(formData.get('pin')).trim() || undefined,
-        admin: formData.get('admin') === 'on',
-        birthday: formDataString(formData.get('birthday')).trim() || undefined,
-        profile_image_upload: await readProfileImageUpload(formData),
-        preferred_metadata_languages: parseMetadataLanguageInput(formData.get('preferred_metadata_languages')),
-      };
+      const request = await createUserRequest(form);
       await createUser(request);
       form.reset();
+      state.settingsCreation = undefined;
       state.users = await getUsers();
       render();
+      document.querySelector<HTMLButtonElement>('[data-settings-create="users"]')?.focus({ preventScroll: true });
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to create the user.';
       render();
@@ -1266,7 +1528,9 @@ function bindRenderEvents(context: AppEventBindingContext): void {
     try {
       state.settingsResponse = await addLibrary(library);
       form.reset();
+      state.settingsCreation = undefined;
       await refreshData();
+      document.querySelector<HTMLButtonElement>('[data-settings-create="libraries"]')?.focus({ preventScroll: true });
     } catch (error) {
       state.error = error instanceof Error ? error.message : 'Failed to add library.';
       render();
@@ -1326,7 +1590,60 @@ function bindRenderEvents(context: AppEventBindingContext): void {
 
 
 
+/** Show a fallback while a provider logo loads or is unavailable. */
+function bindProviderLogos(): void {
+  document.querySelectorAll<HTMLImageElement>('[data-provider-logo]').forEach((image) => {
+    const sync = () => image.parentElement?.classList.toggle('is-loaded', image.complete && image.naturalWidth > 0);
+    image.addEventListener('load', sync);
+    image.addEventListener('error', sync);
+    sync();
+  });
+}
+
+/** Bind attached API-key buttons; clearing stays reversible until settings are saved. */
+function bindApiKeyPickers(): void {
+  document.querySelectorAll<HTMLElement>('.api-key-picker').forEach((picker) => {
+    const input = picker.querySelector<HTMLInputElement>('input[type="password"]')!;
+    const removal = picker.querySelector<HTMLInputElement>('[data-api-key-removal]')!;
+    const button = picker.querySelector<HTMLButtonElement>('[data-clear-api-key]')!;
+    const status = picker.closest('.api-key-field')?.querySelector<HTMLElement>('[data-api-key-status]');
+    const configured = picker.dataset.apiKeyConfigured === 'true';
+    const savedPlaceholder = configured ? 'Saved' : '';
+    const label = picker.getAttribute('aria-label') ?? 'API key';
+    const sync = () => {
+      input.placeholder = removal.checked ? 'Will be cleared on save' : savedPlaceholder;
+      button.disabled = !configured && !input.value && !removal.checked;
+      button.setAttribute('aria-pressed', String(removal.checked));
+      button.setAttribute('aria-label', removal.checked ? `Undo clearing ${label}` : `Clear ${label}`);
+      button.title = removal.checked ? 'Undo API key clearing' : 'Clear API key on save';
+      if (status) status.hidden = !removal.checked;
+    };
+    input.addEventListener('input', () => {
+      removal.checked = false;
+      sync();
+    });
+    button.addEventListener('click', () => {
+      input.value = '';
+      removal.checked = configured && !removal.checked;
+      sync();
+    });
+    sync();
+  });
+}
+
+/** Return only primary providers offered for the current library type, in display order. */
+function visiblePrimaryProviderOptions(list: HTMLElement): HTMLElement[] {
+  return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option[data-provider-role="primary"]:not(.is-hidden)'));
+}
+
 function syncProviderDependencyOptions(list: HTMLElement): void {
+  const primaryOptions = visiblePrimaryProviderOptions(list);
+  primaryOptions.forEach((option, index) => {
+    const up = option.querySelector<HTMLButtonElement>('[data-provider-move="up"]');
+    const down = option.querySelector<HTMLButtonElement>('[data-provider-move="down"]');
+    if (up) up.disabled = index === 0;
+    if (down) down.disabled = index === primaryOptions.length - 1;
+  });
   const selectedPrimaryIds = new Set(
     Array.from(list.querySelectorAll<HTMLInputElement>('.metadata-provider-option[data-provider-role="primary"] input[type="checkbox"]:checked'))
       .map((input) => input.value),
@@ -1336,11 +1653,14 @@ function syncProviderDependencyOptions(list: HTMLElement): void {
     const input = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
     const role = option.dataset.providerRole ?? 'primary';
-    if (role === 'primary') {
+    if (role === 'primary' && !option.classList.contains('is-hidden')) {
       priority += 1;
       if (label) {
         label.textContent = `Priority ${priority}`;
       }
+      return;
+    }
+    if (role === 'primary') {
       return;
     }
 

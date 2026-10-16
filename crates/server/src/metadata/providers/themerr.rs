@@ -33,12 +33,8 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
         ],
         attribution_text: "Theme metadata provided by ThemerrDB.".into(),
         attribution_url: "https://app.lizardbyte.dev/ThemerrDB".into(),
-        logo_light_url: Some(
-            "https://app.lizardbyte.dev/ThemerrDB/assets/img/navbar-avatar.png".into(),
-        ),
-        logo_dark_url: Some(
-            "https://app.lizardbyte.dev/ThemerrDB/assets/img/navbar-avatar.png".into(),
-        ),
+        logo_light_url: Some("/assets/providers/themerr.png".into()),
+        logo_dark_url: Some("/assets/providers/themerr.png".into()),
     }
 }
 

@@ -3500,12 +3500,12 @@ pub async fn cache_artwork(
         .and_then(|value| value.to_str())
         .ok_or_else(|| "Invalid artwork cache file name".to_string())?
         .to_string();
-    purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
     if cache_path.is_file() {
         if fs::read(&cache_path)
             .ok()
             .is_some_and(|bytes| artwork::validate(&bytes).is_ok())
         {
+            purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
             return Ok(cache_path);
         }
         fs::remove_file(&cache_path).map_err(|error| error.to_string())?;
@@ -3522,7 +3522,23 @@ pub async fn cache_artwork(
         .await
         .map_err(|error| error.to_string())?;
     artwork::validate(&bytes)?;
-    fs::write(&cache_path, bytes).map_err(|error| error.to_string())?;
+    // Publish a complete image atomically; retain the working image on failure.
+    let temporary = cache_dir.join(format!(".koko-artwork-{}.tmp", rand::random::<u128>()));
+    let result = (|| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        drop(file);
+        fs::rename(&temporary, &cache_path)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
 
     Ok(cache_path)
 }

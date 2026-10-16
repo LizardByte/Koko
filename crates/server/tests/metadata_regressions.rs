@@ -113,6 +113,35 @@ async fn metadata_artwork_refetches_previously_corrupted_cache_entries() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[tokio::test]
+async fn metadata_artwork_keeps_working_images_until_a_replacement_is_ready() {
+    let dir = artwork_dir();
+    let old = koko::metadata::expected_artwork_cache_path(
+        "http://old.example/poster.png",
+        &dir,
+        "poster",
+    );
+    std::fs::write(&old, png()).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let unavailable = format!("http://{}/poster.png", listener.local_addr().unwrap());
+    drop(listener);
+    assert!(
+        koko::metadata::cache_artwork(&unavailable, &dir, "poster")
+            .await
+            .is_err()
+    );
+    assert!(old.exists());
+    let (url, server) = serve_artwork(200, png());
+    let replacement = koko::metadata::cache_artwork(&url, &dir, "poster")
+        .await
+        .unwrap();
+    server.join().unwrap();
+    assert!(replacement.is_file());
+    assert!(!old.exists());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn metadata_refresh_state_changes_only_the_requested_translation() {
     let mut conn = connection();

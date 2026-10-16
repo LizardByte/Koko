@@ -3867,7 +3867,9 @@ fn cleanup_movie_title(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .trim_matches(|character: char| !character.is_ascii_alphanumeric())
+        .trim_matches(|character: char| {
+            character.is_ascii_punctuation() || character.is_whitespace()
+        })
         .to_string()
 }
 
@@ -4558,6 +4560,25 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn title_cleanup_preserves_unicode_names_and_combining_marks() {
+        for title in [
+            "千と千尋の神隠し",
+            "Москва",
+            "Amélie",
+            "Cafe\u{301}",
+        ] {
+            assert_eq!(
+                super::cleanup_movie_title(&format!("{title} (2001) - 1080p")),
+                title
+            );
+            assert_eq!(
+                super::parse_movie_name(&format!("{title} (2001).mkv"), title).title,
+                title
+            );
+            assert_eq!(super::show_search_query(title, title), title);
+        }
+    }
     use super::*;
 
     #[test]

@@ -2732,27 +2732,25 @@ async fn run_automatic_movie_metadata_linking(
         }
 
         if let (Some(provider_id), Some(result)) = (guessed_provider_id, guess) {
-            if let Err(error) = db
-                .run({
-                    let external_id = result.external_id.clone();
-                    let media_type = result.media_type.clone();
-                    let provider_id = provider_id.clone();
-                    move |conn| {
-                        set_item_metadata_refresh_state(
-                            conn,
-                            candidate.item_id,
-                            provider_id,
-                            &external_id,
-                            Some(&media_type),
-                            "pending",
-                            None,
-                        )
-                    }
-                })
-                .await
-            {
+            let pending_target = MetadataRefreshTarget {
+                locale_key: None,
+                item_id: candidate.item_id,
+                library_id: candidate.library_id,
+                provider_id: provider_id.clone(),
+                item_type: if candidate.library_kind == crate::config::MediaLibraryKind::Shows {
+                    "show".into()
+                } else {
+                    "movie".into()
+                },
+                display_title: candidate.display_title.clone(),
+                relative_path: candidate.relative_path.clone(),
+                external_id: result.external_id.clone(),
+                media_type: result.media_type.clone(),
+                fetch_kind: MetadataRefreshFetchKind::Direct,
+            };
+            if let Err(error) = mark_metadata_refresh_target_pending(db, &pending_target).await {
                 log::warn!(
-                    "Failed to mark automatic metadata candidate {} pending: {}",
+                    "Failed to mark automatic metadata candidate {} pending: {:?}",
                     candidate.item_id,
                     error
                 );

@@ -71,7 +71,7 @@ pub(crate) async fn fetch_secondary_metadata(
     }
 
     let payload = response.text().await.map_err(|error| error.to_string())?;
-    Ok(parse_youtube_trailer(&payload, locale_key, item_type))
+    parse_youtube_trailer(&payload, locale_key, item_type)
 }
 
 fn trailerdb_path(
@@ -146,11 +146,12 @@ fn parse_youtube_trailer(
     payload_json: &str,
     locale_key: &str,
     item_type: &str,
-) -> Option<ProviderMetadataDetails> {
+) -> Result<Option<ProviderMetadataDetails>, String> {
     let language = provider_locale_key(locale_key);
     let extras = match item_type {
         "movie" => {
-            let response: MovieResponse = serde_json::from_str(payload_json).ok()?;
+            let response: MovieResponse = serde_json::from_str(payload_json)
+                .map_err(|error| format!("TrailerDB movie returned invalid response: {error}"))?;
             let groups = extras_from_groups(response.trailer_groups.unwrap_or_default(), &language);
             if groups.is_empty() {
                 extras_from_entries(response.trailers.unwrap_or_default(), &language)
@@ -159,7 +160,8 @@ fn parse_youtube_trailer(
             }
         }
         "show" => {
-            let response: SeriesResponse = serde_json::from_str(payload_json).ok()?;
+            let response: SeriesResponse = serde_json::from_str(payload_json)
+                .map_err(|error| format!("TrailerDB series returned invalid response: {error}"))?;
             let entries = response
                 .trailers
                 .unwrap_or_default()
@@ -175,18 +177,21 @@ fn parse_youtube_trailer(
                 .collect();
             extras_from_entries(entries, &language)
         }
-        _ => return None,
+        _ => return Ok(None),
     };
-    let trailer = extras
+    let Some(trailer) = extras
         .iter()
         .find(|extra| extra.extra_type == METADATA_EXTRA_TYPE_TRAILER)
-        .or_else(|| extras.first())?;
-    Some(ProviderMetadataDetails {
+        .or_else(|| extras.first())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ProviderMetadataDetails {
         trailer_title: trailer.title.clone(),
         trailer_url: Some(trailer.url.clone()),
         extras,
         ..ProviderMetadataDetails::default()
-    })
+    }))
 }
 
 fn extras_from_groups(
@@ -259,7 +264,11 @@ mod tests {
             ]
         })
         .to_string();
-        assert!(super::parse_youtube_trailer(&payload, "en-US", "show").is_some());
+        assert!(
+            super::parse_youtube_trailer(&payload, "en-US", "show")
+                .unwrap()
+                .is_some()
+        );
         let payload = serde_json::json!({
             "trailers": [
                 {
@@ -271,7 +280,7 @@ mod tests {
             ]
         })
         .to_string();
-        assert!(super::parse_youtube_trailer(&payload, "en-US", "show").is_none());
+        assert!(super::parse_youtube_trailer(&payload, "en-US", "show").is_err());
     }
     use super::{
         parse_youtube_trailer,
@@ -322,14 +331,19 @@ mod tests {
         })
         .to_string();
 
-        let trailer = parse_youtube_trailer(&payload, "es-ES", "movie").expect("Expected trailer");
+        let trailer = parse_youtube_trailer(&payload, "es-ES", "movie")
+            .unwrap()
+            .expect("Expected trailer");
 
         assert_eq!(trailer.trailer_title.as_deref(), Some("Trailer oficial"));
         assert_eq!(
             trailer.trailer_url.as_deref(),
             Some("https://www.youtube.com/watch?v=ZYXWVUT9876")
         );
-        assert_eq!(parse_youtube_trailer(&payload, "fr-FR", "movie"), None);
+        assert_eq!(
+            parse_youtube_trailer(&payload, "fr-FR", "movie").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -363,7 +377,9 @@ mod tests {
         })
         .to_string();
 
-        let trailer = parse_youtube_trailer(&payload, "es", "movie").expect("Expected trailer");
+        let trailer = parse_youtube_trailer(&payload, "es", "movie")
+            .unwrap()
+            .expect("Expected trailer");
 
         assert_eq!(trailer.trailer_title.as_deref(), Some("Trailer oficial"));
         assert_eq!(
@@ -379,5 +395,15 @@ mod tests {
             vec!["trailer", "clip"]
         );
         assert_eq!(trailer.extras[0].duration_seconds, Some(148));
+    }
+
+    #[test]
+    fn invalid_trailer_response_is_an_error_instead_of_a_definitive_miss() {
+        assert!(parse_youtube_trailer("<html>unavailable</html>", "en-US", "movie").is_err());
+        assert!(
+            parse_youtube_trailer(r#"{"trailers": []}"#, "en-US", "movie")
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -74,7 +74,7 @@ pub(crate) async fn fetch_youtube_theme_url(
     }
 
     let payload = response.text().await.map_err(|error| error.to_string())?;
-    Ok(parse_youtube_theme_url(&payload))
+    parse_youtube_theme_url(&payload)
 }
 
 pub(crate) async fn fetch_youtube_theme_metadata(
@@ -180,12 +180,13 @@ struct ThemeResponse {
     youtube_theme_url: Option<String>,
 }
 
-fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
-    serde_json::from_str::<ThemeResponse>(payload_json)
-        .ok()?
+fn parse_youtube_theme_url(payload_json: &str) -> Result<Option<String>, String> {
+    let response = serde_json::from_str::<ThemeResponse>(payload_json)
+        .map_err(|error| format!("ThemerrDB returned invalid response: {error}"))?;
+    Ok(response
         .youtube_theme_url
         .as_deref()
-        .and_then(youtube_watch_url)
+        .and_then(youtube_watch_url))
 }
 
 #[cfg(test)]
@@ -208,7 +209,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_youtube_theme_url(&payload).as_deref(),
+            parse_youtube_theme_url(&payload).unwrap().as_deref(),
             Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
         );
     }
@@ -221,7 +222,13 @@ mod tests {
         })
         .to_string();
 
-        assert_eq!(parse_youtube_theme_url(&payload), None);
+        assert_eq!(parse_youtube_theme_url(&payload).unwrap(), None);
+    }
+
+    #[test]
+    fn invalid_theme_response_is_an_error_instead_of_a_definitive_miss() {
+        assert!(parse_youtube_theme_url("<html>unavailable</html>").is_err());
+        assert!(parse_youtube_theme_url(r#"{"youtube_theme_url": 123}"#).is_err());
     }
 
     #[test]

@@ -19,6 +19,12 @@ const visits = new Map<string, BrowseVisit>();
 const returnPaths = new Map<number | undefined, string>();
 let pendingRestore: string | undefined;
 
+export function clearBrowseSessions(): void {
+  visits.clear();
+  returnPaths.clear();
+  pendingRestore = undefined;
+}
+
 export function browsePath(route: AppRoute): string | undefined {
   if (route.page !== 'home' && route.page !== 'browse-detail') return undefined;
   const prefix = route.libraryId === undefined ? '' : `/libraries/${route.libraryId}`;

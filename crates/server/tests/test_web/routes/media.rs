@@ -7,20 +7,20 @@ use rocket::serde::json::{
 
 // test imports
 use crate::test_utils::{
-    create_test_client,
+    create_admin_test_client,
     make_request,
 };
 
 #[rocket::async_test]
 async fn test_get_server_capabilities_route() {
-    let client = create_test_client(Some("media_capabilities_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_capabilities_route")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/system/capabilities",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -41,14 +41,14 @@ async fn test_get_server_capabilities_route() {
 
 #[rocket::async_test]
 async fn test_get_metadata_providers_route() {
-    let client = create_test_client(Some("metadata_providers_route")).await;
+    let (client, token) = create_admin_test_client(Some("metadata_providers_route")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/metadata/providers",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -63,14 +63,14 @@ async fn test_get_metadata_providers_route() {
 
 #[rocket::async_test]
 async fn test_get_libraries_route() {
-    let client = create_test_client(Some("media_libraries_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_libraries_route")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/libraries",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -85,14 +85,15 @@ async fn test_get_libraries_route() {
 
 #[rocket::async_test]
 async fn test_get_library_inventory_missing_route() {
-    let client = create_test_client(Some("media_library_inventory_missing_route")).await;
+    let (client, token) =
+        create_admin_test_client(Some("media_library_inventory_missing_route")).await;
 
     make_request(
         Some(&client),
         "get",
         "/api/v1/libraries/999/files",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::NotFound),
         Some(false),
     )
@@ -101,14 +102,15 @@ async fn test_get_library_inventory_missing_route() {
 
 #[rocket::async_test]
 async fn test_refresh_library_metadata_missing_route() {
-    let client = create_test_client(Some("media_refresh_library_metadata_missing_route")).await;
+    let (client, token) =
+        create_admin_test_client(Some("media_refresh_library_metadata_missing_route")).await;
 
     make_request(
         Some(&client),
         "post",
         "/api/v1/libraries/999/metadata/refresh",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::NotFound),
         Some(false),
     )
@@ -117,14 +119,14 @@ async fn test_refresh_library_metadata_missing_route() {
 
 #[rocket::async_test]
 async fn test_get_items_route() {
-    let client = create_test_client(Some("media_items_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_items_route")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/items",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )
@@ -139,14 +141,14 @@ async fn test_get_items_route() {
 
 #[rocket::async_test]
 async fn test_get_item_missing_route() {
-    let client = create_test_client(Some("media_item_missing_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_item_missing_route")).await;
 
     make_request(
         Some(&client),
         "get",
         "/api/v1/items/999",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::NotFound),
         Some(false),
     )
@@ -155,14 +157,14 @@ async fn test_get_item_missing_route() {
 
 #[rocket::async_test]
 async fn test_get_item_metadata_missing_route() {
-    let client = create_test_client(Some("media_item_metadata_missing_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_item_metadata_missing_route")).await;
 
     make_request(
         Some(&client),
         "get",
         "/api/v1/items/999/metadata",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::NotFound),
         Some(false),
     )
@@ -171,14 +173,14 @@ async fn test_get_item_metadata_missing_route() {
 
 #[rocket::async_test]
 async fn test_search_items_route() {
-    let client = create_test_client(Some("media_search_route")).await;
+    let (client, token) = create_admin_test_client(Some("media_search_route")).await;
 
     let response = make_request(
         Some(&client),
         "get",
         "/api/v1/search?query=test",
         None,
-        None,
+        Some(format!("Bearer {}", token)),
         Some(Status::Ok),
         Some(false),
     )

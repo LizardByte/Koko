@@ -7,7 +7,11 @@ use diesel::{
     ExpressionMethods,
     SelectableHelper,
 };
-use rocket::http::Status;
+use rocket::http::{
+    Cookie,
+    CookieJar,
+    Status,
+};
 use rocket::serde::{
     Deserialize,
     Serialize,
@@ -47,6 +51,7 @@ pub struct TokenResponse {
 #[post("/login", format = "json", data = "<login_form>")]
 pub async fn login(
     db: DbConn,
+    cookies: &CookieJar<'_>,
     login_form: Json<LoginForm>,
 ) -> Result<Json<TokenResponse>, Status> {
     use crate::db::schema::users::dsl::*;
@@ -70,9 +75,6 @@ pub async fn login(
         }
     };
 
-    // debug print user info from db
-    println!("Found user in db: {:?}", user);
-
     // Verify password using BCrypt
     if !crate::auth::verify_password(&form.password, &user.password) {
         println!("Password verification failed");
@@ -88,12 +90,18 @@ pub async fn login(
         }
     };
 
+    crate::auth::set_media_auth_cookie(cookies, &token);
     Ok(Json(TokenResponse { token }))
 }
 
 #[openapi(tag = "Auth")]
 #[get("/logout")]
-pub fn logout() -> &'static str {
+pub fn logout(cookies: &CookieJar<'_>) -> &'static str {
+    cookies.remove(
+        Cookie::build(crate::auth::MEDIA_AUTH_COOKIE)
+            .path("/api/v1")
+            .build(),
+    );
     "Logout Page"
 }
 

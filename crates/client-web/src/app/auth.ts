@@ -17,9 +17,11 @@ export function requiresLogin(): boolean {
   return state.bootstrap?.has_users === true && !currentUser();
 }
 
-export function canManageUsers(): boolean {
+export function canManageServer(): boolean {
   return currentUser()?.admin ?? false;
 }
+
+export const canManageUsers = canManageServer;
 
 export async function readProfileImageUpload(formData: FormData): Promise<ProfileImageUploadRequest | undefined> {
   const value = formData.get('profile_image_file');

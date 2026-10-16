@@ -1,3 +1,4 @@
+import { clearBrowseSessions } from './browseSession';
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
@@ -55,6 +56,7 @@ import {
   addLibrary,
   clearMetadataCache,
   clearStoredAuthToken,
+  logoutUser,
   createUser,
   deleteLibrary,
   deleteMissingItems,
@@ -711,8 +713,15 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
   });
 
-  document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', () => {
-    clearStoredAuthToken();
+  document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to sign out.';
+      render();
+      return;
+    }
+    clearBrowseSessions();
     state.bootstrap = state.bootstrap ? { ...state.bootstrap, current_user: undefined } : undefined;
     void refreshData();
   });

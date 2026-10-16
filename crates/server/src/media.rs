@@ -908,7 +908,7 @@ fn user_metadata_languages_for_library(
     Ok(languages)
 }
 
-/// Return whether a user can view a library. Empty access lists are public.
+/// Return whether an existing user can view a library. Empty lists allow all users.
 pub fn user_can_access_library(
     conn: &mut SqliteConnection,
     library_id: i32,
@@ -925,20 +925,40 @@ pub fn user_can_access_library(
     let Some(library) = library else {
         return Ok(false);
     };
-    let settings = media_library_settings_from_row(library);
-    if settings.allowed_user_ids.is_empty() {
-        return Ok(true);
-    }
     let Some(user_id) = user_id else {
         return Ok(false);
     };
-    let is_admin = users_dsl::users
+    let account = users_dsl::users
         .filter(users_dsl::id.eq(user_id))
         .select(users_dsl::admin)
         .first::<bool>(conn)
-        .optional()?
-        .unwrap_or(false);
-    Ok(is_admin || settings.allowed_user_ids.contains(&user_id))
+        .optional()?;
+    let Some(is_admin) = account else {
+        return Ok(false);
+    };
+    // Malformed access settings must never turn a restricted library into an open one.
+    let Ok(allowed) = serde_json::from_str::<Vec<i32>>(&library.allowed_user_ids_json) else {
+        return Ok(is_admin);
+    };
+    Ok(is_admin || allowed.is_empty() || allowed.contains(&user_id))
+}
+
+/// Return library identifiers visible to the current account.
+pub fn accessible_library_ids(
+    conn: &mut SqliteConnection,
+    user_id: Option<i32>,
+) -> Result<HashSet<i32>, diesel::result::Error> {
+    use crate::db::schema::media_libraries::dsl as libraries_dsl;
+    let ids = libraries_dsl::media_libraries
+        .select(libraries_dsl::id)
+        .load::<i32>(conn)?;
+    let mut visible = HashSet::new();
+    for id in ids {
+        if user_can_access_library(conn, id, user_id)? {
+            visible.insert(id);
+        }
+    }
+    Ok(visible)
 }
 
 /// Replace the persisted media-library settings stored in the database.
@@ -2705,6 +2725,8 @@ pub fn list_media_items_for_user_with_preferred_languages(
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     let mut items =
         list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
+    let visible_libraries = accessible_library_ids(conn, user_id)?;
+    items.retain(|item| visible_libraries.contains(&item.library_id));
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3088,6 +3110,8 @@ pub fn search_media_items_for_user_with_preferred_languages(
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     let mut items =
         search_media_items_with_preferred_languages(conn, query, library_id, preferred_languages)?;
+    let visible_libraries = accessible_library_ids(conn, user_id)?;
+    items.retain(|item| visible_libraries.contains(&item.library_id));
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3122,12 +3146,19 @@ pub fn get_media_home_with_preferred_languages(
         Some(library_id) => media_library_metadata_provider_order(conn, library_id)?,
         None => Vec::new(),
     };
-    let collections = list_metadata_collection_summaries_with_preferred_languages(
+    let mut collections = list_metadata_collection_summaries_with_preferred_languages(
         conn,
         library_id,
         preferred_languages,
         &collection_provider_order,
     )?;
+
+    let visible_items = items.iter().map(|item| item.id).collect::<HashSet<_>>();
+    for collection in &mut collections {
+        collection.item_ids.retain(|id| visible_items.contains(id));
+        collection.item_count = collection.item_ids.len();
+    }
+    collections.retain(|collection| !collection.item_ids.is_empty());
 
     Ok(MediaHome {
         library_id,

@@ -70,6 +70,14 @@ pub async fn create_test_client(prefix: Option<&str>) -> Client {
 
     // Create a new rocket instance with the unique database path
     let rocket = web::rocket_with_db_path(Some(db_path));
+    // Each test needs only a few connections; the host CPU count can otherwise
+    // create hundreds of SQLite connections for every short-lived client.
+    let figment = rocket
+        .figment()
+        .clone()
+        .merge(("workers", 2))
+        .merge(("databases.sqlite_db.pool_size", 4));
+    let rocket = rocket.configure(figment);
     let client = Client::tracked(rocket)
         .await
         .expect("Failed to create test client");
@@ -242,4 +250,13 @@ pub async fn create_and_login_user(
     }
 
     login_user(client, username, password, Some(Status::Ok)).await
+}
+
+/// Isolated authenticated administrator for management and media route success tests.
+pub async fn create_admin_test_client(prefix: Option<&str>) -> (Client, String) {
+    let client = create_test_client(prefix).await;
+    let token = create_and_login_user(&client, "admin", "password123", true, None)
+        .await
+        .unwrap();
+    (client, token)
 }

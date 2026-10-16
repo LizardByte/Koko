@@ -111,6 +111,19 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         .attach(DbConn::fairing())
         .attach(Migrate)
         .attach(ReleaseDatabase)
+        .attach(AdHoc::on_response(
+            "Private API responses",
+            |request, response| {
+                Box::pin(async move {
+                    let path = request.uri().path();
+                    if path.starts_with("/api/")
+                        || matches!(path.as_str(), "/login" | "/logout" | "/user_info")
+                    {
+                        response.set_raw_header("Cache-Control", "private, no-store");
+                    }
+                })
+            },
+        ))
         .attach(AdHoc::on_liftoff("Start background workers", |rocket| {
             Box::pin(async move {
                 let scheduled_tasks_db = DbConn::get_one(rocket).await;

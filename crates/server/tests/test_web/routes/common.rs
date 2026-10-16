@@ -1,6 +1,7 @@
 // lib imports
 use rocket::http::{
     ContentType,
+    Header,
     Status,
 };
 
@@ -8,6 +9,7 @@ use serde_json::Value;
 
 // test imports
 use crate::test_utils::{
+    create_admin_test_client,
     create_test_client,
     make_request,
 };
@@ -96,8 +98,12 @@ async fn test_favicon_serves_application_icon_without_authentication() {
 
 #[rocket::async_test]
 async fn test_all_provider_descriptors_serve_local_logo_assets() {
-    let client = create_test_client(Some("provider_logo_assets")).await;
-    let providers_response = client.get("/api/v1/metadata/providers").dispatch().await;
+    let (client, token) = create_admin_test_client(Some("provider_logo_assets")).await;
+    let providers_response = client
+        .get("/api/v1/metadata/providers")
+        .header(Header::new("Authorization", format!("Bearer {token}")))
+        .dispatch()
+        .await;
     assert_eq!(providers_response.status(), Status::Ok);
     let providers: Vec<Value> = providers_response
         .into_json()

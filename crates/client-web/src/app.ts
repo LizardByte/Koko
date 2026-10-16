@@ -11,6 +11,7 @@ import {
 } from './app/activities';
 import {
   currentUser,
+  canManageServer,
   renderLoginScreen,
   renderAuthShell,
   renderWelcomeScreen,
@@ -335,6 +336,7 @@ function renderRail(): string {
   const collapsed = isRailCollapsed();
   const user = currentUser();
   const userRoleLabel = user?.admin ? 'Administrator' : 'Signed in';
+  const settingsActiveClass = state.route.page === 'settings' ? 'active' : '';
   const userCardMarkup = user
     ? `
           <div class="rail-user-card">
@@ -377,10 +379,10 @@ function renderRail(): string {
       </div>
       <div class="library-rail-bottom">
         ${userCardMarkup}
-        <button class="rail-button rail-settings ${state.route.page === 'settings' ? 'active' : ''}" type="button" data-nav-settings title="Settings">
+        ${canManageServer() ? `<button class="rail-button rail-settings ${settingsActiveClass}" type="button" data-nav-settings title="Settings">
           ${renderIcon('settings')}
           <span class="rail-label">Settings</span>
-        </button>
+        </button>` : ''}
         <button class="rail-button" type="button" data-sign-out title="Sign out">
           ${renderIcon('log-out')}
           <span class="rail-label">Sign out</span>
@@ -395,7 +397,7 @@ function renderRail(): string {
           <option value="/" ${activeLibraryIdValue === undefined ? 'selected' : ''}>Home</option>
           ${state.libraries.map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
         </select>
-        <button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>
+        ${canManageServer() ? `<button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>` : ''}
         <button type="button" class="secondary-button icon-button" data-mobile-sign-out title="Sign out" aria-label="Sign out">${renderIcon('log-out')}</button>
       </form>
     </header>
@@ -657,7 +659,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     selectedItemMetadata: state.selectedItemMetadata,
   });
   const [activitiesResponse, libraries, item, metadata] = await Promise.all([
-    getSystemActivities(),
+    canManageServer() ? getSystemActivities() : Promise.resolve({ activities: [] }),
     getLibraries(),
     getItem(itemId),
     getItemMetadata(itemId),
@@ -700,7 +702,7 @@ async function refreshHomeMetadata(libraryId: number | undefined, previousError:
     searchResults: state.searchResults,
   });
   const [activitiesResponse, libraries, home, libraryItems, searchResults] = await Promise.all([
-    getSystemActivities(),
+    canManageServer() ? getSystemActivities() : Promise.resolve({ activities: [] }),
     getLibraries(),
     getHome(libraryId),
     getItems(libraryId),
@@ -732,7 +734,7 @@ async function refreshOverviewMetadata(route: AppRoute, previousError: string | 
     dashboardItems: state.dashboardItems,
   });
   const [activitiesResponse, libraries, dashboardItems] = await Promise.all([
-    getSystemActivities(),
+    canManageServer() ? getSystemActivities() : Promise.resolve({ activities: [] }),
     getLibraries(),
     route.page === 'settings' && route.section === 'dashboard' ? getItems() : Promise.resolve(state.dashboardItems),
   ]);

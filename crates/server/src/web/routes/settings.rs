@@ -37,6 +37,7 @@ use serde::{
 };
 
 // local imports
+use crate::auth::AdminGuard;
 use crate::config::{
     MediaLibrarySettings,
     Settings,
@@ -331,7 +332,10 @@ fn read_filtered_log_entries(
 /// Return the current server settings snapshot.
 #[openapi(tag = "Settings")]
 #[get("/api/v1/settings")]
-pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> {
+pub async fn get_settings(
+    _admin: AdminGuard,
+    db: DbConn,
+) -> Result<Json<SettingsResponse>, Status> {
     let settings = current_settings();
     let libraries = db.run(list_library_settings).await.map_err(|error| {
         log::error!("Failed to load persisted library settings: {}", error);
@@ -346,7 +350,9 @@ pub async fn get_settings(db: DbConn) -> Result<Json<SettingsResponse>, Status> 
 /// Clear cached provider metadata responses.
 #[openapi(tag = "Settings")]
 #[post("/api/v1/settings/metadata-cache/clear")]
-pub fn clear_metadata_cache() -> Result<Json<MetadataCacheClearResponse>, Status> {
+pub fn clear_metadata_cache(
+    _admin: AdminGuard
+) -> Result<Json<MetadataCacheClearResponse>, Status> {
     let data_dir = current_settings().general.data_dir;
     let removed_files =
         crate::metadata::clear_metadata_response_cache(&data_dir).map_err(|error| {
@@ -360,6 +366,7 @@ pub fn clear_metadata_cache() -> Result<Json<MetadataCacheClearResponse>, Status
 #[openapi(tag = "Settings")]
 #[post("/api/v1/scheduled-tasks/<task_id>/run")]
 pub fn run_scheduled_task(
+    _admin: AdminGuard,
     db: DbConn,
     task_id: &str,
 ) -> Result<Json<ScheduledTaskRunResponse>, Status> {
@@ -390,6 +397,7 @@ pub fn run_scheduled_task(
 #[openapi(tag = "Settings")]
 #[get("/api/v1/settings/logs?<level>&<module>&<search>&<since>&<until>&<limit>")]
 pub fn get_logs(
+    _admin: AdminGuard,
     level: Option<&str>,
     module: Option<&str>,
     search: Option<&str>,
@@ -414,6 +422,7 @@ pub fn get_logs(
 #[openapi(tag = "Settings")]
 #[put("/api/v1/settings", format = "json", data = "<settings>")]
 pub async fn update_settings(
+    _admin: AdminGuard,
     db: DbConn,
     settings: Json<Settings>,
 ) -> Result<Json<SettingsResponse>, Status> {
@@ -470,6 +479,7 @@ pub async fn update_settings(
 #[openapi(tag = "Settings")]
 #[post("/api/v1/settings/libraries", format = "json", data = "<request>")]
 pub async fn add_library(
+    _admin: AdminGuard,
     db: DbConn,
     request: Json<AddLibraryRequest>,
 ) -> Result<Json<SettingsResponse>, Status> {
@@ -494,6 +504,7 @@ pub async fn add_library(
 #[openapi(tag = "Settings")]
 #[delete("/api/v1/settings/libraries/<library_index>")]
 pub async fn remove_library(
+    _admin: AdminGuard,
     db: DbConn,
     library_index: usize,
 ) -> Result<Json<SettingsResponse>, Status> {

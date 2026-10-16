@@ -710,6 +710,15 @@ export function setStoredAuthToken(token: string): void {
   globalThis.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token.trim());
 }
 
+/** Clear the browser's media cookie before releasing local authentication state. */
+export async function logoutUser(): Promise<void> {
+  if (!shouldUseMockApi()) {
+    const response = await fetchJsonResponse('GET', '/logout');
+    if (!response.ok) throw new Error('Failed to sign out.');
+  }
+  clearStoredAuthToken();
+}
+
 export function clearStoredAuthToken(): void {
   globalThis.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
@@ -963,6 +972,7 @@ async function fetchJsonResponse(method: string, path: string, body?: unknown): 
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),
+    credentials: 'include',
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: abortController.signal,
   }).finally(() => {
@@ -970,9 +980,16 @@ async function fetchJsonResponse(method: string, path: string, body?: unknown): 
   });
 }
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function responseError(response: Response): Promise<Error> {
   const responseText = (await response.text()).trim();
-  return new Error(
+  return new ApiError(
+    response.status,
     responseText
       ? `${response.status} ${response.statusText}: ${responseText}`
       : `${response.status} ${response.statusText}`,
@@ -984,7 +1001,7 @@ async function handleErrorResponse<T>(method: string, path: string, body: unknow
     clearStoredAuthToken();
   }
   const error = await responseError(response);
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && ![401, 403, 404].includes(response.status)) {
     return getMockJsonFallback<T>(method, path, body);
   }
 

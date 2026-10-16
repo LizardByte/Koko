@@ -276,7 +276,7 @@ pub(crate) async fn load_show_descendant_targets(
     )
     .await?;
     let mut targets = Vec::new();
-    for season in series.data.seasons.unwrap_or_default() {
+    for season in default_order_seasons(&series.data)? {
         let (Some(id), Some(number)) = (
             season.id,
             season.number.and_then(|number| i32::try_from(number).ok()),
@@ -303,6 +303,21 @@ pub(crate) async fn load_show_descendant_targets(
         }
     }
     Ok(targets)
+}
+
+fn default_order_seasons(
+    series: &SeriesExtendedRecord
+) -> Result<Vec<&tvdb4::models::SeasonBaseRecord>, String> {
+    let order = series
+        .default_season_type
+        .ok_or_else(|| "TheTVDB series is missing defaultSeasonType".to_string())?;
+    Ok(series
+        .seasons
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|season| season.r#type.as_deref().and_then(|kind| kind.id) == Some(order))
+        .collect())
 }
 
 pub(crate) async fn guess_movie_match(
@@ -868,6 +883,23 @@ fn push_language_preference(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn descendants_only_use_the_series_default_season_order() {
+        let series =
+            serde_json::from_value::<tvdb4::models::SeriesExtendedRecord>(serde_json::json!({
+                "defaultSeasonType": 2,
+                "seasons": [
+                    {"id": 10, "number": 1, "type": {"id": 1}},
+                    {"id": 20, "number": 1, "type": {"id": 2}},
+                    {"id": 30, "number": 1, "type": {"id": 3}}
+                ]
+            }))
+            .unwrap();
+        let seasons = super::default_order_seasons(&series).unwrap();
+        assert_eq!(seasons.len(), 1);
+        assert_eq!(seasons[0].id, Some(20));
+        assert!(super::default_order_seasons(&tvdb4::models::SeriesExtendedRecord::new()).is_err());
+    }
     use super::*;
     use serde_json::json;
 

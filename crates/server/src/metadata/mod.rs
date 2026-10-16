@@ -2539,7 +2539,12 @@ pub fn set_item_metadata_refresh_state_for_locale(
                 .map(|row| row.refresh_interval_seconds)
                 .unwrap_or(DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS),
             last_refreshed_at: existing.as_ref().and_then(|row| row.last_refreshed_at),
-            next_refresh_at: existing.as_ref().and_then(|row| row.next_refresh_at),
+            next_refresh_at: if refresh_state == "error" {
+                // Let later due items make progress before retrying a failed row.
+                Some(current_timestamp() + 5 * 60)
+            } else {
+                existing.as_ref().and_then(|row| row.next_refresh_at)
+            },
             refresh_error: refresh_error.map(str::to_string),
             updated_at: Some(current_timestamp()),
         };

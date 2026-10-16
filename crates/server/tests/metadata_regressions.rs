@@ -91,3 +91,43 @@ fn metadata_refresh_state_changes_only_the_requested_translation() {
         "pending"
     );
 }
+
+#[test]
+fn failed_metadata_refreshes_do_not_starve_later_due_items() {
+    let mut conn = connection();
+    for id in 1..=9 {
+        if id > 1 {
+            conn.batch_execute(&format!(
+                "INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) \
+                 VALUES ({id},1,'movie-{id}','movie','Movie');"
+            ))
+            .unwrap();
+        }
+        upsert_item_metadata_snapshot(&mut conn, id, &snapshot("en-US")).unwrap();
+    }
+    conn.batch_execute("UPDATE item_metadata_links SET next_refresh_at = 0")
+        .unwrap();
+    let now = koko::utils::current_timestamp();
+    for row in koko::metadata::list_due_item_metadata_links(&mut conn, now, 8).unwrap() {
+        set_item_metadata_refresh_state_for_locale(
+            &mut conn,
+            row.media_item_id,
+            MetadataProviderId::Tmdb,
+            "603",
+            Some("movie"),
+            "en-US",
+            "error",
+            Some("404"),
+        )
+        .unwrap();
+    }
+    let next = koko::metadata::list_due_item_metadata_links(&mut conn, now, 8).unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].media_item_id, 9);
+    assert_eq!(
+        koko::metadata::list_due_item_metadata_links(&mut conn, now + 301, 9)
+            .unwrap()
+            .len(),
+        9
+    );
+}

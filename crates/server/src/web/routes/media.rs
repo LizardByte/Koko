@@ -2511,27 +2511,28 @@ async fn refresh_metadata_person_details(
     settings: &Settings,
     target: &MetadataPersonEnrichmentTarget,
 ) -> bool {
-    let mut details = match fetch_provider_person_metadata_for_locale(
-        &settings.metadata,
-        target.provider_id.clone(),
-        &target.external_id,
-        &target.locale_key,
-    )
-    .await
-    {
-        Ok(Some(details)) => details,
-        Ok(None) => return true,
-        Err(error) => {
-            log::warn!(
-                "Failed to fetch {} person metadata for {} ({}): {}",
-                target.provider_id.as_storage_value(),
-                target.name,
-                target.external_id,
-                error
-            );
-            return false;
-        }
-    };
+    let mut details =
+        match crate::metadata::cache_policy::fresh(fetch_provider_person_metadata_for_locale(
+            &settings.metadata,
+            target.provider_id.clone(),
+            &target.external_id,
+            &target.locale_key,
+        ))
+        .await
+        {
+            Ok(Some(details)) => details,
+            Ok(None) => return true,
+            Err(error) => {
+                log::warn!(
+                    "Failed to fetch {} person metadata for {} ({}): {}",
+                    target.provider_id.as_storage_value(),
+                    target.name,
+                    target.external_id,
+                    error
+                );
+                return false;
+            }
+        };
 
     cache_deferred_person_image(settings, target, &mut details).await;
 

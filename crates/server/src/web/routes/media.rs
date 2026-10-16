@@ -13,7 +13,6 @@ use std::sync::atomic::{
     Ordering,
 };
 
-use diesel::Connection;
 use once_cell::sync::Lazy;
 use rocket::delete;
 use rocket::fs::NamedFile;
@@ -658,6 +657,8 @@ async fn persist_secondary_metadata_for_item(
         for locale_key in &languages {
             let provider_locale = uses_localized_metadata
                 .then(|| provider_locale_key(provider_id.clone(), locale_key));
+            let mut found = false;
+            let mut had_error = false;
             for (item_type, database_id, external_id) in &references {
                 match fetch_provider_secondary_metadata(
                     provider_id.clone(),
@@ -669,6 +670,7 @@ async fn persist_secondary_metadata_for_item(
                 .await
                 {
                     Ok(Some(details)) => {
+                        found = true;
                         db.run({
                             let provider_id = provider_id.clone();
                             let item_type = item_type.clone();
@@ -716,6 +718,7 @@ async fn persist_secondary_metadata_for_item(
                     }
                     Ok(None) => {}
                     Err(error) => {
+                        had_error = true;
                         log::warn!(
                             "Failed to load {} secondary metadata for media item {} locale {} ({} \
                              {} {}): {}",
@@ -729,6 +732,23 @@ async fn persist_secondary_metadata_for_item(
                         );
                     }
                 }
+            }
+            if !found && !had_error {
+                let provider_id = provider_id.clone();
+                let locale = locale_key.clone();
+                db.run(move |conn| {
+                    crate::metadata::clear_item_secondary_metadata(
+                        conn,
+                        item_id,
+                        provider_id,
+                        &locale,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    log::error!("Failed to clear stale secondary metadata: {error}");
+                    Status::InternalServerError
+                })?;
             }
         }
 
@@ -1707,25 +1727,23 @@ async fn mark_metadata_refresh_target_pending(
     db.run({
         let target = target.clone();
         move |conn| {
-            conn.transaction(|conn| {
-                let mut result = None;
-                for locale in languages {
-                    let summary = set_item_metadata_refresh_state_for_locale(
-                        conn,
-                        target.item_id,
-                        target.provider_id.clone(),
-                        &target.external_id,
-                        Some(&target.media_type),
-                        &locale,
-                        "pending",
-                        None,
-                    )?;
-                    if result.is_none() {
-                        result = Some(summary);
-                    }
+            let mut result = None;
+            for locale in languages {
+                let summary = set_item_metadata_refresh_state_for_locale(
+                    conn,
+                    target.item_id,
+                    target.provider_id.clone(),
+                    &target.external_id,
+                    Some(&target.media_type),
+                    &locale,
+                    "pending",
+                    None,
+                )?;
+                if result.is_none() {
+                    result = Some(summary);
                 }
-                result.ok_or(diesel::result::Error::NotFound)
-            })
+            }
+            result.ok_or(diesel::result::Error::NotFound)
         }
     })
     .await

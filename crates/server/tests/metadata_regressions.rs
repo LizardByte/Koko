@@ -234,3 +234,79 @@ fn failed_metadata_refreshes_do_not_starve_later_due_items() {
         9
     );
 }
+
+#[test]
+fn metadata_rematching_invalidates_old_secondary_extras() {
+    let mut conn = connection();
+    upsert_item_metadata_snapshot(&mut conn, 1, &snapshot("en-US")).unwrap();
+    let mut secondary = snapshot("en-US");
+    secondary.provider_id = MetadataProviderId::Themerr;
+    secondary.external_id = "movie:tmdb:603".into();
+    let details = koko::metadata::ProviderMetadataDetails {
+        theme_song_url: Some("https://www.youtube.com/watch?v=abcdefghijk".into()),
+        ..Default::default()
+    };
+    koko::metadata::upsert_item_metadata_link(
+        &mut conn,
+        1,
+        &secondary,
+        &details,
+        "secondary",
+        None,
+    )
+    .unwrap();
+    assert_eq!(get_item_metadata_summaries(&mut conn, 1).unwrap().len(), 2);
+    let mut corrected = snapshot("en-US");
+    corrected.external_id = "604".into();
+    upsert_item_metadata_snapshot(&mut conn, 1, &corrected).unwrap();
+    assert_eq!(get_item_metadata_summaries(&mut conn, 1).unwrap().len(), 1);
+    koko::metadata::upsert_item_metadata_link(
+        &mut conn,
+        1,
+        &secondary,
+        &details,
+        "secondary",
+        None,
+    )
+    .unwrap();
+    set_item_metadata_refresh_state_for_locale(
+        &mut conn,
+        1,
+        MetadataProviderId::Tmdb,
+        "605",
+        Some("movie"),
+        "en-US",
+        "pending",
+        None,
+    )
+    .unwrap();
+    assert_eq!(get_item_metadata_summaries(&mut conn, 1).unwrap().len(), 1);
+}
+
+#[test]
+fn metadata_secondary_misses_clear_only_the_affected_provider_and_locale() {
+    let mut conn = connection();
+    for locale in ["en-US", "es-ES"] {
+        let mut secondary = snapshot(locale);
+        secondary.provider_id = MetadataProviderId::TrailerDb;
+        koko::metadata::upsert_item_metadata_link(
+            &mut conn,
+            1,
+            &secondary,
+            &Default::default(),
+            "secondary",
+            None,
+        )
+        .unwrap();
+    }
+    koko::metadata::clear_item_secondary_metadata(
+        &mut conn,
+        1,
+        MetadataProviderId::TrailerDb,
+        "es-ES",
+    )
+    .unwrap();
+    let rows = get_item_metadata_summaries(&mut conn, 1).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].locale_key, "en-US");
+}

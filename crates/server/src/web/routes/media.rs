@@ -1731,13 +1731,15 @@ async fn mark_metadata_refresh_target_pending(
             for locale in languages {
                 let summary = set_item_metadata_refresh_state_for_locale(
                     conn,
-                    target.item_id,
-                    target.provider_id.clone(),
-                    &target.external_id,
-                    Some(&target.media_type),
-                    &locale,
-                    "pending",
-                    None,
+                    crate::metadata::MetadataRefreshStateUpdate {
+                        item_id: target.item_id,
+                        provider_id: target.provider_id.clone(),
+                        external_id: &target.external_id,
+                        media_type: Some(&target.media_type),
+                        locale_key: &locale,
+                        refresh_state: "pending",
+                        refresh_error: None,
+                    },
                 )?;
                 if result.is_none() {
                     result = Some(summary);
@@ -1777,13 +1779,15 @@ async fn record_metadata_refresh_error(
                 if let Some(locale) = target.locale_key {
                     set_item_metadata_refresh_state_for_locale(
                         conn,
-                        target.item_id,
-                        target.provider_id,
-                        &target.external_id,
-                        Some(&target.media_type),
-                        &locale,
-                        "error",
-                        Some(&message),
+                        crate::metadata::MetadataRefreshStateUpdate {
+                            item_id: target.item_id,
+                            provider_id: target.provider_id,
+                            external_id: &target.external_id,
+                            media_type: Some(&target.media_type),
+                            locale_key: &locale,
+                            refresh_state: "error",
+                            refresh_error: Some(&message),
+                        },
                     )
                 } else {
                     set_item_metadata_refresh_state(

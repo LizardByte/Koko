@@ -2538,13 +2538,15 @@ pub fn set_item_metadata_refresh_state(
         for locale in locales {
             let summary = set_item_metadata_refresh_state_for_locale(
                 conn,
-                item_id,
-                provider_id.clone(),
-                external_id,
-                media_type,
-                &locale,
-                refresh_state,
-                refresh_error,
+                MetadataRefreshStateUpdate {
+                    item_id,
+                    provider_id: provider_id.clone(),
+                    external_id,
+                    media_type,
+                    locale_key: &locale,
+                    refresh_state,
+                    refresh_error,
+                },
             )?;
             if result.is_none() {
                 result = Some(summary);
@@ -2554,17 +2556,38 @@ pub fn set_item_metadata_refresh_state(
     }
 }
 
-/// Set refresh state on one primary provider translation, preserving other locales.
+/// One locale-specific metadata refresh state update.
+pub struct MetadataRefreshStateUpdate<'a> {
+    /// Media item to update.
+    pub item_id: i32,
+    /// Primary metadata provider.
+    pub provider_id: MetadataProviderId,
+    /// Provider item identity.
+    pub external_id: &'a str,
+    /// Provider-specific media type.
+    pub media_type: Option<&'a str>,
+    /// Translation being refreshed.
+    pub locale_key: &'a str,
+    /// Pending, fresh, or error state.
+    pub refresh_state: &'a str,
+    /// Failure details, when present.
+    pub refresh_error: Option<&'a str>,
+}
+
+/// Update one primary metadata translation's refresh state.
 pub fn set_item_metadata_refresh_state_for_locale(
     conn: &mut SqliteConnection,
-    item_id: i32,
-    provider_id: MetadataProviderId,
-    external_id: &str,
-    media_type: Option<&str>,
-    locale_key: &str,
-    refresh_state: &str,
-    refresh_error: Option<&str>,
+    update: MetadataRefreshStateUpdate<'_>,
 ) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    let MetadataRefreshStateUpdate {
+        item_id,
+        provider_id,
+        external_id,
+        media_type,
+        locale_key,
+        refresh_state,
+        refresh_error,
+    } = update;
     use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
     configure_sqlite_connection(conn)?;
     retry_sqlite_write(|| {
@@ -3487,8 +3510,8 @@ fn read_metadata_response_cache_file(path: &Path) -> Option<String> {
     if cache_policy::bypassed() {
         return None;
     }
-    let contents = fs::read_to_string(&path).ok()?;
-    let created_at = fs::metadata(&path)
+    let contents = fs::read_to_string(path).ok()?;
+    let created_at = fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.elapsed().ok())

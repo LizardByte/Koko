@@ -2019,9 +2019,10 @@ fn test_tv_ratings_keep_provider_and_inheritance_scope_and_season_artwork() {
     let own = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
         .unwrap()
         .unwrap();
-    assert_eq!(own.rating, Some(9.1));
-    assert_eq!(own.rating_provider_id.as_deref(), Some("tvdb"));
-    assert_eq!(own.rating_source_item_type.as_deref(), Some("episode"));
+    // TheTVDB score is popularity; the episode inherits a real season rating.
+    assert_eq!(own.rating, Some(7.8));
+    assert_eq!(own.rating_provider_id.as_deref(), Some("tmdb"));
+    assert_eq!(own.rating_source_item_type.as_deref(), Some("season"));
 
     let preferred_episode = StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tmdb,
@@ -3535,7 +3536,7 @@ fn test_themerr_references_include_tvdb_show_tmdb_fallback() {
                         "remoteIds": [
                             {
                                 "type": 12,
-                                "id": 1399
+                                "id": "1399"
                             }
                         ]
                     }

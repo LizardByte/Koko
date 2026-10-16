@@ -677,6 +677,8 @@ pub struct PlaybackSession {
 pub struct AutomaticMetadataCandidate {
     /// Stable item identifier.
     pub item_id: i32,
+    /// Owning library identifier for refresh job context.
+    pub library_id: i32,
     /// Library-relative media path.
     pub relative_path: String,
     /// Current display title derived from scan data.
@@ -2810,6 +2812,7 @@ fn list_automatic_metadata_candidates_with_options(
 
         candidates.push(AutomaticMetadataCandidate {
             item_id: media_item_id,
+            library_id: library.id,
             relative_path: row.relative_path.clone(),
             display_title: row
                 .display_title
@@ -2847,6 +2850,7 @@ fn list_automatic_metadata_candidates_with_options(
 
         candidates.push(AutomaticMetadataCandidate {
             item_id: row.id,
+            library_id: library.id,
             relative_path: row.relative_path.unwrap_or_default(),
             display_title: row.display_title,
             modified_at: row.modified_at,

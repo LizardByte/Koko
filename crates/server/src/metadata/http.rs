@@ -33,7 +33,7 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0; 2048];
-            stream.read(&mut buffer).unwrap();
+            assert!(stream.read(&mut buffer).unwrap() > 0);
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
                 .unwrap();

@@ -67,7 +67,7 @@ fn serve_artwork(
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buffer = [0; 2048];
-        stream.read(&mut buffer).unwrap();
+        assert!(stream.read(&mut buffer).unwrap() > 0);
         write!(
             stream,
             "HTTP/1.1 {status} Result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -150,13 +150,15 @@ fn metadata_refresh_state_changes_only_the_requested_translation() {
     }
     set_item_metadata_refresh_state_for_locale(
         &mut conn,
-        1,
-        MetadataProviderId::Tmdb,
-        "603",
-        Some("movie"),
-        "es-ES",
-        "error",
-        Some("failed"),
+        koko::metadata::MetadataRefreshStateUpdate {
+            item_id: 1,
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603",
+            media_type: Some("movie"),
+            locale_key: "es-ES",
+            refresh_state: "error",
+            refresh_error: Some("failed"),
+        },
     )
     .unwrap();
     let rows = get_item_metadata_summaries(&mut conn, 1).unwrap();
@@ -176,13 +178,15 @@ fn metadata_refresh_state_changes_only_the_requested_translation() {
     );
     set_item_metadata_refresh_state_for_locale(
         &mut conn,
-        1,
-        MetadataProviderId::Tmdb,
-        "603",
-        Some("movie"),
-        "fr-FR",
-        "pending",
-        None,
+        koko::metadata::MetadataRefreshStateUpdate {
+            item_id: 1,
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "603",
+            media_type: Some("movie"),
+            locale_key: "fr-FR",
+            refresh_state: "pending",
+            refresh_error: None,
+        },
     )
     .unwrap();
     let rows = get_item_metadata_summaries(&mut conn, 1).unwrap();
@@ -214,13 +218,15 @@ fn failed_metadata_refreshes_do_not_starve_later_due_items() {
     for row in koko::metadata::list_due_item_metadata_links(&mut conn, now, 8).unwrap() {
         set_item_metadata_refresh_state_for_locale(
             &mut conn,
-            row.media_item_id,
-            MetadataProviderId::Tmdb,
-            "603",
-            Some("movie"),
-            "en-US",
-            "error",
-            Some("404"),
+            koko::metadata::MetadataRefreshStateUpdate {
+                item_id: row.media_item_id,
+                provider_id: MetadataProviderId::Tmdb,
+                external_id: "603",
+                media_type: Some("movie"),
+                locale_key: "en-US",
+                refresh_state: "error",
+                refresh_error: Some("404"),
+            },
         )
         .unwrap();
     }
@@ -271,13 +277,15 @@ fn metadata_rematching_invalidates_old_secondary_extras() {
     .unwrap();
     set_item_metadata_refresh_state_for_locale(
         &mut conn,
-        1,
-        MetadataProviderId::Tmdb,
-        "605",
-        Some("movie"),
-        "en-US",
-        "pending",
-        None,
+        koko::metadata::MetadataRefreshStateUpdate {
+            item_id: 1,
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "605",
+            media_type: Some("movie"),
+            locale_key: "en-US",
+            refresh_state: "pending",
+            refresh_error: None,
+        },
     )
     .unwrap();
     assert_eq!(get_item_metadata_summaries(&mut conn, 1).unwrap().len(), 1);

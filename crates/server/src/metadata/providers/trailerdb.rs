@@ -54,7 +54,7 @@ pub(crate) async fn fetch_secondary_metadata(
         return Ok(None);
     };
 
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get(format!("{TRAILERDB_DATA_BASE}/{path}.json"))
         .send()
         .await

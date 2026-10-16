@@ -39,10 +39,6 @@ use std::time::{
     Instant,
 };
 use strsim::normalized_levenshtein;
-use tvdb4::apis::{
-    self,
-    login_api,
-};
 use tvdb4::models::{
     EpisodeExtendedRecord,
     Gender,
@@ -392,14 +388,6 @@ pub(crate) async fn guess_show_match(
     Ok((best_score >= 0.78).then_some(best_result).flatten())
 }
 
-fn tvdb_configuration(token: Option<String>) -> apis::configuration::Configuration {
-    let mut config = apis::configuration::Configuration::new();
-    config.base_path = TVDB_API_BASE.to_string();
-    config.user_agent = Some(format!("Koko/{}", env!("CARGO_PKG_VERSION")));
-    config.bearer_access_token = token;
-    config
-}
-
 fn parse_tvdb_external_id(
     external_id: &str,
     media_type: &str,
@@ -446,13 +434,24 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
     }
 
     wait_for_rate_limit().await;
-    let config = tvdb_configuration(None);
-    let response = login_api::login_post(&config, LoginPostRequest::new(api_key))
+    #[derive(serde::Deserialize)]
+    struct Token {
+        token: Option<String>,
+    }
+    let response = crate::metadata::http::client()
+        .post(format!("{TVDB_API_BASE}/login"))
+        .json(&LoginPostRequest::new(api_key))
+        .send()
         .await
-        .map_err(|error| format_tvdb_error("login", error))?;
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?
+        .json::<Response<Token>>()
+        .await
+        .map_err(|error| error.to_string())?;
     let token = response
         .data
-        .and_then(|data| data.token)
+        .token
         .map(|token| token.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "TheTVDB login response did not include a token.".to_string())?;
@@ -464,21 +463,6 @@ async fn auth_token(provider: &MetadataProviderSettings) -> Result<String, Strin
     let mut cache = TVDB_AUTH_TOKEN.lock().await;
     *cache = Some(cached);
     Ok(token)
-}
-
-fn format_tvdb_error<T: std::fmt::Debug>(
-    context: &str,
-    error: apis::Error<T>,
-) -> String {
-    match error {
-        apis::Error::ResponseError(response) => format!(
-            "TheTVDB {} failed with status {}{}",
-            context,
-            response.status,
-            format_payload_snippet(&response.content)
-        ),
-        other => format!("TheTVDB {} request failed: {}", context, other),
-    }
 }
 
 async fn get_text(
@@ -504,16 +488,11 @@ async fn get_text(
     for attempt in 0..=retry_attempts {
         wait_for_rate_limit().await;
         let token = auth_token(provider).await?;
-        let config = tvdb_configuration(Some(token));
         let request_url = format!("{}/{}", TVDB_API_BASE, path.trim_start_matches('/'));
-        let mut request = config
-            .client
+        let request = crate::metadata::http::client()
             .get(&request_url)
-            .bearer_auth(config.bearer_access_token.as_deref().unwrap_or_default())
+            .bearer_auth(token)
             .query(&query);
-        if let Some(user_agent) = config.user_agent.as_deref() {
-            request = request.header("user-agent", user_agent);
-        }
         let response = request.send().await;
 
         match response {
@@ -545,8 +524,9 @@ async fn get_text(
                     let multiplier = 1_u32
                         .checked_shl(u32::try_from(attempt).unwrap_or(0))
                         .unwrap_or(u32::MAX);
-                    let backoff =
-                        retry_after.unwrap_or_else(|| base_backoff.saturating_mul(multiplier));
+                    let backoff = retry_after
+                        .unwrap_or_else(|| base_backoff.saturating_mul(multiplier))
+                        .min(Duration::from_secs(60));
                     log::warn!(
                         "TheTVDB request retry scheduled for {} after status {}{}{} (attempt \
                          {}/{} in {} ms)",

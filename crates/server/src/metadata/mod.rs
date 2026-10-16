@@ -45,6 +45,7 @@ use sha2::{
 };
 use strsim::normalized_levenshtein;
 
+pub(crate) mod http;
 mod providers;
 pub use providers::{
     MetadataProvider,
@@ -3503,7 +3504,9 @@ pub async fn cache_artwork(
         return Ok(cache_path);
     }
 
-    let bytes = reqwest::get(url)
+    let bytes = http::client()
+        .get(url)
+        .send()
         .await
         .map_err(|error| error.to_string())?
         .bytes()

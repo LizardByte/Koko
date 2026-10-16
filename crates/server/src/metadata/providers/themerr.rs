@@ -54,7 +54,7 @@ pub(crate) async fn fetch_youtube_theme_url(
         return Ok(None);
     }
 
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get(format!(
             "{}/{}/{}/{}.json",
             THEMERR_API_BASE, database_path, database_id, normalized_external_id
@@ -130,7 +130,7 @@ struct YoutubeOEmbedMetadata {
 }
 
 async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadata> {
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get("https://www.youtube.com/oembed")
         .query(&[
             ("format", "json"),

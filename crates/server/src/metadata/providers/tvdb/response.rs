@@ -17,8 +17,8 @@ use tvdb4::models::{
     ContentRating,
     EpisodeExtendedRecord,
     GenreBaseRecord,
-    MovieExtendedRecord,
     PeopleExtendedRecord,
+    Release,
     RemoteId,
     SearchResult,
     SeasonExtendedRecord,
@@ -53,6 +53,30 @@ pub(super) struct Person {
     pub data: PeopleExtendedRecord,
     pub cached_image_path: Option<String>,
     pub gender_label: Option<String>,
+}
+
+/// Fields consumed from `GET /movies/{id}/extended` (OpenAPI 4.7.10).
+///
+/// The SDK's 4.7.8 movie model incorrectly declares each `companies` category
+/// as a single Company; the endpoint returns arrays, including empty arrays.
+/// Decode only the documented fields Koko uses so unused provider data cannot
+/// prevent an otherwise valid movie from refreshing.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MovieExtendedRecord {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub image: Option<String>,
+    pub year: Option<String>,
+    #[serde(rename = "first_release")]
+    pub first_release: Option<Box<Release>>,
+    pub translations: Option<Box<TranslationExtended>>,
+    pub artworks: Option<Vec<ArtworkBaseRecord>>,
+    pub genres: Option<Vec<GenreBaseRecord>>,
+    pub content_ratings: Option<Vec<ContentRating>>,
+    pub trailers: Option<Vec<Trailer>>,
+    pub remote_ids: Option<Vec<RemoteId>>,
+    pub characters: Option<Vec<Character>>,
 }
 
 pub(super) struct Artwork<'a> {

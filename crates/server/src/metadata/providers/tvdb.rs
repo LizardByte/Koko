@@ -29,6 +29,7 @@ use crate::metadata::{
     write_metadata_response_cache_text,
 };
 use response::{
+    MovieExtendedRecord,
     Person,
     Record,
     Response,
@@ -43,7 +44,6 @@ use tvdb4::models::{
     EpisodeExtendedRecord,
     Gender,
     LoginPostRequest,
-    MovieExtendedRecord,
     PeopleExtendedRecord,
     SearchResult,
     SeasonExtendedRecord,
@@ -895,7 +895,7 @@ mod tests {
     }
     #[test]
     fn popularity_is_never_persisted_as_a_user_rating() {
-        let response: super::Response<tvdb4::models::MovieExtendedRecord> =
+        let response: super::Response<super::MovieExtendedRecord> =
             serde_json::from_value(serde_json::json!({
                 "data": {
                     "id": 901,
@@ -1016,6 +1016,93 @@ mod tests {
                 .iter()
                 .any(|id| id.source == "imdb" && id.external_id == "tt1234567")
         );
+    }
+
+    #[test]
+    fn movie_records_accept_empty_and_populated_company_arrays() {
+        // Reduced from failed movie responses: an empty first category used to
+        // report a Company length error, and a populated one a string error.
+        for companies in [
+            json!({
+                "studio": [],
+                "network": [],
+                "production": [{"id": 1928, "name": "Production company"}],
+                "distributor": [],
+                "special_effects": []
+            }),
+            json!({
+                "studio": [{"id": 2053, "name": "Studio"}],
+                "network": [],
+                "production": [],
+                "distributor": [],
+                "special_effects": []
+            }),
+            serde_json::Value::Null,
+        ] {
+            let payload = json!({
+                "data": {
+                    "id": 117712,
+                    "name": "Movie",
+                    "first_release": {"date": "2020-10-01"},
+                    "translations": {
+                        "nameTranslations": [{"language": "eng", "name": "English title"}],
+                        "overviewTranslations": [{"language": "eng", "overview": "Overview"}]
+                    },
+                    "artworks": [{"type": 14, "image": "/poster.jpg"}],
+                    "genres": [{"id": 1, "name": "Action"}],
+                    "contentRatings": [{"country": "usa", "name": "R"}],
+                    "remoteIds": [{"id": "tt1234567", "type": 2}],
+                    "trailers": [{
+                        "url": "https://www.youtube.com/watch?v=abcdefghijk",
+                        "language": "eng"
+                    }],
+                    "characters": [{
+                        "peopleId": 42,
+                        "personName": "Person",
+                        "peopleType": "Actor",
+                        "name": "Character"
+                    }],
+                    "companies": companies
+                }
+            })
+            .to_string();
+            let record: Response<MovieExtendedRecord> = serde_json::from_str(&payload).unwrap();
+            let mut snapshot = response::snapshot(&record, "117712", "movie", "eng");
+            assert_eq!(snapshot.title.as_deref(), Some("English title"));
+            assert_eq!(snapshot.overview.as_deref(), Some("Overview"));
+            assert_eq!(snapshot.release_year, Some(2020));
+            assert_eq!(
+                snapshot.artwork_url.as_deref(),
+                Some("https://artworks.thetvdb.com/poster.jpg")
+            );
+            // Both newly serialized snapshots and previously cached full API
+            // responses must retain their metadata when decoded again.
+            for payload in [
+                snapshot.provider_payload_json.clone().unwrap(),
+                payload,
+            ] {
+                snapshot.provider_payload_json = Some(payload);
+                let details = metadata_details(&snapshot);
+                assert_eq!(details.genres, vec!["Action"]);
+                assert_eq!(details.content_rating.as_deref(), Some("R"));
+                assert!(
+                    details
+                        .external_ids
+                        .iter()
+                        .any(|id| id.source == "imdb" && id.external_id == "tt1234567")
+                );
+                assert_eq!(
+                    details.trailer_url.as_deref(),
+                    Some("https://www.youtube.com/watch?v=abcdefghijk")
+                );
+                assert_eq!(details.people.len(), 1);
+                assert_eq!(details.people[0].external_id.as_deref(), Some("42"));
+                assert_eq!(
+                    details.people[0].character_name.as_deref(),
+                    Some("Character")
+                );
+            }
+        }
     }
 
     #[test]

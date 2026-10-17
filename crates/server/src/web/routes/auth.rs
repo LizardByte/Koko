@@ -57,7 +57,6 @@ pub async fn login(
     use crate::db::schema::users::dsl::*;
 
     let form = login_form.into_inner();
-    println!("Attempting login for user: {}", form.username);
 
     let user = match db
         .run(move |conn| {

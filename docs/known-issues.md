@@ -1,3 +1,7 @@
+# Known issues and completed fixes
+
+Checked items describe implemented behavior. Unchecked items remain open; browser end-to-end validation and native client work are tracked separately from server and component tests.
+
 - [x] web-ui: player does not resume for direct play items, it starts over from the beginning (though the progress bar looks like it's resuming from the old position)... it is possible actually to resume? probably start playback and auto seek to the position?
 - [x] web-ui: home-preview if highlighting a season or episode in recently added row, it should show the info from the show in the preview since seasons and episodes do not have this info
 - [x] web-ui: when viewing a person, don't show seasons and episodes they are in by default, just show the top level show... then if the show is highlighted show the seasons in like an expanding tray... and then if a season is highlighted, show the episodes they are in another tray
@@ -50,6 +54,19 @@
 - [x] metadata: tmdb - add guest stars (people) for episodes
 - [x] metadata: tmdb/tvdb - can metadata refresh speed be optimized, especially for tv shows? very slow right now
   - maybe people collection can be done afterwards? this might avoid a lot of duplication?
+- [x] metadata: decode provider responses using endpoint-specific documented fields; handle TVDB movie, series, season, episode, and translation payloads without stale company models or guessed response keys
+- [x] metadata: preserve Unicode titles, use the TVDB default season order, and retry empty TVDB title searches once without standalone "the" words
+- [x] metadata: keep TVDB popularity separate from user ratings; scope refresh state and failed-refresh backoff to the affected translation
+- [x] metadata: bypass response caches for forced refreshes and deferred people enrichment, expire response caches consistently, and invalidate TVDB tokens when credentials change
+- [x] metadata: reject HTTP errors and invalid artwork, publish individual image downloads atomically, and retain previous artwork when a replacement download fails
+- [x] metadata: clear obsolete secondary extras and collection themes after a rematch or a confirmed provider miss, while preserving them on provider errors
+- [x] metadata: unlink and rematch immediately clear the item's provider metadata and its descendants; reject obsolete database writes and preserve catalog files and playback history
+- [x] web-ui/metadata: add administrator Unlink metadata controls and a provider-response cache clear action in Settings → Metadata providers
+- [x] web-ui/metadata: show progress only for registered work, and add consistent status badges to episode cards and item covers
+- [ ] metadata/artwork: overlapping requests for the same provider artwork can let an obsolete download delete a newer cached cover; filesystem publication and cleanup need the same stale-work protection as metadata writes
+- [ ] web-ui/metadata: an older in-flight poll can restore stale item details in the browser after a newer unlink or rematch response; ignore superseded refresh results
+- [ ] web-ui/metadata: automatic show matching does not register season and episode refresh targets in activity progress, so their loaders and failure counts can be missing during a library refresh
+- [ ] metadata/locales: pending recovery deduplicates targets by item ID and processes only one translation per pass; recover every pending locale even when scheduled refreshes are disabled
 - [x] web-ui/metadata: when showing X seasons badge, it should show the number of seasons we have episodes in, and not count missing seasons
 
 - [x] metadata-providers: decouple from metadata/mod.rs as much as possible
@@ -101,7 +118,8 @@
   - batched primary metadata-link loading for item and child lists to remove per-item metadata-link queries (N+1), which speeds season episode grids and thumbnail metadata resolution
 
 - [ ] tests: Move all rust tests to tests directory instead of just directly in the source file. Need to carefully expose private code to tests. I believe there are ways to do this in rust cleanly.
-- [ ] tests: Add tests for web ui client... maybe use playwright?
+- [x] tests: Add automated web client component, rendering, permission, metadata-state, and navigation tests using Node and Vite
+- [ ] tests: Add browser end-to-end tests, including unlink/rematch during polling, nested show refresh progress, and playback... maybe use playwright?
 
 - [ ] features: add podcast support, users should be able to add the podcasts they are specifically interested in and it should appear like a library with shows and episodes... we could also allow users to add custom rss feeds for podcasts that are not in the providers... not 100% sure how to search for podcasts and get metadata... any free APIs for this? maybe use a provider like itunes search api or something? https://affiliate.itunes.apple.com/resources/documentation/itunes-store-web-service-search-api/ ... this would be a new provider module for podcasts, and we would need to add a new media type for podcast episodes... the player would also need to be revamped to support audio only playback with a static image instead of a video... we could also add support for showing the episode transcript if available, maybe even with a karaoke style highlighting of the current line as it is being spoken
   - ref: https://github.com/advplyr/audiobookshelf/blob/master/server/providers/iTunes.js

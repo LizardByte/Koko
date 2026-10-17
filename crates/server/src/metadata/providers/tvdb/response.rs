@@ -15,14 +15,12 @@ use tvdb4::models::{
     ArtworkExtendedRecord,
     Character,
     ContentRating,
-    EpisodeExtendedRecord,
     GenreBaseRecord,
     PeopleExtendedRecord,
     Release,
     RemoteId,
     SearchResult,
-    SeasonExtendedRecord,
-    SeriesExtendedRecord,
+    SeasonType,
     Trailer,
     Translation,
     TranslationExtended,
@@ -73,6 +71,73 @@ pub(super) struct MovieExtendedRecord {
     pub translations: Option<Box<TranslationExtended>>,
     pub artworks: Option<Vec<ArtworkBaseRecord>>,
     pub genres: Option<Vec<GenreBaseRecord>>,
+    pub content_ratings: Option<Vec<ContentRating>>,
+    pub trailers: Option<Vec<Trailer>>,
+    pub remote_ids: Option<Vec<RemoteId>>,
+    pub characters: Option<Vec<Character>>,
+}
+
+/// Consumed series fields, including season identities for descendant discovery.
+/// SDK SeasonBaseRecord also embeds the outdated Companies model.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SeriesExtendedRecord {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    pub image: Option<String>,
+    pub year: Option<String>,
+    pub first_aired: Option<String>,
+    pub translations: Option<Box<TranslationExtended>>,
+    pub artworks: Option<Vec<ArtworkExtendedRecord>>,
+    pub genres: Option<Vec<GenreBaseRecord>>,
+    pub content_ratings: Option<Vec<ContentRating>>,
+    pub trailers: Option<Vec<Trailer>>,
+    pub remote_ids: Option<Vec<RemoteId>>,
+    pub characters: Option<Vec<Character>>,
+    pub default_season_type: Option<i64>,
+    pub seasons: Option<Vec<SeasonBaseRecord>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct SeasonBaseRecord {
+    pub id: Option<i32>,
+    pub number: Option<i64>,
+    pub r#type: Option<Box<SeasonType>>,
+}
+
+/// Consumed fields from `GET /seasons/{id}/extended`. As with movies,
+/// unused company categories must not be decoded through the stale SDK model.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct SeasonExtendedRecord {
+    pub id: Option<i32>,
+    pub name: Option<String>,
+    pub image: Option<String>,
+    pub year: Option<String>,
+    pub translations: Option<Vec<Translation>>,
+    pub artwork: Option<Vec<ArtworkBaseRecord>>,
+    pub trailers: Option<Vec<Trailer>>,
+    pub episodes: Option<Vec<EpisodeBaseRecord>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct EpisodeBaseRecord {
+    pub id: Option<i64>,
+    pub number: Option<i32>,
+}
+
+/// Episode metadata excludes unused nested season records, which also contain
+/// company categories in the provider response.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EpisodeExtendedRecord {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    pub image: Option<String>,
+    pub year: Option<String>,
+    pub aired: Option<String>,
+    pub translations: Option<Box<TranslationExtended>>,
     pub content_ratings: Option<Vec<ContentRating>>,
     pub trailers: Option<Vec<Trailer>>,
     pub remote_ids: Option<Vec<RemoteId>>,

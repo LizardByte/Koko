@@ -29,10 +29,13 @@ use crate::metadata::{
     write_metadata_response_cache_text,
 };
 use response::{
+    EpisodeExtendedRecord,
     MovieExtendedRecord,
     Person,
     Record,
     Response,
+    SeasonExtendedRecord,
+    SeriesExtendedRecord,
 };
 use serde::de::DeserializeOwned;
 use std::time::{
@@ -41,13 +44,10 @@ use std::time::{
 };
 use strsim::normalized_levenshtein;
 use tvdb4::models::{
-    EpisodeExtendedRecord,
     Gender,
     LoginPostRequest,
     PeopleExtendedRecord,
     SearchResult,
-    SeasonExtendedRecord,
-    SeriesExtendedRecord,
     Translation,
 };
 const TVDB_API_BASE: &str = "https://api4.thetvdb.com/v4";
@@ -314,7 +314,7 @@ pub(crate) async fn load_show_descendant_targets(
 
 fn default_order_seasons(
     series: &SeriesExtendedRecord
-) -> Result<Vec<&tvdb4::models::SeasonBaseRecord>, String> {
+) -> Result<Vec<&response::SeasonBaseRecord>, String> {
     let order = series
         .default_season_type
         .ok_or_else(|| "TheTVDB series is missing defaultSeasonType".to_string())?;
@@ -909,20 +909,19 @@ mod tests {
     }
     #[test]
     fn descendants_only_use_the_series_default_season_order() {
-        let series =
-            serde_json::from_value::<tvdb4::models::SeriesExtendedRecord>(serde_json::json!({
-                "defaultSeasonType": 2,
-                "seasons": [
-                    {"id": 10, "number": 1, "type": {"id": 1}},
-                    {"id": 20, "number": 1, "type": {"id": 2}},
-                    {"id": 30, "number": 1, "type": {"id": 3}}
-                ]
-            }))
-            .unwrap();
+        let series = serde_json::from_value::<super::SeriesExtendedRecord>(serde_json::json!({
+            "defaultSeasonType": 2,
+            "seasons": [
+                {"id": 10, "number": 1, "type": {"id": 1}},
+                {"id": 20, "number": 1, "type": {"id": 2}},
+                {"id": 30, "number": 1, "type": {"id": 3}}
+            ]
+        }))
+        .unwrap();
         let seasons = super::default_order_seasons(&series).unwrap();
         assert_eq!(seasons.len(), 1);
         assert_eq!(seasons[0].id, Some(20));
-        assert!(super::default_order_seasons(&tvdb4::models::SeriesExtendedRecord::new()).is_err());
+        assert!(super::default_order_seasons(&super::SeriesExtendedRecord::default()).is_err());
     }
     use super::*;
     use serde_json::json;
@@ -1149,6 +1148,85 @@ mod tests {
         .unwrap();
         let snapshot = response::snapshot(&record, "901", "series", "eng");
         assert!(metadata_details(&snapshot).people.is_empty());
+    }
+
+    #[test]
+    fn television_records_accept_company_arrays_throughout_the_hierarchy() {
+        for studio in [
+            json!([]),
+            json!([{"id": 2053, "name": "Studio"}]),
+        ] {
+            let companies = json!({
+                "studio": studio,
+                "network": [],
+                "production": [],
+                "distributor": [],
+                "special_effects": []
+            });
+            let season_identity = json!({
+                "id": 9900,
+                "number": 1,
+                "type": {"id": 1},
+                "companies": companies
+            });
+            let series: Response<SeriesExtendedRecord> = serde_json::from_value(json!({
+                "data": {
+                    "name": "Show",
+                    "defaultSeasonType": 1,
+                    "seasons": [season_identity]
+                }
+            }))
+            .unwrap();
+            let seasons = default_order_seasons(&series.data).unwrap();
+            assert_eq!(seasons.len(), 1);
+            assert_eq!(seasons[0].id, Some(9900));
+            assert_eq!(seasons[0].number, Some(1));
+
+            let season: Response<SeasonExtendedRecord> = serde_json::from_value(json!({
+                "data": {
+                    "id": 9900,
+                    "companies": companies,
+                    "episodes": [{"id": 12345, "number": 1}],
+                    "translations": [{
+                        "language": "eng",
+                        "name": "Season One",
+                        "overview": "Season overview"
+                    }],
+                    "artwork": [{"type": 7, "image": "/season.jpg"}]
+                }
+            }))
+            .unwrap();
+            let episode = &season.data.episodes.as_ref().unwrap()[0];
+            assert_eq!(episode.id, Some(12345));
+            assert_eq!(episode.number, Some(1));
+            let snapshot = response::snapshot(&season, "9900", "season", "eng");
+            assert_eq!(snapshot.title.as_deref(), Some("Season One"));
+            assert_eq!(snapshot.overview.as_deref(), Some("Season overview"));
+            assert_eq!(
+                snapshot.artwork_url.as_deref(),
+                Some("https://artworks.thetvdb.com/season.jpg")
+            );
+
+            let episode: Response<EpisodeExtendedRecord> = serde_json::from_value(json!({
+                "data": {
+                    "name": "Episode One",
+                    "overview": "Episode overview",
+                    "aired": "2020-01-02",
+                    "image": "/episode.jpg",
+                    "seasons": [season_identity],
+                    "contentRatings": [{"name": "TV-14", "country": "usa"}]
+                }
+            }))
+            .unwrap();
+            let snapshot = response::snapshot(&episode, "12345", "episode", "eng");
+            assert_eq!(snapshot.title.as_deref(), Some("Episode One"));
+            assert_eq!(snapshot.overview.as_deref(), Some("Episode overview"));
+            assert_eq!(snapshot.release_year, Some(2020));
+            assert_eq!(
+                metadata_details(&snapshot).content_rating.as_deref(),
+                Some("TV-14")
+            );
+        }
     }
 
     #[test]

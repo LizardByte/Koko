@@ -2437,21 +2437,20 @@ async fn persist_snapshot_tree_for_languages(
     settings: &crate::config::Settings,
     persist_options: PersistSnapshotOptions,
 ) -> Result<ItemMetadataSummary, Status> {
-    let descendants = match snapshots.first() {
-        Some(snapshot) => {
-            load_snapshot_descendant_refresh_targets(db, item_id, snapshot, settings).await?
-        }
-        None => return Err(Status::ServiceUnavailable),
-    };
-    if !descendants.is_empty() {
-        mark_metadata_refresh_targets_pending(db, &descendants).await?;
-    }
+    let snapshot = snapshots.first().ok_or(Status::ServiceUnavailable)?;
 
     let mut summary = None;
     for snapshot in snapshots {
         summary = Some(
             persist_snapshot_for_item(db, item_id, snapshot, settings, persist_options).await?,
         );
+    }
+    // Keep successfully fetched root metadata even if discovery or fetching of
+    // its seasons/episodes fails. Propagate that failure for the refresh status.
+    let descendants =
+        load_snapshot_descendant_refresh_targets(db, item_id, snapshot, settings).await?;
+    if !descendants.is_empty() {
+        mark_metadata_refresh_targets_pending(db, &descendants).await?;
     }
     if !descendants.is_empty() {
         execute_metadata_refresh_targets(db, &descendants, settings).await;
@@ -4873,6 +4872,73 @@ fn collection_matches_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fetched_show_metadata_survives_descendant_discovery_failure() {
+        use diesel::connection::SimpleConnection;
+        let figment = rocket::Config::figment().merge((
+            "databases.sqlite_db",
+            serde_json::json!({"url": ":memory:", "pool_size": 1}),
+        ));
+        let rocket = rocket::custom(figment)
+            .attach(DbConn::fairing())
+            .ignite()
+            .await
+            .unwrap();
+        let db = DbConn::get_one(&rocket).await.unwrap();
+        db.run(|conn| {
+            crate::db::run_pending_sqlite_migrations(conn).unwrap();
+            conn.batch_execute(
+                "INSERT INTO media_libraries (id,name,path,kind,metadata_providers_json) VALUES \
+                 (1,'Shows','shows','shows','[\"tvdb\"]'); INSERT INTO media_items \
+                 (id,library_id,identity_key,item_type,display_title) VALUES \
+                 (1,1,'show','show','Unmatched Show');",
+            )
+            .unwrap();
+        })
+        .await;
+        let data_dir =
+            std::env::temp_dir().join(format!("koko-show-persist-{}", rand::random::<u64>()));
+        let mut settings = Settings::default();
+        settings.general.data_dir = data_dir.to_str().unwrap().into();
+        // Force discovery to fail without contacting a real provider.
+        settings.metadata.providers.clear();
+        let snapshot = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tvdb,
+            external_id: "76203".into(),
+            media_type: Some("series".into()),
+            title: Some("Matched Show".into()),
+            overview: Some("Show overview".into()),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: Some(2000),
+            locale_key: "en-US".into(),
+            provider_locale_key: Some("eng".into()),
+            provider_payload_json: None,
+        };
+        assert_eq!(
+            persist_snapshot_tree_for_languages(
+                &db,
+                1,
+                &[snapshot],
+                &settings,
+                PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
+            )
+            .await
+            .unwrap_err(),
+            Status::ServiceUnavailable
+        );
+        let item = db
+            .run(|conn| get_media_item_summary(conn, 1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(item.has_metadata);
+        assert_eq!(item.display_title, "Matched Show");
+        assert_eq!(item.overview.as_deref(), Some("Show overview"));
+        assert_eq!(item.release_year, Some(2000));
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
 
     #[tokio::test]
     async fn library_refresh_publishes_show_queue_before_provider_discovery() {

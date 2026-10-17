@@ -66,7 +66,7 @@ Checked items describe implemented behavior. Unchecked items remain open; browse
 - [x] metadata/artwork: retain URL-addressed cached images across overlapping downloads, cache hits, and snapshots without artwork; a request cannot delete a sibling image still used by a newer job or another metadata link
 - [x] web-ui/metadata: ignore superseded polling results and errors after unlink, rematch, refresh, or route reload, including requests that overlap a metadata mutation
 - [ ] web-ui/metadata: automatic show matching does not register season and episode refresh targets in activity progress, so their loaders and failure counts can be missing during a library refresh
-- [ ] metadata/locales: pending recovery deduplicates targets by item ID and processes only one translation per pass; recover every pending locale even when scheduled refreshes are disabled
+- [x] metadata/locales: recover every pending translation in one pass, even when scheduled refreshes are disabled; keep ownership and completion counts per item until all its translations finish
 - [x] web-ui/metadata: when showing X seasons badge, it should show the number of seasons we have episodes in, and not count missing seasons
 
 - [x] metadata-providers: decouple from metadata/mod.rs as much as possible

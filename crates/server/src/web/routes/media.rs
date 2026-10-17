@@ -2306,14 +2306,39 @@ async fn execute_metadata_refresh_links(
         }
     }
 
-    let Some((activity_id, queued_targets)) =
-        register_metadata_refresh_activity("metadata", source, label.into(), None, None, targets)
-            .await
+    // Activity ownership and progress are per item, but recovery work is per
+    // translation. Register one representative without discarding its siblings.
+    let mut translations_by_item = HashMap::<i32, Vec<MetadataRefreshTarget>>::new();
+    let mut activity_targets = Vec::new();
+    for target in targets {
+        let translations = translations_by_item.entry(target.item_id).or_default();
+        if translations.is_empty() {
+            activity_targets.push(target.clone());
+        }
+        translations.push(target);
+    }
+    let Some((activity_id, queued_items)) = register_metadata_refresh_activity(
+        "metadata",
+        source,
+        label.into(),
+        None,
+        None,
+        activity_targets,
+    )
+    .await
     else {
         return;
     };
 
-    if let Err(status) = mark_metadata_refresh_targets_pending(db, &queued_targets).await {
+    let queued_translations = queued_items
+        .iter()
+        .flat_map(|item| {
+            translations_by_item
+                .remove(&item.item_id)
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    if let Err(status) = mark_metadata_refresh_targets_pending(db, &queued_translations).await {
         log::warn!(
             "Failed to mark automatic metadata refresh targets pending: {:?}",
             status
@@ -2323,9 +2348,19 @@ async fn execute_metadata_refresh_links(
     }
 
     mark_metadata_refresh_activity_running(&activity_id).await;
-    for target in queued_targets {
+    let mut remaining = HashMap::<i32, (usize, bool)>::new();
+    for target in &queued_translations {
+        remaining.entry(target.item_id).or_default().0 += 1;
+    }
+    for target in queued_translations {
         let failed = execute_metadata_refresh_target(db, &target, settings).await;
-        record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
+        let (count, any_failed) = remaining.get_mut(&target.item_id).unwrap();
+        *count -= 1;
+        *any_failed |= failed;
+        if *count == 0 {
+            record_metadata_refresh_activity_progress(&activity_id, target.item_id, *any_failed)
+                .await;
+        }
     }
     complete_metadata_refresh_activity(&activity_id).await;
 }
@@ -5213,6 +5248,60 @@ mod tests {
         if let Some((id, _)) = prepared.automatch_activity {
             cancel_metadata_refresh_activity(&id).await;
         }
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_processes_every_pending_translation() {
+        use diesel::connection::SimpleConnection;
+        let rocket = rocket::custom(rocket::Config::figment().merge((
+            "databases.sqlite_db",
+            serde_json::json!({"url": ":memory:", "pool_size": 1}),
+        )))
+        .attach(DbConn::fairing())
+        .ignite()
+        .await
+        .unwrap();
+        let db = DbConn::get_one(&rocket).await.unwrap();
+        db.run(|conn| {
+            crate::db::run_pending_sqlite_migrations(conn).unwrap();
+            conn.batch_execute(
+                "INSERT INTO media_libraries (id,name,path,kind) VALUES
+                (194000001,'Movies','movies','movies');
+                INSERT INTO media_items (id,library_id,identity_key,item_type,display_title)
+                VALUES (194000001,194000001,'movie','movie','Movie');
+                INSERT INTO item_metadata_links
+                    (media_item_id,provider_id,external_id,media_type,locale_key,refresh_state)
+                VALUES (194000001,'tmdb','603','movie','en-US','pending'),
+                       (194000001,'tmdb','603','movie','es-ES','pending');",
+            )
+            .unwrap();
+        })
+        .await;
+        // Each translation must be attempted even without a later scheduled run.
+        // Missing credentials fail deterministically without provider traffic.
+        let mut settings = Settings::default();
+        settings.metadata.providers.clear();
+        settings.scheduled_tasks.metadata_refresh.enabled = false;
+        recover_pending_metadata_refreshes(&db, &settings).await;
+        let rows = db
+            .run(|conn| get_item_metadata_summaries(conn, 194000001))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(
+                row.refresh_state, "error",
+                "{} was never attempted",
+                row.locale_key
+            );
+            assert!(row.refresh_error.is_some());
+        }
+        assert!(
+            !ACTIVE_METADATA_REFRESH_ITEMS
+                .read()
+                .await
+                .contains_key(&194000001)
+        );
     }
 
     fn search_result(

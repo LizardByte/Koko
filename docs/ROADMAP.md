@@ -72,7 +72,7 @@ Checklist:
 - [ ] Add background task coordination, progress, and cancellation
   - [x] Add scheduled task windows, catalog scans, metadata refresh queues, and visible item/library progress
   - [ ] Include automatic show descendants in refresh progress and failures
-  - [ ] Recover all pending metadata translations in one pass
+  - [x] Recover all pending metadata translations in one pass
   - [ ] Add user-controlled cancellation for background work
 - [ ] Add API docs and stable contract review for browser client work
 

@@ -95,7 +95,7 @@ Checklist:
 - [x] Implement admin pages for libraries, users, providers, scheduled tasks, logs, and transcoding settings
 - [ ] Add quality selection and playback error reporting
 - [x] Add automated web component, rendering, permission, and navigation tests
-- [ ] Ignore superseded metadata polls after unlinking, rematching, or starting a newer refresh
+- [x] Ignore superseded metadata polls after unlinking, rematching, or starting a newer refresh
 - [ ] Add browser end-to-end coverage for metadata management and playback
 
 ### Stage 3: Desktop app for Windows, Linux, and macOS

@@ -64,7 +64,7 @@ Checked items describe implemented behavior. Unchecked items remain open; browse
 - [x] web-ui/metadata: add administrator Unlink metadata controls and a provider-response cache clear action in Settings → Metadata providers
 - [x] web-ui/metadata: show progress only for registered work, and add consistent status badges to episode cards and item covers
 - [x] metadata/artwork: retain URL-addressed cached images across overlapping downloads, cache hits, and snapshots without artwork; a request cannot delete a sibling image still used by a newer job or another metadata link
-- [ ] web-ui/metadata: an older in-flight poll can restore stale item details in the browser after a newer unlink or rematch response; ignore superseded refresh results
+- [x] web-ui/metadata: ignore superseded polling results and errors after unlink, rematch, refresh, or route reload, including requests that overlap a metadata mutation
 - [ ] web-ui/metadata: automatic show matching does not register season and episode refresh targets in activity progress, so their loaders and failure counts can be missing during a library refresh
 - [ ] metadata/locales: pending recovery deduplicates targets by item ID and processes only one translation per pass; recover every pending locale even when scheduled refreshes are disabled
 - [x] web-ui/metadata: when showing X seasons badge, it should show the number of seasons we have episodes in, and not count missing seasons

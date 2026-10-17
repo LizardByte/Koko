@@ -87,9 +87,6 @@ jobs:
             shell: bash
             build_artifact_prefix: build-windows
             build_artifact_path: build-artifact
-        exclude:
-          - run: test
-            target: aarch64-pc-windows-msvc
     name: ${{ matrix.run == 'test' && 'Test' || 'Build' }} (${{ matrix.target }})
     permissions:
       contents: read

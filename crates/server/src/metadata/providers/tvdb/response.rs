@@ -1,5 +1,5 @@
 //! Endpoint models from TheTVDB's v4 OpenAPI contract:
-//! https://github.com/thetvdb/v4-api/blob/main/docs/swagger.yml
+//! <https://github.com/thetvdb/v4-api/blob/main/docs/swagger.yml>
 //!
 //! Search records, extended records, and translation responses deliberately have
 //! separate decoders. Koko's enrichment is stored beside the provider's `data`.

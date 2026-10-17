@@ -1316,6 +1316,10 @@ async fn extend_metadata_refresh_activity(
     targets: Vec<MetadataRefreshTarget>,
 ) -> Vec<MetadataRefreshTarget> {
     let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    let mut activities = ACTIVE_SYSTEM_ACTIVITIES.write().await;
+    let Some(record) = activities.get_mut(activity_id) else {
+        return Vec::new();
+    };
     let mut seen_item_ids = HashSet::new();
     let queued_targets = targets
         .into_iter()
@@ -1331,15 +1335,12 @@ async fn extend_metadata_refresh_activity(
         item_registry.insert(target.item_id, activity_id.to_string());
     }
 
-    if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
-        record
-            .activity
-            .item_ids
-            .extend(queued_targets.iter().map(|target| target.item_id));
-        record.activity.total_items =
-            i32::try_from(record.activity.item_ids.len()).unwrap_or(i32::MAX);
-        record.activity.updated_at = current_timestamp();
-    }
+    record
+        .activity
+        .item_ids
+        .extend(queued_targets.iter().map(|target| target.item_id));
+    record.activity.total_items = i32::try_from(record.activity.item_ids.len()).unwrap_or(i32::MAX);
+    record.activity.updated_at = current_timestamp();
 
     queued_targets
 }
@@ -2115,12 +2116,50 @@ async fn execute_metadata_refresh_target_inner(
 
 async fn execute_metadata_refresh_targets(
     db: &DbConn,
-    targets: &[MetadataRefreshTarget],
+    targets: Vec<MetadataRefreshTarget>,
     settings: &crate::config::Settings,
-) {
-    for target in targets {
-        execute_metadata_refresh_target(db, target, settings).await;
+    parent_activity_id: Option<&str>,
+) -> Result<(), Status> {
+    let (activity_id, targets, owns_activity) = if let Some(activity_id) = parent_activity_id {
+        (
+            activity_id.to_string(),
+            extend_metadata_refresh_activity(activity_id, targets).await,
+            false,
+        )
+    } else {
+        let library_id = targets.first().map(|target| target.library_id);
+        let Some((activity_id, targets)) = register_metadata_refresh_activity(
+            "metadata",
+            "automatic_show_descendants",
+            "Refresh show seasons and episodes".into(),
+            library_id,
+            None,
+            targets,
+        )
+        .await
+        else {
+            return Ok(());
+        };
+        (activity_id, targets, true)
+    };
+    if let Err(status) = mark_metadata_refresh_targets_pending(db, &targets).await {
+        for target in &targets {
+            record_metadata_refresh_activity_progress(&activity_id, target.item_id, true).await;
+        }
+        if owns_activity {
+            complete_metadata_refresh_activity(&activity_id).await;
+        }
+        return Err(status);
     }
+    mark_metadata_refresh_activity_running(&activity_id).await;
+    for target in &targets {
+        let failed = execute_metadata_refresh_target(db, target, settings).await;
+        record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
+    }
+    if owns_activity {
+        complete_metadata_refresh_activity(&activity_id).await;
+    }
+    Ok(())
 }
 
 fn parse_tmdb_child_external_id(external_id: &str) -> Option<(&str, i32, Option<i32>)> {
@@ -2586,6 +2625,7 @@ async fn persist_snapshot_tree_for_languages(
     snapshots: &[StoredMetadataSnapshot],
     settings: &crate::config::Settings,
     persist_options: PersistSnapshotOptions,
+    activity_id: Option<&str>,
 ) -> Result<ItemMetadataSummary, Status> {
     let snapshot = snapshots.first().ok_or(Status::ServiceUnavailable)?;
 
@@ -2595,16 +2635,11 @@ async fn persist_snapshot_tree_for_languages(
             persist_snapshot_for_item(db, item_id, snapshot, settings, persist_options).await?,
         );
     }
-    // Keep successfully fetched root metadata even if discovery or fetching of
-    // its seasons/episodes fails. Propagate that failure for the refresh status.
+    // Keep successfully fetched root metadata even if descendant discovery fails.
+    // Register child work before marking it pending, and count failures per child.
     let descendants =
         load_snapshot_descendant_refresh_targets(db, item_id, snapshot, settings).await?;
-    if !descendants.is_empty() {
-        mark_metadata_refresh_targets_pending(db, &descendants).await?;
-    }
-    if !descendants.is_empty() {
-        execute_metadata_refresh_targets(db, &descendants, settings).await;
-    }
+    execute_metadata_refresh_targets(db, descendants, settings, activity_id).await?;
     summary.ok_or(Status::ServiceUnavailable)
 }
 
@@ -2830,27 +2865,23 @@ async fn run_automatic_movie_metadata_linking(
         }
     };
 
-    let activity = if retry_previously_attempted {
-        if activity.is_some() {
-            activity
-        } else {
-            let item_ids = candidates
-                .iter()
-                .map(|(candidate, revision)| (candidate.item_id, *revision))
-                .collect::<Vec<_>>();
-            register_metadata_refresh_activity_for_items(
-                "library",
-                "manual_library_automatch",
-                "Match unlinked library metadata".into(),
-                library_id,
-                None,
-                None,
-                item_ids,
-            )
-            .await
-        }
+    let activity = if activity.is_some() {
+        activity
     } else {
-        None
+        let item_ids = candidates
+            .iter()
+            .map(|(candidate, revision)| (candidate.item_id, *revision))
+            .collect::<Vec<_>>();
+        register_metadata_refresh_activity_for_items(
+            "library",
+            if retry_previously_attempted { "manual_library_automatch" } else { "automatic_match" },
+            "Match unlinked library metadata".into(),
+            library_id,
+            None,
+            None,
+            item_ids,
+        )
+        .await
     };
     if let Some((_, queued_item_ids)) = &activity {
         let queued_item_ids = queued_item_ids
@@ -2858,6 +2889,9 @@ async fn run_automatic_movie_metadata_linking(
             .copied()
             .collect::<std::collections::HashSet<_>>();
         candidates.retain(|(candidate, _)| queued_item_ids.contains(&candidate.item_id));
+    } else {
+        // Another activity already owns this work.
+        candidates.clear();
     }
     if let Some((activity_id, _)) = &activity {
         mark_metadata_refresh_activity_running(activity_id).await;
@@ -2964,6 +2998,7 @@ async fn run_automatic_movie_metadata_linking(
                             &snapshots,
                             settings,
                             PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
+                            activity.as_ref().map(|(id, _)| id.as_str()),
                         ))
                         .await
                     {
@@ -3046,14 +3081,15 @@ async fn run_automatic_movie_metadata_linking(
             .await
         {
             Ok(targets) => {
-                if let Err(status) = mark_metadata_refresh_targets_pending(db, &targets).await {
+                if let Err(status) =
+                    execute_metadata_refresh_targets(db, targets, settings, None).await
+                {
                     log::warn!(
-                        "Failed to mark descendant metadata pending for show item {}: {:?}",
+                        "Failed to refresh descendant metadata for show item {}: {:?}",
                         show_item_id,
                         status
                     );
                 }
-                execute_metadata_refresh_targets(db, &targets, settings).await;
             }
             Err(status) => {
                 log::warn!(
@@ -5065,6 +5101,10 @@ fn collection_matches_query(
 }
 
 #[cfg(test)]
+#[path = "../../../tests/test_web/routes/metadata_refresh.rs"]
+mod metadata_refresh_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -5118,6 +5158,7 @@ mod tests {
                 &[snapshot],
                 &settings,
                 PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
+                None,
             )
             .await
             .unwrap_err(),

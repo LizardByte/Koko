@@ -50,6 +50,14 @@ test('failed items count once toward completion and leave the correct pending co
   assert.match(renderLibraryTab(), /Refreshing metadata 4\/10 · 2 failed/);
 });
 
+test('registered automatic show descendants display their own pending loaders', () => {
+  state.systemActivities = [refresh({ item_ids: [201, 202, 203], total_items: 3, state: 'running' })];
+  for (const id of [202, 203]) {
+    const item = { ...mock.getMockItem(id), metadata_refresh_state: 'pending' };
+    assert.equal(activities.itemHasActiveMetadataRefresh(item), true);
+  }
+});
+
 test('finished work and another library do not keep the progress indicator alive', () => {
   state.systemActivities = [refresh({ state: 'completed' }), refresh({ id: 'failed', state: 'failed' }), refresh({ id: 'other', library_id: 3 })];
   assert.equal(activities.libraryRefreshProgress(library), undefined);

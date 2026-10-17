@@ -63,6 +63,7 @@ Checklist:
   - [x] Add per-library provider ordering, multiple metadata languages, manual matching, immediate unlink/rematch clearing, and provider-response cache controls
   - [x] Validate downloaded artwork, preserve working images on download failures, and reject obsolete metadata database writes
   - [x] Retain shared URL-addressed artwork so overlapping requests cannot delete newer covers
+  - [ ] Reclaim unreferenced artwork through maintenance that accounts for shared links and in-flight work
   - [ ] Generate optional video seek-preview thumbnails
 - [x] Add media item, collection, and search APIs
   - [x] Add media item detail and search API baseline
@@ -71,7 +72,7 @@ Checklist:
 - [x] Add FFmpeg transcoding sessions with start and stop management
 - [ ] Add background task coordination, progress, and cancellation
   - [x] Add scheduled task windows, catalog scans, metadata refresh queues, and visible item/library progress
-  - [ ] Include automatic show descendants in refresh progress and failures
+  - [x] Include automatic show descendants in refresh progress and failures
   - [x] Recover all pending metadata translations in one pass
   - [ ] Add user-controlled cancellation for background work
 - [ ] Add API docs and stable contract review for browser client work
@@ -200,8 +201,8 @@ The current focus is reliability of the implemented Stage 1 server and Stage 2 b
 
 - keep TMDB, TheTVDB, and secondary-provider decoding aligned with their endpoint contracts
 - make movie, show, season, and episode refreshes observable and recoverable
-- prevent obsolete downloads and browser polls from undoing an unlink, rematch, or newer refresh
-- finish automatic descendant progress and recovery of all pending metadata locales
+- retain shared artwork and discard superseded browser polls during unlink, rematch, and overlapping refreshes
+- keep nested refresh progress and recovery of every pending metadata locale reliable across retries and restarts
 - preserve existing artwork and secondary metadata across transient provider failures
 - validate these workflows with regression tests, browser end-to-end coverage, and hosted platform checks before release
 

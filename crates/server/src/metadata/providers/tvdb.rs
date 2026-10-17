@@ -127,15 +127,54 @@ pub(crate) async fn search(
     media_type: Option<&str>,
 ) -> Result<Vec<MetadataSearchResult>, String> {
     let provider = provider_settings(settings, MetadataProviderId::Tvdb)?;
+    search_with_fallback(query, |query| search_query(&provider, query, media_type)).await
+}
+
+async fn search_with_fallback<F, Fut>(
+    query: &str,
+    mut search: F,
+) -> Result<Vec<MetadataSearchResult>, String>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<MetadataSearchResult>, String>>,
+{
+    let results = search(query.to_string()).await?;
+    if !results.is_empty()
+        || !query
+            .split_whitespace()
+            .any(|word| word.eq_ignore_ascii_case("the"))
+    {
+        return Ok(results);
+    }
+
+    // TVDB can return no hits for an official title containing "the", while
+    // finding that same record when these standalone articles are omitted.
+    // Keep the original query authoritative and make at most one extra request.
+    let fallback = query
+        .split_whitespace()
+        .filter(|word| !word.eq_ignore_ascii_case("the"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if fallback.is_empty() {
+        return Ok(results);
+    }
+    search(fallback).await
+}
+
+async fn search_query(
+    provider: &MetadataProviderSettings,
+    query: String,
+    media_type: Option<&str>,
+) -> Result<Vec<MetadataSearchResult>, String> {
     let mut params = vec![
-        ("query", query.to_string()),
+        ("query", query),
         ("limit", "20".to_string()),
     ];
     if let Some(kind) = media_type {
         params.push(("type", kind.to_string()));
     }
     let response: Response<Vec<SearchResult>> =
-        get_json(&provider, "search", params, "search").await?;
+        get_json(provider, "search", params, "search").await?;
     Ok(response
         .data
         .into_iter()
@@ -878,6 +917,114 @@ fn push_language_preference(
 
 #[cfg(test)]
 mod tests {
+    fn falcon_search_result() -> super::MetadataSearchResult {
+        super::response::search_result(
+            serde_json::from_value(serde_json::json!({
+                "tvdb_id": "362496", "type": "series", "year": "2021",
+                "name": "The Falcon and The Winter Soldier"
+            }))
+            .unwrap(),
+            "eng",
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn empty_official_title_search_retries_without_standalone_articles() {
+        let mut requests = Vec::new();
+        let results = super::search_with_fallback("The Falcon and The Winter Soldier", |query| {
+            requests.push(query.clone());
+            std::future::ready(Ok(match query.as_str() {
+                "The Falcon and The Winter Soldier" => Vec::new(),
+                "Falcon and Winter Soldier" => vec![falcon_search_result()],
+                _ => panic!("Unexpected search query: {query}"),
+            }))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            requests,
+            [
+                "The Falcon and The Winter Soldier",
+                "Falcon and Winter Soldier"
+            ]
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].external_id, "362496");
+        assert_eq!(results[0].title, "The Falcon and The Winter Soldier");
+        assert_eq!(results[0].release_year, Some(2021));
+        assert_eq!(results[0].media_type, "series");
+    }
+
+    #[tokio::test]
+    async fn successful_title_search_does_not_broaden_the_results() {
+        let mut requests = Vec::new();
+        let results = super::search_with_fallback("The Falcon and The Winter Soldier", |query| {
+            requests.push(query);
+            std::future::ready(Ok(vec![falcon_search_result()]))
+        })
+        .await
+        .unwrap();
+        assert_eq!(requests, ["The Falcon and The Winter Soldier"]);
+        assert_eq!(results[0].external_id, "362496");
+    }
+
+    #[tokio::test]
+    async fn empty_fallback_is_bounded_and_preserves_other_words_and_unicode() {
+        let mut requests = Vec::new();
+        let results = super::search_with_fallback("THE Théâtre of the Other", |query| {
+            requests.push(query);
+            std::future::ready(Ok(Vec::new()))
+        })
+        .await
+        .unwrap();
+        assert!(results.is_empty());
+        assert_eq!(
+            requests,
+            [
+                "THE Théâtre of the Other",
+                "Théâtre of Other"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn queries_without_articles_or_searchable_terms_do_not_retry() {
+        for query in [
+            "Other",
+            "Them",
+            "Théâtre",
+            "The the",
+            "the",
+            "",
+        ] {
+            let mut requests = Vec::new();
+            assert!(
+                super::search_with_fallback(query, |query| {
+                    requests.push(query);
+                    std::future::ready(Ok(Vec::new()))
+                })
+                .await
+                .unwrap()
+                .is_empty()
+            );
+            assert_eq!(requests, [query]);
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_errors_are_not_treated_as_empty_searches() {
+        let mut requests = Vec::new();
+        let error = super::search_with_fallback("The Show", |query| {
+            requests.push(query);
+            std::future::ready(Err("provider unavailable".to_string()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error, "provider unavailable");
+        assert_eq!(requests, ["The Show"]);
+    }
+
     #[test]
     fn cached_auth_tokens_are_bound_to_the_resolved_api_key() {
         use sha2::Digest;

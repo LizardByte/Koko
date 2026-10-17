@@ -1086,9 +1086,12 @@ legend {
   display: inline-flex;
   align-items: center;
   gap: 0.32rem;
-  padding: 0;
+  min-width: 1.96rem;
+  height: 1.96rem;
+  min-height: 1.96rem;
+  padding: 0 0.38rem;
   border-radius: 999px;
-  background: transparent;
+  background: var(--media-badge-background);
   font-size: 0.72rem;
 }
 
@@ -1101,22 +1104,8 @@ legend {
   padding: 0;
 }
 
-.media-card-status.has-multiple {
-  min-height: 1.45rem;
-  padding-inline: 0.38rem;
-}
-
 .media-card-status.is-unmatched {
-  padding: 0.24rem 0.34rem;
-  background: var(--media-badge-background);
   color: #ffe5b5;
-}
-
-.media-card-status.is-unmatched.icon-only {
-  width: 1.45rem;
-  min-width: 1.45rem;
-  height: 1.45rem;
-  min-height: 1.45rem;
 }
 
 .media-card-status.is-loading {
@@ -1125,16 +1114,12 @@ legend {
 
 .media-card-dynamic-badges .media-card-status.is-loading {
   justify-content: center;
-  background: var(--media-badge-background);
 }
 
 .media-card-status.is-missing {
-  min-width: 1.45rem;
-  min-height: 1.45rem;
-  padding: 0.24rem 0.42rem;
+  padding: 0 0.42rem;
   justify-content: center;
   gap: 0.28rem;
-  background: var(--media-badge-background);
   color: #ffd78a;
   white-space: nowrap;
 }

@@ -419,6 +419,11 @@ function mediaCardDynamicBadges(badgeMarkup: string, playbackBadgeMarkup: string
     `;
 }
 
+/** Overlay the shared refresh indicator on any item's artwork. */
+export function renderMetadataRefreshBadge(item: MediaItemSummary): string {
+  return itemIsMetadataPending(item) ? mediaCardDynamicBadges(metadataBadgeMarkup(item), '') : '';
+}
+
 export function renderItemCard(item: MediaItemSummary): string {
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const artworkItemId = item.artwork_item_id ?? item.id;

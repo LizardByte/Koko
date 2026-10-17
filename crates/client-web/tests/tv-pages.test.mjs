@@ -164,6 +164,35 @@ test('TV items without a show ancestor keep one clear heading', () => {
   assert.equal(tv.renderTvTitle({ ...episode, hierarchy: [] }), '<h2 class="item-title-fallback">S01E02 · The middle &lt;episode&gt;</h2>');
 });
 
+test('episode thumbnails show the refresh loader alongside their watch ring until refresh finishes', () => {
+  const pending = tv.renderTvEpisodeCard({ ...episode, metadata_refresh_state: 'pending' });
+  const thumbnail = pending.slice(pending.indexOf('class="media-extra-thumbnail'), pending.indexOf('<strong class="media-extra-title"'));
+  assert.match(thumbnail, /aria-label="Refreshing metadata"/);
+  assert.match(thumbnail, /loading-spinner/);
+  assert.equal([...thumbnail.matchAll(/class="media-card-progress/g)].length, 1);
+  for (const metadata_refresh_state of ['fresh', 'error']) {
+    assert.doesNotMatch(tv.renderTvEpisodeCard({ ...episode, metadata_refresh_state }), /loading-spinner/);
+  }
+});
+
+test('detail covers show refresh loaders for every item type, including future types and missing artwork', () => {
+  for (const item_type of ['movie', 'show', 'season', 'episode', 'future-type']) {
+    for (const poster_url of ['/poster', undefined]) {
+      const item = { ...mock.getMockItem(101), item_type, poster_url, metadata_refresh_state: 'pending', has_metadata: true, hierarchy: [], children: [] };
+      state.selectedItem = item;
+      state.route = { page: 'item', itemId: item.id };
+      const cover = () => {
+        const html = renderItemPage();
+        return html.slice(html.indexOf('<aside class="item-cover-column"'), html.indexOf('</aside>'));
+      };
+      assert.match(cover(), /aria-label="Refreshing metadata"/, `${item_type} cover`);
+      assert.match(cover(), /loading-spinner/, `${item_type} cover`);
+      item.metadata_refresh_state = 'fresh';
+      assert.doesNotMatch(cover(), /loading-spinner/, `${item_type} completed cover`);
+    }
+  }
+});
+
 test('completed episodes put the checkmark on artwork and order More restarts from episode to show', () => {
   episode.playback_completed = true;
   episode.watch_count = 1;

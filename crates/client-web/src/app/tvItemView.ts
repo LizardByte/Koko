@@ -1,6 +1,6 @@
 import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MediaPlaybackTarget } from '../api';
 import { escapeHtml, formatDuration } from './format';
-import { renderItemCard, renderWatchProgress } from './homeView';
+import { renderItemCard, renderMetadataRefreshBadge, renderWatchProgress } from './homeView';
 import { renderRating } from './ratingView';
 import { state } from './state';
 import { renderButtonContent, renderIcon } from './ui';
@@ -124,6 +124,7 @@ export function renderTvEpisodeCard(episode: MediaItemSummary): string {
   return `<button type="button" class="media-extra-card episode-card" data-item-id="${episode.id}">
     <span class="media-extra-thumbnail episode-thumbnail has-image"><img data-episode-still src="${escapeHtml(artwork)}" alt="" loading="lazy" /><span class="item-cover-fallback episode-still-fallback" hidden aria-hidden="true">${renderIcon('tv', 'media-extra-placeholder-icon')}</span>
       <span class="episode-number-badge">${escapeHtml(episodeCode(episode))}</span>${renderWatchProgress(episode)}
+      ${renderMetadataRefreshBadge(episode)}
     </span>
     <strong class="media-extra-title">${escapeHtml(episode.display_title)}</strong>
     <span class="media-extra-meta"><span>${escapeHtml(formatDuration(episode.duration_ms))}</span>${renderRating(episode)}</span>

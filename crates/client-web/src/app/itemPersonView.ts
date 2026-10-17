@@ -36,7 +36,7 @@ import {
   renderCollapsibleText,
   renderIcon,
 } from './ui';
-import { missingItemDetailBadgeMarkup, renderItemCard, renderPlaybackTargetButton, renderWatchProgress } from './homeView';
+import { missingItemDetailBadgeMarkup, renderItemCard, renderMetadataRefreshBadge, renderPlaybackTargetButton, renderWatchProgress } from './homeView';
 
 export function renderMetadataSearchResults(): string {
   const selectedItem = state.selectedItem;
@@ -976,6 +976,7 @@ function renderSelectedItemIdentity(
         <div class="detail-art item-poster ${posterUrl ? 'has-image' : ''}">
           ${renderSelectedItemPoster(item, posterUrl)}
           ${renderWatchProgress(item)}
+          ${renderMetadataRefreshBadge(item)}
         </div>
       </aside>
       <header class="item-identity">

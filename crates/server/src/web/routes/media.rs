@@ -2294,39 +2294,46 @@ async fn build_metadata_refresh_job(
         media_type: media_type.to_string(),
         fetch_kind: MetadataRefreshFetchKind::Direct,
     };
-    let descendants = if item.item_type == "show"
-        && ((root.provider_id == MetadataProviderId::Tmdb && media_type == "tv")
-            || (root.provider_id == MetadataProviderId::Tvdb && media_type == "series"))
+    let descendants = load_metadata_refresh_descendants(db, settings, &root).await?;
+    Ok(MetadataRefreshJob { root, descendants })
+}
+
+async fn load_metadata_refresh_descendants(
+    db: &DbConn,
+    settings: &Settings,
+    root: &MetadataRefreshTarget,
+) -> Result<Vec<MetadataRefreshTarget>, Status> {
+    if root.item_type == "show"
+        && ((root.provider_id == MetadataProviderId::Tmdb && root.media_type == "tv")
+            || (root.provider_id == MetadataProviderId::Tvdb && root.media_type == "series"))
     {
         match load_show_descendant_refresh_targets(
             db,
             settings,
-            item.id,
+            root.item_id,
             root.provider_id.clone(),
-            external_id,
+            &root.external_id,
         )
         .await
         {
-            Ok(descendants) => descendants,
+            Ok(descendants) => Ok(descendants),
             Err(status) => {
                 if status == Status::ServiceUnavailable {
                     log::warn!(
                         "Skipping descendant metadata refresh expansion for {} because {} is \
                          unavailable; the root item will still be refreshed",
-                        describe_metadata_refresh_target(&root),
+                        describe_metadata_refresh_target(root),
                         root.provider_id.as_storage_value()
                     );
-                    Vec::new()
+                    Ok(Vec::new())
                 } else {
-                    return Err(status);
+                    Err(status)
                 }
             }
         }
     } else {
-        Vec::new()
-    };
-
-    Ok(MetadataRefreshJob { root, descendants })
+        Ok(Vec::new())
+    }
 }
 
 async fn load_metadata_summary_for_item(
@@ -3078,11 +3085,10 @@ async fn load_refresh_target_metadata_languages(
         .map_err(|status| format!("{status:?}"))
 }
 
-async fn load_library_refresh_jobs(
+async fn load_library_refresh_targets(
     db: &DbConn,
-    settings: &crate::config::Settings,
     library_id: i32,
-) -> Result<Vec<MetadataRefreshJob>, Status> {
+) -> Result<Vec<MetadataRefreshTarget>, Status> {
     let items = db
         .run(move |conn| list_media_items(conn, Some(library_id)))
         .await
@@ -3095,7 +3101,7 @@ async fn load_library_refresh_jobs(
             Status::InternalServerError
         })?;
 
-    let mut jobs = Vec::new();
+    let mut targets = Vec::new();
     for item in items
         .into_iter()
         .filter(|item| item.parent_id.is_none() && supports_manual_metadata_linking(item))
@@ -3121,20 +3127,21 @@ async fn load_library_refresh_jobs(
         let Some(media_type) = link.media_type.clone() else {
             continue;
         };
-        jobs.push(
-            build_metadata_refresh_job(
-                db,
-                settings,
-                &item,
-                provider_id,
-                &link.external_id,
-                &media_type,
-            )
-            .await?,
-        );
+        targets.push(MetadataRefreshTarget {
+            locale_key: None,
+            item_id: item.id,
+            library_id,
+            provider_id,
+            item_type: item.item_type,
+            display_title: item.display_title,
+            relative_path: item.relative_path,
+            external_id: link.external_id,
+            media_type,
+            fetch_kind: MetadataRefreshFetchKind::Direct,
+        });
     }
 
-    Ok(jobs)
+    Ok(targets)
 }
 
 async fn load_library_summary(
@@ -4427,33 +4434,19 @@ pub async fn refresh_item_metadata(
     Ok(Json(pending_summary))
 }
 
-async fn run_manual_library_metadata_refresh(
-    db: DbConn,
-    settings: Settings,
-    library_id: i32,
-    library_name: String,
-) -> (DbConn, Settings, String) {
-    let automatch_activity = register_manual_library_automatch_activity(&db, library_id).await;
-    let refresh_jobs = match load_library_refresh_jobs(&db, &settings, library_id).await {
-        Ok(refresh_jobs) => refresh_jobs,
-        Err(status) => {
-            log::warn!(
-                "Failed to prepare library {} metadata refresh jobs: {:?}",
-                library_id,
-                status
-            );
-            if let Some((automatch_activity_id, _)) = &automatch_activity {
-                cancel_metadata_refresh_activity(automatch_activity_id).await;
-            }
-            return (db, settings, library_name);
-        }
-    };
-    let refresh_targets = refresh_jobs
-        .iter()
-        .flat_map(flatten_metadata_refresh_job)
-        .collect::<Vec<_>>();
+struct PreparedLibraryMetadataRefresh {
+    refresh_activity: Option<(String, Vec<MetadataRefreshTarget>)>,
+    automatch_activity: Option<(String, Vec<i32>)>,
+}
 
-    let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
+async fn prepare_manual_library_metadata_refresh(
+    db: &DbConn,
+    library_id: i32,
+    library_name: &str,
+) -> Result<PreparedLibraryMetadataRefresh, Status> {
+    // Publish the root queue using local data before making any provider requests.
+    let refresh_targets = load_library_refresh_targets(db, library_id).await?;
+    let refresh_activity = register_metadata_refresh_activity(
         "library",
         "manual_library_refresh",
         format!("Refresh library metadata for {}", library_name),
@@ -4461,44 +4454,63 @@ async fn run_manual_library_metadata_refresh(
         None,
         refresh_targets,
     )
-    .await
-    else {
-        run_automatic_movie_metadata_linking(
-            &db,
-            &settings,
-            Some(library_id),
-            true,
-            automatch_activity,
-        )
-        .await;
-        return (db, settings, library_name);
-    };
-
-    if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
-        cancel_metadata_refresh_activity(&activity_id).await;
-        if let Some((automatch_activity_id, _)) = &automatch_activity {
-            cancel_metadata_refresh_activity(automatch_activity_id).await;
+    .await;
+    if let Some((activity_id, queued_targets)) = &refresh_activity {
+        if let Err(status) = mark_metadata_refresh_targets_pending(db, queued_targets).await {
+            cancel_metadata_refresh_activity(activity_id).await;
+            return Err(status);
         }
-        log::warn!(
-            "Failed to mark library {} metadata refresh targets pending: {:?}",
-            library_id,
-            status
-        );
-        return (db, settings, library_name);
     }
+    let automatch_activity = register_manual_library_automatch_activity(db, library_id).await;
+    Ok(PreparedLibraryMetadataRefresh {
+        refresh_activity,
+        automatch_activity,
+    })
+}
 
-    mark_metadata_refresh_activity_running(&activity_id).await;
-    for target in queued_targets {
-        let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
-        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+async fn run_manual_library_metadata_refresh(
+    db: DbConn,
+    settings: Settings,
+    library_id: i32,
+    library_name: String,
+    prepared: PreparedLibraryMetadataRefresh,
+) -> (DbConn, Settings, String) {
+    if let Some((activity_id, roots)) = prepared.refresh_activity {
+        mark_metadata_refresh_activity_running(&activity_id).await;
+        for root in roots {
+            // Discover and process one tree at a time. The visible show remains
+            // pending until its seasons and episodes have finished refreshing.
+            match load_metadata_refresh_descendants(&db, &settings, &root).await {
+                Ok(descendants) => {
+                    let targets = extend_metadata_refresh_activity(&activity_id, descendants).await;
+                    let pending_result = mark_metadata_refresh_targets_pending(&db, &targets).await;
+                    for target in targets {
+                        let failed = if let Err(status) = pending_result {
+                            record_metadata_refresh_error(&db, &target, &format!("{status:?}"))
+                                .await;
+                            true
+                        } else {
+                            execute_metadata_refresh_target(&db, &target, &settings).await
+                        };
+                        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+                    }
+                }
+                Err(status) => log::warn!(
+                    "Failed to prepare descendants for {}: {status}",
+                    describe_metadata_refresh_target(&root),
+                ),
+            }
+            let failed = execute_metadata_refresh_target(&db, &root, &settings).await;
+            record_metadata_refresh_activity_progress(&activity_id, failed).await;
+        }
+        complete_metadata_refresh_activity(&activity_id).await;
     }
-    complete_metadata_refresh_activity(&activity_id).await;
     run_automatic_movie_metadata_linking(
         &db,
         &settings,
         Some(library_id),
         true,
-        automatch_activity,
+        prepared.automatch_activity,
     )
     .await;
     (db, settings, library_name)
@@ -4523,12 +4535,27 @@ pub async fn refresh_library_metadata(
         return Ok(Json(library_summary));
     }
 
+    let prepared =
+        match prepare_manual_library_metadata_refresh(&db, library_id, &library_name).await {
+            Ok(prepared) => prepared,
+            Err(status) => {
+                finish_library_metadata_refresh(library_id).await;
+                return Err(status);
+            }
+        };
+    let activity_ids = prepared
+        .refresh_activity
+        .iter()
+        .map(|(id, _)| id.clone())
+        .chain(prepared.automatch_activity.iter().map(|(id, _)| id.clone()))
+        .collect::<Vec<_>>();
     tokio::spawn(async move {
         let refresh_task = tokio::spawn(run_manual_library_metadata_refresh(
             db,
             settings,
             library_id,
             library_name,
+            prepared,
         ));
         let people_refresh = match refresh_task.await {
             Ok(resources) => Some(resources),
@@ -4541,6 +4568,10 @@ pub async fn refresh_library_metadata(
                 None
             }
         };
+        // A panicked worker must not leave the library permanently busy.
+        for activity_id in activity_ids {
+            cancel_metadata_refresh_activity(&activity_id).await;
+        }
         finish_library_metadata_refresh(library_id).await;
         if let Some((people_db, people_settings, people_library_name)) = people_refresh {
             tokio::spawn(run_library_metadata_people_refresh(
@@ -4842,6 +4873,88 @@ fn collection_matches_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn library_refresh_publishes_show_queue_before_provider_discovery() {
+        use diesel::connection::SimpleConnection;
+        let figment = rocket::Config::figment().merge((
+            "databases.sqlite_db",
+            serde_json::json!({"url": ":memory:", "pool_size": 1}),
+        ));
+        let rocket = rocket::custom(figment)
+            .attach(DbConn::fairing())
+            .ignite()
+            .await
+            .unwrap();
+        let db = DbConn::get_one(&rocket).await.unwrap();
+        const LIBRARY_ID: i32 = 190_000_001;
+        db.run(|conn| {
+            crate::db::run_pending_sqlite_migrations(conn).unwrap();
+            conn.batch_execute(
+                "INSERT INTO media_libraries (id,name,path,kind,metadata_language_mode) VALUES \
+                 (190000001,'Shows','shows','shows','manual'); INSERT INTO media_items \
+                 (id,library_id,identity_key,item_type,display_title,relative_path) VALUES \
+                 (190000001,190000001,'show-one','show','Show One','Show One'), \
+                 (190000002,190000001,'show-two','show','Show Two','Show Two');",
+            )
+            .unwrap();
+            for item_id in [190_000_001, 190_000_002] {
+                crate::metadata::upsert_item_metadata_snapshot(
+                    conn,
+                    item_id,
+                    &StoredMetadataSnapshot {
+                        provider_id: MetadataProviderId::Tmdb,
+                        external_id: item_id.to_string(),
+                        media_type: Some("tv".into()),
+                        title: Some("Show".into()),
+                        overview: None,
+                        artwork_url: None,
+                        backdrop_url: None,
+                        release_year: None,
+                        locale_key: "en-US".into(),
+                        provider_locale_key: Some("en-US".into()),
+                        provider_payload_json: None,
+                    },
+                )
+                .unwrap();
+            }
+        })
+        .await;
+
+        // Queueing a TV library must work without provider credentials or network discovery.
+        let prepared = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            prepare_manual_library_metadata_refresh(&db, LIBRARY_ID, "Shows"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (activity_id, targets) = prepared.refresh_activity.unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| target.item_type == "show"));
+        let activity = current_system_activities()
+            .await
+            .into_iter()
+            .find(|activity| activity.id == activity_id)
+            .unwrap();
+        assert_eq!(activity.library_id, Some(LIBRARY_ID));
+        assert_eq!(activity.total_items, 2);
+        assert_eq!(activity.completed_items, 0);
+        let items = db
+            .run(|conn| list_media_items(conn, Some(LIBRARY_ID)))
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(
+            items
+                .iter()
+                .all(|item| item.metadata_refresh_state.as_deref() == Some("pending"))
+        );
+        cancel_metadata_refresh_activity(&activity_id).await;
+        if let Some((id, _)) = prepared.automatch_activity {
+            cancel_metadata_refresh_activity(&id).await;
+        }
+    }
 
     fn search_result(
         provider_id: MetadataProviderId,

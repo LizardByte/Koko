@@ -244,6 +244,66 @@ fn metadata_refresh_state_changes_only_the_requested_translation() {
 }
 
 #[test]
+fn refresh_placeholder_links_do_not_claim_metadata_is_available() {
+    let mut conn = connection();
+    let data_dir = std::env::temp_dir();
+    for state in ["pending", "error"] {
+        set_item_metadata_refresh_state_for_locale(
+            &mut conn,
+            koko::metadata::MetadataRefreshStateUpdate {
+                item_id: 1,
+                provider_id: MetadataProviderId::Tmdb,
+                external_id: "603",
+                media_type: Some("movie"),
+                locale_key: "en-US",
+                refresh_state: state,
+                refresh_error: Some("metadata has not been fetched"),
+            },
+        )
+        .unwrap();
+        let summary = koko::media::get_media_item_summary(&mut conn, 1)
+            .unwrap()
+            .unwrap();
+        assert!(!summary.has_metadata);
+        assert_eq!(summary.metadata_refresh_state.as_deref(), Some(state));
+        let detail = koko::media::get_media_item(&mut conn, 1, data_dir.to_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(!detail.has_metadata);
+        assert_eq!(detail.metadata_refresh_state.as_deref(), Some(state));
+    }
+
+    upsert_item_metadata_snapshot(&mut conn, 1, &snapshot("en-US")).unwrap();
+    for state in ["fresh", "pending", "error"] {
+        set_item_metadata_refresh_state_for_locale(
+            &mut conn,
+            koko::metadata::MetadataRefreshStateUpdate {
+                item_id: 1,
+                provider_id: MetadataProviderId::Tmdb,
+                external_id: "603",
+                media_type: Some("movie"),
+                locale_key: "en-US",
+                refresh_state: state,
+                refresh_error: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            koko::media::get_media_item_summary(&mut conn, 1)
+                .unwrap()
+                .unwrap()
+                .has_metadata
+        );
+        assert!(
+            koko::media::get_media_item(&mut conn, 1, data_dir.to_str().unwrap())
+                .unwrap()
+                .unwrap()
+                .has_metadata
+        );
+    }
+}
+
+#[test]
 fn failed_metadata_refreshes_do_not_starve_later_due_items() {
     let mut conn = connection();
     for id in 1..=9 {

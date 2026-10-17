@@ -846,6 +846,7 @@ function renderLibraryPagination(count: number, page: number, lastPage: number):
 export function renderLibraryTab(): string {
   const items = visibleLibraryItems();
   const library = activeLibrary();
+  const refreshProgress = library ? metadataRefreshActivityProgressForLibrary(library.id) : undefined;
   const isSpecificLibrary = state.route.page === 'home' && typeof state.route.libraryId === 'number';
   const browseFilterKind = state.browseFilter ? browseFilterKindLabel(state.browseFilter.kind) : '';
   const filterCount = activeBrowseFilterCount(state.browsePreferences);
@@ -871,6 +872,7 @@ export function renderLibraryTab(): string {
       <div class="shelf-header browse-section-header" data-nav-section="library-tools" data-nav-label="Library controls">
         <h3>${isSpecificLibrary ? escapeHtml(library?.name ?? 'Library') : 'All libraries'}</h3>
         <div class="browse-header-actions">
+          ${refreshProgress ? `<span class="tag warning" role="status">Refreshing metadata ${refreshProgress.completed}/${refreshProgress.total}${refreshProgress.failed ? ` · ${refreshProgress.failed} failed` : ''}</span>` : ''}
           <span role="status">${items.length} title${items.length === 1 ? '' : 's'}</span>
           <button type="button" class="secondary-button browse-filter-toggle ${filterCount ? 'has-filters' : ''}" id="toggle-library-filters" aria-expanded="${state.browseFiltersOpen}" aria-controls="library-browse-form" aria-label="Filters: ${filterStatus}" title="${filterStatus}">${renderButtonContent(filterLabel, 'sliders-horizontal')}</button>
         </div>

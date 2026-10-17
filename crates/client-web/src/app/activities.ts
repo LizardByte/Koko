@@ -38,25 +38,9 @@ export function itemHasActiveMetadataRefresh(item: Pick<MediaItemSummary, 'id' |
   return item?.metadata_refresh_state === 'pending' && activeMetadataRefreshItemIds().has(item.id);
 }
 
-/** Calculates stored metadata refresh progress from a library summary. */
+/** Reports progress only while a refresh worker is actually registered. */
 export function libraryRefreshProgress(library: MediaLibrary): { completed: number; total: number; percent: number; failed: number } | undefined {
-  const activityProgress = metadataRefreshActivityProgressForLibrary(library.id);
-  if (activityProgress) {
-    return activityProgress;
-  }
-
-  if (library.metadata_refresh_total <= 0 || library.metadata_refresh_pending <= 0) {
-    return undefined;
-  }
-
-  const completed = Math.max(0, library.metadata_refresh_completed);
-  const percent = Math.min(100, Math.max(0, (completed / library.metadata_refresh_total) * 100));
-  return {
-    completed,
-    total: library.metadata_refresh_total,
-    percent,
-    failed: library.metadata_refresh_failed,
-  };
+  return metadataRefreshActivityProgressForLibrary(library.id);
 }
 
 export function activityProgress(activity: Pick<SystemActivity, 'completed_items' | 'total_items' | 'failed_items'>): {
@@ -106,7 +90,8 @@ export function activeLibraryPendingRefreshCount(libraryId: number): number {
   return activeMetadataRefreshActivities()
     .filter((activity) => activity.library_id === libraryId)
     .reduce((total, activity) => {
-      const remaining = Math.max(0, activity.total_items - activity.completed_items - activity.failed_items);
+      // Failed items are already included in completed_items.
+      const remaining = Math.max(0, activity.total_items - activity.completed_items);
       return total + remaining;
     }, 0);
 }

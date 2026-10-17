@@ -244,7 +244,7 @@ async fn metadata_artwork_refetches_previously_corrupted_cache_entries() {
 }
 
 #[tokio::test]
-async fn metadata_artwork_keeps_working_images_until_a_replacement_is_ready() {
+async fn metadata_artwork_keeps_shared_images_after_a_replacement_is_ready() {
     let dir = artwork_dir();
     let old = koko::metadata::expected_artwork_cache_path(
         "http://old.example/poster.png",
@@ -267,8 +267,8 @@ async fn metadata_artwork_keeps_working_images_until_a_replacement_is_ready() {
         .unwrap();
     server.join().unwrap();
     assert!(replacement.is_file());
-    assert!(!old.exists());
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    assert!(old.exists());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -306,7 +306,66 @@ async fn metadata_asset_persistence_keeps_serving_the_previous_artwork_on_failur
         .unwrap();
     server.join().unwrap();
     assert!(poster.unwrap().is_file());
-    assert!(!old.exists());
+    assert!(old.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn obsolete_artwork_downloads_and_cache_hits_cannot_delete_newer_covers() {
+    let dir = artwork_dir();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let old_url = format!("http://{}/old.png", listener.local_addr().unwrap());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let old_server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = [0; 2048];
+        assert!(socket.read(&mut request).unwrap() > 0);
+        started_tx.send(()).unwrap();
+        release_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let bytes = png();
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        )
+        .unwrap();
+        socket.write_all(&bytes).unwrap();
+    });
+    let old_job = tokio::spawn({
+        let dir = dir.clone();
+        let old_url = old_url.clone();
+        async move {
+            koko::metadata::cache_artwork(&old_url, &dir, "poster")
+                .await
+                .unwrap()
+        }
+    });
+    started_rx.await.unwrap();
+    let (new_url, new_server) = serve_artwork(200, png());
+    let current = koko::metadata::cache_artwork(&new_url, &dir, "poster")
+        .await
+        .unwrap();
+    new_server.join().unwrap();
+    release_tx.send(()).unwrap();
+    let old = old_job.await.unwrap();
+    old_server.join().unwrap();
+    assert!(
+        current.is_file(),
+        "An obsolete download must not remove the current cover"
+    );
+    assert_eq!(
+        koko::metadata::cache_artwork(&old_url, &dir, "poster")
+            .await
+            .unwrap(),
+        old
+    );
+    assert!(
+        current.is_file(),
+        "A cached obsolete URL must not remove the current cover"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

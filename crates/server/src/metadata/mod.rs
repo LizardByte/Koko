@@ -3461,21 +3461,18 @@ pub async fn persist_item_metadata_assets_with_logo(
     let poster_path = if let Some(url) = &snapshot.artwork_url {
         try_cache_item_artwork(url, &item_dir, &poster_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &poster_cache_key, None)?;
         None
     };
     let backdrop_cache_key = format!("{}_backdrop", snapshot.provider_id.as_storage_value());
     let backdrop_path = if let Some(url) = &snapshot.backdrop_url {
         try_cache_item_artwork(url, &item_dir, &backdrop_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &backdrop_cache_key, None)?;
         None
     };
     let logo_cache_key = format!("{}_logo", snapshot.provider_id.as_storage_value());
     let logo_path = if let Some(url) = logo_url {
         try_cache_item_artwork(&url, &item_dir, &logo_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &logo_cache_key, None)?;
         None
     };
 
@@ -3743,6 +3740,11 @@ pub(crate) fn cached_artwork_is_valid(path: &Path) -> bool {
 }
 
 /// Download and cache one artwork asset to disk.
+///
+/// Entries are addressed by URL and shared by provider identity. A request cannot
+/// determine whether another URL is obsolete: a newer job or another metadata
+/// link may still use it. Retain sibling entries, including when a snapshot has
+/// no artwork, rather than pruning files outside the guarded database update.
 pub async fn cache_artwork(
     url: &str,
     cache_dir: &Path,
@@ -3751,14 +3753,8 @@ pub async fn cache_artwork(
     fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
 
     let cache_path = expected_artwork_cache_path(url, cache_dir, cache_key);
-    let file_name = cache_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid artwork cache file name".to_string())?
-        .to_string();
     if cache_path.is_file() {
         if cached_artwork_is_valid(&cache_path) {
-            purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
             return Ok(cache_path);
         }
         fs::remove_file(&cache_path).map_err(|error| error.to_string())?;
@@ -3791,8 +3787,6 @@ pub async fn cache_artwork(
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
     }
-    purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
-
     Ok(cache_path)
 }
 
@@ -4306,39 +4300,6 @@ fn stable_artwork_url_hash(url: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);
     hasher.finish()
-}
-
-fn purge_stale_cached_artwork_files(
-    cache_dir: &Path,
-    cache_key: &str,
-    keep_file_name: Option<&str>,
-) -> Result<(), String> {
-    if !cache_dir.is_dir() {
-        return Ok(());
-    }
-
-    let prefix = sanitize_cache_key(cache_key);
-    for entry in fs::read_dir(cache_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
-            continue;
-        }
-        if keep_file_name == Some(file_name) {
-            continue;
-        }
-
-        fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
-
-    Ok(())
 }
 
 fn root_media_item_id(

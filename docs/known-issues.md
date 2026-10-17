@@ -63,7 +63,7 @@ Checked items describe implemented behavior. Unchecked items remain open; browse
 - [x] metadata: unlink and rematch immediately clear the item's provider metadata and its descendants; reject obsolete database writes and preserve catalog files and playback history
 - [x] web-ui/metadata: add administrator Unlink metadata controls and a provider-response cache clear action in Settings → Metadata providers
 - [x] web-ui/metadata: show progress only for registered work, and add consistent status badges to episode cards and item covers
-- [ ] metadata/artwork: overlapping requests for the same provider artwork can let an obsolete download delete a newer cached cover; filesystem publication and cleanup need the same stale-work protection as metadata writes
+- [x] metadata/artwork: retain URL-addressed cached images across overlapping downloads, cache hits, and snapshots without artwork; a request cannot delete a sibling image still used by a newer job or another metadata link
 - [ ] web-ui/metadata: an older in-flight poll can restore stale item details in the browser after a newer unlink or rematch response; ignore superseded refresh results
 - [ ] web-ui/metadata: automatic show matching does not register season and episode refresh targets in activity progress, so their loaders and failure counts can be missing during a library refresh
 - [ ] metadata/locales: pending recovery deduplicates targets by item ID and processes only one translation per pass; recover every pending locale even when scheduled refreshes are disabled

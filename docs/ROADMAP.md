@@ -62,7 +62,7 @@ Checklist:
   - [x] Add TMDB and TheTVDB primary providers, plus ThemerrDB and TrailerDB secondary providers
   - [x] Add per-library provider ordering, multiple metadata languages, manual matching, immediate unlink/rematch clearing, and provider-response cache controls
   - [x] Validate downloaded artwork, preserve working images on download failures, and reject obsolete metadata database writes
-  - [ ] Protect artwork publication and cleanup from overlapping obsolete requests
+  - [x] Retain shared URL-addressed artwork so overlapping requests cannot delete newer covers
   - [ ] Generate optional video seek-preview thumbnails
 - [x] Add media item, collection, and search APIs
   - [x] Add media item detail and search API baseline

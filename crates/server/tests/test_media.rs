@@ -307,7 +307,6 @@ fn test_inspect_transcoding_capability_reports_missing_binary() {
     let settings = FfmpegSettings {
         ffmpeg_path: "koko-ffmpeg-missing-binary".into(),
         ffprobe_path: "koko-ffprobe-missing-binary".into(),
-        ..FfmpegSettings::default()
     };
 
     let capability = inspect_transcoding_capability(&settings);

@@ -1935,6 +1935,12 @@ legend {
   gap: 1rem;
 }
 
+.metadata-management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
 .metadata-search-list {
   display: flex;
   flex-direction: column;

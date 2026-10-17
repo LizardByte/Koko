@@ -42,7 +42,7 @@ test('ordinary users have no scan, refresh, settings, or metadata management con
   state.selectedItem = mock.getMockItem(summary.id);
   state.route = { page: 'item', itemId: summary.id };
   const item = renderItemPage();
-  assert.doesNotMatch(item, /id="(?:metadata-search-form|refresh-item-metadata)"|data-link-metadata/);
+  assert.doesNotMatch(item, /id="(?:metadata-search-form|refresh-item-metadata|unlink-item-metadata)"|data-link-metadata/);
   assert.match(item, /Media details/);
 });
 

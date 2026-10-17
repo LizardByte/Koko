@@ -1028,7 +1028,10 @@ function renderMetadataRefreshButton(
 
   const refreshButtonDisabled = linkedMatch && !metadataRefreshActive ? '' : 'disabled';
   const refreshButtonLabel = metadataRefreshActive ? 'Refreshing metadata' : 'Force refresh metadata';
-  return `<button type="button" class="secondary-button" id="refresh-item-metadata" ${refreshButtonDisabled}>${renderButtonContent(refreshButtonLabel, 'refresh-cw')}</button>`;
+  return `<div class="metadata-management-actions">
+    <button type="button" class="secondary-button" id="refresh-item-metadata" ${refreshButtonDisabled}>${renderButtonContent(refreshButtonLabel, 'refresh-cw')}</button>
+    ${linkedMatch ? `<button type="button" class="secondary-button" id="unlink-item-metadata" title="Clear linked metadata now. For shows, this also clears seasons and episodes.">${renderButtonContent('Unlink metadata', 'x')}</button>` : ''}
+  </div>`;
 }
 
 function renderMetadataSearchPanel(supportsManualLinking: boolean): string {

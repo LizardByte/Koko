@@ -64,6 +64,7 @@ import {
   getLogs,
   getUsers,
   linkItemMetadata,
+  unlinkItemMetadata,
   loginUser,
   refreshItemMetadata,
   refreshLibraryMetadata,
@@ -1019,14 +1020,39 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
           external_id: externalId,
           media_type: mediaType,
         });
+        clearBrowseSessions();
         state.selectedItemMetadata = await getItemMetadata(state.selectedItem.id);
         state.metadataSearchResults = [];
         await refreshPendingMetadataData();
+        state.hasDeferredAutoRefreshRender = false;
+        render();
       } catch (error) {
         state.error = error instanceof Error ? error.message : 'Failed to link metadata.';
         render();
       }
     });
+  });
+
+  document.querySelector<HTMLButtonElement>('#unlink-item-metadata')?.addEventListener('click', async () => {
+    if (!state.selectedItem) {
+      return;
+    }
+
+    const button = document.querySelector<HTMLButtonElement>('#unlink-item-metadata');
+    try {
+      setButtonBusy(button, true);
+      await unlinkItemMetadata(state.selectedItem.id);
+      clearBrowseSessions();
+      state.metadataSearchResults = [];
+      await refreshPendingMetadataData();
+      state.hasDeferredAutoRefreshRender = false;
+      render();
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to unlink item metadata.';
+      render();
+    } finally {
+      setButtonBusy(button, false);
+    }
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-item-metadata')?.addEventListener('click', async () => {

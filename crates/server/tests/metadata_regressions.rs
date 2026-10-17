@@ -43,6 +43,130 @@ fn snapshot(locale: &str) -> StoredMetadataSnapshot {
     }
 }
 
+#[test]
+fn clearing_metadata_removes_every_locale_and_descendant_but_preserves_the_catalog() {
+    use diesel::RunQueryDsl;
+    let mut conn = connection();
+    conn.batch_execute(
+        "UPDATE media_items SET item_type='show' WHERE id=1;
+         INSERT INTO media_items (id,library_id,parent_id,identity_key,item_type,display_title) \
+         VALUES
+         (2,1,1,'season','season','Season 1'), (3,1,2,'episode','episode','Episode 1'),
+         (4,1,NULL,'other','movie','Other');
+         INSERT INTO playback_progress (media_item_id,position_ms) VALUES (3,12345);",
+    )
+    .unwrap();
+    for item_id in 1..=4 {
+        for locale in ["en-US", "es-ES"] {
+            upsert_item_metadata_snapshot(&mut conn, item_id, &snapshot(locale)).unwrap();
+        }
+    }
+    let secondary = StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::Themerr,
+        ..snapshot("en-US")
+    };
+    koko::metadata::upsert_item_metadata_link(
+        &mut conn,
+        2,
+        &secondary,
+        &Default::default(),
+        "secondary",
+        None,
+    )
+    .unwrap();
+    conn.batch_execute(
+        "INSERT INTO item_metadata_external_ids (metadata_link_id,source,external_id)
+         SELECT id,'imdb','tt123' FROM item_metadata_links WHERE media_item_id=3;
+         INSERT INTO item_metadata_people (metadata_link_id,name)
+         SELECT id,'Actor' FROM item_metadata_links WHERE media_item_id=3;",
+    )
+    .unwrap();
+
+    assert_eq!(
+        koko::metadata::clear_item_metadata_tree(&mut conn, 1, false).unwrap(),
+        vec![1, 2, 3]
+    );
+    for item_id in 1..=3 {
+        assert!(
+            get_item_metadata_summaries(&mut conn, item_id)
+                .unwrap()
+                .is_empty()
+        );
+        let item = koko::media::get_media_item_summary(&mut conn, item_id)
+            .unwrap()
+            .unwrap();
+        assert!(!item.has_metadata);
+        assert!(item.overview.is_none());
+        assert!(item.metadata_refresh_error.is_none());
+    }
+    assert_eq!(get_item_metadata_summaries(&mut conn, 4).unwrap().len(), 2);
+    #[derive(diesel::QueryableByName)]
+    struct Remaining {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        external_ids: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        people: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        catalog: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        position: i64,
+    }
+    let remaining = diesel::sql_query(
+        "SELECT
+        (SELECT COUNT(*) FROM item_metadata_external_ids WHERE external_id='tt123') AS \
+         external_ids,
+        (SELECT COUNT(*) FROM item_metadata_people) AS people,
+        (SELECT COUNT(*) FROM media_items) AS catalog,
+        (SELECT position_ms FROM playback_progress LIMIT 1) AS position",
+    )
+    .get_result::<Remaining>(&mut conn)
+    .unwrap();
+    assert_eq!(remaining.external_ids, 0);
+    assert_eq!(remaining.people, 0);
+    assert_eq!(remaining.catalog, 4);
+    assert_eq!(remaining.position, 12345);
+}
+
+#[test]
+fn explicit_unlink_is_hidden_and_suppresses_automatic_matching_until_rematched() {
+    let mut conn = connection();
+    upsert_item_metadata_snapshot(&mut conn, 1, &snapshot("en-US")).unwrap();
+    koko::metadata::clear_item_metadata_tree(&mut conn, 1, true).unwrap();
+    assert!(
+        get_item_metadata_summaries(&mut conn, 1)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        koko::metadata::get_primary_item_metadata_link(&mut conn, 1)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        koko::media::get_preferred_item_metadata_link(&mut conn, 1)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !koko::media::get_media_item_summary(&mut conn, 1)
+            .unwrap()
+            .unwrap()
+            .has_metadata
+    );
+    assert!(
+        koko::metadata::list_due_item_metadata_links(&mut conn, i64::MAX, 8)
+            .unwrap()
+            .is_empty()
+    );
+    koko::metadata::clear_item_metadata_tree(&mut conn, 1, false).unwrap();
+    let mut replacement = snapshot("en-US");
+    replacement.external_id = "604".into();
+    upsert_item_metadata_snapshot(&mut conn, 1, &replacement).unwrap();
+    let matches = get_item_metadata_summaries(&mut conn, 1).unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].external_id, "604");
+}
+
 fn artwork_dir() -> std::path::PathBuf {
     let path =
         std::env::temp_dir().join(format!("koko-metadata-artwork-{}", rand::random::<u64>()));

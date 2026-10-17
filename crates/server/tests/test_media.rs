@@ -1355,6 +1355,18 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
             && candidate.library_kind == MediaLibraryKind::Shows
     }));
 
+    koko::metadata::clear_item_metadata_tree(&mut connection, show.id, true).unwrap();
+    for candidates in [
+        list_automatic_metadata_candidates(&mut connection, None, 8).unwrap(),
+        koko::media::list_automatic_metadata_refresh_candidates(&mut connection, None, 8).unwrap(),
+    ] {
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.item_id == show.id)
+        );
+    }
+
     drop(connection);
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();

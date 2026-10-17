@@ -51,6 +51,10 @@ use serde::Serialize;
 use strsim::normalized_levenshtein;
 
 // local imports
+use super::metadata_jobs::{
+    self,
+    MetadataRevision,
+};
 use crate::auth::{
     AdminGuard,
     UserGuard,
@@ -523,8 +527,9 @@ static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_METADATA_REFRESH_ITEMS: Lazy<tokio::sync::RwLock<HashMap<i32, String>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
-static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
-    Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
+static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<
+    tokio::sync::RwLock<HashSet<(i32, MetadataRevision)>>,
+> = Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_MANUAL_CATALOG_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
@@ -537,6 +542,7 @@ static ACTIVE_TRANSCODE_TASKS: Lazy<
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshActivityRecord {
+    completed: HashMap<i32, bool>,
     activity: SystemActivity,
 }
 
@@ -611,24 +617,23 @@ async fn persist_secondary_metadata_for_item(
     item_id: i32,
     settings: &Settings,
 ) -> Result<(), Status> {
-    let library_id = db
-        .run(move |conn| {
-            get_media_item_summary(conn, item_id)?
-                .map(|item| item.library_id)
-                .ok_or(diesel::result::Error::NotFound)
-        })
-        .await
-        .map_err(|error| match error {
-            diesel::result::Error::NotFound => Status::NotFound,
-            error => {
-                log::error!(
-                    "Failed to load library for media item {} secondary provider metadata: {}",
-                    item_id,
-                    error
-                );
-                Status::InternalServerError
-            }
-        })?;
+    let library_id = metadata_jobs::write(db, move |conn| {
+        get_media_item_summary(conn, item_id)?
+            .map(|item| item.library_id)
+            .ok_or(diesel::result::Error::NotFound)
+    })
+    .await
+    .map_err(|error| match error {
+        diesel::result::Error::NotFound => Status::NotFound,
+        error => {
+            log::error!(
+                "Failed to load library for media item {} secondary provider metadata: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        }
+    })?;
     let library_providers = load_item_library_metadata_providers(db, library_id).await?;
     let secondary_providers = secondary_providers_for_library(settings, &library_providers);
     if secondary_providers.is_empty() {
@@ -639,20 +644,19 @@ async fn persist_secondary_metadata_for_item(
     for provider_id in secondary_providers {
         let uses_localized_metadata = provider_uses_localized_metadata(provider_id.clone());
         let languages = metadata_locales_for_provider(provider_id.clone(), &library_languages);
-        let references = db
-            .run({
-                let provider_id = provider_id.clone();
-                move |conn| get_item_secondary_provider_references(conn, item_id, provider_id)
-            })
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to resolve secondary metadata references for media item {}: {}",
-                    item_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
+        let references = metadata_jobs::write(db, {
+            let provider_id = provider_id.clone();
+            move |conn| get_item_secondary_provider_references(conn, item_id, provider_id)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to resolve secondary metadata references for media item {}: {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
 
         for locale_key in &languages {
             let provider_locale = uses_localized_metadata
@@ -671,7 +675,7 @@ async fn persist_secondary_metadata_for_item(
                 {
                     Ok(Some(details)) => {
                         found = true;
-                        db.run({
+                        metadata_jobs::write(db, {
                             let provider_id = provider_id.clone();
                             let item_type = item_type.clone();
                             let database_id = database_id.clone();
@@ -736,7 +740,7 @@ async fn persist_secondary_metadata_for_item(
             if !found && !had_error {
                 let provider_id = provider_id.clone();
                 let locale = locale_key.clone();
-                db.run(move |conn| {
+                metadata_jobs::write(db, move |conn| {
                     crate::metadata::clear_item_secondary_metadata(
                         conn,
                         item_id,
@@ -752,21 +756,20 @@ async fn persist_secondary_metadata_for_item(
             }
         }
 
-        let collection_references = db
-            .run({
-                let provider_id = provider_id.clone();
-                move |conn| get_item_youtube_theme_collection_references(conn, item_id, provider_id)
-            })
-            .await
-            .map_err(|error| {
-                log::error!(
-                    "Failed to resolve secondary collection theme-song references for media item \
-                     {}: {}",
-                    item_id,
-                    error
-                );
-                Status::InternalServerError
-            })?;
+        let collection_references = metadata_jobs::write(db, {
+            let provider_id = provider_id.clone();
+            move |conn| get_item_youtube_theme_collection_references(conn, item_id, provider_id)
+        })
+        .await
+        .map_err(|error| {
+            log::error!(
+                "Failed to resolve secondary collection theme-song references for media item {}: \
+                 {}",
+                item_id,
+                error
+            );
+            Status::InternalServerError
+        })?;
 
         for (collection_id, item_type, database_id, external_id) in collection_references {
             match fetch_provider_secondary_collection_metadata(
@@ -782,7 +785,7 @@ async fn persist_secondary_metadata_for_item(
                     let Some(url) = collection.theme_song_url else {
                         continue;
                     };
-                    db.run({
+                    metadata_jobs::write(db, {
                         let provider_id = provider_id.clone();
                         let item_type = item_type.clone();
                         let database_id = database_id.clone();
@@ -813,7 +816,7 @@ async fn persist_secondary_metadata_for_item(
                 }
                 Ok(None) => {
                     let provider_id = provider_id.clone();
-                    db.run(move |conn| {
+                    metadata_jobs::write(db, move |conn| {
                         crate::metadata::clear_secondary_collection_metadata(
                             conn,
                             collection_id,
@@ -878,34 +881,33 @@ async fn persist_snapshot_for_item(
                 Status::BadGateway
             })?;
 
-    let mut summary = db
-        .run({
-            let snapshot = snapshot.clone();
-            let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
-            move |conn| {
-                upsert_item_metadata_snapshot_with_refresh_interval(
-                    conn,
-                    item_id,
-                    &snapshot,
-                    refresh_interval_seconds,
-                )
-            }
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to persist linked metadata for media item {}: {}",
+    let mut summary = metadata_jobs::write(db, {
+        let snapshot = snapshot.clone();
+        let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
+        move |conn| {
+            upsert_item_metadata_snapshot_with_refresh_interval(
+                conn,
                 item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
+                &snapshot,
+                refresh_interval_seconds,
+            )
+        }
+    })
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to persist linked metadata for media item {}: {}",
+            item_id,
+            error
+        );
+        Status::InternalServerError
+    })?;
 
     if let Some(poster_path) = poster_path {
         let summary_id = summary.id;
         let poster_path_string = metadata_asset_db_path(&settings.general.data_dir, &poster_path);
         let data_dir = settings.general.data_dir.clone();
-        db.run(move |conn| {
+        metadata_jobs::write(db, move |conn| {
             update_cached_artwork_path(
                 conn,
                 summary_id,
@@ -931,7 +933,7 @@ async fn persist_snapshot_for_item(
         let backdrop_path_string =
             metadata_asset_db_path(&settings.general.data_dir, &backdrop_path);
         let data_dir = settings.general.data_dir.clone();
-        db.run(move |conn| {
+        metadata_jobs::write(db, move |conn| {
             update_cached_artwork_path(
                 conn,
                 summary_id,
@@ -956,7 +958,7 @@ async fn persist_snapshot_for_item(
         let summary_id = summary.id;
         let logo_path_string = metadata_asset_db_path(&settings.general.data_dir, &logo_path);
         let data_dir = settings.general.data_dir.clone();
-        db.run(move |conn| {
+        metadata_jobs::write(db, move |conn| {
             update_cached_artwork_path(conn, summary_id, ArtworkKind::Logo, &logo_path, &data_dir)
         })
         .await
@@ -1110,6 +1112,7 @@ impl MetadataRefreshFetchKind {
 
 #[derive(Debug, Clone)]
 struct MetadataRefreshTarget {
+    revision: MetadataRevision,
     locale_key: Option<String>,
     item_id: i32,
     library_id: i32,
@@ -1161,18 +1164,24 @@ fn flatten_metadata_refresh_job(job: &MetadataRefreshJob) -> Vec<MetadataRefresh
     targets
 }
 
-async fn begin_metadata_refresh_execution(item_id: i32) -> bool {
+async fn begin_metadata_refresh_execution(
+    item_id: i32,
+    revision: MetadataRevision,
+) -> bool {
     ACTIVE_METADATA_REFRESH_EXECUTIONS
         .write()
         .await
-        .insert(item_id)
+        .insert((item_id, revision))
 }
 
-async fn finish_metadata_refresh_execution(item_id: i32) {
+async fn finish_metadata_refresh_execution(
+    item_id: i32,
+    revision: MetadataRevision,
+) {
     ACTIVE_METADATA_REFRESH_EXECUTIONS
         .write()
         .await
-        .remove(&item_id);
+        .remove(&(item_id, revision));
 }
 
 async fn begin_library_metadata_refresh(library_id: i32) -> bool {
@@ -1198,6 +1207,7 @@ async fn register_library_scan_activity(
     ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
         activity_id.clone(),
         MetadataRefreshActivityRecord {
+            completed: HashMap::new(),
             activity: SystemActivity {
                 id: activity_id.clone(),
                 category: "library_scan".into(),
@@ -1258,6 +1268,7 @@ async fn register_metadata_refresh_activity(
     let queued_targets = targets
         .into_iter()
         .filter(|target| seen_item_ids.insert(target.item_id))
+        .filter(|target| target.revision.is_current())
         .filter(|target| !item_registry.contains_key(&target.item_id))
         .collect::<Vec<_>>();
     if queued_targets.is_empty() {
@@ -1268,12 +1279,12 @@ async fn register_metadata_refresh_activity(
     for target in &queued_targets {
         item_registry.insert(target.item_id, activity_id.clone());
     }
-    drop(item_registry);
 
     let now = current_timestamp();
     ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
         activity_id.clone(),
         MetadataRefreshActivityRecord {
+            completed: HashMap::new(),
             activity: SystemActivity {
                 id: activity_id.clone(),
                 category: "metadata_refresh".into(),
@@ -1309,6 +1320,7 @@ async fn extend_metadata_refresh_activity(
     let queued_targets = targets
         .into_iter()
         .filter(|target| seen_item_ids.insert(target.item_id))
+        .filter(|target| target.revision.is_current())
         .filter(|target| !item_registry.contains_key(&target.item_id))
         .collect::<Vec<_>>();
     if queued_targets.is_empty() {
@@ -1318,7 +1330,6 @@ async fn extend_metadata_refresh_activity(
     for target in &queued_targets {
         item_registry.insert(target.item_id, activity_id.to_string());
     }
-    drop(item_registry);
 
     if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
         record
@@ -1340,12 +1351,14 @@ async fn register_metadata_refresh_activity_for_items(
     library_id: Option<i32>,
     root_item_id: Option<i32>,
     provider_id: Option<MetadataProviderId>,
-    item_ids: Vec<i32>,
+    item_ids: Vec<(i32, MetadataRevision)>,
 ) -> Option<(String, Vec<i32>)> {
     let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
     let mut seen_item_ids = HashSet::new();
     let queued_item_ids = item_ids
         .into_iter()
+        .filter(|(_, revision)| revision.is_current())
+        .map(|(item_id, _)| item_id)
         .filter(|item_id| seen_item_ids.insert(*item_id))
         .filter(|item_id| !item_registry.contains_key(item_id))
         .collect::<Vec<_>>();
@@ -1357,12 +1370,12 @@ async fn register_metadata_refresh_activity_for_items(
     for item_id in &queued_item_ids {
         item_registry.insert(*item_id, activity_id.clone());
     }
-    drop(item_registry);
 
     let now = current_timestamp();
     ACTIVE_SYSTEM_ACTIVITIES.write().await.insert(
         activity_id.clone(),
         MetadataRefreshActivityRecord {
+            completed: HashMap::new(),
             activity: SystemActivity {
                 id: activity_id.clone(),
                 category: "metadata_refresh".into(),
@@ -1395,7 +1408,13 @@ async fn register_manual_library_automatch_activity(
 ) -> Option<(String, Vec<i32>)> {
     let candidates = match db
         .run(move |conn| {
-            list_automatic_metadata_refresh_candidates(conn, Some(library_id), usize::MAX)
+            metadata_jobs::load(
+                conn,
+                |conn| {
+                    list_automatic_metadata_refresh_candidates(conn, Some(library_id), usize::MAX)
+                },
+                |candidate| candidate.item_id,
+            )
         })
         .await
     {
@@ -1411,7 +1430,7 @@ async fn register_manual_library_automatch_activity(
     };
     let item_ids = candidates
         .iter()
-        .map(|candidate| candidate.item_id)
+        .map(|(candidate, revision)| (candidate.item_id, *revision))
         .collect::<Vec<_>>();
 
     register_metadata_refresh_activity_for_items(
@@ -1451,15 +1470,36 @@ async fn mark_metadata_refresh_activity_running(activity_id: &str) {
 
 async fn record_metadata_refresh_activity_progress(
     activity_id: &str,
+    item_id: i32,
     failed: bool,
 ) {
     if let Some(record) = ACTIVE_SYSTEM_ACTIVITIES.write().await.get_mut(activity_id) {
-        record.activity.completed_items += 1;
-        if failed {
-            record.activity.failed_items += 1;
+        if record.activity.item_ids.contains(&item_id) {
+            record.completed.insert(item_id, failed);
+            record.activity.completed_items = record.completed.len() as i32;
+            record.activity.failed_items =
+                record.completed.values().filter(|failed| **failed).count() as i32;
+            record.activity.updated_at = current_timestamp();
         }
-        record.activity.updated_at = current_timestamp();
     }
+}
+
+async fn detach_metadata_refresh_items(ids: &[i32]) {
+    let ids = ids.iter().copied().collect::<HashSet<_>>();
+    let mut item_registry = ACTIVE_METADATA_REFRESH_ITEMS.write().await;
+    item_registry.retain(|id, _| !ids.contains(id));
+    ACTIVE_SYSTEM_ACTIVITIES.write().await.retain(|_, record| {
+        if record.activity.category != "metadata_refresh" {
+            return true;
+        }
+        record.activity.item_ids.retain(|id| !ids.contains(id));
+        record.completed.retain(|id, _| !ids.contains(id));
+        record.activity.total_items = record.activity.item_ids.len() as i32;
+        record.activity.completed_items = record.completed.len() as i32;
+        record.activity.failed_items =
+            record.completed.values().filter(|failed| **failed).count() as i32;
+        !record.activity.item_ids.is_empty()
+    });
 }
 
 async fn complete_metadata_refresh_activity(activity_id: &str) {
@@ -1488,6 +1528,24 @@ async fn load_show_descendant_refresh_targets(
     provider_id: MetadataProviderId,
     show_external_id: &str,
 ) -> Result<Vec<MetadataRefreshTarget>, Status> {
+    MetadataRevision::inherited(show_item_id)
+        .scope(load_show_descendant_refresh_targets_inner(
+            db,
+            settings,
+            show_item_id,
+            provider_id,
+            show_external_id,
+        ))
+        .await
+}
+
+async fn load_show_descendant_refresh_targets_inner(
+    db: &DbConn,
+    settings: &Settings,
+    show_item_id: i32,
+    provider_id: MetadataProviderId,
+    show_external_id: &str,
+) -> Result<Vec<MetadataRefreshTarget>, Status> {
     let lookup = crate::metadata::cache_policy::fresh(load_provider_show_descendant_targets(
         &settings.metadata,
         provider_id.clone(),
@@ -1508,19 +1566,18 @@ async fn load_show_descendant_refresh_targets(
     }
 
     let descendant_plan = show_metadata_descendant_plan(&lookup);
-    let descendant_items = db
-        .run(move |conn| {
-            upsert_show_metadata_descendant_items(conn, show_item_id, &descendant_plan)
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to upsert missing show descendants for metadata propagation on item {}: {}",
-                show_item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
+    let descendant_items = metadata_jobs::write(db, move |conn| {
+        upsert_show_metadata_descendant_items(conn, show_item_id, &descendant_plan)
+    })
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to upsert missing show descendants for metadata propagation on item {}: {}",
+            show_item_id,
+            error
+        );
+        Status::InternalServerError
+    })?;
 
     let mut targets = Vec::new();
     for (season_number, season_target) in provider_season_targets_by_number(&lookup) {
@@ -1636,6 +1693,7 @@ fn metadata_refresh_target_for_show_season(
     let season_number = provider_target.season_number;
     match provider_id {
         MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
+            revision: MetadataRevision::inherited(season.id),
             locale_key: None,
             item_id: season.id,
             library_id: season.library_id,
@@ -1651,6 +1709,7 @@ fn metadata_refresh_target_for_show_season(
             },
         }),
         MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            revision: MetadataRevision::inherited(season.id),
             locale_key: None,
             item_id: season.id,
             library_id: season.library_id,
@@ -1683,6 +1742,7 @@ fn metadata_refresh_target_for_show_episode(
     let episode_number = provider_target.episode_number;
     match provider_id {
         MetadataProviderId::Tmdb => Some(MetadataRefreshTarget {
+            revision: MetadataRevision::inherited(episode.id),
             locale_key: None,
             item_id: episode.id,
             library_id: episode.library_id,
@@ -1701,6 +1761,7 @@ fn metadata_refresh_target_for_show_episode(
             },
         }),
         MetadataProviderId::Tvdb => Some(MetadataRefreshTarget {
+            revision: MetadataRevision::inherited(episode.id),
             locale_key: None,
             item_id: episode.id,
             library_id: episode.library_id,
@@ -1728,6 +1789,16 @@ async fn mark_metadata_refresh_target_pending(
     db: &DbConn,
     target: &MetadataRefreshTarget,
 ) -> Result<ItemMetadataSummary, Status> {
+    target
+        .revision
+        .scope(mark_metadata_refresh_target_pending_inner(db, target))
+        .await
+}
+
+async fn mark_metadata_refresh_target_pending_inner(
+    db: &DbConn,
+    target: &MetadataRefreshTarget,
+) -> Result<ItemMetadataSummary, Status> {
     let languages = if let Some(locale) = &target.locale_key {
         vec![locale.clone()]
     } else {
@@ -1738,7 +1809,7 @@ async fn mark_metadata_refresh_target_pending(
                 .map_err(|_| Status::InternalServerError)?,
         )
     };
-    db.run({
+    metadata_jobs::write(db, {
         let target = target.clone();
         move |conn| {
             let mut result = None;
@@ -1785,38 +1856,50 @@ async fn record_metadata_refresh_error(
     target: &MetadataRefreshTarget,
     message: &str,
 ) {
-    if let Err(error) = db
-        .run({
-            let target = target.clone();
-            let message = message.to_string();
-            move |conn| {
-                if let Some(locale) = target.locale_key {
-                    set_item_metadata_refresh_state_for_locale(
-                        conn,
-                        crate::metadata::MetadataRefreshStateUpdate {
-                            item_id: target.item_id,
-                            provider_id: target.provider_id,
-                            external_id: &target.external_id,
-                            media_type: Some(&target.media_type),
-                            locale_key: &locale,
-                            refresh_state: "error",
-                            refresh_error: Some(&message),
-                        },
-                    )
-                } else {
-                    set_item_metadata_refresh_state(
-                        conn,
-                        target.item_id,
-                        target.provider_id,
-                        &target.external_id,
-                        Some(&target.media_type),
-                        "error",
-                        Some(&message),
-                    )
-                }
+    if target.revision.is_current() {
+        target
+            .revision
+            .scope(record_metadata_refresh_error_inner(db, target, message))
+            .await;
+    }
+}
+
+async fn record_metadata_refresh_error_inner(
+    db: &DbConn,
+    target: &MetadataRefreshTarget,
+    message: &str,
+) {
+    if let Err(error) = metadata_jobs::write(db, {
+        let target = target.clone();
+        let message = message.to_string();
+        move |conn| {
+            if let Some(locale) = target.locale_key {
+                set_item_metadata_refresh_state_for_locale(
+                    conn,
+                    crate::metadata::MetadataRefreshStateUpdate {
+                        item_id: target.item_id,
+                        provider_id: target.provider_id,
+                        external_id: &target.external_id,
+                        media_type: Some(&target.media_type),
+                        locale_key: &locale,
+                        refresh_state: "error",
+                        refresh_error: Some(&message),
+                    },
+                )
+            } else {
+                set_item_metadata_refresh_state(
+                    conn,
+                    target.item_id,
+                    target.provider_id,
+                    &target.external_id,
+                    Some(&target.media_type),
+                    "error",
+                    Some(&message),
+                )
             }
-        })
-        .await
+        }
+    })
+    .await
     {
         log::warn!(
             "Failed to record metadata refresh error for media item {}: {}",
@@ -1944,7 +2027,10 @@ async fn execute_metadata_refresh_target(
     target: &MetadataRefreshTarget,
     settings: &crate::config::Settings,
 ) -> bool {
-    if !begin_metadata_refresh_execution(target.item_id).await {
+    if !target.revision.is_current() {
+        return false;
+    }
+    if !begin_metadata_refresh_execution(target.item_id, target.revision).await {
         log::info!(
             "Skipping duplicate {} metadata refresh for {}; another refresh for this item is \
              already running",
@@ -1954,8 +2040,11 @@ async fn execute_metadata_refresh_target(
         return false;
     }
 
-    let failed = execute_metadata_refresh_target_inner(db, target, settings).await;
-    finish_metadata_refresh_execution(target.item_id).await;
+    let failed = target
+        .revision
+        .scope(execute_metadata_refresh_target_inner(db, target, settings))
+        .await;
+    finish_metadata_refresh_execution(target.item_id, target.revision).await;
     failed
 }
 
@@ -2139,6 +2228,7 @@ fn pending_metadata_refresh_target(
     };
 
     Some(MetadataRefreshTarget {
+        revision: MetadataRevision::inherited(item.id),
         locale_key: Some(link.locale_key),
         item_id: item.id,
         library_id: item.library_id,
@@ -2156,7 +2246,14 @@ pub(crate) async fn recover_pending_metadata_refreshes(
     db: &DbConn,
     settings: &crate::config::Settings,
 ) {
-    let links = match db.run(list_pending_item_metadata_links).await {
+    let links = match db
+        .run(|conn| {
+            metadata_jobs::load(conn, list_pending_item_metadata_links, |link| {
+                link.media_item_id
+            })
+        })
+        .await
+    {
         Ok(links) => links,
         Err(error) => {
             log::warn!("Failed to load pending metadata refresh links: {}", error);
@@ -2180,12 +2277,12 @@ pub(crate) async fn recover_pending_metadata_refreshes(
 async fn execute_metadata_refresh_links(
     db: &DbConn,
     settings: &crate::config::Settings,
-    links: Vec<ItemMetadataLink>,
+    links: Vec<(ItemMetadataLink, MetadataRevision)>,
     source: &str,
     label: &str,
 ) {
     let mut targets = Vec::new();
-    for link in links {
+    for (link, revision) in links {
         let item_id = link.media_item_id;
         let item = match db
             .run(move |conn| get_media_item_summary(conn, item_id))
@@ -2203,7 +2300,8 @@ async fn execute_metadata_refresh_links(
             }
         };
 
-        if let Some(target) = pending_metadata_refresh_target(item, link) {
+        if let Some(mut target) = pending_metadata_refresh_target(item, link) {
+            target.revision = revision;
             targets.push(target);
         }
     }
@@ -2227,7 +2325,7 @@ async fn execute_metadata_refresh_links(
     mark_metadata_refresh_activity_running(&activity_id).await;
     for target in queued_targets {
         let failed = execute_metadata_refresh_target(db, &target, settings).await;
-        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+        record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
     }
     complete_metadata_refresh_activity(&activity_id).await;
 }
@@ -2242,7 +2340,13 @@ async fn run_due_metadata_refreshes(
 
     let now = current_timestamp();
     let links = match db
-        .run(move |conn| list_due_item_metadata_links(conn, now, 8))
+        .run(move |conn| {
+            metadata_jobs::load(
+                conn,
+                |conn| list_due_item_metadata_links(conn, now, 8),
+                |link| link.media_item_id,
+            )
+        })
         .await
     {
         Ok(links) => links,
@@ -2283,6 +2387,7 @@ async fn build_metadata_refresh_job(
     media_type: &str,
 ) -> Result<MetadataRefreshJob, Status> {
     let root = MetadataRefreshTarget {
+        revision: MetadataRevision::inherited(item.id),
         locale_key: None,
         item_id: item.id,
         library_id: item.library_id,
@@ -2299,6 +2404,16 @@ async fn build_metadata_refresh_job(
 }
 
 async fn load_metadata_refresh_descendants(
+    db: &DbConn,
+    settings: &Settings,
+    root: &MetadataRefreshTarget,
+) -> Result<Vec<MetadataRefreshTarget>, Status> {
+    root.revision
+        .scope(load_metadata_refresh_descendants_inner(db, settings, root))
+        .await
+}
+
+async fn load_metadata_refresh_descendants_inner(
     db: &DbConn,
     settings: &Settings,
     root: &MetadataRefreshTarget,
@@ -2659,11 +2774,17 @@ async fn run_automatic_movie_metadata_linking(
 
     let mut candidates = match db
         .run(move |conn| {
-            if retry_previously_attempted {
-                list_automatic_metadata_refresh_candidates(conn, library_id, usize::MAX)
-            } else {
-                list_automatic_metadata_candidates(conn, library_id, 8)
-            }
+            metadata_jobs::load(
+                conn,
+                |conn| {
+                    if retry_previously_attempted {
+                        list_automatic_metadata_refresh_candidates(conn, library_id, usize::MAX)
+                    } else {
+                        list_automatic_metadata_candidates(conn, library_id, 8)
+                    }
+                },
+                |candidate| candidate.item_id,
+            )
         })
         .await
     {
@@ -2680,7 +2801,7 @@ async fn run_automatic_movie_metadata_linking(
         } else {
             let item_ids = candidates
                 .iter()
-                .map(|candidate| candidate.item_id)
+                .map(|(candidate, revision)| (candidate.item_id, *revision))
                 .collect::<Vec<_>>();
             register_metadata_refresh_activity_for_items(
                 "library",
@@ -2701,13 +2822,16 @@ async fn run_automatic_movie_metadata_linking(
             .iter()
             .copied()
             .collect::<std::collections::HashSet<_>>();
-        candidates.retain(|candidate| queued_item_ids.contains(&candidate.item_id));
+        candidates.retain(|(candidate, _)| queued_item_ids.contains(&candidate.item_id));
     }
     if let Some((activity_id, _)) = &activity {
         mark_metadata_refresh_activity_running(activity_id).await;
     }
 
-    for candidate in candidates {
+    for (candidate, revision) in candidates {
+        if !revision.is_current() {
+            continue;
+        }
         let mut failed = false;
         let mut guessed_provider_id = None;
         let mut guess = None;
@@ -2758,6 +2882,7 @@ async fn run_automatic_movie_metadata_linking(
 
         if let (Some(provider_id), Some(result)) = (guessed_provider_id, guess) {
             let pending_target = MetadataRefreshTarget {
+                revision,
                 locale_key: None,
                 item_id: candidate.item_id,
                 library_id: candidate.library_id,
@@ -2779,7 +2904,11 @@ async fn run_automatic_movie_metadata_linking(
                     candidate.item_id,
                     error
                 );
-                failed = true;
+                if let Some((activity_id, _)) = &activity {
+                    record_metadata_refresh_activity_progress(activity_id, candidate.item_id, true)
+                        .await;
+                }
+                continue;
             }
             match fetch_snapshots_for_item_metadata_languages(
                 db,
@@ -2793,46 +2922,23 @@ async fn run_automatic_movie_metadata_linking(
             .await
             {
                 Ok(snapshots) => {
-                    if let Err(status) = persist_snapshot_tree_for_languages(
-                        db,
-                        candidate.item_id,
-                        &snapshots,
-                        settings,
-                        PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
-                    )
-                    .await
+                    if let Err(status) = revision
+                        .scope(persist_snapshot_tree_for_languages(
+                            db,
+                            candidate.item_id,
+                            &snapshots,
+                            settings,
+                            PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
+                        ))
+                        .await
                     {
                         log::warn!(
                             "Failed to persist automatic metadata snapshot for item {}: {:?}",
                             candidate.item_id,
                             status
                         );
-                        if let Err(error) = db
-                            .run({
-                                let external_id = result.external_id.clone();
-                                let media_type = Some(result.media_type.clone());
-                                let status_message = format!("{status:?}");
-                                let provider_id = provider_id.clone();
-                                move |conn| {
-                                    set_item_metadata_refresh_state(
-                                        conn,
-                                        candidate.item_id,
-                                        provider_id,
-                                        &external_id,
-                                        media_type.as_deref(),
-                                        "error",
-                                        Some(&status_message),
-                                    )
-                                }
-                            })
-                            .await
-                        {
-                            log::warn!(
-                                "Failed to record automatic metadata error for item {}: {}",
-                                candidate.item_id,
-                                error
-                            );
-                        }
+                        record_metadata_refresh_error(db, &pending_target, &format!("{status:?}"))
+                            .await;
                         failed = true;
                     }
                 }
@@ -2843,32 +2949,7 @@ async fn run_automatic_movie_metadata_linking(
                         candidate.item_id,
                         error
                     );
-                    if let Err(persist_error) = db
-                        .run({
-                            let external_id = result.external_id.clone();
-                            let media_type = result.media_type.clone();
-                            let error_message = format!("{error:?}");
-                            let provider_id = provider_id.clone();
-                            move |conn| {
-                                set_item_metadata_refresh_state(
-                                    conn,
-                                    candidate.item_id,
-                                    provider_id,
-                                    &external_id,
-                                    Some(&media_type),
-                                    "error",
-                                    Some(&error_message),
-                                )
-                            }
-                        })
-                        .await
-                    {
-                        log::warn!(
-                            "Failed to record automatic metadata error for item {}: {}",
-                            candidate.item_id,
-                            persist_error
-                        );
-                    }
+                    record_metadata_refresh_error(db, &pending_target, &format!("{error:?}")).await;
                     failed = true;
                 }
             }
@@ -2892,7 +2973,7 @@ async fn run_automatic_movie_metadata_linking(
         }
 
         if let Some((activity_id, _)) = &activity {
-            record_metadata_refresh_activity_progress(activity_id, failed).await;
+            record_metadata_refresh_activity_progress(activity_id, candidate.item_id, failed).await;
         }
     }
 
@@ -2900,7 +2981,14 @@ async fn run_automatic_movie_metadata_linking(
         complete_metadata_refresh_activity(activity_id).await;
     }
 
-    let pending_show_backfills = match db.run(linked_shows_needing_descendant_backfill).await {
+    let pending_show_backfills = match db
+        .run(|conn| {
+            metadata_jobs::load(conn, linked_shows_needing_descendant_backfill, |(id, _)| {
+                *id
+            })
+        })
+        .await
+    {
         Ok(items) => items,
         Err(error) => {
             log::warn!(
@@ -2911,15 +2999,16 @@ async fn run_automatic_movie_metadata_linking(
         }
     };
 
-    for (show_item_id, external_id) in pending_show_backfills {
-        match load_show_descendant_refresh_targets(
-            db,
-            settings,
-            show_item_id,
-            MetadataProviderId::Tmdb,
-            &external_id,
-        )
-        .await
+    for ((show_item_id, external_id), revision) in pending_show_backfills {
+        match revision
+            .scope(load_show_descendant_refresh_targets(
+                db,
+                settings,
+                show_item_id,
+                MetadataProviderId::Tmdb,
+                &external_id,
+            ))
+            .await
         {
             Ok(targets) => {
                 if let Err(status) = mark_metadata_refresh_targets_pending(db, &targets).await {
@@ -3105,6 +3194,7 @@ async fn load_library_refresh_targets(
         .into_iter()
         .filter(|item| item.parent_id.is_none() && supports_manual_metadata_linking(item))
     {
+        let revision = MetadataRevision::current(item.id);
         let item_id = item.id;
         let link = db
             .run(move |conn| get_primary_item_metadata_link(conn, item_id))
@@ -3127,6 +3217,7 @@ async fn load_library_refresh_targets(
             continue;
         };
         targets.push(MetadataRefreshTarget {
+            revision,
             locale_key: None,
             item_id: item.id,
             library_id,
@@ -4229,6 +4320,7 @@ pub async fn link_item_metadata(
     item_id: i32,
     request: Json<LinkMetadataRequest>,
 ) -> Result<Json<ItemMetadataSummary>, Status> {
+    let _reset_guard = metadata_jobs::RESET_REQUEST.lock().await;
     let request = request.into_inner();
     let settings = current_settings();
     let item = db
@@ -4263,7 +4355,49 @@ pub async fn link_item_metadata(
         return Err(Status::BadRequest);
     }
 
+    let languages = metadata_locales_for_provider(
+        request.provider_id.clone(),
+        &load_item_library_metadata_languages(&db, item.library_id).await?,
+    );
+    let (cleared_ids, revision, pending_summary) = db
+        .run({
+            let request = LinkMetadataRequest {
+                provider_id: request.provider_id.clone(),
+                external_id: request.external_id.clone(),
+                media_type: request.media_type.clone(),
+            };
+            move |conn| {
+                metadata_jobs::reset(conn, item_id, false, |conn| {
+                    let mut summary = None;
+                    for locale in languages {
+                        let pending =
+                            crate::metadata::set_item_metadata_refresh_state_in_transaction(
+                                conn,
+                                &crate::metadata::MetadataRefreshStateUpdate {
+                                    item_id,
+                                    provider_id: request.provider_id.clone(),
+                                    external_id: &request.external_id,
+                                    media_type: Some(&request.media_type),
+                                    locale_key: &locale,
+                                    refresh_state: "pending",
+                                    refresh_error: None,
+                                },
+                            )?;
+                        summary.get_or_insert(pending);
+                    }
+                    summary.ok_or(diesel::result::Error::NotFound)
+                })
+            }
+        })
+        .await
+        .map_err(|error| {
+            log::error!("Failed to reset metadata for item {item_id}: {error}");
+            Status::InternalServerError
+        })?;
+    detach_metadata_refresh_items(&cleared_ids).await;
+
     let root_target = MetadataRefreshTarget {
+        revision,
         locale_key: None,
         item_id: item.id,
         library_id: item.library_id,
@@ -4285,19 +4419,10 @@ pub async fn link_item_metadata(
     )
     .await
     else {
-        return Ok(Json(
-            load_metadata_summary_for_item(&db, item_id, request.provider_id.clone()).await?,
-        ));
+        return Ok(Json(pending_summary));
     };
 
-    if let Err(status) = mark_metadata_refresh_targets_pending(&db, &queued_targets).await {
-        cancel_metadata_refresh_activity(&activity_id).await;
-        return Err(status);
-    }
-
-    let pending_summary =
-        load_metadata_summary_for_item(&db, item_id, request.provider_id.clone()).await?;
-    tokio::spawn(async move {
+    tokio::spawn(revision.scope(async move {
         mark_metadata_refresh_activity_running(&activity_id).await;
 
         let mut targets = queued_targets;
@@ -4340,12 +4465,40 @@ pub async fn link_item_metadata(
 
         for target in targets {
             let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
-            record_metadata_refresh_activity_progress(&activity_id, failed).await;
+            record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
-    });
+    }));
 
     Ok(Json(pending_summary))
+}
+
+/// Clear an item's provider metadata immediately and stop automatic matching until it is rematched.
+#[openapi(tag = "Media")]
+#[delete("/api/v1/items/<item_id>/metadata")]
+pub async fn unlink_item_metadata(
+    _admin: AdminGuard,
+    db: DbConn,
+    item_id: i32,
+) -> Result<Status, Status> {
+    let _reset_guard = metadata_jobs::RESET_REQUEST.lock().await;
+    let item = db
+        .run(move |conn| get_media_item_summary(conn, item_id))
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+    if !supports_manual_metadata_linking(&item) {
+        return Err(Status::BadRequest);
+    }
+    let (ids, _, ()) = db
+        .run(move |conn| metadata_jobs::reset(conn, item_id, true, |_| Ok(())))
+        .await
+        .map_err(|error| {
+            log::error!("Failed to unlink metadata for item {item_id}: {error}");
+            Status::InternalServerError
+        })?;
+    detach_metadata_refresh_items(&ids).await;
+    Ok(Status::NoContent)
 }
 
 /// Force-refresh the currently linked metadata snapshot for one media item.
@@ -4356,6 +4509,7 @@ pub async fn refresh_item_metadata(
     db: DbConn,
     item_id: i32,
 ) -> Result<Json<ItemMetadataSummary>, Status> {
+    let revision = MetadataRevision::current(item_id);
     let settings = current_settings();
     let item = db
         .run(move |conn| get_media_item_summary(conn, item_id))
@@ -4390,15 +4544,16 @@ pub async fn refresh_item_metadata(
         MetadataProviderId::from_storage_value(&link.provider_id).ok_or(Status::BadRequest)?;
     let media_type = link.media_type.clone().ok_or(Status::BadRequest)?;
     let external_id = link.external_id.clone();
-    let refresh_job = build_metadata_refresh_job(
-        &db,
-        &settings,
-        &item,
-        provider_id.clone(),
-        &external_id,
-        &media_type,
-    )
-    .await?;
+    let refresh_job = revision
+        .scope(build_metadata_refresh_job(
+            &db,
+            &settings,
+            &item,
+            provider_id.clone(),
+            &external_id,
+            &media_type,
+        ))
+        .await?;
     let refresh_targets = flatten_metadata_refresh_job(&refresh_job);
     let Some((activity_id, queued_targets)) = register_metadata_refresh_activity(
         "item",
@@ -4425,7 +4580,7 @@ pub async fn refresh_item_metadata(
         mark_metadata_refresh_activity_running(&activity_id).await;
         for target in queued_targets {
             let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
-            record_metadata_refresh_activity_progress(&activity_id, failed).await;
+            record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
     });
@@ -4491,7 +4646,12 @@ async fn run_manual_library_metadata_refresh(
                         } else {
                             execute_metadata_refresh_target(&db, &target, &settings).await
                         };
-                        record_metadata_refresh_activity_progress(&activity_id, failed).await;
+                        record_metadata_refresh_activity_progress(
+                            &activity_id,
+                            target.item_id,
+                            failed,
+                        )
+                        .await;
                     }
                 }
                 Err(status) => log::warn!(
@@ -4500,7 +4660,7 @@ async fn run_manual_library_metadata_refresh(
                 ),
             }
             let failed = execute_metadata_refresh_target(&db, &root, &settings).await;
-            record_metadata_refresh_activity_progress(&activity_id, failed).await;
+            record_metadata_refresh_activity_progress(&activity_id, root.item_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
     }
@@ -5016,7 +5176,40 @@ mod tests {
                 .iter()
                 .all(|item| item.metadata_refresh_state.as_deref() == Some("pending"))
         );
+        // Replacing one queued item releases its ownership and removes its old
+        // failure from the library progress while the other item keeps running.
+        record_metadata_refresh_activity_progress(&activity_id, targets[0].item_id, true).await;
+        detach_metadata_refresh_items(&[targets[0].item_id]).await;
+        record_metadata_refresh_activity_progress(&activity_id, targets[0].item_id, true).await;
+        let remaining = current_system_activities()
+            .await
+            .into_iter()
+            .find(|entry| entry.id == activity_id)
+            .unwrap();
+        assert_eq!(remaining.item_ids, vec![targets[1].item_id]);
+        assert_eq!(remaining.total_items, 1);
+        assert_eq!(remaining.completed_items, 0);
+        assert_eq!(remaining.failed_items, 0);
+        let (replacement_id, replacement) = register_metadata_refresh_activity(
+            "item",
+            "manual_item_link",
+            "Replacement".into(),
+            Some(LIBRARY_ID),
+            Some(targets[0].item_id),
+            vec![targets[0].clone()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(replacement.len(), 1);
         cancel_metadata_refresh_activity(&activity_id).await;
+        assert_eq!(
+            ACTIVE_METADATA_REFRESH_ITEMS
+                .read()
+                .await
+                .get(&targets[0].item_id),
+            Some(&replacement_id)
+        );
+        cancel_metadata_refresh_activity(&replacement_id).await;
         if let Some((id, _)) = prepared.automatch_activity {
             cancel_metadata_refresh_activity(&id).await;
         }

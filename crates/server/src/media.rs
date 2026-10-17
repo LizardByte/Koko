@@ -1095,6 +1095,7 @@ pub fn get_persisted_library_summaries(
                     .eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()),
             )
             .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
             .select(ItemMetadataLink::as_select())
             .load::<ItemMetadataLink>(conn)?
             .into_iter()
@@ -5542,6 +5543,7 @@ fn preferred_metadata_links_by_item_id(
     let rows = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::media_item_id.eq_any(item_ids))
         .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
         .order((
             item_metadata_links_dsl::media_item_id.asc(),
             item_metadata_links_dsl::updated_at.desc(),
@@ -5833,6 +5835,7 @@ fn prioritized_metadata_links_for_item(
 
     let mut rows = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
         .filter(item_metadata_links_dsl::relation_kind.eq_any(["primary", "secondary"]))
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?

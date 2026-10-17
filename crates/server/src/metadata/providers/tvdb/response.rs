@@ -106,17 +106,23 @@ pub(super) struct SeasonBaseRecord {
     pub r#type: Option<Box<SeasonType>>,
 }
 
-/// Consumed fields from `GET /seasons/{id}/extended`. As with movies,
-/// unused company categories must not be decoded through the stale SDK model.
+/// Consumed fields from `GET /seasons/{id}/extended?meta=translations`.
+/// This query returns a TranslationExtended object, unlike the translation
+/// list declared by the SDK's season model. Discovery uses SeasonEpisodes.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(super) struct SeasonExtendedRecord {
     pub id: Option<i32>,
     pub name: Option<String>,
     pub image: Option<String>,
     pub year: Option<String>,
-    pub translations: Option<Vec<Translation>>,
+    pub translations: Option<Box<TranslationExtended>>,
     pub artwork: Option<Vec<ArtworkBaseRecord>>,
     pub trailers: Option<Vec<Trailer>>,
+}
+
+/// Episode identities from the season discovery request without `meta`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(super) struct SeasonEpisodes {
     pub episodes: Option<Vec<EpisodeBaseRecord>>,
 }
 
@@ -181,7 +187,6 @@ pub(super) struct Fields<'a> {
     pub year: Option<&'a str>,
     pub date: Option<&'a str>,
     pub translations: Option<&'a TranslationExtended>,
-    pub season_translations: &'a [Translation],
     pub artworks: Vec<Artwork<'a>>,
     pub genres: &'a [GenreBaseRecord],
     pub ratings: &'a [ContentRating],
@@ -247,7 +252,6 @@ impl Record for SeriesExtendedRecord {
             ratings: self.content_ratings.as_deref().unwrap_or_default(),
             trailers: self.trailers.as_deref().unwrap_or_default(),
             remote_ids: self.remote_ids.as_deref().unwrap_or_default(),
-            ..Fields::default()
         }
     }
 
@@ -262,7 +266,7 @@ impl Record for SeasonExtendedRecord {
             name: self.name.as_deref(),
             image: self.image.as_deref(),
             year: self.year.as_deref(),
-            season_translations: self.translations.as_deref().unwrap_or_default(),
+            translations: self.translations.as_deref(),
             artworks: self
                 .artwork
                 .as_deref()
@@ -414,11 +418,11 @@ pub(super) fn snapshot<T: Record>(
     let name_records = fields
         .translations
         .and_then(|values| values.name_translations.as_deref())
-        .unwrap_or(fields.season_translations);
+        .unwrap_or_default();
     let overview_records = fields
         .translations
         .and_then(|values| values.overview_translations.as_deref())
-        .unwrap_or(fields.season_translations);
+        .unwrap_or_default();
     let title = response
         .translation
         .as_ref()

@@ -290,7 +290,7 @@ pub(crate) async fn load_show_descendant_targets(
         ) else {
             continue;
         };
-        let season: Response<SeasonExtendedRecord> = get_json(
+        let season: Response<response::SeasonEpisodes> = get_json(
             &provider,
             &format!("seasons/{id}/extended"),
             Vec::new(),
@@ -1182,23 +1182,30 @@ mod tests {
             assert_eq!(seasons[0].id, Some(9900));
             assert_eq!(seasons[0].number, Some(1));
 
+            let discovery: Response<response::SeasonEpisodes> = serde_json::from_value(json!({
+                "data": {
+                    "companies": companies,
+                    "episodes": [{"id": 12345, "number": 1}]
+                }
+            }))
+            .unwrap();
+            let episode = &discovery.data.episodes.as_ref().unwrap()[0];
+            assert_eq!(episode.id, Some(12345));
+            assert_eq!(episode.number, Some(1));
+
             let season: Response<SeasonExtendedRecord> = serde_json::from_value(json!({
                 "data": {
                     "id": 9900,
                     "companies": companies,
                     "episodes": [{"id": 12345, "number": 1}],
-                    "translations": [{
-                        "language": "eng",
-                        "name": "Season One",
-                        "overview": "Season overview"
-                    }],
+                    "translations": {
+                        "nameTranslations": [{"language": "eng", "name": "Season One"}],
+                        "overviewTranslations": [{"language": "eng", "overview": "Season overview"}]
+                    },
                     "artwork": [{"type": 7, "image": "/season.jpg"}]
                 }
             }))
             .unwrap();
-            let episode = &season.data.episodes.as_ref().unwrap()[0];
-            assert_eq!(episode.id, Some(12345));
-            assert_eq!(episode.number, Some(1));
             let snapshot = response::snapshot(&season, "9900", "season", "eng");
             assert_eq!(snapshot.title.as_deref(), Some("Season One"));
             assert_eq!(snapshot.overview.as_deref(), Some("Season overview"));
@@ -1261,6 +1268,50 @@ mod tests {
             response::person_details(&person, "fra").unwrap().biography,
             None
         );
+    }
+
+    #[test]
+    fn season_metadata_decodes_the_translation_object_for_the_requested_locale() {
+        // `meta=translations` uses the same object fields as series/movies,
+        // while the discovery request omits this object entirely.
+        let record: Response<SeasonExtendedRecord> = serde_json::from_value(json!({
+            "data": {
+                "id": 492243,
+                "image": "/season.jpg",
+                "year": "2012",
+                "translations": {
+                    "nameTranslations": [
+                        {"language": "eng", "name": "Season One"},
+                        {"language": "spa", "name": "Temporada Uno"}
+                    ],
+                    "overviewTranslations": [
+                        {"language": "eng", "overview": "English overview"},
+                        {"language": "spa", "overview": "Spanish overview"}
+                    ],
+                    "aliases": []
+                }
+            }
+        }))
+        .unwrap();
+        for (language, title, overview) in [
+            ("eng", "Season One", "English overview"),
+            ("spa", "Temporada Uno", "Spanish overview"),
+        ] {
+            let snapshot = response::snapshot(&record, "492243", "season", language);
+            assert_eq!(snapshot.title.as_deref(), Some(title));
+            assert_eq!(snapshot.overview.as_deref(), Some(overview));
+            assert_eq!(snapshot.release_year, Some(2012));
+            assert_eq!(
+                snapshot.artwork_url.as_deref(),
+                Some("https://artworks.thetvdb.com/season.jpg")
+            );
+            let stored: Response<SeasonExtendedRecord> =
+                serde_json::from_str(snapshot.provider_payload_json.as_deref().unwrap()).unwrap();
+            assert_eq!(
+                response::snapshot(&stored, "492243", "season", language).overview,
+                snapshot.overview
+            );
+        }
     }
 
     #[test]

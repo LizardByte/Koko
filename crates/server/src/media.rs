@@ -113,6 +113,7 @@ struct SummaryMetadataLink {
     cached_backdrop_path: Option<String>,
     refresh_state: String,
     refresh_error: Option<String>,
+    last_refreshed_at: Option<i64>,
     updated_at: Option<i64>,
     locale_key: String,
 }
@@ -304,9 +305,9 @@ pub struct MediaItemSummary {
     pub backdrop_url: Option<String>,
     /// Local or managed title logo URL, when available.
     pub logo_url: Option<String>,
-    /// Whether the item currently has linked metadata.
+    /// Whether primary metadata has been successfully saved for this item.
     pub has_metadata: bool,
-    /// Current metadata refresh state when metadata exists.
+    /// Current metadata refresh state, including pending or failed initial matches.
     pub metadata_refresh_state: Option<String>,
     /// Last metadata refresh error, when available.
     pub metadata_refresh_error: Option<String>,
@@ -422,9 +423,9 @@ pub struct MediaItemDetail {
     pub content_rating: Option<String>,
     /// Linked metadata media type such as movie or tv.
     pub linked_media_type: Option<String>,
-    /// Whether the item currently has linked metadata.
+    /// Whether primary metadata has been successfully saved for this item.
     pub has_metadata: bool,
-    /// Current metadata refresh state when metadata exists.
+    /// Current metadata refresh state, including pending or failed initial matches.
     pub metadata_refresh_state: Option<String>,
     /// Last metadata refresh error, when available.
     pub metadata_refresh_error: Option<String>,
@@ -677,6 +678,8 @@ pub struct PlaybackSession {
 pub struct AutomaticMetadataCandidate {
     /// Stable item identifier.
     pub item_id: i32,
+    /// Owning library identifier for refresh job context.
+    pub library_id: i32,
     /// Library-relative media path.
     pub relative_path: String,
     /// Current display title derived from scan data.
@@ -1092,6 +1095,7 @@ pub fn get_persisted_library_summaries(
                     .eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()),
             )
             .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+            .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
             .select(ItemMetadataLink::as_select())
             .load::<ItemMetadataLink>(conn)?
             .into_iter()
@@ -2810,6 +2814,7 @@ fn list_automatic_metadata_candidates_with_options(
 
         candidates.push(AutomaticMetadataCandidate {
             item_id: media_item_id,
+            library_id: library.id,
             relative_path: row.relative_path.clone(),
             display_title: row
                 .display_title
@@ -2847,6 +2852,7 @@ fn list_automatic_metadata_candidates_with_options(
 
         candidates.push(AutomaticMetadataCandidate {
             item_id: row.id,
+            library_id: library.id,
             relative_path: row.relative_path.unwrap_or_default(),
             display_title: row.display_title,
             modified_at: row.modified_at,
@@ -2950,7 +2956,7 @@ pub fn get_media_item_with_preferred_languages(
         }
         detail.content_rating = presentation.content_rating;
         detail.linked_media_type = presentation.media_type;
-        detail.has_metadata = true;
+        detail.has_metadata = primary_link.is_some_and(|link| link.last_refreshed_at.is_some());
         if let Some(link) = primary_link {
             detail.metadata_refresh_state = Some(link.refresh_state.clone());
             detail.metadata_refresh_error = link.refresh_error.clone();
@@ -5475,6 +5481,7 @@ fn summary_metadata_link_from_full_link(link: &ItemMetadataLink) -> SummaryMetad
         cached_backdrop_path: link.cached_backdrop_path.clone(),
         refresh_state: link.refresh_state.clone(),
         refresh_error: link.refresh_error.clone(),
+        last_refreshed_at: link.last_refreshed_at,
         updated_at: link.updated_at,
         locale_key: link.locale_key.clone(),
     }
@@ -5514,7 +5521,9 @@ fn apply_primary_metadata_link(
     if link.cached_logo_path.is_some() || link.logo_url.is_some() {
         summary.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", summary.id));
     }
-    summary.has_metadata = true;
+    // A pending/error link can reserve a provider identity before any snapshot
+    // has been saved. Only a completed snapshot means metadata is available.
+    summary.has_metadata = link.last_refreshed_at.is_some();
     summary.metadata_refresh_state = Some(link.refresh_state.clone());
     summary.metadata_refresh_error = link.refresh_error.clone();
     summary.artwork_updated_at = link.updated_at;
@@ -5534,6 +5543,7 @@ fn preferred_metadata_links_by_item_id(
     let rows = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::media_item_id.eq_any(item_ids))
         .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
         .order((
             item_metadata_links_dsl::media_item_id.asc(),
             item_metadata_links_dsl::updated_at.desc(),
@@ -5551,6 +5561,7 @@ fn preferred_metadata_links_by_item_id(
             item_metadata_links_dsl::cached_backdrop_path,
             item_metadata_links_dsl::refresh_state,
             item_metadata_links_dsl::refresh_error,
+            item_metadata_links_dsl::last_refreshed_at,
             item_metadata_links_dsl::updated_at,
             item_metadata_links_dsl::locale_key,
             item_metadata_links_dsl::provider_id,
@@ -5568,6 +5579,7 @@ fn preferred_metadata_links_by_item_id(
             Option<String>,
             String,
             Option<String>,
+            Option<i64>,
             Option<i64>,
             String,
             String,
@@ -5587,6 +5599,7 @@ fn preferred_metadata_links_by_item_id(
                 cached_backdrop_path,
                 refresh_state,
                 refresh_error,
+                last_refreshed_at,
                 updated_at,
                 locale_key,
                 provider_id,
@@ -5605,6 +5618,7 @@ fn preferred_metadata_links_by_item_id(
                 cached_backdrop_path,
                 refresh_state,
                 refresh_error,
+                last_refreshed_at,
                 updated_at,
                 locale_key,
             },
@@ -5821,6 +5835,7 @@ fn prioritized_metadata_links_for_item(
 
     let mut rows = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
         .filter(item_metadata_links_dsl::relation_kind.eq_any(["primary", "secondary"]))
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?
@@ -6418,6 +6433,7 @@ mod tests {
             cached_backdrop_path: None,
             refresh_state: "fresh".into(),
             refresh_error: None,
+            last_refreshed_at: Some(1),
             updated_at: None,
             locale_key: "en-US".into(),
         };

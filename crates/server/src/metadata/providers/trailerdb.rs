@@ -1,4 +1,5 @@
-use serde_json::Value;
+use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
@@ -53,7 +54,7 @@ pub(crate) async fn fetch_secondary_metadata(
         return Ok(None);
     };
 
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get(format!("{TRAILERDB_DATA_BASE}/{path}.json"))
         .send()
         .await
@@ -70,7 +71,7 @@ pub(crate) async fn fetch_secondary_metadata(
     }
 
     let payload = response.text().await.map_err(|error| error.to_string())?;
-    Ok(parse_youtube_trailer(&payload, locale_key))
+    parse_youtube_trailer(&payload, locale_key, item_type)
 }
 
 fn trailerdb_path(
@@ -93,159 +94,194 @@ fn trailerdb_path(
     }
 }
 
+// Movie and series detail responses have different documented video fields.
+// https://trailerdb.org/data/movie/tt0133093.json
+// https://trailerdb.org/data/series/1399.json
+#[derive(Deserialize)]
+struct MovieResponse {
+    trailer_groups: Option<Vec<TrailerGroup>>,
+    trailers: Option<Vec<MovieTrailer>>,
+}
+
+#[derive(Deserialize)]
+struct SeriesResponse {
+    trailers: Option<Vec<SeriesTrailer>>,
+}
+
+#[derive(Deserialize)]
+struct TrailerGroup {
+    #[serde(rename = "type")]
+    extra_type: String,
+    title: Option<String>,
+    languages: BTreeMap<String, LocalizedTrailer>,
+}
+
+#[derive(Deserialize)]
+struct LocalizedTrailer {
+    youtube_id: String,
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MovieTrailer {
+    youtube_id: String,
+    title: Option<String>,
+    #[serde(rename = "type")]
+    extra_type: String,
+    language: String,
+    is_official: Option<bool>,
+    duration: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct SeriesTrailer {
+    youtube_id: String,
+    title: Option<String>,
+    trailer_type: String,
+    language: String,
+    is_official: Option<bool>,
+}
+
 fn parse_youtube_trailer(
     payload_json: &str,
     locale_key: &str,
-) -> Option<ProviderMetadataDetails> {
-    let payload = serde_json::from_str::<Value>(payload_json).ok()?;
+    item_type: &str,
+) -> Result<Option<ProviderMetadataDetails>, String> {
     let language = provider_locale_key(locale_key);
-
-    let mut extras = extras_from_groups(payload.get("trailer_groups"), &language);
-    if extras.is_empty() {
-        extras = extras_from_entries(payload.get("trailers"), &language);
-    }
-    if extras.is_empty() {
-        return None;
-    }
-
-    let preferred_trailer = extras
+    let extras = match item_type {
+        "movie" => {
+            let response: MovieResponse = serde_json::from_str(payload_json)
+                .map_err(|error| format!("TrailerDB movie returned invalid response: {error}"))?;
+            let groups = extras_from_groups(response.trailer_groups.unwrap_or_default(), &language);
+            if groups.is_empty() {
+                extras_from_entries(response.trailers.unwrap_or_default(), &language)
+            } else {
+                groups
+            }
+        }
+        "show" => {
+            let response: SeriesResponse = serde_json::from_str(payload_json)
+                .map_err(|error| format!("TrailerDB series returned invalid response: {error}"))?;
+            let entries = response
+                .trailers
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| MovieTrailer {
+                    youtube_id: entry.youtube_id,
+                    title: entry.title,
+                    extra_type: entry.trailer_type,
+                    language: entry.language,
+                    is_official: entry.is_official,
+                    duration: None,
+                })
+                .collect();
+            extras_from_entries(entries, &language)
+        }
+        _ => return Ok(None),
+    };
+    let Some(trailer) = extras
         .iter()
         .find(|extra| extra.extra_type == METADATA_EXTRA_TYPE_TRAILER)
-        .or_else(|| extras.first());
-    Some(ProviderMetadataDetails {
-        trailer_title: preferred_trailer.and_then(|extra| extra.title.clone()),
-        trailer_url: preferred_trailer.map(|extra| extra.url.clone()),
+        .or_else(|| extras.first())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ProviderMetadataDetails {
+        trailer_title: trailer.title.clone(),
+        trailer_url: Some(trailer.url.clone()),
         extras,
         ..ProviderMetadataDetails::default()
-    })
+    }))
 }
 
 fn extras_from_groups(
-    groups: Option<&Value>,
+    groups: Vec<TrailerGroup>,
     language: &str,
 ) -> Vec<ProviderMetadataExtra> {
     groups
-        .and_then(Value::as_array)
-        .map(|groups| {
-            groups
-                .iter()
-                .enumerate()
-                .filter_map(|(index, group)| {
-                    let languages = group.get("languages")?.as_object()?;
-                    let translation = languages
-                        .iter()
-                        .find(|(key, _)| key.eq_ignore_ascii_case(language))
-                        .map(|(_, value)| value)?;
-                    let youtube_id = text_field(translation, &["youtube_id"])?;
-                    let url = youtube_watch_url(&youtube_id)?;
-                    let extra_type = normalize_metadata_extra_type(&text_field(group, &["type"])?)
-                        .unwrap_or_else(|| METADATA_EXTRA_TYPE_TRAILER.to_string());
-                    let title = text_field(translation, &["title"])
-                        .or_else(|| text_field(group, &["title"]));
-                    Some(ProviderMetadataExtra {
-                        extra_type,
-                        title,
-                        url,
-                        duration_seconds: None,
-                        thumbnail_url: None,
-                        sort_order: index as i32,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn extras_from_entries(
-    trailers: Option<&Value>,
-    language: &str,
-) -> Vec<ProviderMetadataExtra> {
-    let Some(trailers) = trailers.and_then(Value::as_array) else {
-        return Vec::new();
-    };
-
-    let mut entries = trailers
-        .iter()
-        .enumerate()
-        .filter(|entry| {
-            text_field(entry.1, &["language"])
-                .as_deref()
-                .is_some_and(|entry_language| entry_language.eq_ignore_ascii_case(language))
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by(|(left_index, left), (right_index, right)| {
-        trailer_entry_score(right)
-            .cmp(&trailer_entry_score(left))
-            .then_with(|| left_index.cmp(right_index))
-    });
-
-    entries
         .into_iter()
         .enumerate()
-        .filter_map(|(sort_order, (_, entry))| extra_from_entry(entry, sort_order as i32))
+        .filter_map(|(index, group)| {
+            let translation = group
+                .languages
+                .into_iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(language))?
+                .1;
+            Some(ProviderMetadataExtra {
+                extra_type: normalize_metadata_extra_type(&group.extra_type)?,
+                title: translation.title.or(group.title),
+                url: youtube_watch_url(&translation.youtube_id)?,
+                duration_seconds: None,
+                thumbnail_url: None,
+                sort_order: index as i32,
+            })
+        })
         .collect()
 }
 
-fn extra_from_entry(
-    entry: &Value,
-    sort_order: i32,
-) -> Option<ProviderMetadataExtra> {
-    let youtube_id = text_field(entry, &["youtube_id"])?;
-    let url = youtube_watch_url(&youtube_id)?;
-    let extra_type = text_field(entry, &["type", "trailer_type"])
-        .and_then(|value| normalize_metadata_extra_type(&value))
-        .unwrap_or_else(|| METADATA_EXTRA_TYPE_TRAILER.to_string());
-    Some(ProviderMetadataExtra {
-        extra_type,
-        title: text_field(entry, &["title"]),
-        url,
-        duration_seconds: int_field(entry, &["duration", "duration_seconds"]),
-        thumbnail_url: text_field(entry, &["thumbnail_url", "thumbnail"]),
-        sort_order,
-    })
-}
-
-fn trailer_entry_score(entry: &Value) -> (i32, i32) {
-    let official_score = entry
-        .get("is_official")
-        .and_then(Value::as_bool)
-        .map(i32::from)
-        .unwrap_or(0);
-    let trailer_type_score = text_field(entry, &["type", "trailer_type"])
-        .map(|value| value.eq_ignore_ascii_case("trailer") as i32)
-        .unwrap_or(0);
-    (official_score, trailer_type_score)
-}
-
-fn text_field(
-    value: &Value,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn int_field(
-    value: &Value,
-    keys: &[&str],
-) -> Option<i32> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .filter(|value| *value > 0)
-    })
+fn extras_from_entries(
+    entries: Vec<MovieTrailer>,
+    language: &str,
+) -> Vec<ProviderMetadataExtra> {
+    let mut entries = entries
+        .into_iter()
+        .filter(|entry| entry.language.eq_ignore_ascii_case(language))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| {
+        std::cmp::Reverse((
+            entry.is_official.unwrap_or(false),
+            entry.extra_type.eq_ignore_ascii_case("trailer"),
+        ))
+    });
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            Some(ProviderMetadataExtra {
+                extra_type: normalize_metadata_extra_type(&entry.extra_type)?,
+                title: entry.title,
+                url: youtube_watch_url(&entry.youtube_id)?,
+                duration_seconds: entry.duration.filter(|value| *value > 0),
+                thumbnail_url: None,
+                sort_order: index as i32,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn series_response_uses_trailer_type_and_rejects_movie_alias() {
+        let payload = serde_json::json!({
+            "trailers": [
+                {
+                    "youtube_id": "abcdefghijk",
+                    "title": "Trailer",
+                    "trailer_type": "trailer",
+                    "language": "en"
+                }
+            ]
+        })
+        .to_string();
+        assert!(
+            super::parse_youtube_trailer(&payload, "en-US", "show")
+                .unwrap()
+                .is_some()
+        );
+        let payload = serde_json::json!({
+            "trailers": [
+                {
+                    "youtube_id": "abcdefghijk",
+                    "title": "Trailer",
+                    "type": "trailer",
+                    "language": "en"
+                }
+            ]
+        })
+        .to_string();
+        assert!(super::parse_youtube_trailer(&payload, "en-US", "show").is_err());
+    }
     use super::{
         parse_youtube_trailer,
         trailerdb_path,
@@ -295,14 +331,19 @@ mod tests {
         })
         .to_string();
 
-        let trailer = parse_youtube_trailer(&payload, "es-ES").expect("Expected trailer");
+        let trailer = parse_youtube_trailer(&payload, "es-ES", "movie")
+            .unwrap()
+            .expect("Expected trailer");
 
         assert_eq!(trailer.trailer_title.as_deref(), Some("Trailer oficial"));
         assert_eq!(
             trailer.trailer_url.as_deref(),
             Some("https://www.youtube.com/watch?v=ZYXWVUT9876")
         );
-        assert_eq!(parse_youtube_trailer(&payload, "fr-FR"), None);
+        assert_eq!(
+            parse_youtube_trailer(&payload, "fr-FR", "movie").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -336,7 +377,9 @@ mod tests {
         })
         .to_string();
 
-        let trailer = parse_youtube_trailer(&payload, "es").expect("Expected trailer");
+        let trailer = parse_youtube_trailer(&payload, "es", "movie")
+            .unwrap()
+            .expect("Expected trailer");
 
         assert_eq!(trailer.trailer_title.as_deref(), Some("Trailer oficial"));
         assert_eq!(
@@ -352,5 +395,15 @@ mod tests {
             vec!["trailer", "clip"]
         );
         assert_eq!(trailer.extras[0].duration_seconds, Some(148));
+    }
+
+    #[test]
+    fn invalid_trailer_response_is_an_error_instead_of_a_definitive_miss() {
+        assert!(parse_youtube_trailer("<html>unavailable</html>", "en-US", "movie").is_err());
+        assert!(
+            parse_youtube_trailer(r#"{"trailers": []}"#, "en-US", "movie")
+                .unwrap()
+                .is_none()
+        );
     }
 }

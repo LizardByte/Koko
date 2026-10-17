@@ -35,6 +35,7 @@ const ADMIN_ROUTES: &[(Method, &str)] = &[
     (Method::Post, "/api/v1/libraries/1/metadata/refresh"),
     (Method::Get, "/api/v1/items/1/metadata/search?query=film"),
     (Method::Post, "/api/v1/items/1/metadata/link"),
+    (Method::Delete, "/api/v1/items/1/metadata"),
     (Method::Post, "/api/v1/items/1/metadata/refresh"),
 ];
 
@@ -148,6 +149,97 @@ async fn fixture() -> (Client, String, String) {
         .await
         .unwrap();
     (client, admin, viewer)
+}
+
+#[rocket::async_test]
+async fn administrator_unlink_clears_the_tree_before_returning_without_provider_credentials() {
+    let (client, admin, _) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "UPDATE media_items SET item_type='show' WHERE id=1;
+            UPDATE item_metadata_links SET title='Wrong show',overview='Old metadata',
+                last_refreshed_at=1 WHERE media_item_id=1;
+            INSERT INTO media_items
+                (id,library_id,parent_id,identity_key,item_type,display_title) VALUES
+            (11,1,1,'season','season','Season 1'), (12,1,11,'episode','episode','Episode 1');
+            INSERT INTO item_metadata_links
+                (media_item_id,provider_id,external_id,title,last_refreshed_at) VALUES
+            (11,'tmdb','old-season','Wrong season',1),
+            (12,'tmdb','old-episode','Wrong episode',1);",
+        )
+        .unwrap();
+    })
+    .await;
+    // Release the pooled connection before the route acquires its own.
+    drop(db);
+    response(
+        &client,
+        Method::Delete,
+        "/api/v1/items/1/metadata",
+        Some(&admin),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            for id in [1, 11, 12] {
+                assert!(
+                    koko::metadata::get_item_metadata_summaries(conn, id)
+                        .unwrap()
+                        .is_empty()
+                );
+                let item = koko::media::get_media_item_summary(conn, id)
+                    .unwrap()
+                    .unwrap();
+                assert!(!item.has_metadata);
+                assert!(item.overview.is_none());
+            }
+            assert_eq!(
+                koko::media::get_media_item_summary(conn, 1)
+                    .unwrap()
+                    .unwrap()
+                    .display_title,
+                "Visible film"
+            );
+            assert_eq!(
+                koko::metadata::get_item_metadata_summaries(conn, 2)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        })
+        .await;
+    response(
+        &client,
+        Method::Delete,
+        "/api/v1/items/1/metadata",
+        Some(&admin),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Delete,
+        "/api/v1/items/11/metadata",
+        Some(&admin),
+        json!({}),
+        Status::BadRequest,
+    )
+    .await;
+    response(
+        &client,
+        Method::Delete,
+        "/api/v1/items/999/metadata",
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
 }
 
 #[rocket::async_test]

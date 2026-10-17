@@ -1414,46 +1414,97 @@ export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProg
   }
 }
 
+const mockMetadataRevisions = new Map<number, number>();
+const mockCatalogTitles = new Map(items.map((item) => [item.id, item.display_title]));
+
+function clearMockItemMetadataTree(itemId: number): MediaItemDetail {
+  const root = items.find((item) => item.id === itemId);
+  if (!root) {
+    throw new Error('404 Not Found');
+  }
+  if (!['movie', 'show'].includes(root.item_type)) {
+    throw new Error('400 Bad Request');
+  }
+  const ids = new Set([itemId]);
+  for (const id of ids) {
+    items.filter((item) => item.parent_id === id).forEach((item) => ids.add(item.id));
+  }
+  const clear = (item: MediaItemSummary): void => {
+    if (!ids.has(item.id)) {
+      return;
+    }
+    const detail = item as MediaItemDetail;
+    detail.display_title = mockCatalogTitles.get(item.id) ?? item.display_title;
+    detail.has_metadata = false;
+    detail.genres = [];
+    detail.extras = [];
+    for (const key of [
+      'poster_url', 'backdrop_url', 'logo_url', 'artwork_item_id', 'artwork_updated_at',
+      'overview', 'tagline', 'rating', 'rating_provider_id', 'rating_source_item_type',
+      'release_year', 'content_rating', 'linked_media_type', 'theme_song_url',
+      'trailer_title', 'trailer_url', 'metadata_refresh_state', 'metadata_refresh_error',
+    ] as const) {
+      delete detail[key];
+    }
+  };
+  for (const item of items) {
+    clear(item);
+    item.children.forEach(clear);
+    item.hierarchy.forEach(clear);
+    if (ids.has(item.id)) {
+      mockMetadataRevisions.set(item.id, (mockMetadataRevisions.get(item.id) ?? 0) + 1);
+      itemMetadata[item.id] = { item_id: item.id, providers: metadataProviders, matches: [] };
+    }
+  }
+  syncMockLibraryRefreshProgress(root.library_id);
+  return root;
+}
+
+export function unlinkMockItemMetadata(itemId: number): void {
+  clearMockItemMetadataTree(itemId);
+}
+
 export function linkMockItemMetadata(itemId: number, request: LinkMetadataRequest): ItemMetadataMatch {
-  const candidate = (metadataSearchResults[itemId] ?? []).find((result) => {
-    return result.provider_id === request.provider_id
-      && result.external_id === request.external_id
-      && result.media_type === request.media_type;
-  });
+  const candidates = metadataSearchResults[itemId] ?? (itemId === 201 ? metadataSearchResults[203] : []);
+  const candidate = candidates.find((result) => result.provider_id === request.provider_id
+    && result.external_id === request.external_id && result.media_type === request.media_type);
   if (!candidate) {
     throw new Error('404 Not Found');
   }
-
-  const linkedMatch: ItemMetadataMatch = {
+  const item = clearMockItemMetadataTree(itemId);
+  const revision = mockMetadataRevisions.get(itemId);
+  const pendingMatch: ItemMetadataMatch = {
     id: Date.now(),
     provider_id: candidate.provider_id,
     external_id: candidate.external_id,
-    title: candidate.title,
-    overview: candidate.overview,
-    artwork_url: candidate.artwork_url,
-    backdrop_url: candidate.backdrop_url,
-    release_year: candidate.release_year,
     media_type: candidate.media_type,
     relation_kind: 'primary',
     match_state: 'linked',
+    refresh_state: 'pending',
     genres: [],
     people: [],
     locale_key: 'en-US',
     updated_at: Math.floor(Date.now() / 1000),
   };
-
-  const item = items.find((candidate) => candidate.id === itemId);
-
-  itemMetadata[itemId] = {
-    item_id: itemId,
-    providers: metadataProviders,
-    matches: metadataMatchesWithSecondaries(item, linkedMatch),
-  };
-  if (item) {
+  itemMetadata[itemId] = { item_id: itemId, providers: metadataProviders, matches: [pendingMatch] };
+  item.metadata_refresh_state = 'pending';
+  syncMockLibraryRefreshProgress(item.library_id);
+  globalThis.setTimeout(() => {
+    if (mockMetadataRevisions.get(itemId) !== revision) {
+      return;
+    }
+    const linkedMatch: ItemMetadataMatch = { ...pendingMatch, ...candidate, refresh_state: 'fresh' };
+    itemMetadata[itemId].matches = metadataMatchesWithSecondaries(item, linkedMatch);
     item.display_title = candidate.title;
-  }
-
-  return linkedMatch;
+    item.overview = candidate.overview;
+    item.poster_url = candidate.artwork_url;
+    item.backdrop_url = candidate.backdrop_url;
+    item.release_year = candidate.release_year ?? undefined;
+    item.has_metadata = true;
+    item.metadata_refresh_state = 'fresh';
+    syncMockLibraryRefreshProgress(item.library_id);
+  }, 900);
+  return pendingMatch;
 }
 
 function getMockPersonCreditsForMatch(
@@ -1531,6 +1582,7 @@ export function getMockPerson(personId: number): MetadataPersonResponse {
 }
 
 export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
+  const revision = mockMetadataRevisions.get(itemId);
   const response = itemMetadata[itemId];
   const existingMatch = response?.matches.find((match) => match.relation_kind === 'primary')
     ?? response?.matches[0];
@@ -1555,6 +1607,9 @@ export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {
     syncMockLibraryRefreshProgress(item.library_id);
 
     globalThis.setTimeout(() => {
+      if (mockMetadataRevisions.get(itemId) !== revision) {
+        return;
+      }
       const source = (metadataSearchResults[itemId] ?? []).find((candidate) => {
         return candidate.provider_id === existingMatch.provider_id
           && candidate.external_id === existingMatch.external_id
@@ -1596,6 +1651,7 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
   }
 
   const refreshableItems = items.filter((item) => item.library_id === libraryId && item.has_metadata);
+  const revisions = new Map(refreshableItems.map((item) => [item.id, mockMetadataRevisions.get(item.id)]));
   refreshableItems.forEach((item) => {
     item.metadata_refresh_state = 'pending';
     const response = itemMetadata[item.id];
@@ -1617,6 +1673,9 @@ export function refreshMockLibraryMetadata(libraryId: number): MediaLibrary {
   globalThis.setTimeout(() => {
     const refreshedAt = Math.floor(Date.now() / 1000);
     refreshableItems.forEach((item) => {
+      if (mockMetadataRevisions.get(item.id) !== revisions.get(item.id)) {
+        return;
+      }
       item.metadata_refresh_state = 'fresh';
       item.artwork_updated_at = refreshedAt;
       const response = itemMetadata[item.id];

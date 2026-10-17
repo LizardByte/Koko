@@ -419,6 +419,11 @@ function mediaCardDynamicBadges(badgeMarkup: string, playbackBadgeMarkup: string
     `;
 }
 
+/** Overlay the shared refresh indicator on any item's artwork. */
+export function renderMetadataRefreshBadge(item: MediaItemSummary): string {
+  return itemIsMetadataPending(item) ? mediaCardDynamicBadges(metadataBadgeMarkup(item), '') : '';
+}
+
 export function renderItemCard(item: MediaItemSummary): string {
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const artworkItemId = item.artwork_item_id ?? item.id;
@@ -843,6 +848,13 @@ function renderLibraryPagination(count: number, page: number, lastPage: number):
   </nav>`;
 }
 
+function renderLibraryRefreshStatus(library?: MediaLibrary): string {
+  const refreshProgress = library ? metadataRefreshActivityProgressForLibrary(library.id) : undefined;
+  if (!refreshProgress) return '';
+  const failureStatus = refreshProgress.failed ? ` · ${refreshProgress.failed} failed` : '';
+  return `<span class="tag warning" role="status">Refreshing metadata ${refreshProgress.completed}/${refreshProgress.total}${failureStatus}</span>`;
+}
+
 export function renderLibraryTab(): string {
   const items = visibleLibraryItems();
   const library = activeLibrary();
@@ -871,6 +883,7 @@ export function renderLibraryTab(): string {
       <div class="shelf-header browse-section-header" data-nav-section="library-tools" data-nav-label="Library controls">
         <h3>${isSpecificLibrary ? escapeHtml(library?.name ?? 'Library') : 'All libraries'}</h3>
         <div class="browse-header-actions">
+          ${renderLibraryRefreshStatus(library)}
           <span role="status">${items.length} title${items.length === 1 ? '' : 's'}</span>
           <button type="button" class="secondary-button browse-filter-toggle ${filterCount ? 'has-filters' : ''}" id="toggle-library-filters" aria-expanded="${state.browseFiltersOpen}" aria-controls="library-browse-form" aria-label="Filters: ${filterStatus}" title="${filterStatus}">${renderButtonContent(filterLabel, 'sliders-horizontal')}</button>
         </div>

@@ -20,6 +20,7 @@ use std::time::Duration;
 // lib imports
 use diesel::{
     BoolExpressionMethods,
+    Connection,
     ExpressionMethods,
     JoinOnDsl,
     OptionalExtension,
@@ -44,6 +45,9 @@ use sha2::{
 };
 use strsim::normalized_levenshtein;
 
+mod artwork;
+pub(crate) mod cache_policy;
+pub(crate) mod http;
 mod providers;
 pub use providers::{
     MetadataProvider,
@@ -982,6 +986,7 @@ pub fn get_item_metadata_summaries(
 
     let rows = metadata_links_dsl::item_metadata_links
         .filter(metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(metadata_links_dsl::match_state.ne("unlinked"))
         .order(metadata_links_dsl::provider_id.asc())
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?;
@@ -1443,6 +1448,7 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1467,8 +1473,13 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1481,6 +1492,10 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} metadata fetch is not implemented.",
@@ -1526,18 +1541,39 @@ fn localized_provider_settings(
     (localized_settings, provider_locale)
 }
 
+fn has_metadata_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
 fn snapshot_has_presentable_metadata(snapshot: &StoredMetadataSnapshot) -> bool {
-    snapshot
-        .title
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || snapshot
-            .overview
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || snapshot.artwork_url.is_some()
-        || snapshot.backdrop_url.is_some()
-        || snapshot.provider_payload_json.is_some()
+    has_metadata_text(snapshot.title.as_deref()) || has_metadata_text(snapshot.overview.as_deref())
+}
+
+fn snapshot_needs_text_fallback(snapshot: &StoredMetadataSnapshot) -> bool {
+    !has_metadata_text(snapshot.title.as_deref())
+        || !has_metadata_text(snapshot.overview.as_deref())
+}
+
+fn merge_localized_snapshot(
+    primary: Option<StoredMetadataSnapshot>,
+    fallback: StoredMetadataSnapshot,
+) -> StoredMetadataSnapshot {
+    let Some(mut primary) = primary else {
+        return fallback;
+    };
+    if !has_metadata_text(primary.title.as_deref()) {
+        primary.title = fallback.title;
+    }
+    if !has_metadata_text(primary.overview.as_deref()) {
+        primary.overview = fallback.overview;
+    }
+    if primary.artwork_url.is_none() {
+        primary.artwork_url = fallback.artwork_url;
+    }
+    if primary.backdrop_url.is_none() {
+        primary.backdrop_url = fallback.backdrop_url;
+    }
+    primary
 }
 
 /// Fetch one provider season snapshot for a linked show descendant.
@@ -1658,6 +1694,7 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1683,8 +1720,13 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1698,6 +1740,10 @@ pub async fn fetch_provider_season_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} season metadata fetch is not implemented.",
@@ -1840,6 +1886,7 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
     }
 
     let mut last_error = None;
+    let mut best_snapshot = None;
     for fetch_locale in locale_fallback_chain(&locale_key) {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
@@ -1866,8 +1913,13 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
 
         match result {
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
-                snapshot.locale_key = locale_key;
+                snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
+                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                if snapshot_needs_text_fallback(&snapshot) {
+                    best_snapshot = Some(snapshot);
+                    continue;
+                }
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1881,6 +1933,10 @@ pub async fn fetch_provider_episode_metadata_snapshot_for_locale_with_options(
         }
     }
 
+    if let Some(snapshot) = best_snapshot {
+        write_metadata_snapshot_cache(&cache_key, &snapshot);
+        return Ok(snapshot);
+    }
     Err(last_error.unwrap_or_else(|| {
         format!(
             "{} episode metadata fetch is not implemented.",
@@ -2045,137 +2101,264 @@ pub fn upsert_item_metadata_link(
         if relation_kind.is_empty() { "primary" } else { relation_kind }.to_string();
     configure_sqlite_connection(conn)?;
     retry_sqlite_write(|| {
-        let existing = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
-            .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)
-            .optional()?;
-        let keep_cached_artwork = existing
-            .as_ref()
-            .map(|row| {
-                !metadata_refresh_target_changed(
-                    row,
-                    snapshot.provider_id.as_storage_value(),
-                    &snapshot.external_id,
-                    snapshot.media_type.as_deref(),
-                ) && row.artwork_url == snapshot.artwork_url
-            })
-            .unwrap_or(false);
-        let keep_cached_backdrop = existing
-            .as_ref()
-            .map(|row| {
-                !metadata_refresh_target_changed(
-                    row,
-                    snapshot.provider_id.as_storage_value(),
-                    &snapshot.external_id,
-                    snapshot.media_type.as_deref(),
-                ) && row.backdrop_url == snapshot.backdrop_url
-            })
-            .unwrap_or(false);
-        let logo_url = details.logo_url.clone();
-        let keep_cached_logo = existing
-            .as_ref()
-            .map(|row| {
-                !metadata_refresh_target_changed(
-                    row,
-                    snapshot.provider_id.as_storage_value(),
-                    &snapshot.external_id,
-                    snapshot.media_type.as_deref(),
-                ) && row.logo_url == logo_url
-            })
-            .unwrap_or(false);
+        conn.transaction(|conn| {
+            let existing = metadata_links_dsl::item_metadata_links
+                .filter(metadata_links_dsl::media_item_id.eq(item_id))
+                .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
+                .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
+                .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
+                .select(ItemMetadataLink::as_select())
+                .first(conn)
+                .optional()?;
+            if relation_kind == "primary"
+                && existing.as_ref().is_some_and(|row| {
+                    metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    )
+                })
+            {
+                invalidate_item_secondary_metadata(conn, item_id)?;
+            }
+            let keep_cached_artwork = existing
+                .as_ref()
+                .map(|row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    ) && row.artwork_url == snapshot.artwork_url
+                })
+                .unwrap_or(false);
+            let keep_cached_backdrop = existing
+                .as_ref()
+                .map(|row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    ) && row.backdrop_url == snapshot.backdrop_url
+                })
+                .unwrap_or(false);
+            let logo_url = details.logo_url.clone();
+            let keep_cached_logo = existing
+                .as_ref()
+                .map(|row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    ) && row.logo_url == logo_url
+                })
+                .unwrap_or(false);
 
-        let payload = NewItemMetadataLink {
-            media_item_id: item_id,
-            provider_id: snapshot.provider_id.as_storage_value().to_string(),
-            external_id: snapshot.external_id.clone(),
-            title: snapshot.title.clone(),
-            overview: snapshot.overview.clone(),
-            tagline: details.tagline.clone(),
-            artwork_url: snapshot.artwork_url.clone(),
-            backdrop_url: snapshot.backdrop_url.clone(),
-            release_year: snapshot.release_year,
-            media_type: snapshot.media_type.clone(),
-            relation_kind: relation_kind.clone(),
-            match_state: "linked".into(),
-            logo_url,
-            cached_logo_path: if keep_cached_logo {
-                existing
-                    .as_ref()
-                    .and_then(|row| row.cached_logo_path.clone())
-            } else {
-                None
-            },
-            genres_json: serde_json::to_string(&details.genres).ok(),
-            rating: details.rating,
-            content_rating: details.content_rating.clone(),
-            locale_key: snapshot.locale_key.clone(),
-            provider_locale_key: snapshot.provider_locale_key.clone(),
-            cached_artwork_path: if keep_cached_artwork {
-                existing
-                    .as_ref()
-                    .and_then(|row| row.cached_artwork_path.clone())
-            } else {
-                None
-            },
-            cached_backdrop_path: if keep_cached_backdrop {
-                existing
-                    .as_ref()
-                    .and_then(|row| row.cached_backdrop_path.clone())
-            } else {
-                None
-            },
-            refresh_state: "fresh".into(),
-            refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
-            last_refreshed_at: Some(current_timestamp()),
-            next_refresh_at: refresh_interval_seconds
-                .map(|interval| current_timestamp() + interval),
-            refresh_error: None,
-            updated_at: Some(current_timestamp()),
-        };
+            let payload = NewItemMetadataLink {
+                media_item_id: item_id,
+                provider_id: snapshot.provider_id.as_storage_value().to_string(),
+                external_id: snapshot.external_id.clone(),
+                title: snapshot.title.clone(),
+                overview: snapshot.overview.clone(),
+                tagline: details.tagline.clone(),
+                artwork_url: snapshot.artwork_url.clone(),
+                backdrop_url: snapshot.backdrop_url.clone(),
+                release_year: snapshot.release_year,
+                media_type: snapshot.media_type.clone(),
+                relation_kind: relation_kind.clone(),
+                match_state: "linked".into(),
+                logo_url,
+                cached_logo_path: if keep_cached_logo {
+                    existing
+                        .as_ref()
+                        .and_then(|row| row.cached_logo_path.clone())
+                } else {
+                    None
+                },
+                genres_json: serde_json::to_string(&details.genres).ok(),
+                rating: details.rating,
+                content_rating: details.content_rating.clone(),
+                locale_key: snapshot.locale_key.clone(),
+                provider_locale_key: snapshot.provider_locale_key.clone(),
+                cached_artwork_path: if keep_cached_artwork {
+                    existing
+                        .as_ref()
+                        .and_then(|row| row.cached_artwork_path.clone())
+                } else {
+                    None
+                },
+                cached_backdrop_path: if keep_cached_backdrop {
+                    existing
+                        .as_ref()
+                        .and_then(|row| row.cached_backdrop_path.clone())
+                } else {
+                    None
+                },
+                refresh_state: "fresh".into(),
+                refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
+                last_refreshed_at: Some(current_timestamp()),
+                next_refresh_at: refresh_interval_seconds
+                    .map(|interval| current_timestamp() + interval),
+                refresh_error: None,
+                updated_at: Some(current_timestamp()),
+            };
 
-        if let Some(existing) = existing {
-            diesel::update(
-                metadata_links_dsl::item_metadata_links
-                    .filter(metadata_links_dsl::id.eq(existing.id)),
-            )
-            .set(&payload)
-            .execute(conn)?;
-        } else {
-            diesel::insert_into(metadata_links_dsl::item_metadata_links)
-                .values(&payload)
-                .on_conflict((
-                    metadata_links_dsl::media_item_id,
-                    metadata_links_dsl::provider_id,
-                    metadata_links_dsl::relation_kind,
-                    metadata_links_dsl::locale_key,
-                ))
-                .do_update()
+            if let Some(existing) = existing {
+                diesel::update(
+                    metadata_links_dsl::item_metadata_links
+                        .filter(metadata_links_dsl::id.eq(existing.id)),
+                )
                 .set(&payload)
                 .execute(conn)?;
-        }
+            } else {
+                diesel::insert_into(metadata_links_dsl::item_metadata_links)
+                    .values(&payload)
+                    .on_conflict((
+                        metadata_links_dsl::media_item_id,
+                        metadata_links_dsl::provider_id,
+                        metadata_links_dsl::relation_kind,
+                        metadata_links_dsl::locale_key,
+                    ))
+                    .do_update()
+                    .set(&payload)
+                    .execute(conn)?;
+            }
 
-        let row = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
-            .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
-            .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)?;
+            let row = metadata_links_dsl::item_metadata_links
+                .filter(metadata_links_dsl::media_item_id.eq(item_id))
+                .filter(metadata_links_dsl::provider_id.eq(snapshot.provider_id.as_storage_value()))
+                .filter(metadata_links_dsl::relation_kind.eq(&relation_kind))
+                .filter(metadata_links_dsl::locale_key.eq(&snapshot.locale_key))
+                .select(ItemMetadataLink::as_select())
+                .first(conn)?;
 
-        sync_metadata_extras_for_link(conn, row.id, details, current_timestamp())?;
+            sync_metadata_extras_for_link(conn, row.id, details, current_timestamp())?;
 
-        if relation_kind == "primary" {
-            sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, details)?;
-            sync_item_metadata_external_ids(conn, row.id, snapshot, details)?;
-            sync_item_metadata_people(conn, row.id, snapshot, details)?;
-        }
+            if relation_kind == "primary" {
+                sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, details)?;
+                sync_item_metadata_external_ids(conn, row.id, snapshot, details)?;
+                sync_item_metadata_people(conn, row.id, snapshot, details)?;
+            }
 
-        to_item_metadata_summary_with_people(conn, row)
+            to_item_metadata_summary_with_people(conn, row)
+        })
     })
+}
+
+fn invalidate_item_secondary_metadata(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as links;
+    use crate::db::schema::metadata_collection_items::dsl as collection_items;
+    use crate::db::schema::metadata_collections::dsl as collections;
+    diesel::delete(
+        collection_items::metadata_collection_items
+            .filter(collection_items::media_item_id.eq(item_id))
+            .filter(
+                collection_items::collection_id.eq_any(
+                    collections::metadata_collections
+                        .filter(collections::relation_kind.eq("secondary"))
+                        .select(collections::id),
+                ),
+            ),
+    )
+    .execute(conn)?;
+    diesel::delete(
+        links::item_metadata_links
+            .filter(links::media_item_id.eq(item_id))
+            .filter(links::relation_kind.eq("secondary")),
+    )
+    .execute(conn)?;
+    Ok(())
+}
+
+/// Clear provider metadata for an item and every descendant without changing
+/// catalog files or playback history. Explicit unlinking leaves a hidden marker
+/// so automatic matching does not immediately undo the user's choice.
+pub fn clear_item_metadata_tree(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    prevent_automatic_match: bool,
+) -> Result<Vec<i32>, diesel::result::Error> {
+    configure_sqlite_connection(conn)?;
+    retry_sqlite_write(|| {
+        conn.transaction(|conn| {
+            clear_item_metadata_tree_in_transaction(conn, item_id, prevent_automatic_match)
+        })
+    })
+}
+
+pub(crate) fn clear_item_metadata_tree_in_transaction(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    prevent_automatic_match: bool,
+) -> Result<Vec<i32>, diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as links;
+    use crate::db::schema::media_items::dsl as items;
+    items::media_items
+        .find(item_id)
+        .select(items::id)
+        .first::<i32>(conn)?;
+    let marker_provider = links::item_metadata_links
+        .filter(links::media_item_id.eq(item_id))
+        .filter(links::relation_kind.eq("primary"))
+        .select(links::provider_id)
+        .first::<String>(conn)
+        .optional()?
+        .unwrap_or_else(|| "tmdb".into());
+    let mut ids = vec![item_id];
+    let mut seen = HashSet::from([item_id]);
+    let mut cursor = 0;
+    while cursor < ids.len() {
+        let children = items::media_items
+            .filter(items::parent_id.eq(ids[cursor]))
+            .select(items::id)
+            .load::<i32>(conn)?;
+        for child in children {
+            if seen.insert(child) {
+                ids.push(child);
+            }
+        }
+        cursor += 1;
+    }
+    diesel::delete(links::item_metadata_links.filter(links::media_item_id.eq_any(&ids)))
+        .execute(conn)?;
+    if prevent_automatic_match {
+        diesel::insert_into(links::item_metadata_links)
+            .values((
+                links::media_item_id.eq(item_id),
+                links::provider_id.eq(marker_provider),
+                links::external_id.eq(""),
+                links::match_state.eq("unlinked"),
+                links::refresh_state.eq("unlinked"),
+                links::refresh_interval_seconds.eq(0),
+            ))
+            .execute(conn)?;
+    }
+    Ok(ids)
+}
+
+/// Remove a definitive secondary-provider miss without deleting another locale.
+pub fn clear_item_secondary_metadata(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+    locale: &str,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as links;
+    diesel::delete(
+        links::item_metadata_links
+            .filter(links::media_item_id.eq(item_id))
+            .filter(links::relation_kind.eq("secondary"))
+            .filter(links::provider_id.eq(provider_id.as_storage_value()))
+            .filter(links::locale_key.eq(locale)),
+    )
+    .execute(conn)?;
+    Ok(())
 }
 
 fn normalized_youtube_url(value: Option<&str>) -> Option<String> {
@@ -2421,116 +2604,204 @@ pub fn set_item_metadata_refresh_state(
     refresh_state: &str,
     refresh_error: Option<&str>,
 ) -> Result<ItemMetadataSummary, diesel::result::Error> {
-    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
-    configure_sqlite_connection(conn)?;
-    retry_sqlite_write(|| {
-        let existing = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)
-            .optional()?;
-        let keep_cached_paths = existing
-            .as_ref()
-            .map(|row| {
-                !metadata_refresh_target_changed(
-                    row,
-                    provider_id.as_storage_value(),
+    use crate::db::schema::item_metadata_links::dsl as links;
+    {
+        let mut locales = links::item_metadata_links
+            .filter(links::media_item_id.eq(item_id))
+            .filter(links::provider_id.eq(provider_id.as_storage_value()))
+            .filter(links::relation_kind.eq("primary"))
+            .select(links::locale_key)
+            .load::<String>(conn)?;
+        if locales.is_empty() {
+            locales.push(DEFAULT_METADATA_LOCALE.into());
+        }
+        let mut result = None;
+        for locale in locales {
+            let summary = set_item_metadata_refresh_state_for_locale(
+                conn,
+                MetadataRefreshStateUpdate {
+                    item_id,
+                    provider_id: provider_id.clone(),
                     external_id,
                     media_type,
-                )
-            })
-            .unwrap_or(false);
+                    locale_key: &locale,
+                    refresh_state,
+                    refresh_error,
+                },
+            )?;
+            if result.is_none() {
+                result = Some(summary);
+            }
+        }
+        result.ok_or(diesel::result::Error::NotFound)
+    }
+}
 
-        let payload = NewItemMetadataLink {
-            media_item_id: item_id,
-            provider_id: provider_id.as_storage_value().to_string(),
-            external_id: external_id.to_string(),
-            title: existing.as_ref().and_then(|row| row.title.clone()),
-            overview: existing.as_ref().and_then(|row| row.overview.clone()),
-            tagline: existing.as_ref().and_then(|row| row.tagline.clone()),
-            artwork_url: existing.as_ref().and_then(|row| row.artwork_url.clone()),
-            backdrop_url: existing.as_ref().and_then(|row| row.backdrop_url.clone()),
-            release_year: existing.as_ref().and_then(|row| row.release_year),
-            media_type: media_type
-                .map(str::to_string)
-                .or_else(|| existing.as_ref().and_then(|row| row.media_type.clone())),
-            relation_kind: existing
-                .as_ref()
-                .map(|row| row.relation_kind.clone())
-                .unwrap_or_else(|| "primary".into()),
-            match_state: existing
-                .as_ref()
-                .map(|row| row.match_state.clone())
-                .unwrap_or_else(|| "linked".into()),
-            logo_url: existing.as_ref().and_then(|row| row.logo_url.clone()),
-            cached_logo_path: existing
-                .as_ref()
-                .and_then(|row| row.cached_logo_path.clone()),
-            genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
-            rating: existing.as_ref().and_then(|row| row.rating),
-            content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
-            locale_key: existing
-                .as_ref()
-                .map(|row| row.locale_key.clone())
-                .unwrap_or_else(|| DEFAULT_METADATA_LOCALE.to_string()),
-            provider_locale_key: existing
-                .as_ref()
-                .and_then(|row| row.provider_locale_key.clone()),
-            cached_artwork_path: if keep_cached_paths {
-                existing
-                    .as_ref()
-                    .and_then(|row| row.cached_artwork_path.clone())
-            } else {
-                None
-            },
-            cached_backdrop_path: if keep_cached_paths {
-                existing
-                    .as_ref()
-                    .and_then(|row| row.cached_backdrop_path.clone())
-            } else {
-                None
-            },
-            refresh_state: refresh_state.to_string(),
-            refresh_interval_seconds: existing
-                .as_ref()
-                .map(|row| row.refresh_interval_seconds)
-                .unwrap_or(DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS),
-            last_refreshed_at: existing.as_ref().and_then(|row| row.last_refreshed_at),
-            next_refresh_at: existing.as_ref().and_then(|row| row.next_refresh_at),
-            refresh_error: refresh_error.map(str::to_string),
-            updated_at: Some(current_timestamp()),
-        };
+/// One locale-specific metadata refresh state update.
+#[derive(Clone)]
+pub struct MetadataRefreshStateUpdate<'a> {
+    /// Media item to update.
+    pub item_id: i32,
+    /// Primary metadata provider.
+    pub provider_id: MetadataProviderId,
+    /// Provider item identity.
+    pub external_id: &'a str,
+    /// Provider-specific media type.
+    pub media_type: Option<&'a str>,
+    /// Translation being refreshed.
+    pub locale_key: &'a str,
+    /// Pending, fresh, or error state.
+    pub refresh_state: &'a str,
+    /// Failure details, when present.
+    pub refresh_error: Option<&'a str>,
+}
 
-        if let Some(existing) = existing {
-            diesel::update(
-                metadata_links_dsl::item_metadata_links
-                    .filter(metadata_links_dsl::id.eq(existing.id)),
+/// Update one primary metadata translation's refresh state.
+pub fn set_item_metadata_refresh_state_for_locale(
+    conn: &mut SqliteConnection,
+    update: MetadataRefreshStateUpdate<'_>,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    configure_sqlite_connection(conn)?;
+    retry_sqlite_write(|| {
+        conn.transaction(|conn| set_item_metadata_refresh_state_in_transaction(conn, &update))
+    })
+}
+
+pub(crate) fn set_item_metadata_refresh_state_in_transaction(
+    conn: &mut SqliteConnection,
+    update: &MetadataRefreshStateUpdate<'_>,
+) -> Result<ItemMetadataSummary, diesel::result::Error> {
+    let MetadataRefreshStateUpdate {
+        item_id,
+        provider_id,
+        external_id,
+        media_type,
+        locale_key,
+        refresh_state,
+        refresh_error,
+    } = update.clone();
+    use crate::db::schema::item_metadata_links::dsl as metadata_links_dsl;
+    let existing = metadata_links_dsl::item_metadata_links
+        .filter(metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::locale_key.eq(locale_key))
+        .select(ItemMetadataLink::as_select())
+        .first(conn)
+        .optional()?;
+    if existing.as_ref().is_some_and(|row| {
+        metadata_refresh_target_changed(
+            row,
+            provider_id.as_storage_value(),
+            external_id,
+            media_type,
+        )
+    }) {
+        invalidate_item_secondary_metadata(conn, item_id)?;
+    }
+    let keep_cached_paths = existing
+        .as_ref()
+        .map(|row| {
+            !metadata_refresh_target_changed(
+                row,
+                provider_id.as_storage_value(),
+                external_id,
+                media_type,
             )
+        })
+        .unwrap_or(false);
+
+    let payload = NewItemMetadataLink {
+        media_item_id: item_id,
+        provider_id: provider_id.as_storage_value().to_string(),
+        external_id: external_id.to_string(),
+        title: existing.as_ref().and_then(|row| row.title.clone()),
+        overview: existing.as_ref().and_then(|row| row.overview.clone()),
+        tagline: existing.as_ref().and_then(|row| row.tagline.clone()),
+        artwork_url: existing.as_ref().and_then(|row| row.artwork_url.clone()),
+        backdrop_url: existing.as_ref().and_then(|row| row.backdrop_url.clone()),
+        release_year: existing.as_ref().and_then(|row| row.release_year),
+        media_type: media_type
+            .map(str::to_string)
+            .or_else(|| existing.as_ref().and_then(|row| row.media_type.clone())),
+        relation_kind: existing
+            .as_ref()
+            .map(|row| row.relation_kind.clone())
+            .unwrap_or_else(|| "primary".into()),
+        match_state: existing
+            .as_ref()
+            .map(|row| row.match_state.clone())
+            .unwrap_or_else(|| "linked".into()),
+        logo_url: existing.as_ref().and_then(|row| row.logo_url.clone()),
+        cached_logo_path: existing
+            .as_ref()
+            .and_then(|row| row.cached_logo_path.clone()),
+        genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
+        rating: existing.as_ref().and_then(|row| row.rating),
+        content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
+        locale_key: locale_key.to_string(),
+        provider_locale_key: existing
+            .as_ref()
+            .and_then(|row| row.provider_locale_key.clone()),
+        cached_artwork_path: if keep_cached_paths {
+            existing
+                .as_ref()
+                .and_then(|row| row.cached_artwork_path.clone())
+        } else {
+            None
+        },
+        cached_backdrop_path: if keep_cached_paths {
+            existing
+                .as_ref()
+                .and_then(|row| row.cached_backdrop_path.clone())
+        } else {
+            None
+        },
+        refresh_state: refresh_state.to_string(),
+        refresh_interval_seconds: existing
+            .as_ref()
+            .map(|row| row.refresh_interval_seconds)
+            .unwrap_or(DEFAULT_METADATA_REFRESH_INTERVAL_SECONDS),
+        last_refreshed_at: existing.as_ref().and_then(|row| row.last_refreshed_at),
+        next_refresh_at: if refresh_state == "error" {
+            // Let later due items make progress before retrying a failed row.
+            Some(current_timestamp() + 5 * 60)
+        } else {
+            existing.as_ref().and_then(|row| row.next_refresh_at)
+        },
+        refresh_error: refresh_error.map(str::to_string),
+        updated_at: Some(current_timestamp()),
+    };
+
+    if let Some(existing) = existing {
+        diesel::update(
+            metadata_links_dsl::item_metadata_links.filter(metadata_links_dsl::id.eq(existing.id)),
+        )
+        .set(&payload)
+        .execute(conn)?;
+    } else {
+        diesel::insert_into(metadata_links_dsl::item_metadata_links)
+            .values(&payload)
+            .on_conflict((
+                metadata_links_dsl::media_item_id,
+                metadata_links_dsl::provider_id,
+                metadata_links_dsl::relation_kind,
+                metadata_links_dsl::locale_key,
+            ))
+            .do_update()
             .set(&payload)
             .execute(conn)?;
-        } else {
-            diesel::insert_into(metadata_links_dsl::item_metadata_links)
-                .values(&payload)
-                .on_conflict((
-                    metadata_links_dsl::media_item_id,
-                    metadata_links_dsl::provider_id,
-                    metadata_links_dsl::relation_kind,
-                    metadata_links_dsl::locale_key,
-                ))
-                .do_update()
-                .set(&payload)
-                .execute(conn)?;
-        }
+    }
 
-        let row = metadata_links_dsl::item_metadata_links
-            .filter(metadata_links_dsl::media_item_id.eq(item_id))
-            .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
-            .select(ItemMetadataLink::as_select())
-            .first(conn)?;
+    let row = metadata_links_dsl::item_metadata_links
+        .filter(metadata_links_dsl::media_item_id.eq(item_id))
+        .filter(metadata_links_dsl::provider_id.eq(provider_id.as_storage_value()))
+        .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::locale_key.eq(locale_key))
+        .select(ItemMetadataLink::as_select())
+        .first(conn)?;
 
-        to_item_metadata_summary_with_people(conn, row)
-    })
+    to_item_metadata_summary_with_people(conn, row)
 }
 
 fn metadata_refresh_target_changed(
@@ -2779,6 +3050,28 @@ fn first_collection_extra_url(
         .find_map(|collection| urls_by_collection_id.get(&collection.id).cloned())
 }
 
+/// Clear a secondary collection after the provider definitively reports no theme.
+pub fn clear_secondary_collection_metadata(
+    conn: &mut SqliteConnection,
+    source_collection_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::metadata_collections::dsl as collections;
+    let source = collections::metadata_collections
+        .find(source_collection_id)
+        .select(MetadataCollection::as_select())
+        .first::<MetadataCollection>(conn)?;
+    diesel::delete(
+        collections::metadata_collections
+            .filter(collections::provider_id.eq(provider_id.as_storage_value()))
+            .filter(collections::relation_kind.eq("secondary"))
+            .filter(collections::source_provider_id.eq(source.source_provider_id))
+            .filter(collections::source_external_id.eq(source.source_external_id)),
+    )
+    .execute(conn)?;
+    Ok(())
+}
+
 /// Upsert a secondary collection metadata row with a provider-supplied theme-song URL.
 pub fn upsert_secondary_collection_theme_song_url(
     conn: &mut SqliteConnection,
@@ -2883,6 +3176,7 @@ pub fn get_preferred_item_metadata_link_for_languages(
     let rows = metadata_links_dsl::item_metadata_links
         .filter(metadata_links_dsl::media_item_id.eq(item_id))
         .filter(metadata_links_dsl::relation_kind.eq("primary"))
+        .filter(metadata_links_dsl::match_state.ne("unlinked"))
         .order(metadata_links_dsl::updated_at.desc())
         .select(ItemMetadataLink::as_select())
         .load::<ItemMetadataLink>(conn)?;
@@ -3167,21 +3461,18 @@ pub async fn persist_item_metadata_assets_with_logo(
     let poster_path = if let Some(url) = &snapshot.artwork_url {
         try_cache_item_artwork(url, &item_dir, &poster_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &poster_cache_key, None)?;
         None
     };
     let backdrop_cache_key = format!("{}_backdrop", snapshot.provider_id.as_storage_value());
     let backdrop_path = if let Some(url) = &snapshot.backdrop_url {
         try_cache_item_artwork(url, &item_dir, &backdrop_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &backdrop_cache_key, None)?;
         None
     };
     let logo_cache_key = format!("{}_logo", snapshot.provider_id.as_storage_value());
     let logo_path = if let Some(url) = logo_url {
         try_cache_item_artwork(&url, &item_dir, &logo_cache_key).await
     } else {
-        purge_stale_cached_artwork_files(&item_dir, &logo_cache_key, None)?;
         None
     };
 
@@ -3274,6 +3565,8 @@ pub(crate) fn metadata_response_cache_key(
     parts: &[&str],
 ) -> String {
     let mut hasher = Sha256::new();
+    // Invalidate response snapshots written before endpoint-specific decoding.
+    hasher.update(b"metadata-response-v2\0");
     hasher.update(provider_id.as_storage_value().as_bytes());
     hasher.update([0]);
     hasher.update(kind.as_bytes());
@@ -3316,9 +3609,15 @@ fn write_metadata_snapshot_cache(
 }
 
 pub(crate) fn read_metadata_response_cache_text(cache_key: &str) -> Option<String> {
-    let path = metadata_response_cache_path(cache_key);
-    let contents = fs::read_to_string(&path).ok()?;
-    let created_at = fs::metadata(&path)
+    read_metadata_response_cache_file(&metadata_response_cache_path(cache_key))
+}
+
+fn read_metadata_response_cache_file(path: &Path) -> Option<String> {
+    if cache_policy::bypassed() {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let created_at = fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.elapsed().ok())
@@ -3433,7 +3732,19 @@ impl ArtworkKind {
     }
 }
 
+/// Validate an existing provider artwork cache entry.
+pub(crate) fn cached_artwork_is_valid(path: &Path) -> bool {
+    fs::read(path)
+        .ok()
+        .is_some_and(|bytes| artwork::validate(&bytes).is_ok())
+}
+
 /// Download and cache one artwork asset to disk.
+///
+/// Entries are addressed by URL and shared by provider identity. A request cannot
+/// determine whether another URL is obsolete: a newer job or another metadata
+/// link may still use it. Retain sibling entries, including when a snapshot has
+/// no artwork, rather than pruning files outside the guarded database update.
 pub async fn cache_artwork(
     url: &str,
     cache_dir: &Path,
@@ -3442,24 +3753,40 @@ pub async fn cache_artwork(
     fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
 
     let cache_path = expected_artwork_cache_path(url, cache_dir, cache_key);
-    let file_name = cache_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| "Invalid artwork cache file name".to_string())?
-        .to_string();
-    purge_stale_cached_artwork_files(cache_dir, cache_key, Some(&file_name))?;
     if cache_path.is_file() {
-        return Ok(cache_path);
+        if cached_artwork_is_valid(&cache_path) {
+            return Ok(cache_path);
+        }
+        fs::remove_file(&cache_path).map_err(|error| error.to_string())?;
     }
 
-    let bytes = reqwest::get(url)
+    let bytes = http::client()
+        .get(url)
+        .send()
         .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
         .map_err(|error| error.to_string())?
         .bytes()
         .await
         .map_err(|error| error.to_string())?;
-    fs::write(&cache_path, bytes).map_err(|error| error.to_string())?;
-
+    artwork::validate(&bytes)?;
+    // Publish a complete image atomically; retain the working image on failure.
+    let temporary = cache_dir.join(format!(".koko-artwork-{}.tmp", rand::random::<u128>()));
+    let result = (|| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        drop(file);
+        fs::rename(&temporary, &cache_path)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
     Ok(cache_path)
 }
 
@@ -3709,7 +4036,21 @@ pub(crate) async fn try_cache_item_artwork(
                 url,
                 error
             );
-            None
+            // The managed directory is specific to this provider identity and
+            // locale. Keep serving its previous image until replacement succeeds.
+            let prefix = format!("{}-", sanitize_cache_key(cache_key));
+            fs::read_dir(item_dir)
+                .ok()?
+                .filter_map(Result::ok)
+                .find_map(|entry| {
+                    let path = entry.path();
+                    let matches_key = entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(&prefix));
+                    (matches_key && path.is_file() && cached_artwork_is_valid(&path))
+                        .then_some(path)
+                })
         }
     }
 }
@@ -3865,7 +4206,9 @@ fn cleanup_movie_title(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .trim_matches(|character: char| !character.is_ascii_alphanumeric())
+        .trim_matches(|character: char| {
+            character.is_ascii_punctuation() || character.is_whitespace()
+        })
         .to_string()
 }
 
@@ -3957,39 +4300,6 @@ fn stable_artwork_url_hash(url: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);
     hasher.finish()
-}
-
-fn purge_stale_cached_artwork_files(
-    cache_dir: &Path,
-    cache_key: &str,
-    keep_file_name: Option<&str>,
-) -> Result<(), String> {
-    if !cache_dir.is_dir() {
-        return Ok(());
-    }
-
-    let prefix = sanitize_cache_key(cache_key);
-    for entry in fs::read_dir(cache_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with(&prefix) {
-            continue;
-        }
-        if keep_file_name == Some(file_name) {
-            continue;
-        }
-
-        fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
-
-    Ok(())
 }
 
 fn root_media_item_id(
@@ -4556,6 +4866,103 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn metadata_response_cache_expiration_and_clear_are_authoritative() {
+        let root = std::env::temp_dir().join(format!("koko-cache-{}", rand::random::<u64>()));
+        let path = metadata_response_cache_dir(root.to_str().unwrap()).join("a/response.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "cached").unwrap();
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached")
+        );
+        let expired = std::time::SystemTime::now()
+            - Duration::from_secs(METADATA_RESPONSE_CACHE_TTL_SECONDS as u64 + 10);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(expired))
+            .unwrap();
+        assert_eq!(read_metadata_response_cache_file(&path), None);
+        assert!(!path.exists());
+        fs::write(&path, "cached again").unwrap();
+        assert_eq!(
+            clear_metadata_response_cache(root.to_str().unwrap()).unwrap(),
+            1
+        );
+        assert_eq!(read_metadata_response_cache_file(&path), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn forced_metadata_refresh_bypasses_cached_response_files() {
+        let path = std::env::temp_dir().join(format!("koko-response-{}", rand::random::<u64>()));
+        fs::write(&path, "cached response").unwrap();
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached response")
+        );
+        cache_policy::fresh(async {
+            assert_eq!(read_metadata_response_cache_file(&path), None);
+        })
+        .await;
+        assert_eq!(
+            read_metadata_response_cache_file(&path).as_deref(),
+            Some("cached response")
+        );
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn locale_fallback_requires_text_and_fills_missing_fields() {
+        let primary = StoredMetadataSnapshot {
+            provider_id: MetadataProviderId::Tmdb,
+            external_id: "1".into(),
+            media_type: Some("movie".into()),
+            title: Some("Titulo".into()),
+            overview: None,
+            artwork_url: Some("https://example.test/poster.png".into()),
+            backdrop_url: None,
+            release_year: None,
+            locale_key: "es-ES".into(),
+            provider_locale_key: Some("es-ES".into()),
+            provider_payload_json: Some("{}".into()),
+        };
+        assert!(snapshot_needs_text_fallback(&primary));
+        let mut empty = primary.clone();
+        empty.title = Some(" ".into());
+        assert!(!snapshot_has_presentable_metadata(&empty));
+        let mut fallback = primary.clone();
+        fallback.title = Some("English title".into());
+        fallback.overview = Some("English fallback overview".into());
+        fallback.locale_key = "en-US".into();
+        let merged = merge_localized_snapshot(Some(primary), fallback);
+        assert_eq!(merged.title.as_deref(), Some("Titulo"));
+        assert_eq!(
+            merged.overview.as_deref(),
+            Some("English fallback overview")
+        );
+        assert_eq!(merged.locale_key, "es-ES");
+        assert!(!snapshot_needs_text_fallback(&merged));
+    }
+    #[test]
+    fn title_cleanup_preserves_unicode_names_and_combining_marks() {
+        for title in [
+            "千と千尋の神隠し",
+            "Москва",
+            "Amélie",
+            "Cafe\u{301}",
+        ] {
+            assert_eq!(
+                super::cleanup_movie_title(&format!("{title} (2001) - 1080p")),
+                title
+            );
+            assert_eq!(
+                super::parse_movie_name(&format!("{title} (2001).mkv"), title).title,
+                title
+            );
+            assert_eq!(super::show_search_query(title, title), title);
+        }
+    }
     use super::*;
 
     #[test]

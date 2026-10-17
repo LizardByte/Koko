@@ -19,6 +19,7 @@ import {
   refreshMockItemMetadata,
   getMockSettings,
   linkMockItemMetadata,
+  unlinkMockItemMetadata,
   loginMockUser,
   removeMockLibrary,
   searchMockItemMetadata,
@@ -914,6 +915,10 @@ function createMockPlaybackSessionResponse<T>(body?: unknown): T {
 }
 
 function getMockDeleteResponse<T>(method: string, url: URL): T {
+  const unlinkMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
+  if (unlinkMetadataMatch) {
+    return unlinkMockItemMetadata(Number(unlinkMetadataMatch[1])) as T;
+  }
   const removeLibraryMatch = /^\/api\/v1\/settings\/libraries\/(\d+)$/.exec(url.pathname);
   if (removeLibraryMatch) {
     return removeMockLibrary(Number(removeLibraryMatch[1])) as T;
@@ -1161,6 +1166,10 @@ export function searchItemMetadata(itemId: number, options?: string | MetadataSe
 
 export function linkItemMetadata(itemId: number, request: LinkMetadataRequest): Promise<ItemMetadataMatch> {
   return requestJson<ItemMetadataMatch>('POST', `/api/v1/items/${itemId}/metadata/link`, request);
+}
+
+export function unlinkItemMetadata(itemId: number): Promise<void> {
+  return requestJson<void>('DELETE', `/api/v1/items/${itemId}/metadata`);
 }
 
 export function refreshItemMetadata(itemId: number): Promise<ItemMetadataMatch> {

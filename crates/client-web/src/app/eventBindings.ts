@@ -41,6 +41,7 @@ import {
 } from './selectors';
 import { syncVisibleSpinners } from './spinners';
 import { state } from './state';
+import { mutateMetadata } from './metadataRequests';
 import type { HomeBrowseTab } from './types';
 import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
 import {
@@ -60,10 +61,10 @@ import {
   createUser,
   deleteLibrary,
   deleteMissingItems,
-  getItemMetadata,
   getLogs,
   getUsers,
   linkItemMetadata,
+  unlinkItemMetadata,
   loginUser,
   refreshItemMetadata,
   refreshLibraryMetadata,
@@ -837,7 +838,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
     try {
       setButtonBusy(button, true);
-      const refreshedLibrary = await refreshLibraryMetadata(library.id);
+      const refreshedLibrary = await mutateMetadata(() => refreshLibraryMetadata(library.id));
       state.libraries = state.libraries.map((entry) => entry.id === refreshedLibrary.id ? refreshedLibrary : entry);
       await refreshPendingMetadataData();
       schedulePendingMetadataRefresh(true);
@@ -1014,19 +1015,44 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
       const [itemId, providerId, externalId, mediaType] = encoded.split(':');
       try {
-        await linkItemMetadata(Number(itemId), {
+        await mutateMetadata(() => linkItemMetadata(Number(itemId), {
           provider_id: providerId,
           external_id: externalId,
           media_type: mediaType,
-        });
-        state.selectedItemMetadata = await getItemMetadata(state.selectedItem.id);
+        }));
+        clearBrowseSessions();
         state.metadataSearchResults = [];
         await refreshPendingMetadataData();
+        state.hasDeferredAutoRefreshRender = false;
+        render();
       } catch (error) {
         state.error = error instanceof Error ? error.message : 'Failed to link metadata.';
         render();
       }
     });
+  });
+
+  document.querySelector<HTMLButtonElement>('#unlink-item-metadata')?.addEventListener('click', async () => {
+    if (!state.selectedItem) {
+      return;
+    }
+
+    const button = document.querySelector<HTMLButtonElement>('#unlink-item-metadata');
+    try {
+      setButtonBusy(button, true);
+      const itemId = state.selectedItem.id;
+      await mutateMetadata(() => unlinkItemMetadata(itemId));
+      clearBrowseSessions();
+      state.metadataSearchResults = [];
+      await refreshPendingMetadataData();
+      state.hasDeferredAutoRefreshRender = false;
+      render();
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : 'Failed to unlink item metadata.';
+      render();
+    } finally {
+      setButtonBusy(button, false);
+    }
   });
 
   document.querySelector<HTMLButtonElement>('#refresh-item-metadata')?.addEventListener('click', async () => {
@@ -1035,7 +1061,8 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
 
     try {
-      await refreshItemMetadata(state.selectedItem.id);
+      const itemId = state.selectedItem.id;
+      await mutateMetadata(() => refreshItemMetadata(itemId));
       await refreshPendingMetadataData();
       schedulePendingMetadataRefresh();
     } catch (error) {
@@ -1499,7 +1526,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       }
 
       try {
-        const library = await refreshLibraryMetadata(libraryId);
+        const library = await mutateMetadata(() => refreshLibraryMetadata(libraryId));
         state.libraries = state.libraries.map((entry) => entry.id === library.id ? library : entry);
         await refreshPendingMetadataData();
         schedulePendingMetadataRefresh(true);

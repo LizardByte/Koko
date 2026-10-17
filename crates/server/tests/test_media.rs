@@ -307,7 +307,6 @@ fn test_inspect_transcoding_capability_reports_missing_binary() {
     let settings = FfmpegSettings {
         ffmpeg_path: "koko-ffmpeg-missing-binary".into(),
         ffprobe_path: "koko-ffprobe-missing-binary".into(),
-        ..FfmpegSettings::default()
     };
 
     let capability = inspect_transcoding_capability(&settings);
@@ -1356,6 +1355,18 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
             && candidate.library_kind == MediaLibraryKind::Shows
     }));
 
+    koko::metadata::clear_item_metadata_tree(&mut connection, show.id, true).unwrap();
+    for candidates in [
+        list_automatic_metadata_candidates(&mut connection, None, 8).unwrap(),
+        koko::media::list_automatic_metadata_refresh_candidates(&mut connection, None, 8).unwrap(),
+    ] {
+        assert!(
+            !candidates
+                .iter()
+                .any(|candidate| candidate.item_id == show.id)
+        );
+    }
+
     drop(connection);
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(db_path).unwrap();
@@ -2019,9 +2030,10 @@ fn test_tv_ratings_keep_provider_and_inheritance_scope_and_season_artwork() {
     let own = get_media_item(&mut connection, episode.id, &root.to_string_lossy())
         .unwrap()
         .unwrap();
-    assert_eq!(own.rating, Some(9.1));
-    assert_eq!(own.rating_provider_id.as_deref(), Some("tvdb"));
-    assert_eq!(own.rating_source_item_type.as_deref(), Some("episode"));
+    // TheTVDB score is popularity; the episode inherits a real season rating.
+    assert_eq!(own.rating, Some(7.8));
+    assert_eq!(own.rating_provider_id.as_deref(), Some("tmdb"));
+    assert_eq!(own.rating_source_item_type.as_deref(), Some("season"));
 
     let preferred_episode = StoredMetadataSnapshot {
         provider_id: MetadataProviderId::Tmdb,
@@ -3535,7 +3547,7 @@ fn test_themerr_references_include_tvdb_show_tmdb_fallback() {
                         "remoteIds": [
                             {
                                 "type": 12,
-                                "id": 1399
+                                "id": "1399"
                             }
                         ]
                     }

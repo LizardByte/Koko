@@ -21,8 +21,8 @@ use koko::web;
 
 // Global counter to ensure unique database files across all tests
 static GLOBAL_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-static TEST_CLIENT_CREATION_LOCK: Lazy<std::sync::Mutex<()>> =
-    Lazy::new(|| std::sync::Mutex::new(()));
+static TEST_CLIENT_CREATION_LOCK: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
 
 /// Enhanced test response structure with headers
 pub struct TestResponse {
@@ -33,7 +33,7 @@ pub struct TestResponse {
 
 /// Create a test client with an isolated database
 pub async fn create_test_client(prefix: Option<&str>) -> Client {
-    let _lock = TEST_CLIENT_CREATION_LOCK.lock().unwrap();
+    let _lock = TEST_CLIENT_CREATION_LOCK.lock().await;
 
     // Set the test environment first
     use koko::globals::CURRENT_ENV;

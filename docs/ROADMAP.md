@@ -9,7 +9,7 @@ Koko should grow as a single-repo Rust media platform with a strong shared core:
 - Rust-first server and shared contracts
 - FFmpeg-backed media inspection, transcoding, and packaging
 - Shared build-deps FFmpeg executables, with an abstraction layer that keeps future embedded-library support possible
-- TMDB-first metadata for movies and TV, with a provider model that keeps additional sources pluggable and user-selectable over time
+- TMDB and TheTVDB metadata for movies and TV, with per-library provider priorities and pluggable primary and secondary sources
 - Browser client first
 - Kodi/Plex-inspired browse and playback UX
 - Desktop packaging next for Windows, Linux, and macOS
@@ -29,7 +29,7 @@ Koko should grow as a single-repo Rust media platform with a strong shared core:
 
 The repo should remain the main home for the server and as many clients as practical.
 
-Planned top-level crate layout:
+Current crate layout and planned additions:
 
 - `crates/server`: Rust server, APIs, jobs, scanner, transcoding, auth, persistence
 - `crates/common`: shared Rust domain models, API contracts, playback profiles, and utilities
@@ -37,7 +37,7 @@ Planned top-level crate layout:
 - `crates/client-desktop`: desktop shell and native integrations
 - `crates/client-android`: Android and Android TV client
 - `crates/client-ios`: iOS and Apple TV client
-- `crates/client-roku`: Roku client if practical in-repo
+- `crates/client-roku`: planned Roku client if practical in-repo
 - `crates/client-xbox`: Xbox-focused client shell or shared console client assets if feasible
 
 ## Delivery stages
@@ -59,12 +59,22 @@ Checklist:
 - [ ] Add metadata extraction and artwork generation
   - [x] Add ffprobe-backed metadata extraction baseline
   - [x] Add pluggable metadata-provider registry and persistence baseline
-- [ ] Add media item, collection, and search APIs
+  - [x] Add TMDB and TheTVDB primary providers, plus ThemerrDB and TrailerDB secondary providers
+  - [x] Add per-library provider ordering, multiple metadata languages, manual matching, immediate unlink/rematch clearing, and provider-response cache controls
+  - [x] Validate downloaded artwork, preserve working images on download failures, and reject obsolete metadata database writes
+  - [x] Retain shared URL-addressed artwork so overlapping requests cannot delete newer covers
+  - [ ] Reclaim unreferenced artwork through maintenance that accounts for shared links and in-flight work
+  - [ ] Generate optional video seek-preview thumbnails
+- [x] Add media item, collection, and search APIs
   - [x] Add media item detail and search API baseline
   - [x] Add metadata provider and item metadata status API baseline
-- [ ] Add stream manifest and direct-play decision APIs
-- [ ] Add FFmpeg transcoding sessions and job management
+- [x] Add stream manifest and direct-play decision API baseline
+- [x] Add FFmpeg transcoding sessions with start and stop management
 - [ ] Add background task coordination, progress, and cancellation
+  - [x] Add scheduled task windows, catalog scans, metadata refresh queues, and visible item/library progress
+  - [x] Include automatic show descendants in refresh progress and failures
+  - [x] Recover all pending metadata translations in one pass
+  - [ ] Add user-controlled cancellation for background work
 - [ ] Add API docs and stable contract review for browser client work
 
 ### Stage 2: Browser client
@@ -78,17 +88,20 @@ Design target: a Kodi/Plex-inspired browsing experience with shelves, hero areas
 Checklist:
 
 - [x] Create `crates/client-web`
-- [ ] Implement login and session handling
-- [ ] Implement library browsing and search
+- [x] Implement login and session handling
+- [x] Implement library browsing and search
   - [x] Add Kodi/Plex-inspired shelf and poster card baseline
-- [ ] Implement item details, artwork, and playback UI
+- [x] Implement item details, artwork, and playback UI baseline
   - [x] Add metadata provider status and linked metadata detail baseline
-- [ ] Implement admin pages for libraries, users, and transcoding settings
+- [x] Implement admin pages for libraries, users, providers, scheduled tasks, logs, and transcoding settings
 - [ ] Add quality selection and playback error reporting
+- [x] Add automated web component, rendering, permission, and navigation tests
+- [x] Ignore superseded metadata polls after unlinking, rematching, or starting a newer refresh
+- [ ] Add browser end-to-end coverage for metadata management and playback
 
 ### Stage 3: Desktop app for Windows, Linux, and macOS
 
-Status: Planned
+Status: In progress (packaged server and tray baseline; dedicated desktop client remains planned)
 
 Goal: deliver a packaged desktop experience by reusing browser-client functionality where possible.
 
@@ -97,7 +110,11 @@ Checklist:
 - [ ] Define desktop shell architecture
 - [ ] Reuse browser UI where practical
 - [ ] Add native windowing, tray, deep links, and auto-start support
-- [ ] Add packaging and signing workflows per OS
+  - [x] Add server tray integration and opening the browser client
+- [x] Add packaging and signing workflows per OS
+  - [x] Add Windows installer, macOS DMG, and Linux Flatpak build workflows
+  - [x] Add Windows signing and macOS code-signing and notarization support
+- [ ] Validate signed package installation and update behavior on supported operating systems
 
 ### Stage 4: Android and Android TV
 
@@ -153,18 +170,24 @@ Checklist:
 These run across multiple stages:
 
 - [ ] Security hardening, secrets handling, and audit logging
+  - [x] Enforce administrator and per-library access controls, and store provider credentials in the operating-system secret store
 - [ ] Observability, metrics, tracing, and structured diagnostics
 - [ ] Performance baselines for scan, metadata, and transcoding workflows
 - [ ] Internationalization and accessibility
 - [ ] CI, release automation, packaging, and update channels
+  - [x] Run server and web tests, web builds, and platform package builds in CI
+  - [ ] Validate hosted checks and platform packages for the metadata reliability changes
 - [ ] Dependency license and supply-chain review
 - [ ] User documentation and deployment guides
 
 ## Metadata strategy
 
-- TheMovieDB is the first planned online metadata provider for movies and TV.
+- TheMovieDB and TheTVDB are implemented primary metadata providers for movies and TV.
+- ThemerrDB extends movie, show, and collection metadata with themes; TrailerDB adds movie and show extras through supported TMDB references.
 - The metadata system should stay provider-agnostic so future sources for music, books, photos, and local sidecar metadata can be added without redesigning the core media catalog.
-- Users should eventually be able to enable providers, set priority order, and choose which providers apply to each library type.
+- Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO, music, and book providers remain planned.
+- Provider responses use endpoint-specific models, and refresh jobs bypass response caches while keeping the normal cache expiry and manual cache-clear controls.
+- Unlinking a movie or show immediately clears its provider metadata and any show descendants, and leaves it unlinked until an explicit rematch. Rematching clears the old metadata before fetching replacement data in the background.
 
 ## FFmpeg strategy
 
@@ -174,19 +197,14 @@ These run across multiple stages:
 
 ## Current sprint
 
-The current sprint is focused on the first shippable Stage 1 slice:
+The current focus is reliability of the implemented Stage 1 server and Stage 2 browser workflows:
 
-- media-library configuration model
-- library discovery summaries
-- FFmpeg capability detection
-- versioned discovery endpoints for future clients
-- persistent media-library catalog and file inventory baseline
-- incremental rescans with stable media item IDs
-- ffprobe-backed metadata persistence for audio and video files
-- metadata-provider registry and item metadata link baseline
-- browser-oriented item, detail, and search APIs
-- initial `crates/client-web` scaffold consuming Stage 1 APIs
-- Kodi/Plex-inspired poster and metadata detail baseline in `crates/client-web`
+- keep TMDB, TheTVDB, and secondary-provider decoding aligned with their endpoint contracts
+- make movie, show, season, and episode refreshes observable and recoverable
+- retain shared artwork and discard superseded browser polls during unlink, rematch, and overlapping refreshes
+- keep nested refresh progress and recovery of every pending metadata locale reliable across retries and restarts
+- preserve existing artwork and secondary metadata across transient provider failures
+- validate these workflows with regression tests, browser end-to-end coverage, and hosted platform checks before release
 
 ## Exit criteria for Stage 1
 

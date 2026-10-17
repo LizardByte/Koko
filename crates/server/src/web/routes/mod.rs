@@ -5,6 +5,7 @@ pub mod auth;
 pub mod common;
 pub mod dependencies;
 pub mod media;
+mod metadata_jobs;
 pub mod settings;
 pub mod user;
 
@@ -36,6 +37,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_person,
         media::search_item_metadata,
         media::link_item_metadata,
+        media::unlink_item_metadata,
         media::refresh_item_metadata,
         media::get_item_playback,
         media::create_session,

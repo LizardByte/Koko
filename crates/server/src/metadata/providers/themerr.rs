@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde::Deserialize;
 
 use crate::config::MetadataProviderId;
 use crate::metadata::{
@@ -54,7 +54,7 @@ pub(crate) async fn fetch_youtube_theme_url(
         return Ok(None);
     }
 
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get(format!(
             "{}/{}/{}/{}.json",
             THEMERR_API_BASE, database_path, database_id, normalized_external_id
@@ -74,7 +74,7 @@ pub(crate) async fn fetch_youtube_theme_url(
     }
 
     let payload = response.text().await.map_err(|error| error.to_string())?;
-    Ok(parse_youtube_theme_url(&payload))
+    parse_youtube_theme_url(&payload)
 }
 
 pub(crate) async fn fetch_youtube_theme_metadata(
@@ -123,14 +123,14 @@ pub(crate) fn item_lookup_reference_priority(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 struct YoutubeOEmbedMetadata {
     title: Option<String>,
     thumbnail_url: Option<String>,
 }
 
 async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadata> {
-    let response = reqwest::Client::new()
+    let response = crate::metadata::http::client()
         .get("https://www.youtube.com/oembed")
         .query(&[
             ("format", "json"),
@@ -143,11 +143,7 @@ async fn fetch_youtube_oembed_metadata(url: &str) -> Option<YoutubeOEmbedMetadat
         return None;
     }
     let payload = response.text().await.ok()?;
-    let payload = serde_json::from_str::<Value>(&payload).ok()?;
-    Some(YoutubeOEmbedMetadata {
-        title: text_field(&payload, &["title"]),
-        thumbnail_url: text_field(&payload, &["thumbnail_url"]),
-    })
+    serde_json::from_str(&payload).ok()
 }
 
 fn database_path_for_item_type(item_type: &str) -> Option<&'static str> {
@@ -178,28 +174,19 @@ fn normalize_database_id(
     }
 }
 
-fn parse_youtube_theme_url(payload_json: &str) -> Option<String> {
-    serde_json::from_str::<Value>(payload_json)
-        .ok()?
-        .get("youtube_theme_url")?
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(youtube_watch_url)
+/// ThemerrDB movie, show, and collection records expose this same theme field.
+#[derive(Deserialize)]
+struct ThemeResponse {
+    youtube_theme_url: Option<String>,
 }
 
-fn text_field(
-    value: &Value,
-    keys: &[&str],
-) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
+fn parse_youtube_theme_url(payload_json: &str) -> Result<Option<String>, String> {
+    let response = serde_json::from_str::<ThemeResponse>(payload_json)
+        .map_err(|error| format!("ThemerrDB returned invalid response: {error}"))?;
+    Ok(response
+        .youtube_theme_url
+        .as_deref()
+        .and_then(youtube_watch_url))
 }
 
 #[cfg(test)]
@@ -222,7 +209,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_youtube_theme_url(&payload).as_deref(),
+            parse_youtube_theme_url(&payload).unwrap().as_deref(),
             Some("https://www.youtube.com/watch?v=SLBACEP6LsI")
         );
     }
@@ -235,7 +222,13 @@ mod tests {
         })
         .to_string();
 
-        assert_eq!(parse_youtube_theme_url(&payload), None);
+        assert_eq!(parse_youtube_theme_url(&payload).unwrap(), None);
+    }
+
+    #[test]
+    fn invalid_theme_response_is_an_error_instead_of_a_definitive_miss() {
+        assert!(parse_youtube_theme_url("<html>unavailable</html>").is_err());
+        assert!(parse_youtube_theme_url(r#"{"youtube_theme_url": 123}"#).is_err());
     }
 
     #[test]

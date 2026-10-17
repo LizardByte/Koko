@@ -1,10 +1,7 @@
-use std::collections::{
-    HashMap,
-    HashSet,
-};
-use std::sync::Mutex;
+mod response;
 
-use once_cell::sync::Lazy;
+use std::collections::HashSet;
+
 use serde_json::Value;
 use strsim::normalized_levenshtein;
 use tmdb_client::apis::client::APIClient as TmdbApiClient;
@@ -50,11 +47,6 @@ use crate::metadata::{
 };
 
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
-
-static TMDB_PERSON_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static TMDB_COLLECTION_DETAIL_CACHE: Lazy<Mutex<HashMap<String, Value>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -564,7 +556,8 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    tokio::task::spawn_blocking(operation)
+    let fresh = crate::metadata::cache_policy::bypassed();
+    tokio::task::spawn_blocking(move || crate::metadata::cache_policy::blocking(fresh, operation))
         .await
         .map_err(|error| format!("TMDB request task failed: {}", error))?
 }
@@ -726,18 +719,8 @@ fn tmdb_cached_person_detail(
             image_languages,
         ],
     );
-    if let Some(cached) = TMDB_PERSON_DETAIL_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&cache_key).cloned())
-    {
-        return Some(cached);
-    }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-            if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
-                cache.insert(cache_key.clone(), value.clone());
-            }
             return Some(value);
         }
     }
@@ -760,12 +743,6 @@ fn tmdb_cached_person_detail(
         );
     }
 
-    if let Ok(mut cache) = TMDB_PERSON_DETAIL_CACHE.lock() {
-        if cache.len() > 5000 {
-            cache.clear();
-        }
-        cache.insert(cache_key.clone(), value.clone());
-    }
     write_metadata_response_cache_text(&cache_key, &value.to_string());
     Some(value)
 }
@@ -783,18 +760,8 @@ fn tmdb_cached_collection_detail(
             language,
         ],
     );
-    if let Some(cached) = TMDB_COLLECTION_DETAIL_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&cache_key).cloned())
-    {
-        return Some(cached);
-    }
     if let Some(contents) = read_metadata_response_cache_text(&cache_key) {
         if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-            if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
-                cache.insert(cache_key.clone(), value.clone());
-            }
             return Some(value);
         }
     }
@@ -804,12 +771,6 @@ fn tmdb_cached_collection_detail(
         .get_collection_details(collection_id, Some(language))
         .ok()?;
     let value = serde_json::to_value(details).ok()?;
-    if let Ok(mut cache) = TMDB_COLLECTION_DETAIL_CACHE.lock() {
-        if cache.len() > 5000 {
-            cache.clear();
-        }
-        cache.insert(cache_key.clone(), value.clone());
-    }
     write_metadata_response_cache_text(&cache_key, &value.to_string());
     Some(value)
 }
@@ -822,15 +783,18 @@ fn tmdb_known_for_from_person_payload(payload: &Value) -> Vec<String> {
     for key in ["cast", "crew"] {
         if let Some(entries) = combined_credits.get(key).and_then(Value::as_array) {
             for entry in entries {
-                if let Some(title) = entry
-                    .get("title")
-                    .or_else(|| entry.get("name"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
+                let title =
+                    match serde_json::from_value::<response::MultiSearchResult>(entry.clone()) {
+                        Ok(response::MultiSearchResult::Movie(movie)) => Some(movie.title),
+                        Ok(response::MultiSearchResult::Show(show)) => Some(show.name),
+                        _ => None,
+                    };
+                if let Some(title) = title
+                    .map(|title| title.trim().to_owned())
                     .filter(|title| !title.is_empty())
                 {
-                    if !titles.iter().any(|existing| existing == title) {
-                        titles.push(title.to_string());
+                    if !titles.contains(&title) {
+                        titles.push(title);
                     }
                 }
                 if titles.len() >= 8 {
@@ -859,53 +823,46 @@ fn matches_important_tmdb_crew_role(role: &str) -> bool {
 }
 
 fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
-    let media_type = item.get("media_type")?.as_str()?.to_ascii_lowercase();
-    if media_type != "movie" && media_type != "tv" {
+    use response::MultiSearchResult;
+    let (id, media_type, title, date, overview, poster, backdrop) =
+        match serde_json::from_value(item).ok()? {
+            MultiSearchResult::Movie(item) => (
+                item.id,
+                "movie",
+                item.title,
+                item.release_date,
+                item.overview,
+                item.poster_path,
+                item.backdrop_path,
+            ),
+            MultiSearchResult::Show(item) => (
+                item.id,
+                "tv",
+                item.name,
+                item.first_air_date,
+                item.overview,
+                item.poster_path,
+                item.backdrop_path,
+            ),
+            MultiSearchResult::Other => return None,
+        };
+    let title = title.trim().to_string();
+    if title.is_empty() {
         return None;
     }
-
-    let external_id = item.get("id")?.as_i64()?.to_string();
-    let title = item
-        .get("title")
-        .or_else(|| item.get("name"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)?;
-    let overview = item
-        .get("overview")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let artwork_url = item
-        .get("poster_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|path| tmdb_image_url(path, "w500"));
-    let backdrop_url = item
-        .get("backdrop_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|path| tmdb_image_url(path, "w1280"));
-    let release_year = item
-        .get("release_date")
-        .or_else(|| item.get("first_air_date"))
-        .and_then(Value::as_str)
-        .map(|value| value.to_string())
-        .and_then(|value| extract_release_year(Some(value)));
-
     Some(MetadataSearchResult {
         provider_id: MetadataProviderId::Tmdb,
-        external_id,
-        media_type,
+        external_id: id.to_string(),
+        media_type: media_type.into(),
         title,
-        overview,
-        artwork_url,
-        backdrop_url,
-        release_year,
+        overview: overview.filter(|value| !value.trim().is_empty()),
+        artwork_url: poster
+            .filter(|value| !value.trim().is_empty())
+            .map(|path| tmdb_image_url(&path, "w500")),
+        backdrop_url: backdrop
+            .filter(|value| !value.trim().is_empty())
+            .map(|path| tmdb_image_url(&path, "w1280")),
+        release_year: extract_release_year(date),
         score: None,
     })
 }
@@ -1090,7 +1047,7 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
     let trailer = tmdb_trailer_entry(&payload);
     ProviderMetadataDetails {
         external_ids: tmdb_external_ids(&payload, snapshot),
-        tagline: text_field(&payload, &["tagline"]),
+        tagline: text_field(&payload, "tagline"),
         logo_url: tmdb_logo_url(&payload),
         genres: tmdb_genres(&payload),
         rating: payload
@@ -1135,36 +1092,24 @@ fn extend_tmdb_external_ids_from_value(
     external_ids: &mut Vec<ProviderExternalId>,
     value: &Value,
 ) {
-    let Some(map) = value.as_object() else {
+    let Ok(ids) = serde_json::from_value::<response::ExternalIds>(value.clone()) else {
         return;
     };
-    for (key, value) in map {
-        let Some(source) = tmdb_external_id_source_from_key(key) else {
-            continue;
-        };
-        push_external_id_value(external_ids, &source, value);
+    for (source, id) in [
+        ("imdb", ids.imdb_id),
+        ("thetvdb", ids.tvdb_id.map(|id| id.to_string())),
+        ("wikidata", ids.wikidata_id),
+        ("facebook", ids.facebook_id),
+        ("instagram", ids.instagram_id),
+        ("twitter", ids.twitter_id),
+        ("youtube", ids.youtube_id),
+        ("tiktok", ids.tiktok_id),
+        ("freebase", ids.freebase_id),
+        ("freebase_mid", ids.freebase_mid),
+        ("tvrage", ids.tvrage_id.map(|id| id.to_string())),
+    ] {
+        push_external_id(external_ids, source, id.as_deref());
     }
-}
-
-fn tmdb_external_id_source_from_key(key: &str) -> Option<String> {
-    let key = key.trim();
-    if key.ends_with("_mid") {
-        return normalize_external_id_source(key);
-    }
-    normalize_external_id_source(key.strip_suffix("_id")?)
-}
-
-fn push_external_id_value(
-    external_ids: &mut Vec<ProviderExternalId>,
-    source: &str,
-    value: &Value,
-) {
-    let external_id = value
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| value.as_i64().map(|id| id.to_string()))
-        .or_else(|| value.as_u64().map(|id| id.to_string()));
-    push_external_id(external_ids, source, external_id.as_deref());
 }
 
 fn push_external_id(
@@ -1412,7 +1357,7 @@ fn tmdb_collections(payload: &Value) -> Vec<ProviderMetadataCollection> {
     vec![ProviderMetadataCollection {
         external_id: external_id.to_string(),
         name: Some(name.to_string()),
-        overview: text_field(collection, &["overview"]),
+        overview: text_field(collection, "overview"),
         artwork_url: collection
             .get("poster_path")
             .and_then(Value::as_str)
@@ -1463,7 +1408,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                 birth_place: tmdb_person_detail(entry, "place_of_birth"),
                 role: Some("Actor".into()),
                 department: Some("Cast".into()),
-                character_name: text_field(entry, &["character"]),
+                character_name: text_field(entry, "character"),
                 profile_url: person_external_id(entry)
                     .map(|id| format!("https://www.themoviedb.org/person/{id}")),
                 image_url: entry
@@ -1472,7 +1417,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
-                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                cached_image_path: text_field(entry, "koko_cached_image_path"),
                 sort_order: entry
                     .get("order")
                     .and_then(Value::as_i64)
@@ -1487,7 +1432,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
     if let Some(crew) = credits.get("crew").and_then(Value::as_array) {
         let mut crew_order = 10_000;
         people.extend(crew.iter().filter_map(|entry| {
-            let job = text_field(entry, &["job"])?;
+            let job = text_field(entry, "job")?;
             if !matches_important_tmdb_crew_role(&job) {
                 return None;
             }
@@ -1505,7 +1450,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                 deathday: tmdb_person_detail(entry, "deathday"),
                 birth_place: tmdb_person_detail(entry, "place_of_birth"),
                 role: Some(job),
-                department: text_field(entry, &["department"]).or_else(|| Some("Crew".into())),
+                department: text_field(entry, "department").or_else(|| Some("Crew".into())),
                 character_name: None,
                 profile_url: person_external_id(entry)
                     .map(|id| format!("https://www.themoviedb.org/person/{id}")),
@@ -1515,7 +1460,7 @@ fn tmdb_people(payload: &Value) -> Vec<ProviderMetadataPerson> {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
-                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                cached_image_path: text_field(entry, "koko_cached_image_path"),
                 sort_order,
             })
         }));
@@ -1554,7 +1499,7 @@ fn extend_tmdb_guest_stars(
                 birth_place: tmdb_person_detail(entry, "place_of_birth"),
                 role: Some("Guest Star".into()),
                 department: Some("Cast".into()),
-                character_name: text_field(entry, &["character"]),
+                character_name: text_field(entry, "character"),
                 profile_url: person_external_id(entry)
                     .map(|id| format!("https://www.themoviedb.org/person/{id}")),
                 image_url: entry
@@ -1563,7 +1508,7 @@ fn extend_tmdb_guest_stars(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(|path| tmdb_image_url(path, "w185")),
-                cached_image_path: text_field(entry, &["koko_cached_image_path"]),
+                cached_image_path: text_field(entry, "koko_cached_image_path"),
                 sort_order,
             })
         }));
@@ -1593,11 +1538,11 @@ fn tmdb_person_from_detail(
                     .collect()
             })
             .unwrap_or_default(),
-        biography: text_field(person, &["biography"]),
+        biography: text_field(person, "biography"),
         gender: tmdb_person_gender_from_value(person),
-        birthday: text_field(person, &["birthday"]),
-        deathday: text_field(person, &["deathday"]),
-        birth_place: text_field(person, &["place_of_birth"]),
+        birthday: text_field(person, "birthday"),
+        deathday: text_field(person, "deathday"),
+        birth_place: text_field(person, "place_of_birth"),
         role: None,
         department: None,
         character_name: None,
@@ -1610,7 +1555,7 @@ fn tmdb_person_from_detail(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|path| tmdb_image_url(path, "w185")),
-        cached_image_path: text_field(person, &["koko_cached_image_path"]),
+        cached_image_path: text_field(person, "koko_cached_image_path"),
         sort_order: 0,
     })
 }
@@ -1695,42 +1640,30 @@ fn tmdb_person_known_for(credit: &Value) -> Vec<String> {
 }
 
 fn person_name(value: &Value) -> Option<String> {
-    text_field(
-        value,
-        &[
-            "name",
-            "original_name",
-            "fullName",
-        ],
-    )
+    serde_json::from_value::<response::PersonIdentity>(value.clone())
+        .ok()?
+        .name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
 }
 
 fn person_external_id(value: &Value) -> Option<String> {
-    value
-        .get("id")
-        .or_else(|| value.get("peopleId"))
-        .or_else(|| value.get("personId"))
-        .and_then(|id| {
-            id.as_i64()
-                .map(|id| id.to_string())
-                .or_else(|| id.as_str().map(str::to_string))
-        })
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
+    serde_json::from_value::<response::PersonIdentity>(value.clone())
+        .ok()?
+        .id
+        .map(|id| id.to_string())
 }
 
 fn text_field(
     value: &Value,
-    keys: &[&str],
+    key: &str,
 ) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMetadataPerson> {
@@ -1759,6 +1692,68 @@ fn sort_and_dedupe_people(people: Vec<ProviderMetadataPerson>) -> Vec<ProviderMe
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn blocking_tmdb_requests_inherit_the_refresh_cache_policy() {
+        let bypassed = crate::metadata::cache_policy::fresh(async {
+            super::run_tmdb_blocking(|| Ok(crate::metadata::cache_policy::bypassed()))
+                .await
+                .unwrap()
+        })
+        .await;
+        assert!(bypassed);
+        assert!(!crate::metadata::cache_policy::bypassed());
+    }
+    #[test]
+    fn response_fields_are_selected_by_endpoint_type() {
+        let movie = serde_json::json!({
+            "media_type": "movie",
+            "id": 1,
+            "title": "Movie",
+            "name": "Wrong",
+            "release_date": "2000-01-01",
+            "first_air_date": "1900-01-01"
+        });
+        let show = serde_json::json!({
+            "media_type": "tv",
+            "id": 2,
+            "title": "Wrong",
+            "name": "Show",
+            "release_date": "1900-01-01",
+            "first_air_date": "2020-01-01"
+        });
+        let movie = super::search_result_from_value(movie).unwrap();
+        let show = super::search_result_from_value(show).unwrap();
+        assert_eq!(
+            (movie.title.as_str(), movie.release_year),
+            ("Movie", Some(2000))
+        );
+        assert_eq!(
+            (show.title.as_str(), show.release_year),
+            ("Show", Some(2020))
+        );
+        assert_eq!(
+            super::person_name(&serde_json::json!({
+                "fullName": "Invented"
+            })),
+            None
+        );
+        assert_eq!(
+            super::person_external_id(&serde_json::json!({
+                "peopleId": 42
+            })),
+            None
+        );
+        let mut ids = Vec::new();
+        super::extend_tmdb_external_ids_from_value(
+            &mut ids,
+            &serde_json::json!({
+                "made_up_id": "wrong",
+                "imdb_id": "tt1234567"
+            }),
+        );
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].source, "imdb");
+    }
     use super::{
         metadata_details,
         metadata_item_kind,

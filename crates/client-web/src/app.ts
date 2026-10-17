@@ -41,6 +41,7 @@ import {
 } from './app/selectors';
 import { syncVisibleSpinners } from './app/spinners';
 import { state } from './app/state';
+import { beginMetadataRequest, invalidateMetadataRequests } from './app/metadataRequests';
 import {
   renderHomePage,
   renderItemCard,
@@ -519,6 +520,7 @@ function prepareRouteState(route: AppRoute, showLoading: boolean): void {
 }
 
 async function refreshData(showLoading = true): Promise<void> {
+  invalidateMetadataRequests();
   cancelPendingHomeSearch();
   clearPendingLibraryRefresh();
   clearPendingMetadataRefresh();
@@ -600,6 +602,7 @@ async function refreshData(showLoading = true): Promise<void> {
 }
 
 async function refreshPendingLibraryData(): Promise<void> {
+  const isCurrent = beginMetadataRequest('library');
   const route = parseRoute();
   if (route.page !== 'home') {
     return;
@@ -625,7 +628,7 @@ async function refreshPendingLibraryData(): Promise<void> {
         ? searchItems(searchQuery)
         : Promise.resolve([]),
     ]);
-    if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
+    if (!isCurrent() || state.route.page !== 'home' || state.route.libraryId !== libraryId) {
       return;
     }
 
@@ -641,15 +644,16 @@ async function refreshPendingLibraryData(): Promise<void> {
       searchResults: state.searchResults,
     }) || previousError !== state.error;
   } catch (error) {
+    if (!isCurrent()) return;
     state.error = error instanceof Error ? error.message : 'Failed to refresh library data.';
     shouldRender = previousError !== state.error;
   } finally {
     schedulePendingLibraryRefresh();
-    maybeRenderAfterAutoRefresh(shouldRender);
+    if (isCurrent()) maybeRenderAfterAutoRefresh(shouldRender);
   }
 }
 
-async function refreshSelectedItemMetadata(itemId: number, previousError: string | undefined): Promise<boolean> {
+async function refreshSelectedItemMetadata(itemId: number, previousError: string | undefined, isCurrent: () => boolean): Promise<boolean> {
   const previousSnapshot = snapshotJson({
     systemActivities: state.systemActivities,
     libraries: state.libraries,
@@ -664,14 +668,14 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     getItem(itemId),
     getItemMetadata(itemId),
   ]);
-  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+  if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
   }
   const [home, libraryItems] = await Promise.all([
     getHome(item.library_id),
     getItems(item.library_id),
   ]);
-  if (state.route.page !== 'item' || state.route.itemId !== itemId) {
+  if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
   }
 
@@ -692,7 +696,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
   }) || previousError !== state.error;
 }
 
-async function refreshHomeMetadata(libraryId: number | undefined, previousError: string | undefined): Promise<boolean> {
+async function refreshHomeMetadata(libraryId: number | undefined, previousError: string | undefined, isCurrent: () => boolean): Promise<boolean> {
   const searchQuery = state.searchQuery.trim();
   const previousSnapshot = snapshotJson({
     systemActivities: state.systemActivities,
@@ -708,7 +712,7 @@ async function refreshHomeMetadata(libraryId: number | undefined, previousError:
     getItems(libraryId),
     searchQuery ? searchItems(searchQuery) : Promise.resolve([]),
   ]);
-  if (state.route.page !== 'home' || state.route.libraryId !== libraryId) {
+  if (!isCurrent() || state.route.page !== 'home' || state.route.libraryId !== libraryId) {
     return false;
   }
 
@@ -727,7 +731,7 @@ async function refreshHomeMetadata(libraryId: number | undefined, previousError:
   }) || previousError !== state.error;
 }
 
-async function refreshOverviewMetadata(route: AppRoute, previousError: string | undefined): Promise<boolean> {
+async function refreshOverviewMetadata(route: AppRoute, previousError: string | undefined, isCurrent: () => boolean): Promise<boolean> {
   const previousSnapshot = snapshotJson({
     systemActivities: state.systemActivities,
     libraries: state.libraries,
@@ -741,6 +745,7 @@ async function refreshOverviewMetadata(route: AppRoute, previousError: string | 
   if (state.route.page !== route.page || (state.route.page === 'settings' && route.page === 'settings' && state.route.section !== route.section)) {
     return false;
   }
+  if (!isCurrent()) return false;
   state.systemActivities = activitiesResponse.activities;
   state.libraries = libraries;
   state.dashboardItems = dashboardItems;
@@ -756,6 +761,7 @@ async function refreshOverviewMetadata(route: AppRoute, previousError: string | 
 }
 
 async function refreshPendingMetadataData(): Promise<void> {
+  const isCurrent = beginMetadataRequest();
   const route = parseRoute();
   let shouldRender = false;
   const previousError = state.error;
@@ -763,20 +769,21 @@ async function refreshPendingMetadataData(): Promise<void> {
   try {
     switch (route.page) {
       case 'item':
-        shouldRender = await refreshSelectedItemMetadata(route.itemId, previousError);
+        shouldRender = await refreshSelectedItemMetadata(route.itemId, previousError, isCurrent);
         break;
       case 'home':
-        shouldRender = await refreshHomeMetadata(route.libraryId, previousError);
+        shouldRender = await refreshHomeMetadata(route.libraryId, previousError, isCurrent);
         break;
       default:
-        shouldRender = await refreshOverviewMetadata(route, previousError);
+        shouldRender = await refreshOverviewMetadata(route, previousError, isCurrent);
     }
   } catch (error) {
+    if (!isCurrent()) return;
     state.error = error instanceof Error ? error.message : 'Failed to refresh media metadata.';
     shouldRender = previousError !== state.error;
   } finally {
     schedulePendingMetadataRefresh();
-    maybeRenderAfterAutoRefresh(shouldRender);
+    if (isCurrent()) maybeRenderAfterAutoRefresh(shouldRender);
   }
 }
 

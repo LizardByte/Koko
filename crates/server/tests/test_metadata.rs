@@ -351,7 +351,7 @@ fn test_expected_artwork_cache_path_changes_when_url_changes() {
 }
 
 #[test]
-fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missing() {
+fn test_missing_artwork_urls_do_not_remove_shared_cached_assets() {
     let temp_dir = std::env::temp_dir().join(format!(
         "koko_metadata_asset_cleanup_{}",
         std::time::SystemTime::now()
@@ -381,17 +381,26 @@ fn test_persist_item_metadata_assets_clears_stale_provider_poster_when_url_missi
         &snapshot.locale_key,
     );
     fs::create_dir_all(&item_dir).unwrap();
-    fs::write(item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg"), b"stale").unwrap();
+    for kind in ["poster", "backdrop", "logo"] {
+        fs::write(
+            item_dir.join(format!("tmdb_{kind}-aaaaaaaaaaaaaaaa.jpg")),
+            b"shared",
+        )
+        .unwrap();
+    }
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime
+    let paths = runtime
         .block_on(persist_item_metadata_assets(&snapshot, 198, &data_dir))
         .unwrap();
-
-    assert!(
-        !item_dir.join("tmdb_poster-aaaaaaaaaaaaaaaa.jpg").exists(),
-        "Expected stale provider poster to be removed when no artwork URL is present"
-    );
+    assert_eq!(paths, (None, None, None));
+    for kind in ["poster", "backdrop", "logo"] {
+        assert!(
+            item_dir
+                .join(format!("tmdb_{kind}-aaaaaaaaaaaaaaaa.jpg"))
+                .exists()
+        );
+    }
 
     fs::remove_dir_all(temp_dir).unwrap();
 }

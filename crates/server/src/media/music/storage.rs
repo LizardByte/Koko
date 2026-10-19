@@ -1,84 +1,98 @@
 //! Scalar music metadata and normalized genre rows. No serialized payloads are persisted.
-
-use diesel::Connection;
-
 use super::*;
+use crate::db::schema::{
+    music_file_genres as file_genres,
+    music_file_metadata as files,
+    music_item_genres as item_genres,
+    music_item_metadata as items,
+};
+use diesel::{
+    Connection,
+    IntoSql,
+    prelude::*,
+};
 
-#[derive(diesel::QueryableByName)]
+#[derive(Queryable)]
 struct MusicRow {
-    #[diesel(sql_type = sql_types::Integer)]
     owner_id: i32,
-    #[diesel(sql_type = sql_types::Text)]
     title: String,
-    #[diesel(sql_type = sql_types::Text)]
     artist: String,
-    #[diesel(sql_type = sql_types::Text)]
     album_artist: String,
-    #[diesel(sql_type = sql_types::Text)]
     album: String,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
     track_number: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
     disc_number: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
     release_year: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     musicbrainz_artist_id: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     musicbrainz_release_id: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     musicbrainz_recording_id: Option<String>,
 }
-
-#[derive(diesel::QueryableByName)]
+#[derive(Queryable)]
 struct GenreRow {
-    #[diesel(sql_type = sql_types::Integer)]
     owner_id: i32,
-    #[diesel(sql_type = sql_types::Text)]
     source: String,
-    #[diesel(sql_type = sql_types::Text)]
     genre: String,
 }
-
 #[derive(Clone, Copy)]
 enum Owner {
     File,
     Item,
 }
-
-impl Owner {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::File => "file",
-            Self::Item => "item",
-        }
-    }
-}
-
 type StoredMusic = HashMap<i32, (MusicMetadata, String)>;
 
+macro_rules! columns {
+    ($table:ident, $id:ident, $title:expr) => {
+        (
+            $table::$id,
+            $title,
+            $table::artist,
+            $table::album_artist,
+            $table::album,
+            $table::track_number,
+            $table::disc_number,
+            $table::release_year,
+            $table::musicbrainz_artist_id,
+            $table::musicbrainz_release_id,
+            $table::musicbrainz_recording_id,
+        )
+    };
+}
+macro_rules! values {
+    ($table:ident, $music:ident) => {
+        (
+            $table::artist.eq(&$music.artist),
+            $table::album_artist.eq(&$music.album_artist),
+            $table::album.eq(&$music.album),
+            $table::track_number.eq(&$music.track_number),
+            $table::disc_number.eq(&$music.disc_number),
+            $table::release_year.eq(&$music.year),
+            $table::musicbrainz_artist_id.eq(&$music.musicbrainz_artist_id),
+            $table::musicbrainz_release_id.eq(&$music.musicbrainz_release_id),
+            $table::musicbrainz_recording_id.eq(&$music.musicbrainz_recording_id),
+        )
+    };
+}
 fn load(
     conn: &mut SqliteConnection,
     owner: Owner,
     ids: &[i32],
-) -> Result<StoredMusic, diesel::result::Error> {
-    if ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    // IDs are typed integers; table names come only from Owner, never request text.
-    let ids = ids.iter().map(i32::to_string).collect::<Vec<_>>().join(",");
-    let kind = owner.kind();
-    let title = if matches!(owner, Owner::File) { "title" } else { "'' AS title" };
-    let sql = format!(
-        "SELECT media_{kind}_id AS \
-         owner_id,{title},artist,album_artist,album,track_number,disc_number,release_year,\
-         musicbrainz_artist_id,musicbrainz_release_id,musicbrainz_recording_id FROM \
-         music_{kind}_metadata WHERE media_{kind}_id IN ({ids})"
-    );
-    let rows = diesel::sql_query(sql).load::<MusicRow>(conn)?;
-    let mut music = rows
-        .into_iter()
-        .map(|row| {
+) -> QueryResult<StoredMusic> {
+    let mut music = HashMap::new();
+    for chunk in ids.chunks(500) {
+        let rows = match owner {
+            Owner::File => files::table
+                .filter(files::media_file_id.eq_any(chunk))
+                .select(columns!(files, media_file_id, files::title))
+                .load::<MusicRow>(conn)?,
+            Owner::Item => items::table
+                .filter(items::media_item_id.eq_any(chunk))
+                .select(columns!(
+                    items,
+                    media_item_id,
+                    "".into_sql::<sql_types::Text>()
+                ))
+                .load::<MusicRow>(conn)?,
+        };
+        music.extend(rows.into_iter().map(|row| {
             (
                 row.owner_id,
                 (
@@ -97,41 +111,58 @@ fn load(
                     row.title,
                 ),
             )
-        })
-        .collect::<StoredMusic>();
-    let genres = load_genres(conn, owner, &ids)?;
-    for row in genres.into_iter().filter(|row| row.source == "local") {
+        }));
+    }
+    for row in load_genres(conn, owner, ids)?
+        .into_iter()
+        .filter(|row| row.source == "local")
+    {
         if let Some((music, _)) = music.get_mut(&row.owner_id) {
             music.genres.push(row.genre);
         }
     }
     Ok(music)
 }
-
 fn load_genres(
     conn: &mut SqliteConnection,
     owner: Owner,
-    ids: &str,
-) -> Result<Vec<GenreRow>, diesel::result::Error> {
-    let kind = owner.kind();
-    let source = if matches!(owner, Owner::Item) { "source" } else { "'local' AS source" };
-    diesel::sql_query(format!(
-        "SELECT media_{kind}_id AS owner_id,{source},genre FROM music_{kind}_genres WHERE \
-         media_{kind}_id IN ({ids}) ORDER BY genre"
-    ))
-    .load(conn)
+    ids: &[i32],
+) -> QueryResult<Vec<GenreRow>> {
+    let mut rows = Vec::new();
+    for chunk in ids.chunks(500) {
+        rows.extend(match owner {
+            Owner::File => file_genres::table
+                .filter(file_genres::media_file_id.eq_any(chunk))
+                .order(file_genres::genre)
+                .select((
+                    file_genres::media_file_id,
+                    "local".into_sql::<sql_types::Text>(),
+                    file_genres::genre,
+                ))
+                .load::<GenreRow>(conn)?,
+            Owner::Item => item_genres::table
+                .filter(item_genres::media_item_id.eq_any(chunk))
+                .order(item_genres::genre)
+                .select((
+                    item_genres::media_item_id,
+                    item_genres::source,
+                    item_genres::genre,
+                ))
+                .load::<GenreRow>(conn)?,
+        });
+    }
+    Ok(rows)
 }
-
 pub(in crate::media) fn load_files(
     conn: &mut SqliteConnection,
     ids: &[i32],
-) -> Result<StoredMusic, diesel::result::Error> {
+) -> QueryResult<StoredMusic> {
     load(conn, Owner::File, ids)
 }
 pub(in crate::media) fn load_items(
     conn: &mut SqliteConnection,
     ids: &[i32],
-) -> Result<StoredMusic, diesel::result::Error> {
+) -> QueryResult<StoredMusic> {
     load(conn, Owner::Item, ids)
 }
 
@@ -142,89 +173,86 @@ fn save(
     title: &str,
     file_hash: &str,
     music: &MusicMetadata,
-) -> Result<(), diesel::result::Error> {
-    let kind = owner.kind();
-    let title_column = if matches!(owner, Owner::File) { ",title,file_hash" } else { "" };
-    let title_value = if matches!(owner, Owner::File) { ",?,?" } else { "" };
-    let title_update = if matches!(owner, Owner::File) {
-        ",title=excluded.title,file_hash=excluded.file_hash"
-    } else {
-        ""
-    };
+) -> QueryResult<()> {
     conn.transaction(|conn| {
-        let sql = format!(
-            "INSERT INTO music_{kind}_metadata \
-             (media_{kind}_id,artist,album_artist,album,track_number,disc_number,release_year,\
-             musicbrainz_artist_id,musicbrainz_release_id,musicbrainz_recording_id{title_column}) \
-             VALUES (?,?,?,?,?,?,?,?,?,?{title_value}) ON CONFLICT(media_{kind}_id) DO UPDATE SET \
-             artist=excluded.artist,album_artist=excluded.album_artist,album=excluded.album,\
-             track_number=excluded.track_number,disc_number=excluded.disc_number,\
-             release_year=excluded.release_year,musicbrainz_artist_id=excluded.\
-             musicbrainz_artist_id,musicbrainz_release_id=excluded.musicbrainz_release_id,\
-             musicbrainz_recording_id=excluded.musicbrainz_recording_id{title_update}"
-        );
-        let mut query = diesel::sql_query(sql)
-            .into_boxed::<diesel::sqlite::Sqlite>()
-            .bind::<sql_types::Integer, _>(id)
-            .bind::<sql_types::Text, _>(&music.artist)
-            .bind::<sql_types::Text, _>(&music.album_artist)
-            .bind::<sql_types::Text, _>(&music.album)
-            .bind::<sql_types::Nullable<sql_types::Integer>, _>(music.track_number)
-            .bind::<sql_types::Nullable<sql_types::Integer>, _>(music.disc_number)
-            .bind::<sql_types::Nullable<sql_types::Integer>, _>(music.year)
-            .bind::<sql_types::Nullable<sql_types::Text>, _>(&music.musicbrainz_artist_id)
-            .bind::<sql_types::Nullable<sql_types::Text>, _>(&music.musicbrainz_release_id)
-            .bind::<sql_types::Nullable<sql_types::Text>, _>(&music.musicbrainz_recording_id);
-        if matches!(owner, Owner::File) {
-            query = query
-                .bind::<sql_types::Text, _>(title)
-                .bind::<sql_types::Text, _>(file_hash);
+        match owner {
+            Owner::File => {
+                diesel::insert_into(files::table)
+                    .values((
+                        files::media_file_id.eq(id),
+                        files::title.eq(title),
+                        files::file_hash.eq(file_hash),
+                        values!(files, music),
+                    ))
+                    .on_conflict(files::media_file_id)
+                    .do_update()
+                    .set((
+                        files::title.eq(title),
+                        files::file_hash.eq(file_hash),
+                        values!(files, music),
+                    ))
+                    .execute(conn)?;
+            }
+            Owner::Item => {
+                diesel::insert_into(items::table)
+                    .values((items::media_item_id.eq(id), values!(items, music)))
+                    .on_conflict(items::media_item_id)
+                    .do_update()
+                    .set(values!(items, music))
+                    .execute(conn)?;
+            }
         }
-        query.execute(conn)?;
         save_genres(conn, owner, id, "local", &music.genres)
     })
 }
-
 fn save_genres(
     conn: &mut SqliteConnection,
     owner: Owner,
     id: i32,
     source: &str,
     genres: &[String],
-) -> Result<(), diesel::result::Error> {
-    let kind = owner.kind();
-    let filter = if matches!(owner, Owner::Item) { " AND source = ?" } else { "" };
-    let mut delete = diesel::sql_query(format!(
-        "DELETE FROM music_{kind}_genres WHERE media_{kind}_id = ?{filter}"
-    ))
-    .into_boxed::<diesel::sqlite::Sqlite>()
-    .bind::<sql_types::Integer, _>(id);
-    if matches!(owner, Owner::Item) {
-        delete = delete.bind::<sql_types::Text, _>(source);
+) -> QueryResult<()> {
+    match owner {
+        Owner::File => {
+            diesel::delete(file_genres::table.filter(file_genres::media_file_id.eq(id)))
+                .execute(conn)?;
+        }
+        Owner::Item => {
+            diesel::delete(
+                item_genres::table
+                    .filter(item_genres::media_item_id.eq(id))
+                    .filter(item_genres::source.eq(source)),
+            )
+            .execute(conn)?;
+        }
     }
-    delete.execute(conn)?;
     for genre in genres
         .iter()
         .map(|genre| genre.trim())
         .filter(|genre| !genre.is_empty())
     {
-        let columns = if matches!(owner, Owner::Item) { ",source" } else { "" };
-        let value = if matches!(owner, Owner::Item) { ",?" } else { "" };
-        let mut insert = diesel::sql_query(format!(
-            "INSERT OR IGNORE INTO music_{kind}_genres (media_{kind}_id,genre{columns}) VALUES \
-             (?,?{value})"
-        ))
-        .into_boxed::<diesel::sqlite::Sqlite>()
-        .bind::<sql_types::Integer, _>(id)
-        .bind::<sql_types::Text, _>(genre);
-        if matches!(owner, Owner::Item) {
-            insert = insert.bind::<sql_types::Text, _>(source);
+        match owner {
+            Owner::File => {
+                diesel::insert_or_ignore_into(file_genres::table)
+                    .values((
+                        file_genres::media_file_id.eq(id),
+                        file_genres::genre.eq(genre),
+                    ))
+                    .execute(conn)?;
+            }
+            Owner::Item => {
+                diesel::insert_or_ignore_into(item_genres::table)
+                    .values((
+                        item_genres::media_item_id.eq(id),
+                        item_genres::source.eq(source),
+                        item_genres::genre.eq(genre),
+                    ))
+                    .execute(conn)?;
+            }
         }
-        insert.execute(conn)?;
     }
     Ok(())
 }
-
 pub(in crate::media) fn save_file(
     conn: &mut SqliteConnection,
     id: i32,
@@ -263,11 +291,7 @@ pub(in crate::media) fn apply_summaries(
     }
     apply_artwork_summaries(conn, items)?;
     let mut music = load_items(conn, &ids)?;
-    let genres = load_genres(
-        conn,
-        Owner::Item,
-        &ids.iter().map(i32::to_string).collect::<Vec<_>>().join(","),
-    )?;
+    let genres = load_genres(conn, Owner::Item, &ids)?;
     let mut provider_genres = HashMap::<i32, Vec<String>>::new();
     for row in genres.into_iter().filter(|row| row.source == "musicbrainz") {
         provider_genres
@@ -373,7 +397,7 @@ pub(in crate::media) fn apply_detail(
     };
     if detail.genres.is_empty() {
         let genres = if detail.has_metadata {
-            load_genres(conn, Owner::Item, &detail.id.to_string())?
+            load_genres(conn, Owner::Item, &[detail.id])?
                 .into_iter()
                 .filter(|row| row.source == "musicbrainz")
                 .map(|row| row.genre)
@@ -409,7 +433,7 @@ pub(crate) fn provider_genres(
     conn: &mut SqliteConnection,
     id: i32,
 ) -> Result<Vec<String>, diesel::result::Error> {
-    Ok(load_genres(conn, Owner::Item, &id.to_string())?
+    Ok(load_genres(conn, Owner::Item, &[id])?
         .into_iter()
         .filter(|row| row.source == "musicbrainz")
         .map(|row| row.genre)

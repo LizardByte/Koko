@@ -5,24 +5,23 @@ use super::{
 };
 use crate::db::{
     models::MediaItem,
-    schema::media_items::dsl as media_items,
+    schema::{
+        media_items::dsl as media_items,
+        music_playlist_entries::dsl as entries,
+        music_playlists::dsl as playlists,
+        music_progress_context::dsl as context,
+    },
 };
 use diesel::{
     Connection,
     ExpressionMethods,
     OptionalExtension,
     QueryDsl,
-    QueryableByName,
+    Queryable,
     RunQueryDsl,
+    Selectable,
     SelectableHelper,
     SqliteConnection,
-    sql_types::{
-        BigInt,
-        Bool,
-        Integer,
-        Nullable,
-        Text,
-    },
 };
 use rocket_okapi::okapi::schemars::{
     self,
@@ -38,40 +37,30 @@ use std::collections::{
 };
 
 /// A saved queue owned by the current user.
-#[derive(Debug, Clone, Serialize, JsonSchema, QueryableByName, PartialEq)]
+#[derive(Debug, Clone, Serialize, JsonSchema, Queryable, Selectable, PartialEq)]
+#[diesel(table_name = crate::db::schema::music_playlists)]
 pub struct MusicPlaylist {
     /// Stable playlist ID.
-    #[diesel(sql_type = Integer)]
     pub id: i32,
     /// User chosen name.
-    #[diesel(sql_type = Text)]
     pub name: String,
     /// Creation timestamp in Unix seconds.
-    #[diesel(sql_type = BigInt)]
     pub created_at: i64,
     /// Last modification timestamp in Unix seconds.
-    #[diesel(sql_type = BigInt)]
     pub updated_at: i64,
     /// Radio queues stay temporary until explicitly saved as a playlist.
-    #[diesel(sql_type = Bool)]
     pub temporary: bool,
     /// Zero-based entry in saved playing order, including repeated songs.
-    #[diesel(sql_type = Integer)]
     pub current_index: i32,
     /// Position in the current song.
-    #[diesel(sql_type = BigInt)]
     pub position_ms: i64,
     /// Whether the queue reached its end.
-    #[diesel(sql_type = Bool)]
     pub completed: bool,
     /// Shuffle preference; the entries already contain the actual playing order.
-    #[diesel(sql_type = Bool)]
     pub shuffle: bool,
     /// Repeat preference: off, all, or one.
-    #[diesel(sql_type = Text)]
     pub repeat_mode: String,
     /// Artist or album whose current artwork represents the radio's original seed.
-    #[diesel(sql_type = Nullable<Integer>)]
     pub artwork_item_id: Option<i32>,
 }
 
@@ -97,12 +86,6 @@ pub struct MusicPlaylistDetail {
     pub artwork: Option<PlaylistArtwork>,
 }
 
-#[derive(QueryableByName)]
-struct ItemId {
-    #[diesel(sql_type = Integer)]
-    id: i32,
-}
-
 /// Actual queue order and progress, stored as scalar fields and relational entries.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QueueState {
@@ -126,18 +109,12 @@ pub fn load(
     user: i32,
     id: i32,
 ) -> diesel::QueryResult<MusicPlaylistDetail> {
-    let mut playlist: MusicPlaylist =
-        diesel::sql_query("SELECT * FROM music_playlists WHERE id=? AND user_id=?")
-            .bind::<Integer, _>(id)
-            .bind::<Integer, _>(user)
-            .get_result(conn)?;
-    let ids = diesel::sql_query(
-        "SELECT media_item_id AS id FROM music_playlist_entries WHERE playlist_id=? ORDER BY \
-         position",
-    )
-    .bind::<Integer, _>(id)
-    .load::<ItemId>(conn)?;
-    let ordered_ids = ids.iter().map(|entry| entry.id).collect::<Vec<_>>();
+    let mut playlist = playlists::music_playlists
+        .find(id)
+        .filter(playlists::user_id.eq(user))
+        .select(MusicPlaylist::as_select())
+        .first(conn)?;
+    let ordered_ids = entry_ids(conn, id)?;
     let rows = visible_rows(conn, user, &ordered_ids)?;
     let links = super::preferred_metadata_links_by_item_id(conn, &ordered_ids, &[])?;
     let mut summaries = rows
@@ -203,15 +180,15 @@ pub fn list(
     user: i32,
     library: Option<i32>,
 ) -> diesel::QueryResult<Vec<MusicPlaylistDetail>> {
-    let ids = diesel::sql_query(
-        "SELECT id FROM music_playlists WHERE user_id=? AND temporary=0 ORDER BY updated_at \
-         DESC,id DESC",
-    )
-    .bind::<Integer, _>(user)
-    .load::<ItemId>(conn)?;
+    let ids = playlists::music_playlists
+        .filter(playlists::user_id.eq(user))
+        .filter(playlists::temporary.eq(false))
+        .order((playlists::updated_at.desc(), playlists::id.desc()))
+        .select(playlists::id)
+        .load::<i32>(conn)?;
     let mut playlists = Vec::new();
     for entry in ids {
-        let mut detail = load(conn, user, entry.id)?;
+        let mut detail = load(conn, user, entry)?;
         if let Some(library) = library {
             detail.items.retain(|item| item.library_id == library);
         }
@@ -228,15 +205,16 @@ pub fn ongoing(
     user: i32,
     library: Option<i32>,
 ) -> diesel::QueryResult<Vec<MusicPlaylistDetail>> {
-    let ids = diesel::sql_query(
-        "SELECT id FROM music_playlists WHERE user_id=? AND temporary=1 AND completed=0 ORDER BY \
-         updated_at DESC,id DESC",
-    )
-    .bind::<Integer, _>(user)
-    .load::<ItemId>(conn)?;
+    let ids = playlists::music_playlists
+        .filter(playlists::user_id.eq(user))
+        .filter(playlists::temporary.eq(true))
+        .filter(playlists::completed.eq(false))
+        .order((playlists::updated_at.desc(), playlists::id.desc()))
+        .select(playlists::id)
+        .load::<i32>(conn)?;
     let mut result = Vec::new();
     for id in ids {
-        let detail = load(conn, user, id.id)?;
+        let detail = load(conn, user, id)?;
         // Keep the full mix order even when discovered from one library's home page.
         if !detail.items.is_empty()
             && library
@@ -264,15 +242,19 @@ pub fn create_radio(
                 .or_else(|| ids.first().copied())
                 .ok_or(diesel::result::Error::NotFound)?,
         )?;
-        diesel::sql_query(
-            "DELETE FROM music_playlists WHERE user_id=? AND temporary=1 AND completed=1",
+        diesel::delete(
+            playlists::music_playlists
+                .filter(playlists::user_id.eq(user))
+                .filter(playlists::temporary.eq(true))
+                .filter(playlists::completed.eq(true)),
         )
-        .bind::<Integer, _>(user)
         .execute(conn)?;
         let detail = create(conn, user, name, ids)?;
-        diesel::sql_query("UPDATE music_playlists SET temporary=1,artwork_item_id=? WHERE id=?")
-            .bind::<Integer, _>(source)
-            .bind::<Integer, _>(detail.playlist.id)
+        diesel::update(playlists::music_playlists.find(detail.playlist.id))
+            .set((
+                playlists::temporary.eq(true),
+                playlists::artwork_item_id.eq(source),
+            ))
             .execute(conn)?;
         load(conn, user, detail.playlist.id)
     })
@@ -319,10 +301,11 @@ pub fn update_queue(
     queue: &QueueState,
 ) -> diesel::QueryResult<()> {
     conn.transaction(|conn| {
-        diesel::sql_query("SELECT id FROM music_playlists WHERE id=? AND user_id=?")
-            .bind::<Integer, _>(id)
-            .bind::<Integer, _>(user)
-            .get_result::<ItemId>(conn)?;
+        playlists::music_playlists
+            .find(id)
+            .filter(playlists::user_id.eq(user))
+            .select(playlists::id)
+            .first::<i32>(conn)?;
         let visible = visible_rows(conn, user, &queue.item_ids)?
             .into_iter()
             .map(|item| item.id)
@@ -330,44 +313,24 @@ pub fn update_queue(
         if queue.item_ids.iter().any(|id| !visible.contains(id)) {
             return Err(diesel::result::Error::NotFound);
         }
-        let saved = diesel::sql_query(
-            "SELECT media_item_id AS id FROM music_playlist_entries WHERE playlist_id=? ORDER BY \
-             position",
-        )
-        .bind::<Integer, _>(id)
-        .load::<ItemId>(conn)?;
-        // Progress ticks only update scalars; rewrite entries only after an actual queue edit.
-        if !saved
-            .iter()
-            .map(|item| item.id)
-            .eq(queue.item_ids.iter().copied())
-        {
-            diesel::sql_query("DELETE FROM music_playlist_entries WHERE playlist_id=?")
-                .bind::<Integer, _>(id)
+        if entry_ids(conn, id)? != queue.item_ids {
+            diesel::delete(entries::music_playlist_entries.filter(entries::playlist_id.eq(id)))
                 .execute(conn)?;
-            for (position, item) in queue.item_ids.iter().enumerate() {
-                diesel::sql_query(
-                    "INSERT INTO music_playlist_entries(playlist_id,position,media_item_id) \
-                     VALUES(?,?,?)",
-                )
-                .bind::<Integer, _>(id)
-                .bind::<Integer, _>(position as i32)
-                .bind::<Integer, _>(*item)
-                .execute(conn)?;
-            }
+            insert_entries(conn, id, &queue.item_ids)?;
         }
-        diesel::sql_query(
-            "UPDATE music_playlists SET \
-             current_index=?,position_ms=?,completed=?,shuffle=?,repeat_mode=?,\
-             updated_at=unixepoch() WHERE id=? AND user_id=?",
+        diesel::update(
+            playlists::music_playlists
+                .find(id)
+                .filter(playlists::user_id.eq(user)),
         )
-        .bind::<Integer, _>(queue.current_index)
-        .bind::<BigInt, _>(queue.position_ms)
-        .bind::<Bool, _>(queue.completed)
-        .bind::<Bool, _>(queue.shuffle)
-        .bind::<Text, _>(&queue.repeat_mode)
-        .bind::<Integer, _>(id)
-        .bind::<Integer, _>(user)
+        .set((
+            playlists::current_index.eq(queue.current_index),
+            playlists::position_ms.eq(queue.position_ms),
+            playlists::completed.eq(queue.completed),
+            playlists::shuffle.eq(queue.shuffle),
+            playlists::repeat_mode.eq(&queue.repeat_mode),
+            playlists::updated_at.eq(crate::utils::current_timestamp()),
+        ))
         .execute(conn)?;
         Ok(())
     })
@@ -380,13 +343,16 @@ pub fn rename_and_save(
     id: i32,
     name: &str,
 ) -> diesel::QueryResult<MusicPlaylistDetail> {
-    if diesel::sql_query(
-        "UPDATE music_playlists SET name=?,temporary=0,updated_at=unixepoch() WHERE id=? AND \
-         user_id=?",
+    if diesel::update(
+        playlists::music_playlists
+            .find(id)
+            .filter(playlists::user_id.eq(user)),
     )
-    .bind::<Text, _>(name)
-    .bind::<Integer, _>(id)
-    .bind::<Integer, _>(user)
+    .set((
+        playlists::name.eq(name),
+        playlists::temporary.eq(false),
+        playlists::updated_at.eq(crate::utils::current_timestamp()),
+    ))
     .execute(conn)?
         == 0
     {
@@ -403,17 +369,16 @@ pub fn set_radio_context(
     radio: bool,
 ) -> diesel::QueryResult<()> {
     if radio {
-        diesel::sql_query(
-            "INSERT OR IGNORE INTO music_progress_context(user_id,media_item_id) VALUES(?,?)",
-        )
-        .bind::<Integer, _>(user)
-        .bind::<Integer, _>(item)
-        .execute(conn)?;
-    } else {
-        diesel::sql_query("DELETE FROM music_progress_context WHERE user_id=? AND media_item_id=?")
-            .bind::<Integer, _>(user)
-            .bind::<Integer, _>(item)
+        diesel::insert_or_ignore_into(context::music_progress_context)
+            .values((context::user_id.eq(user), context::media_item_id.eq(item)))
             .execute(conn)?;
+    } else {
+        diesel::delete(
+            context::music_progress_context
+                .filter(context::user_id.eq(user))
+                .filter(context::media_item_id.eq(item)),
+        )
+        .execute(conn)?;
     }
     Ok(())
 }
@@ -423,14 +388,12 @@ pub fn radio_context_items(
     conn: &mut SqliteConnection,
     user: i32,
 ) -> diesel::QueryResult<HashSet<i32>> {
-    Ok(
-        diesel::sql_query("SELECT media_item_id AS id FROM music_progress_context WHERE user_id=?")
-            .bind::<Integer, _>(user)
-            .load::<ItemId>(conn)?
-            .into_iter()
-            .map(|item| item.id)
-            .collect(),
-    )
+    Ok(context::music_progress_context
+        .filter(context::user_id.eq(user))
+        .select(context::media_item_id)
+        .load::<i32>(conn)?
+        .into_iter()
+        .collect())
 }
 
 /// Save a queue atomically, preserving its exact order and duplicate entries.
@@ -448,23 +411,15 @@ pub fn create(
         if ids.iter().any(|id| !visible.contains(id)) {
             return Err(diesel::result::Error::NotFound);
         }
-        diesel::sql_query("INSERT INTO music_playlists(user_id,name) VALUES (?,?)")
-            .bind::<Integer, _>(user)
-            .bind::<Text, _>(name)
+        diesel::insert_into(playlists::music_playlists)
+            .values((playlists::user_id.eq(user), playlists::name.eq(name)))
             .execute(conn)?;
-        let id = diesel::sql_query("SELECT CAST(last_insert_rowid() AS INTEGER) AS id")
-            .get_result::<ItemId>(conn)?
-            .id;
-        for (position, item) in ids.iter().enumerate() {
-            diesel::sql_query(
-                "INSERT INTO music_playlist_entries(playlist_id,position,media_item_id) VALUES \
-                 (?,?,?)",
-            )
-            .bind::<Integer, _>(id)
-            .bind::<Integer, _>(position as i32)
-            .bind::<Integer, _>(*item)
-            .execute(conn)?;
-        }
+        // SQLite holds the writer lock until this transaction commits.
+        let id = playlists::music_playlists
+            .order(playlists::id.desc())
+            .select(playlists::id)
+            .first::<i32>(conn)?;
+        insert_entries(conn, id, ids)?;
         load(conn, user, id)
     })
 }
@@ -502,13 +457,42 @@ pub fn delete(
     user: i32,
     id: i32,
 ) -> diesel::QueryResult<()> {
-    if diesel::sql_query("DELETE FROM music_playlists WHERE id=? AND user_id=?")
-        .bind::<Integer, _>(id)
-        .bind::<Integer, _>(user)
-        .execute(conn)?
+    if diesel::delete(
+        playlists::music_playlists
+            .find(id)
+            .filter(playlists::user_id.eq(user)),
+    )
+    .execute(conn)?
         == 0
     {
         return Err(diesel::result::Error::NotFound);
+    }
+    Ok(())
+}
+
+fn entry_ids(
+    conn: &mut SqliteConnection,
+    id: i32,
+) -> diesel::QueryResult<Vec<i32>> {
+    entries::music_playlist_entries
+        .filter(entries::playlist_id.eq(id))
+        .order(entries::position)
+        .select(entries::media_item_id)
+        .load(conn)
+}
+fn insert_entries(
+    conn: &mut SqliteConnection,
+    id: i32,
+    ids: &[i32],
+) -> diesel::QueryResult<()> {
+    for (position, item) in ids.iter().enumerate() {
+        diesel::insert_into(entries::music_playlist_entries)
+            .values((
+                entries::playlist_id.eq(id),
+                entries::position.eq(position as i32),
+                entries::media_item_id.eq(item),
+            ))
+            .execute(conn)?;
     }
     Ok(())
 }

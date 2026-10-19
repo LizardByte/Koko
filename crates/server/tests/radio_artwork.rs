@@ -115,48 +115,31 @@ fn artwork_requires_seed_access_and_does_not_leak_after_access_is_revoked() {
 }
 
 #[test]
-fn legacy_radio_migration_freezes_the_first_album_as_a_fallback() {
+fn combined_music_migration_applies_and_reverts_as_one_revision() {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
-    conn.batch_execute(
-        "PRAGMA foreign_keys=ON;
-        CREATE TABLE media_items(id INTEGER PRIMARY KEY,parent_id INTEGER,item_type TEXT);
-        CREATE TABLE music_playlists(id INTEGER PRIMARY KEY,temporary BOOLEAN);
-        CREATE TABLE music_playlist_entries(playlist_id INTEGER,position INTEGER,media_item_id \
-         INTEGER);
-        INSERT INTO media_items VALUES(10,NULL,'artist'),(11,10,'album'),(12,11,'track'),
-                                      (21,NULL,'album'),(22,21,'track');
-        INSERT INTO music_playlists VALUES(1,1),(2,0);
-        INSERT INTO music_playlist_entries VALUES(1,0,12),(1,1,22),(2,0,12);",
-    )
-    .unwrap();
-    conn.batch_execute(include_str!(
-        "../sql/migrations/93e6b42ca108_radio_artwork/up.sql"
-    ))
-    .unwrap();
-    #[derive(diesel::QueryableByName)]
-    struct Source {
-        #[diesel(sql_type=diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
-        artwork_item_id: Option<i32>,
-    }
-    use diesel::RunQueryDsl;
-    let source = |conn: &mut SqliteConnection, id| {
-        diesel::sql_query(format!(
-            "SELECT artwork_item_id FROM music_playlists WHERE id={id}"
-        ))
-        .get_result::<Source>(conn)
-        .unwrap()
-        .artwork_item_id
-    };
-    assert_eq!(source(&mut conn, 1), Some(11));
-    assert_eq!(source(&mut conn, 2), None);
-    conn.batch_execute("DELETE FROM music_playlist_entries WHERE playlist_id=1 AND position=0;")
-        .unwrap();
-    assert_eq!(source(&mut conn, 1), Some(11));
-    conn.batch_execute("DELETE FROM media_items WHERE id=11;")
-        .unwrap();
-    assert_eq!(source(&mut conn, 1), None);
-    conn.batch_execute(include_str!(
-        "../sql/migrations/93e6b42ca108_radio_artwork/down.sql"
-    ))
-    .unwrap();
+    let revisions = koko::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+    assert_eq!(
+        revisions
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["a54d52c8da5e", "c18f43d2a9b7"]
+    );
+    assert!(
+        koko::db::run_pending_sqlite_migrations(&mut conn)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        koko::db::revert_all_sqlite_migrations(&mut conn)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        koko::db::run_pending_sqlite_migrations(&mut conn)
+            .unwrap()
+            .len(),
+        2
+    );
 }

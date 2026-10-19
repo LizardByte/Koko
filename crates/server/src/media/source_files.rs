@@ -3,13 +3,18 @@
 #[cfg(test)]
 mod tests;
 
+use diesel::sql_types::{
+    BigInt,
+    Nullable,
+    Text,
+};
 use diesel::{
     ExpressionMethods,
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
     SqliteConnection,
-    sql_types,
+    prelude::*,
 };
 use rocket_okapi::okapi::schemars::{
     self,
@@ -18,58 +23,41 @@ use rocket_okapi::okapi::schemars::{
 use serde::Serialize;
 
 /// One physical file belonging to an item or any of its descendants.
-#[derive(Debug, Serialize, JsonSchema, diesel::QueryableByName)]
+#[derive(Debug, Serialize, JsonSchema, diesel::Queryable)]
 pub struct MediaItemSourceFile {
     /// Stable library file membership identifier.
-    #[diesel(sql_type = sql_types::Integer)]
     pub id: i32,
     /// Catalog item backed by this file.
-    #[diesel(sql_type = sql_types::Integer)]
     pub item_id: i32,
     /// Catalog item type, including future types.
-    #[diesel(sql_type = sql_types::Text)]
     pub item_type: String,
     /// Local scanner title before provider presentation overrides.
-    #[diesel(sql_type = sql_types::Text)]
     pub display_title: String,
     /// Full physical path on the server.
-    #[diesel(sql_type = sql_types::Text)]
     pub path: String,
     /// Library root that discovered the file.
-    #[diesel(sql_type = sql_types::Text)]
     pub source_root_path: String,
     /// Path relative to the library root.
-    #[diesel(sql_type = sql_types::Text)]
     pub relative_path: String,
     /// Physical file size in bytes.
-    #[diesel(sql_type = sql_types::BigInt)]
     pub file_size: i64,
     /// File modification time in Unix seconds.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
     pub modified_at: Option<i64>,
     /// Time the scanner first noticed this file was missing.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
     pub missing_since: Option<i64>,
     /// Probed container name.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     pub container: Option<String>,
     /// Probed duration in milliseconds.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
     pub duration_ms: Option<i64>,
     /// Probed bitrate in bits per second.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
     pub bit_rate: Option<i64>,
     /// Video width in pixels.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
     pub width: Option<i32>,
     /// Video height in pixels.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
     pub height: Option<i32>,
     /// Probed video codec.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     pub video_codec: Option<String>,
     /// Probed audio codec.
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
     pub audio_codec: Option<String>,
 }
 
@@ -94,31 +82,13 @@ pub struct MediaItemSources {
     pub files: Vec<MediaItemSourceFile>,
 }
 
-// UNION deduplicates identifiers even if a corrupt hierarchy contains a cycle.
-// Both edges and memberships stay within the requested item's library.
-const SOURCES: &str = "WITH RECURSIVE descendants(id, library_id) AS (
-    SELECT id, library_id FROM media_items WHERE id = ? AND deleted_at IS NULL
-    UNION
-    SELECT child.id, child.library_id FROM media_items child
-    JOIN descendants parent ON child.parent_id = parent.id
-        AND child.library_id = parent.library_id
-    WHERE child.deleted_at IS NULL
-)
-";
-const SOURCE_JOINS: &str = "FROM descendants d
-    JOIN media_items item ON item.id = d.id
-    JOIN media_file_libraries membership ON membership.media_item_id = d.id
-        AND membership.library_id = d.library_id AND membership.deleted_at IS NULL
-    JOIN media_files file ON file.id = membership.media_file_id";
-
-#[derive(diesel::QueryableByName)]
-struct Totals {
-    #[diesel(sql_type = sql_types::BigInt)]
-    total_files: i64,
-    #[diesel(sql_type = sql_types::BigInt)]
-    missing_files: i64,
-    #[diesel(sql_type = sql_types::BigInt)]
-    total_size: i64,
+diesel::define_sql_function! {
+    fn lower(value: Text) -> Text;
+}
+diesel::define_sql_function! {
+    #[aggregate]
+    #[sql_name = "SUM"]
+    fn sum_bytes(value: BigInt) -> Nullable<BigInt>;
 }
 
 /// Inspect an active item without loading provider payloads or assuming an item type.
@@ -127,47 +97,124 @@ pub fn get_item_source_files(
     item_id: i32,
     offset: i64,
     limit: i64,
-) -> Result<Option<MediaItemSources>, diesel::result::Error> {
-    use crate::db::schema::media_items::dsl as items;
-    let Some(catalog_title) = items::media_items
+) -> QueryResult<Option<MediaItemSources>> {
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as file,
+        media_items as items,
+    };
+    let Some((catalog_title, library)) = items::table
         .find(item_id)
         .filter(items::deleted_at.is_null())
-        .select(items::display_title)
-        .first::<String>(conn)
+        .select((items::display_title, items::library_id))
+        .first::<(String, i32)>(conn)
         .optional()?
     else {
         return Ok(None);
     };
     let offset = offset.max(0);
     let limit = limit.clamp(1, 100);
-    let totals = diesel::sql_query(format!(
-        "{SOURCES} SELECT COUNT(*) AS total_files,
-        COALESCE(SUM(membership.missing_since IS NOT NULL), 0) AS missing_files,
-        COALESCE(SUM(file.file_size), 0) AS total_size {SOURCE_JOINS}"
-    ))
-    .bind::<sql_types::Integer, _>(item_id)
-    .get_result::<Totals>(conn)?;
-    let files = diesel::sql_query(format!(
-        "{SOURCES} SELECT membership.id, item.id AS item_id, item.item_type,
-        item.display_title, file.path, membership.source_root_path, membership.relative_path,
-        file.file_size, file.modified_at, membership.missing_since, file.container,
-        file.duration_ms, file.bit_rate, file.width, file.height, file.video_codec,
-        file.audio_codec {SOURCE_JOINS}
-        ORDER BY membership.source_root_path COLLATE NOCASE,
-        membership.relative_path COLLATE NOCASE, membership.id LIMIT ? OFFSET ?"
-    ))
-    .bind::<sql_types::Integer, _>(item_id)
-    .bind::<sql_types::BigInt, _>(limit)
-    .bind::<sql_types::BigInt, _>(offset)
-    .load::<MediaItemSourceFile>(conn)?;
+    let ids = descendant_ids(conn, item_id, library)?;
+    let mut total_files = 0;
+    let mut missing_files = 0;
+    let mut total_size = 0;
+    let mut files = Vec::new();
+    for chunk in ids.chunks(500) {
+        let sources = || {
+            membership::table
+                .inner_join(items::table)
+                .inner_join(file::table)
+                .filter(membership::media_item_id.eq_any(chunk))
+                .filter(membership::library_id.eq(library))
+                .filter(membership::deleted_at.is_null())
+        };
+        let (count, size) = sources()
+            .select((diesel::dsl::count_star(), sum_bytes(file::file_size)))
+            .first::<(i64, Option<i64>)>(conn)?;
+        total_files += count;
+        total_size += size.unwrap_or_default();
+        missing_files += sources()
+            .filter(membership::missing_since.is_not_null())
+            .count()
+            .get_result::<i64>(conn)?;
+        files.extend(
+            sources()
+                .order((
+                    lower(membership::source_root_path),
+                    lower(membership::relative_path),
+                    membership::id,
+                ))
+                .limit(offset.saturating_add(limit))
+                .select((
+                    membership::id,
+                    items::id,
+                    items::item_type,
+                    items::display_title,
+                    file::path,
+                    membership::source_root_path,
+                    membership::relative_path,
+                    file::file_size,
+                    file::modified_at,
+                    membership::missing_since,
+                    file::container,
+                    file::duration_ms,
+                    file::bit_rate,
+                    file::width,
+                    file::height,
+                    file::video_codec,
+                    file::audio_codec,
+                ))
+                .load::<MediaItemSourceFile>(conn)?,
+        );
+    }
+    files.sort_by_cached_key(|file| {
+        (
+            file.source_root_path.to_ascii_lowercase(),
+            file.relative_path.to_ascii_lowercase(),
+            file.id,
+        )
+    });
+    let files = files
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
     Ok(Some(MediaItemSources {
         item_id,
         catalog_title,
         offset,
         limit,
-        total_files: totals.total_files,
-        missing_files: totals.missing_files,
-        total_size: totals.total_size,
+        total_files,
+        missing_files,
+        total_size,
         files,
     }))
+}
+
+fn descendant_ids(
+    conn: &mut SqliteConnection,
+    root: i32,
+    library: i32,
+) -> QueryResult<Vec<i32>> {
+    use crate::db::schema::media_items as items;
+    let mut visited = std::collections::HashSet::from([root]);
+    let mut pending = vec![root];
+    while !pending.is_empty() {
+        let mut next = Vec::new();
+        for chunk in pending.chunks(500) {
+            for id in items::table
+                .filter(items::parent_id.eq_any(chunk))
+                .filter(items::library_id.eq(library))
+                .filter(items::deleted_at.is_null())
+                .select(items::id)
+                .load::<i32>(conn)?
+            {
+                if visited.insert(id) {
+                    next.push(id);
+                }
+            }
+        }
+        pending = next;
+    }
+    Ok(visited.into_iter().collect())
 }

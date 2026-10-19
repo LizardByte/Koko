@@ -9,14 +9,16 @@ use std::collections::{
     VecDeque,
 };
 
+use crate::db::schema::{
+    item_metadata_external_ids as external_ids,
+    item_metadata_links as links,
+    media_items as items,
+    metadata_people as persons,
+    metadata_person_external_ids as person_ids,
+};
 use diesel::{
-    QueryableByName,
-    RunQueryDsl,
     SqliteConnection,
-    sql_types::{
-        Integer,
-        Text,
-    },
+    prelude::*,
 };
 
 /// Equivalent provider people and library artists, resolved through registry IDs.
@@ -32,20 +34,6 @@ pub struct LinkedIdentities {
 enum Node {
     Person(i32),
     Artist(i32),
-}
-
-#[derive(QueryableByName)]
-struct Identifier {
-    #[diesel(sql_type = Text)]
-    source: String,
-    #[diesel(sql_type = Text)]
-    external_id: String,
-}
-
-#[derive(QueryableByName)]
-struct Id {
-    #[diesel(sql_type = Integer)]
-    id: i32,
 }
 
 /// Resolve identities connected to an existing provider person.
@@ -84,32 +72,15 @@ fn resolve(
         let ids = match node {
             Node::Person(id) => {
                 people.insert(id);
-                diesel::sql_query(
-                    "SELECT source, external_id FROM metadata_person_external_ids WHERE person_id \
-                     = ? UNION SELECT provider_id AS source, external_id FROM metadata_people \
-                     WHERE id = ? AND external_id IS NOT NULL",
-                )
-                .bind::<Integer, _>(id)
-                .bind::<Integer, _>(id)
-                .load::<Identifier>(conn)?
+                person_identifiers(conn, id)?
             }
             Node::Artist(id) => {
                 artists.insert(id);
-                diesel::sql_query(
-                    "SELECT e.source, e.external_id FROM item_metadata_external_ids e JOIN \
-                     item_metadata_links l ON l.id=e.metadata_link_id WHERE l.media_item_id=? AND \
-                     l.relation_kind='primary' AND l.match_state<>'unlinked' AND \
-                     l.media_type='artist' UNION SELECT provider_id AS source, external_id FROM \
-                     item_metadata_links WHERE media_item_id=? AND relation_kind='primary' AND \
-                     match_state<>'unlinked' AND media_type='artist'",
-                )
-                .bind::<Integer, _>(id)
-                .bind::<Integer, _>(id)
-                .load::<Identifier>(conn)?
+                artist_identifiers(conn, id)?
             }
         };
-        for id in ids {
-            let Some(source) = super::normalize_external_id_source(&id.source) else { continue };
+        for (id_source, external_id) in ids {
+            let Some(source) = super::normalize_external_id_source(&id_source) else { continue };
             // Social profiles and homepages can be shared by bands and members.
             // Entity registry IDs identify the person rather than their account.
             if !matches!(
@@ -122,44 +93,123 @@ fn resolve(
                     | "discogs"
                     | "isni"
                     | "viaf"
-            ) || id.external_id.is_empty()
-                || !identifiers.insert((source.clone(), id.external_id.clone()))
+            ) || external_id.is_empty()
+                || !identifiers.insert((source.clone(), external_id.clone()))
             {
                 continue;
             }
             let provider = if source == "thetvdb" { "tvdb" } else { &source };
-            let people = diesel::sql_query(
-                "SELECT person_id AS id FROM metadata_person_external_ids WHERE source=? AND \
-                 external_id=? UNION SELECT id FROM metadata_people WHERE provider_id=? AND \
-                 external_id=?",
-            )
-            .bind::<Text, _>(&source)
-            .bind::<Text, _>(&id.external_id)
-            .bind::<Text, _>(provider)
-            .bind::<Text, _>(&id.external_id)
-            .load::<Id>(conn)?;
-            queue.extend(people.into_iter().map(|row| Node::Person(row.id)));
-            let artists = diesel::sql_query(
-                "SELECT l.media_item_id AS id FROM item_metadata_external_ids e JOIN \
-                 item_metadata_links l ON l.id=e.metadata_link_id JOIN media_items m ON \
-                 m.id=l.media_item_id WHERE e.source=? AND e.external_id=? AND \
-                 l.relation_kind='primary' AND l.match_state<>'unlinked' AND \
-                 l.media_type='artist' AND m.item_type='artist' AND m.deleted_at IS NULL UNION \
-                 SELECT l.media_item_id AS id FROM item_metadata_links l JOIN media_items m ON \
-                 m.id=l.media_item_id WHERE l.provider_id=? AND l.external_id=? AND \
-                 l.relation_kind='primary' AND l.match_state<>'unlinked' AND \
-                 l.media_type='artist' AND m.item_type='artist' AND m.deleted_at IS NULL",
-            )
-            .bind::<Text, _>(&source)
-            .bind::<Text, _>(&id.external_id)
-            .bind::<Text, _>(provider)
-            .bind::<Text, _>(&id.external_id)
-            .load::<Id>(conn)?;
-            queue.extend(artists.into_iter().map(|row| Node::Artist(row.id)));
+            queue.extend(
+                matching_people(conn, &source, provider, &external_id)?
+                    .into_iter()
+                    .map(Node::Person),
+            );
+            queue.extend(
+                matching_artists(conn, &source, provider, &external_id)?
+                    .into_iter()
+                    .map(Node::Artist),
+            );
         }
     }
     Ok(LinkedIdentities {
         person_ids: people.into_iter().collect(),
         artist_ids: artists.into_iter().collect(),
     })
+}
+
+fn person_identifiers(
+    conn: &mut SqliteConnection,
+    id: i32,
+) -> QueryResult<Vec<(String, String)>> {
+    let mut ids = person_ids::table
+        .filter(person_ids::person_id.eq(id))
+        .select((person_ids::source, person_ids::external_id))
+        .load(conn)?;
+    if let Some((provider, Some(external))) = persons::table
+        .find(id)
+        .select((persons::provider_id, persons::external_id))
+        .first::<(String, Option<String>)>(conn)
+        .optional()?
+    {
+        ids.push((provider, external));
+    }
+    Ok(ids)
+}
+
+fn artist_identifiers(
+    conn: &mut SqliteConnection,
+    id: i32,
+) -> QueryResult<Vec<(String, String)>> {
+    let mut ids = external_ids::table
+        .inner_join(links::table)
+        .filter(links::media_item_id.eq(id))
+        .filter(links::relation_kind.eq("primary"))
+        .filter(links::match_state.ne("unlinked"))
+        .filter(links::media_type.eq("artist"))
+        .select((external_ids::source, external_ids::external_id))
+        .load(conn)?;
+    ids.extend(
+        links::table
+            .filter(links::media_item_id.eq(id))
+            .filter(links::relation_kind.eq("primary"))
+            .filter(links::match_state.ne("unlinked"))
+            .filter(links::media_type.eq("artist"))
+            .select((links::provider_id, links::external_id))
+            .load::<(String, String)>(conn)?,
+    );
+    Ok(ids)
+}
+
+fn matching_people(
+    conn: &mut SqliteConnection,
+    source: &str,
+    provider: &str,
+    external: &str,
+) -> QueryResult<Vec<i32>> {
+    let mut ids = person_ids::table
+        .filter(person_ids::source.eq(source))
+        .filter(person_ids::external_id.eq(external))
+        .select(person_ids::person_id)
+        .load::<i32>(conn)?;
+    ids.extend(
+        persons::table
+            .filter(persons::provider_id.eq(provider))
+            .filter(persons::external_id.eq(external))
+            .select(persons::id)
+            .load::<i32>(conn)?,
+    );
+    Ok(ids)
+}
+
+fn matching_artists(
+    conn: &mut SqliteConnection,
+    source: &str,
+    provider: &str,
+    external: &str,
+) -> QueryResult<Vec<i32>> {
+    let mut ids = external_ids::table
+        .inner_join(links::table.inner_join(items::table))
+        .filter(external_ids::source.eq(source))
+        .filter(external_ids::external_id.eq(external))
+        .filter(links::relation_kind.eq("primary"))
+        .filter(links::match_state.ne("unlinked"))
+        .filter(links::media_type.eq("artist"))
+        .filter(items::item_type.eq("artist"))
+        .filter(items::deleted_at.is_null())
+        .select(links::media_item_id)
+        .load::<i32>(conn)?;
+    ids.extend(
+        links::table
+            .inner_join(items::table)
+            .filter(links::provider_id.eq(provider))
+            .filter(links::external_id.eq(external))
+            .filter(links::relation_kind.eq("primary"))
+            .filter(links::match_state.ne("unlinked"))
+            .filter(links::media_type.eq("artist"))
+            .filter(items::item_type.eq("artist"))
+            .filter(items::deleted_at.is_null())
+            .select(links::media_item_id)
+            .load::<i32>(conn)?,
+    );
+    Ok(ids)
 }

@@ -27,6 +27,14 @@ const deferred = () => {
 const json = (value) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
 const poll = () => refreshSelectedItemMetadata(101, undefined, beginMetadataRequest());
 
+function pollingResponse(path, old) {
+  if (path.endsWith('/metadata')) return { matches: old ? [{ title: 'Old match' }] : [] };
+  if (path.endsWith('/activities')) return { activities: [] };
+  if (path.endsWith('/101')) return { id: 101, library_id: 1, display_title: old ? 'Old match' : 'Current title' };
+  if (path.endsWith('/home')) return { shelves: [] };
+  return [];
+}
+
 beforeEach(() => {
   invalidateMetadataRequests();
   Object.assign(state, {
@@ -44,10 +52,7 @@ for (const stage of ['item', 'home']) {
       let old = true;
       globalThis.fetch = async (url) => {
         const path = new URL(url, location.origin).pathname;
-        const value = path.endsWith('/metadata') ? { matches: old ? [{ title: 'Old match' }] : [] }
-          : path.endsWith('/activities') ? { activities: [] }
-          : path.endsWith('/101') ? { id: 101, library_id: 1, display_title: old ? 'Old match' : 'Current title' }
-          : path.endsWith('/home') ? { shelves: [] } : [];
+        const value = pollingResponse(path, old);
         if (old && path.endsWith(stage === 'item' ? '/101' : '/home')) {
           started.resolve();
           await delayed.promise;

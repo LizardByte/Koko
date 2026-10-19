@@ -255,10 +255,10 @@ test('all declared mock provider logos work in the development server', async ()
   const origin = `http://127.0.0.1:${assetServer.address().port}`;
   for (const provider of providers) {
     for (const url of [provider.logo_light_url, provider.logo_dark_url].filter(Boolean)) {
-      assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png|ico)$/);
+      assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png)$/);
       const response = await fetch(`${origin}${url}`);
       assert.equal(response.status, 200, url);
-      assert.equal(response.headers.get('content-type'), url.endsWith('.svg') ? 'image/svg+xml' : url.endsWith('.ico') ? 'image/x-icon' : 'image/png');
+      assert.equal(response.headers.get('content-type'), url.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
       assert.ok((await response.arrayBuffer()).byteLength > 0);
     }
   }

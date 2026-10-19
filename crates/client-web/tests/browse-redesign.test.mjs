@@ -410,7 +410,16 @@ test('returning to browsing restores the tab, page, scroll, and card focus', () 
   globalThis.scrollY = 0;
   globalThis.scrollTo = () => {};
   globalThis.requestAnimationFrame = (callback) => frames.push(callback);
-  globalThis.document = { activeElement: card, body: { dataset: { inputMode: 'keyboard' } }, querySelector: (selector) => selector === '.main-shell' ? main : selector.includes('data-shelf-row') ? row : card, querySelectorAll: () => [row] };
+  globalThis.document = {
+    activeElement: card,
+    body: { dataset: { inputMode: 'keyboard' } },
+    querySelector: (selector) => {
+      if (selector === '.main-shell') return main;
+      if (selector.includes('data-shelf-row')) return row;
+      return card;
+    },
+    querySelectorAll: () => [row],
+  };
   state.homeTab = 'library';
   state.libraryPage = 2;
   session.captureBrowseSession();

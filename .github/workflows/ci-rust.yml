@@ -211,9 +211,7 @@ jobs:
         working-directory: crates/client-web
         run: |
           npm ci --ignore-scripts
-          npm run check
-          npm test
-          npm run build
+          npm run validate
 
       - name: Test
         id: test

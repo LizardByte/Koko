@@ -55,6 +55,27 @@ Type-check the client:
 npm run check
 ```
 
+Run the local SonarJS checks:
+
+```cmd
+npm run lint
+```
+
+This checks cognitive complexity, nested conditionals, nested template literals, and multiline control-flow blocks.
+It covers client source, tests, and tooling configuration. It runs in CI before type-checking, tests, and the build.
+SonarCloud still runs the full hosted analysis; the local checks cover a focused subset of its rules.
+The SonarJS dependency override keeps its legacy compiler API separate from the TypeScript 7 native compiler used
+by `npm run check`. Babel parses TypeScript syntax for linting without changing the application build.
+
+Before opening a pull request, run all frontend checks and the production build:
+
+```cmd
+npm run validate
+```
+
+This uses `npm-run-all2` to run `lint`, `check`, `test`, and `build` in order, stopping on failure.
+CI uses the same command after `npm ci --ignore-scripts`. Each check is also available separately.
+
 ## Browse navigation
 
 On Home, library, item, collection, and person pages, arrow keys and the controller D-pad or left stick move to nearby controls in the visible layout. Cards scroll into view automatically. Moving left from the edge of a content section enters the library sidebar; moving right from the sidebar returns to the last content section.

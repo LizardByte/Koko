@@ -4424,3 +4424,18 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
   .item-identity { gap: var(--space-2); }
   .item-identity .item-title-logo { max-height: 70px; }
 }
+
+
+.media-card-art.music-art { aspect-ratio: 1; }
+.music-detail-page { --item-cover-height: var(--item-cover-width); }
+.music-detail-page .item-cover-column .item-poster { aspect-ratio: 1; }
+.music-track-list { display: grid; gap: 4px; }
+.music-track-row { display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-color, #ffffff20); }
+.music-track-row.is-missing { opacity: 0.55; }
+.music-track-number { color: var(--text-muted, #aaa); font-variant-numeric: tabular-nums; }
+.music-track-title { display: grid; gap: 4px; min-width: 0; text-align: left; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.music-track-title strong, .music-track-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-track-title small { color: var(--text-muted, #aaa); }
+@media (max-width: 600px) { .music-track-row { gap: 8px; } }
+
+.settings-workspace [data-music-tag-option][hidden] { display: none; }

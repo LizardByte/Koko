@@ -106,7 +106,7 @@ const libraries: MediaLibrary[] = [
     recursive: true,
     kind: 'music',
     scanner: 'music',
-    metadata_providers: [],
+    metadata_providers: ['musicbrainz'],
     metadata_language_mode: 'auto',
     metadata_languages: ['en-US'],
     status: 'available',
@@ -446,6 +446,19 @@ const items: MediaItemDetail[] = [
   },
 ];
 
+const musicTags = { artist: 'Mock Artist', album_artist: 'Mock Artist', album: 'Mock Album', disc_number: 1, genres: ['Rock'] };
+const artist: MediaItemDetail = { ...items.find((item) => item.id === 103)!, id: 301, item_type: 'artist', display_title: 'Mock Artist', relative_path: '', playable: false, child_count: 1, duration_ms: 413_000, music: { ...musicTags, album: '' }, children: [], hierarchy: [] };
+const album: MediaItemDetail = { ...artist, id: 302, parent_id: artist.id, item_type: 'album', display_title: 'Mock Album', child_count: 2, music: musicTags, children: [], hierarchy: [{ ...artist }] };
+const musicTracks = items.filter((item) => item.library_id === 3);
+musicTracks.forEach((track, index) => {
+  track.parent_id = album.id;
+  track.music = { ...musicTags, track_number: index + 1 };
+  track.hierarchy = [{ ...artist }, { ...album }];
+});
+album.children = musicTracks.map((track) => ({ ...track, hierarchy: [] }));
+artist.children = [{ ...album, hierarchy: [] }];
+items.push(artist, album);
+
 type PlannedProviderDetails = Pick<MetadataProviderStatus,
   'id' | 'display_name' | 'description' | 'supported_kinds'
   | 'attribution_text' | 'attribution_url' | 'logo_light_url' | 'logo_dark_url'>;
@@ -498,16 +511,18 @@ const metadataProviders: MetadataProviderStatus[] = [
     logo_light_url: '/assets/providers/tvdb-light.png',
     logo_dark_url: '/assets/providers/tvdb-dark.png',
   },
-  plannedMetadataProvider({
+  {
     id: 'musicbrainz',
     display_name: 'MusicBrainz',
-    description: 'Planned music metadata provider for albums, artists, and tracks.',
+    description: 'Artist, album, and track metadata from MusicBrainz.',
     supported_kinds: ['music'],
     attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
     attribution_url: 'https://musicbrainz.org/',
     logo_light_url: '/assets/providers/musicbrainz.svg',
     logo_dark_url: '/assets/providers/musicbrainz.svg',
-  }),
+    requires_api_key: false, implemented: true, role: 'primary', extends_provider_ids: [],
+    enabled: true, configured: true, language: 'en-US',
+  },
   {
     id: 'themerr',
     display_name: 'ThemerrDB',
@@ -830,7 +845,7 @@ let settings: SettingsSnapshot = {
         recursive: true,
         kind: 'music',
         scanner: 'auto',
-        metadata_providers: [],
+        metadata_providers: ['musicbrainz'],
         metadata_language_mode: 'auto',
         metadata_languages: ['en-US'],
         allowed_user_ids: [],
@@ -1193,6 +1208,10 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
 
 export function getMockHome(libraryId?: number): MediaHome {
   const filteredItems = getMockItems(libraryId);
+  const kind = libraries.find((library) => library.id === libraryId)?.kind;
+  let continueTitle = 'Continue watching';
+  if (kind === 'music') continueTitle = 'Continue listening';
+  else if (kind === 'books') continueTitle = 'Continue reading';
   const continueWatching = filteredItems.filter((item) => {
     const userId = activeMockUserId();
     const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
@@ -1204,7 +1223,7 @@ export function getMockHome(libraryId?: number): MediaHome {
   return {
     library_id: libraryId ?? null,
     shelves: [
-      { id: 'continue_watching', title: 'Continue watching', items: continueWatching },
+      { id: 'continue_watching', title: continueTitle, items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
       { id: 'recommended', title: 'Recommended', items: recommended },
     ],

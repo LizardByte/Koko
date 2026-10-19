@@ -58,6 +58,25 @@ test('registered automatic show descendants display their own pending loaders', 
   }
 });
 
+test('queued unmatched music items show loaders before a provider match exists', () => {
+  library.kind = 'music';
+  state.systemActivities = [refresh({ item_ids: [801, 802, 803], total_items: 3 })];
+  for (const [index, item_type] of ['artist', 'album', 'track'].entries()) {
+    const item = { ...mock.getMockItem(201), id: 801 + index, item_type, music: {}, has_metadata: false, metadata_refresh_state: null };
+    state.libraryItems = [item];
+    assert.equal(activities.itemHasActiveMetadataRefresh(item), true);
+    assert.match(renderLibraryTab(), /loading-spinner/);
+  }
+});
+
+test('completed matches stop spinning while other items remain queued', () => {
+  const item = { ...mock.getMockItem(201), metadata_refresh_state: null, has_metadata: false };
+  state.libraryItems = [item];
+  state.systemActivities = [refresh({ state: 'running', item_ids: [202], completed_items: 1 })];
+  assert.equal(activities.itemHasActiveMetadataRefresh(item), false);
+  assert.doesNotMatch(renderLibraryTab(), /loading-spinner/);
+});
+
 test('finished work and another library do not keep the progress indicator alive', () => {
   state.systemActivities = [refresh({ state: 'completed' }), refresh({ id: 'failed', state: 'failed' }), refresh({ id: 'other', library_id: 3 })];
   assert.equal(activities.libraryRefreshProgress(library), undefined);

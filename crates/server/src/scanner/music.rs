@@ -1,4 +1,5 @@
-//! Music scanner rules.
+//! Audio-file inventory for music libraries.
+//! The catalog uses ffprobe tags to group these files into artists, albums, and tracks.
 
 use crate::config::{
     MediaLibraryKind,

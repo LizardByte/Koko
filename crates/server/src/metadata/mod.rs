@@ -52,6 +52,7 @@ mod providers;
 pub use providers::{
     MetadataProvider,
     MetadataRegistry,
+    MusicMatchContext,
 };
 
 // local imports
@@ -347,6 +348,8 @@ pub struct MetadataSearchResult {
     pub release_year: Option<i32>,
     /// Match score from 0.0 to 1.0, when Koko can compute one.
     pub score: Option<f64>,
+    /// Total tracks across all media in this candidate release, when known.
+    pub track_count: Option<u32>,
 }
 
 /// Collection summary aggregated across linked metadata rows.
@@ -1449,7 +1452,13 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
 
     let mut last_error = None;
     let mut best_snapshot = None;
-    for fetch_locale in locale_fallback_chain(&locale_key) {
+    let registry = MetadataRegistry::new();
+    let localized = registry
+        .provider(&provider_id)
+        .is_some_and(|provider| provider.uses_localized_metadata());
+    let fetch_locales =
+        if localized { locale_fallback_chain(&locale_key) } else { vec![locale_key.clone()] };
+    for fetch_locale in fetch_locales {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
 
@@ -2157,6 +2166,9 @@ pub fn upsert_item_metadata_link(
                 })
                 .unwrap_or(false);
 
+            if snapshot.provider_id == MetadataProviderId::MusicBrainz {
+                crate::media::music::save_provider_genres(conn, item_id, &details.genres)?;
+            }
             let payload = NewItemMetadataLink {
                 media_item_id: item_id,
                 provider_id: snapshot.provider_id.as_storage_value().to_string(),
@@ -2178,7 +2190,11 @@ pub fn upsert_item_metadata_link(
                 } else {
                     None
                 },
-                genres_json: serde_json::to_string(&details.genres).ok(),
+                genres_json: if snapshot.provider_id == MetadataProviderId::MusicBrainz {
+                    None
+                } else {
+                    serde_json::to_string(&details.genres).ok()
+                },
                 rating: details.rating,
                 content_rating: details.content_rating.clone(),
                 locale_key: snapshot.locale_key.clone(),
@@ -2327,6 +2343,11 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
     }
     diesel::delete(links::item_metadata_links.filter(links::media_item_id.eq_any(&ids)))
         .execute(conn)?;
+    if !prevent_automatic_match {
+        diesel::update(items::media_items.filter(items::id.eq_any(&ids)))
+            .set(items::metadata_match_attempted_at.eq(None::<i64>))
+            .execute(conn)?;
+    }
     if prevent_automatic_match {
         diesel::insert_into(links::item_metadata_links)
             .values((
@@ -3966,7 +3987,11 @@ fn to_item_metadata_summary_with_people(
         .collect();
     let extras_by_link_id = metadata_extras_by_link_id(conn, &[link.id])?;
     let link_id = link.id;
+    let item_id = link.media_item_id;
     let mut summary = to_item_metadata_summary(link);
+    if summary.provider_id == MetadataProviderId::MusicBrainz {
+        summary.genres = crate::media::music::provider_genres(conn, item_id)?;
+    }
     summary.people = people;
     if let Some(extras) = extras_by_link_id.get(&link_id) {
         if let Some((title, url)) = preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_TRAILER) {
@@ -5165,6 +5190,7 @@ mod tests {
             backdrop_url: None,
             release_year: Some(1999),
             score: None,
+            track_count: None,
         };
         let wrong_year = MetadataSearchResult {
             release_year: Some(2003),

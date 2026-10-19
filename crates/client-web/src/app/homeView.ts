@@ -430,7 +430,8 @@ export function renderItemCard(item: MediaItemSummary): string {
   const artworkUrl = getArtworkUrl(artworkItemId, 'poster', item.artwork_updated_at);
   const hasAlternateArtwork = typeof item.artwork_item_id === 'number' && item.artwork_item_id !== item.id;
   const useEpisodeLayout = item.item_type === 'episode' && !hasAlternateArtwork;
-  const artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
+  let artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
+  if (item.music) artworkTypeClass = 'music-art';
   const cardSubtitle = itemCardSubtitle(item);
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
@@ -498,9 +499,8 @@ function renderCollectionFeature(collection: MediaCollectionSummary): string {
 function renderItemFeature(item: MediaItemSummary): string {
   const backdropUrl = pageBackdropUrlForItem(item);
   const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
-  const library = state.libraries.find((entry) => entry.id === item.library_id);
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
-  const overview = item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`;
+  const overview = item.overview?.trim();
 
   return `
     <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
@@ -508,7 +508,7 @@ function renderItemFeature(item: MediaItemSummary): string {
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
           : `<h2>${escapeHtml(item.display_title)}</h2>`}
-        <p>${escapeHtml(overview)}</p>
+        ${overview ? `<p>${escapeHtml(overview)}</p>` : ''}
         <div class="hero-meta-row">
           ${genreMarkup}
           <span class="tag">${escapeHtml(formatChildCount(item))}</span>

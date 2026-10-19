@@ -485,8 +485,9 @@ pub async fn add_library(
 ) -> Result<Json<SettingsResponse>, Status> {
     let mut library = request.into_inner().library;
     library.normalize();
+    let library_name = library.name.clone();
 
-    let libraries = db
+    let (library_id, libraries) = db
         .run(move |conn| add_library_setting(conn, &library))
         .await
         .map_err(|error| {
@@ -496,6 +497,14 @@ pub async fn add_library(
 
     let settings = current_settings();
     persist_bootstrap_settings(&settings)?;
+    super::media::start_library_scan(
+        db,
+        settings.clone(),
+        library_id,
+        library_name,
+        "library_added",
+    )
+    .await;
 
     Ok(Json(merged_settings_response(settings, libraries)))
 }

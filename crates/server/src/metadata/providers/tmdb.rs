@@ -229,6 +229,7 @@ pub(crate) async fn guess_movie_match(
             backdrop_url: snapshot.backdrop_url,
             release_year: snapshot.release_year,
             score: Some(1.0),
+            track_count: None,
         }));
     }
     if let Some(tvdb_id) = parsed.provider_id("tvdb").map(str::to_string) {
@@ -864,6 +865,7 @@ fn search_result_from_value(item: Value) -> Option<MetadataSearchResult> {
             .map(|path| tmdb_image_url(&path, "w1280")),
         release_year: extract_release_year(date),
         score: None,
+        track_count: None,
     })
 }
 
@@ -903,6 +905,7 @@ fn movie_search_result_from_object(item: MovieObject) -> Option<MetadataSearchRe
             .release_date
             .and_then(|value| extract_release_year(Some(value))),
         score: None,
+        track_count: None,
     })
 }
 

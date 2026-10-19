@@ -52,7 +52,7 @@ export function persistedLibraryForSettings(library: MediaLibrarySettings): Medi
 }
 
 export function canManuallyLinkMetadata(item?: MediaItemSummary): boolean {
-  return item?.item_type === 'movie' || item?.item_type === 'show';
+  return Boolean(item && ['movie', 'show', 'artist', 'album', 'track'].includes(item.item_type));
 }
 
 export function backNavigationTarget(): { label: string; path: string } {

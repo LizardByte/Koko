@@ -388,6 +388,7 @@ pub(crate) async fn guess_movie_match(
             backdrop_url: snapshot.backdrop_url,
             release_year: snapshot.release_year,
             score: Some(1.0),
+            track_count: None,
         }));
     }
 

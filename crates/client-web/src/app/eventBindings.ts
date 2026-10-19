@@ -24,6 +24,7 @@ import {
   openVideoOverlay,
   playYouTubeThemeSong,
   startPlayback,
+  startMusicPlayback,
   startPlaybackForItemId,
 } from './playbackController';
 import { parseRoute } from './routes';
@@ -1192,6 +1193,18 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
   });
 
+  document.querySelectorAll<HTMLButtonElement>('[data-play-music-album-id], [data-play-music-track-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        if (button.dataset.playMusicAlbumId && state.selectedItem) await startMusicPlayback(state.selectedItem);
+        else await startPlaybackForItemId(Number(button.dataset.playMusicTrackId), 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start music playback.';
+        render();
+      }
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => {
     const playFrom = async (startMs: number): Promise<void> => {
       if (!state.selectedItem) {
@@ -1552,6 +1565,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       paths,
       recursive: formData.get('library_recursive') === 'on',
       kind: formDataString(formData.get('library_kind'), 'movies'),
+      use_embedded_music_tags: formData.get('library_use_embedded_music_tags') === 'on',
       scanner: formDataString(formData.get('library_scanner'), 'auto'),
       metadata_providers: formDataStrings(formData.getAll('library_metadata_provider')),
       metadata_language_mode: formDataString(formData.get('library_metadata_language_mode'), 'auto') === 'manual' ? 'manual' : 'auto',
@@ -1618,6 +1632,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   const addLibraryKindSelect = document.querySelector<HTMLSelectElement>('#add-library-form select[name="library_kind"]');
   addLibraryKindSelect?.addEventListener('change', () => syncAddLibraryProviderOptions());
   syncAddLibraryProviderOptions();
+  document.querySelectorAll<HTMLSelectElement>('select[name^="existing_library_kind_"]').forEach((select) => {
+    select.addEventListener('change', () => select.closest('.settings-library-card')?.querySelectorAll<HTMLElement>('[data-music-tag-option]').forEach((option) => { option.hidden = select.value !== 'music'; }));
+  });
   document.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 
   bindPlayerProgress();
@@ -1727,6 +1744,7 @@ function syncAddLibraryProviderOptions(): void {
     return;
   }
 
+  form.querySelectorAll<HTMLElement>('[data-music-tag-option]').forEach((option) => { option.hidden = kind !== 'music'; });
   form.querySelectorAll<HTMLInputElement>('input[name="library_metadata_provider"]').forEach((input) => {
     const supportedKinds = input.dataset.providerKinds?.split(',') ?? [];
     const supported = supportedKinds.includes(kind);

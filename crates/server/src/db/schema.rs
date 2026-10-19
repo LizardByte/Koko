@@ -226,6 +226,7 @@ table! {
         updated_at -> Nullable<BigInt>,
         missing_since -> Nullable<BigInt>,
         deleted_at -> Nullable<BigInt>,
+        metadata_match_attempted_at -> Nullable<BigInt>,
     }
 }
 
@@ -242,6 +243,7 @@ table! {
         metadata_language_mode -> Text,
         metadata_languages_json -> Text,
         allowed_user_ids_json -> Text,
+        use_embedded_music_tags -> Bool,
     }
 }
 
@@ -310,6 +312,10 @@ allow_tables_to_appear_in_same_query!(
     media_files,
     media_items,
     media_libraries,
+    music_file_metadata,
+    music_file_genres,
+    music_item_metadata,
+    music_item_genres,
     playback_progress,
     scan_state,
     users
@@ -327,3 +333,56 @@ table! {
         preferred_metadata_languages_json -> Text,
     }
 }
+
+table! {
+    music_file_metadata (media_file_id) {
+        media_file_id -> Integer,
+        title -> Text,
+        file_hash -> Text,
+        artist -> Text,
+        album_artist -> Text,
+        album -> Text,
+        track_number -> Nullable<Integer>,
+        disc_number -> Nullable<Integer>,
+        release_year -> Nullable<Integer>,
+        musicbrainz_artist_id -> Nullable<Text>,
+        musicbrainz_release_id -> Nullable<Text>,
+        musicbrainz_recording_id -> Nullable<Text>,
+    }
+}
+
+table! {
+    music_file_genres (media_file_id, genre) {
+        media_file_id -> Integer,
+        genre -> Text,
+    }
+}
+
+joinable!(music_file_metadata -> media_files (media_file_id));
+joinable!(music_file_genres -> media_files (media_file_id));
+
+table! {
+    music_item_metadata (media_item_id) {
+        media_item_id -> Integer,
+        artist -> Text,
+        album_artist -> Text,
+        album -> Text,
+        track_number -> Nullable<Integer>,
+        disc_number -> Nullable<Integer>,
+        release_year -> Nullable<Integer>,
+        musicbrainz_artist_id -> Nullable<Text>,
+        musicbrainz_release_id -> Nullable<Text>,
+        musicbrainz_recording_id -> Nullable<Text>,
+    }
+}
+
+table! {
+    music_item_genres (media_item_id, source, genre) {
+        media_item_id -> Integer,
+        source -> Text,
+        genre -> Text,
+    }
+}
+
+joinable!(music_item_metadata -> media_items (media_item_id));
+joinable!(music_item_genres -> media_items (media_item_id));

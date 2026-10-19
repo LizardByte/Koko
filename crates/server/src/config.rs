@@ -443,6 +443,9 @@ pub enum MediaLibraryMetadataLanguageMode {
 /// A configured media-library root.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 pub struct MediaLibrarySettings {
+    /// Read descriptive tags embedded in music files. Disabled by default.
+    #[serde(default)]
+    pub use_embedded_music_tags: bool,
     /// Human-friendly library name.
     #[serde(default)]
     pub name: String,
@@ -504,10 +507,12 @@ impl MediaLibrarySettings {
         .into_iter()
         .filter_map(|value| MetadataProviderId::from_storage_value(&value))
         .collect();
-        if self.metadata_providers.is_empty() {
-            self.metadata_providers = default_library_metadata_providers();
-        }
-        if self.metadata_providers.is_empty() {
+        if self.kind == MediaLibraryKind::Music
+            && (self.metadata_providers.is_empty()
+                || self.metadata_providers == [MetadataProviderId::Tmdb])
+        {
+            self.metadata_providers = vec![MetadataProviderId::MusicBrainz];
+        } else if self.metadata_providers.is_empty() {
             self.metadata_providers = default_library_metadata_providers();
         }
         self.metadata_languages = normalized_unique_strings(

@@ -1,0 +1,1008 @@
+//! MusicBrainz artist, release, and recording metadata.
+
+mod artist;
+
+use std::time::Duration;
+
+use once_cell::sync::Lazy;
+use serde::Deserialize;
+use tokio::sync::Mutex;
+use tokio::time::Instant;
+
+use super::*;
+use crate::media::{
+    MusicMetadata,
+    valid_mbid,
+};
+
+static NEXT_REQUEST: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+const API_ROOT: &str = "https://musicbrainz.org/ws/2";
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_API_ROOT: String;
+}
+const USER_AGENT: &str = concat!(
+    "Koko/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/LizardByte/Koko)"
+);
+
+/// MusicBrainz's read-only provider; public lookups do not need credentials.
+pub(super) struct MusicBrainzMetadataProvider;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct Entity {
+    id: String,
+    title: Option<String>,
+    name: Option<String>,
+    disambiguation: Option<String>,
+    date: Option<String>,
+    first_release_date: Option<String>,
+    country: Option<String>,
+    score: Option<u32>,
+    track_count: Option<u32>,
+    media: Vec<Medium>,
+    artist_credit: Vec<ArtistCredit>,
+    genres: Vec<Genre>,
+    cover_art_archive: Option<CoverArt>,
+    release_group: Option<ReleaseGroup>,
+    #[serde(flatten)]
+    artist_details: artist::ArtistDetails,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseGroup {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct Medium {
+    track_count: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtistCredit {
+    name: Option<String>,
+    artist: Artist,
+    #[serde(default)]
+    joinphrase: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Artist {
+    #[serde(default)]
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Genre {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoverArt {
+    front: bool,
+}
+
+impl Entity {
+    fn track_count(&self) -> Option<u32> {
+        self.track_count
+            .or_else(|| {
+                (!self.media.is_empty())
+                    .then(|| {
+                        self.media
+                            .iter()
+                            .try_fold(0u32, |total, medium| total.checked_add(medium.track_count?))
+                    })
+                    .flatten()
+            })
+            .filter(|count| *count > 0)
+    }
+
+    fn title(&self) -> &str {
+        self.title.as_deref().or(self.name.as_deref()).unwrap_or("")
+    }
+
+    fn artist(&self) -> String {
+        self.artist_credit
+            .iter()
+            .map(|credit| {
+                format!(
+                    "{}{}",
+                    credit.name.as_deref().unwrap_or(&credit.artist.name),
+                    credit.joinphrase
+                )
+            })
+            .collect()
+    }
+
+    fn year(&self) -> Option<i32> {
+        self.date
+            .as_deref()
+            .or(self.first_release_date.as_deref())?
+            .get(..4)?
+            .parse()
+            .ok()
+    }
+
+    fn search_result(
+        &self,
+        entity: &str,
+    ) -> Option<MetadataSearchResult> {
+        if !valid_mbid(&self.id) || self.title().trim().is_empty() {
+            return None;
+        }
+        let overview = [
+            self.artist(),
+            self.disambiguation.clone().unwrap_or_default(),
+            self.country.clone().unwrap_or_default(),
+        ]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+        Some(MetadataSearchResult {
+            provider_id: MetadataProviderId::MusicBrainz,
+            external_id: self.id.clone(),
+            media_type: entity.into(),
+            title: self.title().into(),
+            overview: (!overview.is_empty()).then_some(overview),
+            artwork_url: None,
+            backdrop_url: None,
+            release_year: self.year(),
+            score: self.score.map(|score| f64::from(score) / 100.0),
+            track_count: (entity == "release").then(|| self.track_count()).flatten(),
+        })
+    }
+}
+
+fn entity_type(media_type: &str) -> Result<&'static str, String> {
+    match media_type {
+        "artist" => Ok("artist"),
+        "album" | "release" => Ok("release"),
+        "release-group" => Ok("release-group"),
+        "track" | "recording" => Ok("recording"),
+        _ => Err(format!("Unsupported MusicBrainz media type: {media_type}")),
+    }
+}
+
+async fn request(url: reqwest::Url) -> Result<serde_json::Value, String> {
+    // One gate covers automatic jobs, manual searches, refreshes, and retries.
+    let mut next = NEXT_REQUEST.lock().await;
+    for attempt in 0..3 {
+        if let Some(deadline) = *next {
+            tokio::time::sleep_until(deadline).await;
+        }
+        *next = Some(Instant::now() + Duration::from_millis(1100));
+        let response = crate::metadata::http::client()
+            .get(url.clone())
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
+            .send()
+            .await
+            .map_err(|error| format!("MusicBrainz request failed: {error}"))?;
+        let status = response.status();
+        if attempt < 2 && matches!(status.as_u16(), 429 | 503) {
+            let delay = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(2)
+                .clamp(1, 60);
+            *next = Some(Instant::now() + Duration::from_secs(delay));
+            continue;
+        }
+        return response
+            .error_for_status()
+            .map_err(|error| format!("MusicBrainz request failed: {error}"))?
+            .json()
+            .await
+            .map_err(|error| format!("Invalid MusicBrainz response: {error}"));
+    }
+    unreachable!()
+}
+
+fn query_url(
+    entity: &str,
+    id: Option<&str>,
+    parameters: &[(&str, &str)],
+) -> reqwest::Url {
+    #[cfg(test)]
+    let api_root = TEST_API_ROOT
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| API_ROOT.into());
+    #[cfg(not(test))]
+    let api_root = API_ROOT;
+    let mut url = reqwest::Url::parse(&format!(
+        "{api_root}/{entity}{}",
+        id.map(|id| format!("/{id}")).unwrap_or_default()
+    ))
+    .expect("MusicBrainz API URL");
+    url.query_pairs_mut()
+        .append_pair("fmt", "json")
+        .extend_pairs(parameters.iter().copied());
+    url
+}
+
+async fn search_entities(
+    query: &str,
+    media_type: &str,
+) -> Result<Vec<Entity>, String> {
+    let entity = entity_type(media_type)?;
+    let payload = request(query_url(
+        entity,
+        None,
+        &[
+            ("query", query),
+            ("limit", "20"),
+        ],
+    ))
+    .await?;
+    let key = format!("{entity}s");
+    serde_json::from_value(
+        payload
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| format!("MusicBrainz response is missing {key}"))?,
+    )
+    .map_err(|error| format!("Invalid MusicBrainz search response: {error}"))
+}
+
+fn quoted(value: &str) -> String {
+    // Escape Lucene operators rather than treating a tag as query syntax.
+    let mut escaped = String::new();
+    for character in value.chars() {
+        if "+-!(){}[]^\"~*?:\\/&|".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    format!("\"{escaped}\"")
+}
+
+fn choose_match(
+    entities: &[Entity],
+    entity: &str,
+    title: &str,
+    artist: Option<&str>,
+    artist_id: Option<&str>,
+) -> Option<MetadataSearchResult> {
+    let matches = entities
+        .iter()
+        .filter(|candidate| {
+            candidate.title().trim().to_lowercase() == title.trim().to_lowercase()
+                && candidate.score.unwrap_or_default() >= 95
+                && artist_id.map_or_else(
+                    || {
+                        artist.is_none_or(|artist| {
+                            candidate.artist().trim().to_lowercase() == artist.trim().to_lowercase()
+                        })
+                    },
+                    |id| {
+                        candidate
+                            .artist_credit
+                            .iter()
+                            .any(|credit| credit.artist.id == id)
+                    },
+                )
+        })
+        .collect::<Vec<_>>();
+    // A title alone cannot distinguish artists with the same name or album editions.
+    if matches.len() == 1 { matches[0].search_result(entity) } else { None }
+}
+
+fn music_query(
+    entity: &str,
+    title: &str,
+    music: &MusicMetadata,
+    context: &MusicMatchContext,
+) -> (String, Option<String>) {
+    let field = match entity {
+        "artist" => "artist",
+        "release" => "release",
+        "release-group" => "releasegroup",
+        _ => "recording",
+    };
+    let artist_id =
+        if entity == "artist" || (entity == "recording" && music.artist != music.album_artist) {
+            None
+        } else {
+            context
+                .artist_id
+                .as_ref()
+                .or(music.musicbrainz_artist_id.as_ref())
+                .filter(|id| valid_mbid(id))
+                .cloned()
+        };
+    let mut query = format!("{field}:{}", quoted(title));
+    if let Some(id) = &artist_id {
+        query.push_str(&format!(" AND arid:{id}"));
+    } else if entity != "artist" {
+        let artist = if entity == "recording" { &music.artist } else { &music.album_artist };
+        query.push_str(&format!(" AND artist:{}", quoted(artist)));
+    }
+    if entity == "recording" {
+        if let Some(id) = context.release_id.as_ref().filter(|id| valid_mbid(id)) {
+            query.push_str(&format!(" AND reid:{id}"));
+        } else if let Some(id) = context
+            .release_group_id
+            .as_ref()
+            .filter(|id| valid_mbid(id))
+        {
+            query.push_str(&format!(" AND rgid:{id}"));
+        } else if music.album != "Unknown Album" {
+            query.push_str(&format!(" AND release:{}", quoted(&music.album)));
+        }
+    }
+    if entity == "release" {
+        if let Some(year) = music.year {
+            query.push_str(&format!(" AND date:{year}"));
+        }
+    }
+    (query, artist_id)
+}
+
+impl MetadataProvider for MusicBrainzMetadataProvider {
+    fn descriptor(&self) -> MetadataProviderDescriptor {
+        MetadataProviderDescriptor {
+            id: MetadataProviderId::MusicBrainz,
+            display_name: "MusicBrainz".into(),
+            description: "Artist, album, and track metadata from MusicBrainz, with release \
+                          artwork from the Cover Art Archive."
+                .into(),
+            supported_kinds: vec![MediaLibraryKind::Music],
+            requires_api_key: false,
+            implemented: true,
+            role: MetadataProviderRole::Primary,
+            extends_provider_ids: Vec::new(),
+            attribution_text: "Music metadata is provided by MusicBrainz. Cover art is provided \
+                               by the Cover Art Archive."
+                .into(),
+            attribution_url: "https://musicbrainz.org/".into(),
+            logo_light_url: Some("/assets/providers/musicbrainz.svg".into()),
+            logo_dark_url: Some("/assets/providers/musicbrainz.svg".into()),
+        }
+    }
+
+    fn search<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        query: &'a str,
+        media_type: Option<&'a str>,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        Box::pin(async move {
+            let entity = entity_type(media_type.unwrap_or("release"))?;
+            let query = quoted(query.trim());
+            Ok(search_entities(&query, entity)
+                .await?
+                .iter()
+                .filter_map(|candidate| candidate.search_result(entity))
+                .collect())
+        })
+    }
+
+    fn guess_music_match<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        item_type: &'a str,
+        title: &'a str,
+        music: &'a MusicMetadata,
+        context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Option<MetadataSearchResult>> {
+        Box::pin(async move {
+            // A folder names an album, rather than a specific pressing or edition.
+            let entity = if item_type == "album" && music.musicbrainz_release_id.is_none() {
+                "release-group"
+            } else {
+                entity_type(item_type)?
+            };
+            let id = match entity {
+                "artist" => music.musicbrainz_artist_id.as_deref(),
+                "release" => music.musicbrainz_release_id.as_deref(),
+                "release-group" => None,
+                _ => music.musicbrainz_recording_id.as_deref(),
+            };
+            if let Some(id) = id.filter(|id| valid_mbid(id)) {
+                return Ok(Some(MetadataSearchResult {
+                    provider_id: MetadataProviderId::MusicBrainz,
+                    external_id: id.into(),
+                    media_type: entity.into(),
+                    title: title.into(),
+                    overview: None,
+                    artwork_url: None,
+                    backdrop_url: None,
+                    release_year: music.year,
+                    score: Some(1.0),
+                    track_count: None,
+                }));
+            }
+            let artist = match entity {
+                "artist" => None,
+                "release" | "release-group" => Some(music.album_artist.as_str()),
+                _ => Some(music.artist.as_str()),
+            };
+            if title.starts_with("Unknown ")
+                || artist.is_some_and(|artist| artist == "Unknown Artist")
+            {
+                return Ok(None);
+            }
+            let (query, artist_id) = music_query(entity, title, music, context);
+            if entity == "release-group" {
+                if let Some(count) = context.track_count {
+                    let (mut query, artist_id) = music_query("release", title, music, context);
+                    query.push_str(&format!(" AND tracks:{count}"));
+                    let releases = search_entities(&query, "release").await?;
+                    return Ok(choose_album_match(
+                        &releases,
+                        title,
+                        artist,
+                        artist_id.as_deref(),
+                        count,
+                    ));
+                }
+            }
+            Ok(choose_match(
+                &search_entities(&query, entity).await?,
+                entity,
+                title,
+                artist,
+                artist_id.as_deref(),
+            ))
+        })
+    }
+
+    fn fetch_snapshot<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        external_id: &'a str,
+        media_type: &'a str,
+        _include_person_details: bool,
+    ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
+        Box::pin(async move {
+            let entity = entity_type(media_type)?;
+            if !valid_mbid(external_id) {
+                return Err("MusicBrainz identifiers must be UUIDs".into());
+            }
+            let includes = match entity {
+                "artist" => "genres",
+                "release" => "artist-credits+genres+release-groups",
+                _ => "artist-credits+genres",
+            };
+            let payload =
+                request(query_url(entity, Some(external_id), &[("inc", includes)])).await?;
+            snapshot_from_payload(external_id, entity, payload)
+        })
+    }
+
+    fn metadata_details(
+        &self,
+        snapshot: &StoredMetadataSnapshot,
+    ) -> ProviderMetadataDetails {
+        let entity = snapshot
+            .provider_payload_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Entity>(raw).ok());
+        ProviderMetadataDetails {
+            external_ids: entity
+                .as_ref()
+                .and_then(|entity| entity.release_group.as_ref())
+                .filter(|group| valid_mbid(&group.id))
+                .map(|group| crate::metadata::ProviderExternalId {
+                    source: "musicbrainz_release_group".into(),
+                    external_id: group.id.clone(),
+                })
+                .into_iter()
+                .collect(),
+            genres: entity
+                .map(|entity| entity.genres.into_iter().map(|genre| genre.name).collect())
+                .unwrap_or_default(),
+            ..ProviderMetadataDetails::default()
+        }
+    }
+}
+
+fn choose_album_match(
+    entities: &[Entity],
+    title: &str,
+    artist: Option<&str>,
+    artist_id: Option<&str>,
+    count: u32,
+) -> Option<MetadataSearchResult> {
+    let matching = entities
+        .iter()
+        .filter(|entity| {
+            entity.track_count() == Some(count)
+                && choose_match(
+                    std::slice::from_ref(*entity),
+                    "release",
+                    title,
+                    artist,
+                    artist_id,
+                )
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    if matching.len() == 1 {
+        return matching[0].search_result("release");
+    }
+    // The count cannot distinguish pressings of the same album. Link the common
+    // release group instead of choosing an arbitrary edition from search order.
+    let first = matching.first()?;
+    let group = first
+        .release_group
+        .as_ref()
+        .filter(|group| valid_mbid(&group.id))?;
+    if !matching.iter().all(|entity| {
+        entity
+            .release_group
+            .as_ref()
+            .is_some_and(|other| other.id == group.id)
+    }) {
+        return None;
+    }
+    let mut result = first.search_result("release")?;
+    result.external_id = group.id.clone();
+    result.media_type = "release-group".into();
+    result.track_count = None;
+    Some(result)
+}
+
+fn snapshot_from_payload(
+    external_id: &str,
+    entity: &str,
+    payload: serde_json::Value,
+) -> Result<StoredMetadataSnapshot, String> {
+    let parsed: Entity = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("Invalid MusicBrainz lookup: {error}"))?;
+    if parsed.id != external_id || parsed.title().trim().is_empty() {
+        return Err("MusicBrainz returned a mismatched or empty entity".into());
+    }
+    Ok(StoredMetadataSnapshot {
+        provider_id: MetadataProviderId::MusicBrainz,
+        external_id: external_id.into(),
+        media_type: Some(entity.into()),
+        title: Some(parsed.title().into()),
+        overview: if entity == "artist" {
+            artist::overview(
+                parsed.disambiguation.as_deref(),
+                parsed.country.as_deref(),
+                &parsed.artist_details,
+            )
+        } else {
+            parsed
+                .disambiguation
+                .clone()
+                .filter(|value| !value.is_empty())
+        },
+        artwork_url: match entity {
+            "release-group" => Some(format!(
+                "https://coverartarchive.org/release-group/{external_id}/front-500"
+            )),
+            "release"
+                if parsed
+                    .cover_art_archive
+                    .as_ref()
+                    .is_some_and(|cover| cover.front) =>
+            {
+                Some(format!(
+                    "https://coverartarchive.org/release/{external_id}/front-500"
+                ))
+            }
+            "release" => parsed
+                .release_group
+                .as_ref()
+                .filter(|group| valid_mbid(&group.id))
+                .map(|group| {
+                    format!(
+                        "https://coverartarchive.org/release-group/{}/front-500",
+                        group.id
+                    )
+                }),
+            _ => None,
+        },
+        backdrop_url: None,
+        release_year: parsed.year(),
+        locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+        provider_locale_key: None,
+        provider_payload_json: Some(payload.to_string()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const MBID: &str = "f5093c06-23e3-404f-aeaa-40f72885ee3a";
+
+    #[test]
+    fn edition_without_cover_uses_its_release_group_artwork() {
+        let group = "09f10c6c-e9b4-383c-9744-3df6e3d2770e";
+        let mut payload = serde_json::json!({"id": MBID, "title": "Album",
+            "cover-art-archive": {"front": false}, "release-group": {"id": group}});
+        let snapshot = snapshot_from_payload(MBID, "release", payload.clone()).unwrap();
+        assert_eq!(
+            snapshot.artwork_url,
+            Some(format!(
+                "https://coverartarchive.org/release-group/{group}/front-500"
+            ))
+        );
+        payload["cover-art-archive"]["front"] = serde_json::json!(true);
+        let snapshot = snapshot_from_payload(MBID, "release", payload.clone()).unwrap();
+        assert_eq!(
+            snapshot.artwork_url,
+            Some(format!(
+                "https://coverartarchive.org/release/{MBID}/front-500"
+            ))
+        );
+        payload["cover-art-archive"]["front"] = serde_json::json!(false);
+        payload["release-group"]["id"] = serde_json::json!("invalid");
+        assert!(
+            snapshot_from_payload(MBID, "release", payload)
+                .unwrap()
+                .artwork_url
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn album_matches_use_total_tracks_and_leave_ambiguous_editions_unresolved() {
+        let group = "09f10c6c-e9b4-383c-9744-3df6e3d2770e";
+        let release = |id: &str, count: u32, group: &str| {
+            serde_json::json!({
+                "id": id, "title": "Album", "score": 100, "track-count": count,
+                "release-group": {"id": group},
+                "artist-credit": [{"artist": {"name": "Artist"}}]
+            })
+        };
+        let exact = release(MBID, 12, group);
+        let expanded = release("64a283a3-8eb7-4488-a99a-f52ffaaced83", 24, group);
+        let entities: Vec<Entity> =
+            serde_json::from_value(serde_json::json!([expanded, exact.clone()])).unwrap();
+        let matched = choose_album_match(&entities, "Album", Some("Artist"), None, 12).unwrap();
+        assert_eq!(matched.external_id, MBID);
+        assert_eq!(matched.media_type, "release");
+        assert_eq!(matched.track_count, Some(12));
+        assert!(choose_album_match(&entities, "Album", Some("Artist"), None, 13).is_none());
+        assert!(choose_album_match(&entities, "Album", Some("Wrong Artist"), None, 12).is_none());
+        let same_album: Vec<Entity> = serde_json::from_value(serde_json::json!([
+            exact.clone(),
+            release("64a283a3-8eb7-4488-a99a-f52ffaaced83", 12, group)
+        ]))
+        .unwrap();
+        let matched = choose_album_match(&same_album, "Album", Some("Artist"), None, 12).unwrap();
+        assert_eq!(matched.external_id, group);
+        assert_eq!(matched.media_type, "release-group");
+        let ambiguous: Vec<Entity> = serde_json::from_value(serde_json::json!([
+            exact,
+            release("64a283a3-8eb7-4488-a99a-f52ffaaced83", 12, MBID)
+        ]))
+        .unwrap();
+        assert!(choose_album_match(&ambiguous, "Album", Some("Artist"), None, 12).is_none());
+        let multi_disc: Entity = serde_json::from_value(serde_json::json!({
+            "id": MBID, "title": "Album", "media": [{"track-count":12},{"track-count":14}]
+        }))
+        .unwrap();
+        assert_eq!(
+            multi_disc.search_result("release").unwrap().track_count,
+            Some(26)
+        );
+        assert_eq!(
+            multi_disc
+                .search_result("release-group")
+                .unwrap()
+                .track_count,
+            None
+        );
+    }
+
+    #[test]
+    fn lookup_preserves_release_identity_and_artwork() {
+        let payload = serde_json::json!({
+            "id": MBID, "title": "Album", "date": "2020-05-01",
+            "cover-art-archive": {"front": true}, "genres": [{"name": "rock"}]
+        });
+        let snapshot = snapshot_from_payload(MBID, "release", payload).unwrap();
+        assert_eq!(snapshot.release_year, Some(2020));
+        assert!(snapshot.artwork_url.unwrap().ends_with("/front-500"));
+        assert!(
+            snapshot_from_payload(
+                "invalid",
+                "release",
+                serde_json::json!({"id": MBID, "title": "Album"})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn artist_facts_are_stored_in_the_scalar_overview_and_reach_library_cards() {
+        use diesel::connection::SimpleConnection;
+        use diesel::{
+            Connection,
+            SqliteConnection,
+        };
+        let snapshot = snapshot_from_payload(
+            MBID,
+            "artist",
+            serde_json::json!({
+                "id": MBID, "name": "Artist", "type": "Person",
+                "area": {"name": "United States"}, "begin-area": {"name": "Savannah"},
+                "life-span": {"begin": "1973-11-19", "end": null, "ended": false}
+            }),
+        )
+        .unwrap();
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+        conn.batch_execute(
+            "INSERT INTO media_libraries (id,name,path,kind,metadata_providers_json)
+             VALUES (1,'Music','music','music','[\"musicbrainz\"]');
+             INSERT INTO media_items (id,library_id,identity_key,item_type,display_title)
+             VALUES (1,1,'artist','artist','Local Artist');",
+        )
+        .unwrap();
+        crate::metadata::upsert_item_metadata_snapshot(&mut conn, 1, &snapshot).unwrap();
+        let items = crate::media::list_media_items(&mut conn, Some(1)).unwrap();
+        assert_eq!(
+            items[0].overview.as_deref(),
+            Some("United States · Born 19 November 1973 in Savannah")
+        );
+    }
+
+    #[test]
+    fn matching_refuses_ambiguous_titles_and_wrong_artists() {
+        let raw = serde_json::json!({
+            "id": MBID, "title": "Album", "score": 100,
+            "artist-credit": [{"name": "Artist", "artist": {"name": "Artist"}}]
+        });
+        let entities: Vec<Entity> =
+            serde_json::from_value(serde_json::json!([raw.clone()])).unwrap();
+        assert!(choose_match(&entities, "release", "Album", Some("Artist"), None).is_some());
+        assert!(choose_match(&entities, "release", "Album", Some("Other"), None).is_none());
+        let ambiguous: Vec<Entity> =
+            serde_json::from_value(serde_json::json!([raw.clone(), raw])).unwrap();
+        assert!(choose_match(&ambiguous, "release", "Album", Some("Artist"), None).is_none());
+        assert_eq!(quoted("AC/DC: \"Live\""), "\"AC\\/DC\\: \\\"Live\\\"\"");
+    }
+
+    #[test]
+    fn url_parameters_keep_query_syntax_out_of_paths() {
+        let url = query_url("release", None, &[("query", "release:\"A & B\"")]);
+        assert_eq!(url.path(), "/ws/2/release");
+        assert!(
+            url.query_pairs()
+                .any(|(key, value)| key == "query" && value == "release:\"A & B\"")
+        );
+        assert!(entity_type("movie").is_err());
+    }
+
+    #[test]
+    fn album_groups_supply_covers_and_matched_parents_constrain_searches() {
+        let snapshot = snapshot_from_payload(
+            MBID,
+            "release-group",
+            serde_json::json!({
+                "id": MBID, "title": "Album", "first-release-date": "1982",
+                "artist-credit": [{"artist": {"id": MBID, "name": "Canonical Artist"}}]
+            }),
+        )
+        .unwrap();
+        assert_eq!(snapshot.release_year, Some(1982));
+        assert_eq!(
+            snapshot.artwork_url.as_deref(),
+            Some(format!("https://coverartarchive.org/release-group/{MBID}/front-500").as_str())
+        );
+        let music = MusicMetadata {
+            artist: "Local Artist".into(),
+            album_artist: "Local Artist".into(),
+            album: "Album".into(),
+            ..Default::default()
+        };
+        let context = MusicMatchContext {
+            artist_id: Some(MBID.into()),
+            release_group_id: Some(MBID.into()),
+            ..Default::default()
+        };
+        let (query, artist_id) = music_query("recording", "Song", &music, &context);
+        assert!(query.contains(&format!("arid:{MBID}")));
+        assert!(query.contains(&format!("rgid:{MBID}")));
+        assert!(!query.contains("artist:\"Local"));
+        let entities: Vec<Entity> = serde_json::from_value(serde_json::json!([{
+            "id": MBID, "title": "Song", "score": 100,
+            "artist-credit": [{"artist": {"id": MBID, "name": "Canonical Artist"}}]
+        }]))
+        .unwrap();
+        assert!(
+            choose_match(
+                &entities,
+                "recording",
+                "Song",
+                Some("Local Artist"),
+                artist_id.as_deref()
+            )
+            .is_some()
+        );
+        let (query, _) = music_query("release-group", "Album", &music, &context);
+        assert!(query.starts_with("releasegroup:"));
+    }
+
+    #[tokio::test]
+    async fn requests_identify_koko_and_share_a_rate_limit_across_retries() {
+        use std::io::{
+            Read,
+            Write,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url =
+            reqwest::Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut arrivals = Vec::new();
+            for index in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut buffer = [0; 4096];
+                let size = stream.read(&mut buffer).unwrap();
+                let headers = String::from_utf8_lossy(&buffer[..size]).to_ascii_lowercase();
+                assert!(headers.contains("user-agent: koko/"));
+                assert!(headers.contains("https://github.com/lizardbyte/koko"));
+                arrivals.push(std::time::Instant::now());
+                let response = if index == 0 {
+                    "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: \
+                     0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     2\r\nConnection: close\r\n\r\n{}"
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            for pair in arrivals.windows(2) {
+                assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(990));
+            }
+        });
+        let (first, second) = tokio::join!(request(url.clone()), request(url));
+        first.unwrap();
+        second.unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_album_matches_and_persists_release_group_cover_without_global_enablement() {
+        use diesel::{
+            Connection,
+            RunQueryDsl,
+        };
+        use std::io::{
+            Read,
+            Write,
+        };
+        let artist_id = "46510d46-ce20-4dde-b9ea-207e474353f4";
+        let album_id = "29551412-b9fc-4519-9c65-37f8cf14711e";
+        let album = serde_json::json!({
+            "id": album_id, "title": "Brett Eldredge", "score": 100,
+            "first-release-date": "2017-08-04", "genres": [{"name": "country"}],
+            "artist-credit": [{"artist": {"id": artist_id, "name": "Brett Eldredge"}}]
+        });
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let api_root = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (index, body) in [
+                serde_json::json!({"release-groups": [album.clone()]}),
+                album,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let deadline = std::time::Instant::now() + Duration::from_secs(20);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10))
+                        }
+                        Err(error) => panic!("MusicBrainz test request did not arrive: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut chunk = [0; 4096];
+                    let size = stream.read(&mut chunk).unwrap();
+                    assert!(size > 0 && request.len() < 16384);
+                    request.extend_from_slice(&chunk[..size]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                let path = request.split_whitespace().nth(1).unwrap();
+                let url = reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+                if index == 0 {
+                    assert_eq!(url.path(), "/ws/2/release-group");
+                    assert!(url.query_pairs().any(|(key, value)| key == "query"
+                        && value
+                            == format!("releasegroup:\"Brett Eldredge\" AND arid:{artist_id}")));
+                } else {
+                    assert_eq!(url.path(), format!("/ws/2/release-group/{album_id}"));
+                }
+                let body = body.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+        TEST_API_ROOT
+            .scope(api_root, async {
+                let settings = MetadataSettings::default();
+                assert!(
+                    !settings
+                        .providers
+                        .iter()
+                        .find(|provider| provider.id == MetadataProviderId::MusicBrainz)
+                        .unwrap()
+                        .enabled
+                );
+                let music = MusicMetadata {
+                    artist: "Brett Eldredge".into(),
+                    album_artist: "Brett Eldredge".into(),
+                    album: "Brett Eldredge".into(),
+                    ..Default::default()
+                };
+                let context = MusicMatchContext {
+                    artist_id: Some(artist_id.into()),
+                    ..Default::default()
+                };
+                let provider = MusicBrainzMetadataProvider;
+                let result = provider
+                    .guess_music_match(&settings, "album", "Brett Eldredge", &music, &context)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(result.media_type, "release-group");
+                let snapshot = provider
+                    .fetch_snapshot(&settings, &result.external_id, &result.media_type, false)
+                    .await
+                    .unwrap();
+                let mut conn = diesel::SqliteConnection::establish(":memory:").unwrap();
+                crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+                diesel::sql_query(
+                    "INSERT INTO media_libraries (id,name,path,kind) VALUES \
+                     (1,'Music','music','music')",
+                )
+                .execute(&mut conn)
+                .unwrap();
+                diesel::sql_query(
+                    "INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) \
+                     VALUES (1,1,'album','album','Brett Eldredge')",
+                )
+                .execute(&mut conn)
+                .unwrap();
+                crate::metadata::upsert_item_metadata_snapshot(&mut conn, 1, &snapshot).unwrap();
+                let link = crate::metadata::get_primary_item_metadata_link(&mut conn, 1)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(link.external_id, album_id);
+                assert_eq!(link.media_type.as_deref(), Some("release-group"));
+                assert_eq!(link.refresh_state, "fresh");
+                assert_eq!(
+                    link.artwork_url,
+                    Some(format!(
+                        "https://coverartarchive.org/release-group/{album_id}/front-500"
+                    ))
+                );
+                assert!(link.genres_json.is_none());
+            })
+            .await;
+        server.join().unwrap();
+    }
+}

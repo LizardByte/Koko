@@ -8,7 +8,6 @@ use std::collections::{
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::atomic::{
-    AtomicBool,
     AtomicU64,
     Ordering,
 };
@@ -439,7 +438,7 @@ pub struct SystemActivity {
     pub library_id: Option<i32>,
     /// Root item identifier for item-scoped work, when known.
     pub root_item_id: Option<i32>,
-    /// All item identifiers currently tracked by the activity.
+    /// Queued or running item identifiers and their ancestors.
     pub item_ids: Vec<i32>,
     /// Total number of tracked items.
     pub total_items: i32,
@@ -532,7 +531,10 @@ static ACTIVE_METADATA_REFRESH_EXECUTIONS: Lazy<
 > = Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
 static ACTIVE_LIBRARY_METADATA_REFRESHES: Lazy<tokio::sync::RwLock<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::RwLock::new(HashSet::new()));
-static ACTIVE_MANUAL_CATALOG_SCAN_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+static ACTIVE_LIBRARY_SCANS: Lazy<tokio::sync::Mutex<HashSet<i32>>> =
+    Lazy::new(|| tokio::sync::Mutex::new(HashSet::new()));
+static CATALOG_SCAN_EXECUTION: Lazy<tokio::sync::Mutex<()>> =
+    Lazy::new(|| tokio::sync::Mutex::new(()));
 static ACTIVE_PLAYBACK_SESSIONS: Lazy<
     tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
 > = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
@@ -551,16 +553,6 @@ fn next_system_activity_id() -> String {
         "activity-{}",
         NEXT_SYSTEM_ACTIVITY_ID.fetch_add(1, Ordering::SeqCst)
     )
-}
-
-fn begin_catalog_scan_execution() -> bool {
-    ACTIVE_MANUAL_CATALOG_SCAN_RUNNING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-}
-
-fn finish_catalog_scan_execution() {
-    ACTIVE_MANUAL_CATALOG_SCAN_RUNNING.store(false, Ordering::SeqCst);
 }
 
 fn metadata_refresh_interval_seconds(settings: &Settings) -> Option<i64> {
@@ -979,7 +971,10 @@ async fn persist_snapshot_for_item(
 }
 
 fn supports_manual_metadata_linking(item: &MediaItemSummary) -> bool {
-    matches!(item.item_type.as_str(), "movie" | "show")
+    matches!(
+        item.item_type.as_str(),
+        "movie" | "show" | "artist" | "album" | "track"
+    )
 }
 
 fn provider_search_media_type(
@@ -988,6 +983,9 @@ fn provider_search_media_type(
 ) -> Option<&'static str> {
     match (provider_id, item.item_type.as_str()) {
         (_, "movie") => Some("movie"),
+        (MetadataProviderId::MusicBrainz, "artist") => Some("artist"),
+        (MetadataProviderId::MusicBrainz, "album") => Some("release"),
+        (MetadataProviderId::MusicBrainz, "track") => Some("recording"),
         (MetadataProviderId::Tmdb, "show") => Some("tv"),
         (MetadataProviderId::Tvdb, "show") => Some("series"),
         _ => None,
@@ -1028,6 +1026,23 @@ fn metadata_search_score(
         metadata_search_casing_penalty(query_title, result_title, &result.provider_id)
     };
     ((title_score + year_score).clamp(0.0, 1.0) + casing_score).clamp(0.0, 1.0)
+}
+
+fn album_track_count_score(
+    local_count: i32,
+    candidate_count: Option<u32>,
+) -> f64 {
+    if local_count <= 0 {
+        return 1.0;
+    }
+    match candidate_count {
+        Some(count) if i64::from(count) == i64::from(local_count) => 1.0,
+        Some(count) => {
+            let local = f64::from(local_count);
+            0.7 + 0.2 * (f64::from(count).min(local) / f64::from(count).max(local))
+        }
+        None => 0.95,
+    }
 }
 
 fn metadata_search_casing_penalty(
@@ -1201,6 +1216,7 @@ async fn finish_library_metadata_refresh(library_id: i32) {
 async fn register_library_scan_activity(
     library_id: i32,
     library_name: &str,
+    source: &str,
 ) -> String {
     let activity_id = next_system_activity_id();
     let now = current_timestamp();
@@ -1212,7 +1228,7 @@ async fn register_library_scan_activity(
                 id: activity_id.clone(),
                 category: "library_scan".into(),
                 scope: "library".into(),
-                source: "manual_library_scan".into(),
+                source: source.into(),
                 state: "queued".into(),
                 label: format!("Scan library catalog for {library_name}"),
                 provider_id: None,
@@ -1511,7 +1527,13 @@ async fn current_system_activities() -> Vec<SystemActivity> {
     let activities = ACTIVE_SYSTEM_ACTIVITIES.read().await;
     let mut snapshot = activities
         .values()
-        .map(|record| record.activity.clone())
+        .map(|record| {
+            let mut activity = record.activity.clone();
+            activity
+                .item_ids
+                .retain(|id| !record.completed.contains_key(id));
+            activity
+        })
         .collect::<Vec<_>>();
     snapshot.sort_by(|left, right| {
         right
@@ -1520,6 +1542,118 @@ async fn current_system_activities() -> Vec<SystemActivity> {
             .then_with(|| left.label.cmp(&right.label))
     });
     snapshot
+}
+
+async fn system_activities_with_ancestors(db: &DbConn) -> Result<Vec<SystemActivity>, Status> {
+    let mut activities = current_system_activities().await;
+    let ids = activities
+        .iter()
+        .flat_map(|activity| activity.item_ids.iter().copied())
+        .collect::<HashSet<_>>();
+    if ids.is_empty() {
+        return Ok(activities);
+    }
+    let parents = db
+        .run(move |conn| {
+            use crate::db::schema::media_items::dsl as items;
+            use diesel::{
+                ExpressionMethods,
+                QueryDsl,
+                RunQueryDsl,
+            };
+            let mut parents = HashMap::new();
+            let mut next = ids.into_iter().collect::<Vec<_>>();
+            while !next.is_empty() {
+                let mut ancestors = Vec::new();
+                for chunk in next.chunks(500) {
+                    for (id, parent) in items::media_items
+                        .filter(items::id.eq_any(chunk))
+                        .filter(items::deleted_at.is_null())
+                        .select((items::id, items::parent_id))
+                        .load::<(i32, Option<i32>)>(conn)?
+                    {
+                        parents.insert(id, parent);
+                        if let Some(parent) = parent {
+                            ancestors.push(parent);
+                        }
+                    }
+                }
+                ancestors.sort_unstable();
+                ancestors.dedup();
+                next = ancestors
+                    .into_iter()
+                    .filter(|id| !parents.contains_key(id))
+                    .collect();
+            }
+            Ok::<_, diesel::result::Error>(parents)
+        })
+        .await
+        .map_err(|error| {
+            log::error!("Failed to load activity ancestors: {error}");
+            Status::InternalServerError
+        })?;
+    for activity in &mut activities {
+        let mut ids = activity.item_ids.iter().copied().collect::<HashSet<_>>();
+        for id in activity.item_ids.clone() {
+            let mut parent = parents.get(&id).copied().flatten();
+            while let Some(id) = parent {
+                if !ids.insert(id) {
+                    break;
+                }
+                activity.item_ids.push(id);
+                parent = parents.get(&id).copied().flatten();
+            }
+        }
+    }
+    Ok(activities)
+}
+
+fn music_match_context(
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    item_id: i32,
+) -> Result<crate::metadata::MusicMatchContext, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as items;
+    use diesel::{
+        ExpressionMethods,
+        OptionalExtension,
+        QueryDsl,
+        RunQueryDsl,
+    };
+    let mut context = crate::metadata::MusicMatchContext::default();
+    let track_count = items::media_items
+        .filter(items::parent_id.eq(item_id))
+        .filter(items::item_type.eq("track"))
+        .filter(items::deleted_at.is_null())
+        .count()
+        .get_result::<i64>(conn)?;
+    context.track_count = u32::try_from(track_count).ok().filter(|count| *count > 0);
+    let mut current = item_id;
+    let mut seen = HashSet::new();
+    while let Some(parent) = items::media_items
+        .find(current)
+        .filter(items::deleted_at.is_null())
+        .select(items::parent_id)
+        .first::<Option<i32>>(conn)
+        .optional()?
+        .flatten()
+    {
+        if !seen.insert(parent) {
+            break;
+        }
+        current = parent;
+        if let Some(link) = get_primary_item_metadata_link(conn, parent)? {
+            if link.provider_id != "musicbrainz" || link.match_state == "unlinked" {
+                continue;
+            }
+            match link.media_type.as_deref() {
+                Some("artist") => context.artist_id = Some(link.external_id),
+                Some("release") => context.release_id = Some(link.external_id),
+                Some("release-group") => context.release_group_id = Some(link.external_id),
+                _ => {}
+            }
+        }
+    }
+    Ok(context)
 }
 
 async fn load_show_descendant_refresh_targets(
@@ -2773,9 +2907,10 @@ async fn cache_deferred_person_image(
 }
 
 fn linked_shows_needing_descendant_backfill(
-    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    library_id: Option<i32>,
 ) -> Result<Vec<(i32, String)>, diesel::result::Error> {
-    let items = list_media_items(conn, None)?;
+    let items = list_media_items(conn, library_id)?;
     let mut pending = Vec::new();
 
     for show in items.into_iter().filter(|item| item.item_type == "show") {
@@ -2829,18 +2964,61 @@ fn descendant_metadata_needs_backfill(link: Option<ItemMetadataLink>) -> bool {
     }
 }
 
+fn available_automatic_metadata_providers(settings: &Settings) -> HashSet<MetadataProviderId> {
+    // Libraries select their providers. The legacy global enabled flag is not
+    // exposed by provider settings and must not override that selection.
+    list_provider_statuses(&settings.metadata)
+        .into_iter()
+        .filter(|provider| provider.configured && provider.implemented)
+        .map(|provider| provider.id)
+        .collect()
+}
+
+enum AutomaticMetadataWork {
+    Match(crate::media::AutomaticMetadataCandidate, MetadataRevision),
+    Refresh(MetadataRefreshTarget),
+}
+
+impl AutomaticMetadataWork {
+    fn item_id(&self) -> i32 {
+        match self {
+            Self::Match(candidate, _) => candidate.item_id,
+            Self::Refresh(target) => target.item_id,
+        }
+    }
+}
+
+fn order_music_metadata_work(
+    items: &[MediaItemSummary],
+    work: &mut [AutomaticMetadataWork],
+) {
+    let order = items
+        .iter()
+        .filter_map(|item| {
+            item.music.as_deref().map(|music| {
+                (
+                    item.id,
+                    crate::media::music::metadata_sort_key(
+                        &item.item_type,
+                        &item.display_title,
+                        music,
+                    ),
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
+    work.sort_by_cached_key(|item| order.get(&item.item_id()).cloned());
+}
+
 async fn run_automatic_movie_metadata_linking(
     db: &DbConn,
     settings: &crate::config::Settings,
     library_id: Option<i32>,
     retry_previously_attempted: bool,
     activity: Option<(String, Vec<i32>)>,
+    linked_music_refresh: Option<(String, Vec<MetadataRefreshTarget>)>,
 ) {
-    let ready_providers = list_provider_statuses(&settings.metadata)
-        .into_iter()
-        .filter(|provider| provider.configured && provider.implemented)
-        .map(|provider| provider.id)
-        .collect::<std::collections::HashSet<_>>();
+    let ready_providers = available_automatic_metadata_providers(settings);
 
     let mut candidates = match db
         .run(move |conn| {
@@ -2897,7 +3075,32 @@ async fn run_automatic_movie_metadata_linking(
         mark_metadata_refresh_activity_running(activity_id).await;
     }
 
-    for (candidate, revision) in candidates {
+    let mut work = candidates
+        .into_iter()
+        .map(|(candidate, revision)| AutomaticMetadataWork::Match(candidate, revision))
+        .collect::<Vec<_>>();
+    let linked_activity_id = if let Some((id, targets)) = linked_music_refresh {
+        work.extend(targets.into_iter().map(AutomaticMetadataWork::Refresh));
+        match db.run(move |conn| list_media_items(conn, library_id)).await {
+            Ok(items) => order_music_metadata_work(&items, &mut work),
+            Err(error) => log::warn!("Failed to order music metadata work: {error}"),
+        }
+        mark_metadata_refresh_activity_running(&id).await;
+        Some(id)
+    } else {
+        None
+    };
+    for entry in work {
+        let (candidate, revision) = match entry {
+            AutomaticMetadataWork::Match(candidate, revision) => (candidate, revision),
+            AutomaticMetadataWork::Refresh(target) => {
+                let failed = execute_metadata_refresh_target(db, &target, settings).await;
+                if let Some(id) = &linked_activity_id {
+                    record_metadata_refresh_activity_progress(id, target.item_id, failed).await;
+                }
+                continue;
+            }
+        };
         if !revision.is_current() {
             continue;
         }
@@ -2910,6 +3113,28 @@ async fn run_automatic_movie_metadata_linking(
             .filter(|provider_id| ready_providers.contains(provider_id))
         {
             let guess_result = match candidate.library_kind {
+                crate::config::MediaLibraryKind::Music => {
+                    let registry = crate::metadata::MetadataRegistry::new();
+                    let item_id = candidate.item_id;
+                    let context = db
+                        .run(move |conn| music_match_context(conn, item_id))
+                        .await
+                        .unwrap_or_default();
+                    match (registry.provider(provider_id), candidate.music.as_ref()) {
+                        (Some(provider), Some(music)) => {
+                            provider
+                                .guess_music_match(
+                                    &settings.metadata,
+                                    &candidate.item_type,
+                                    &candidate.display_title,
+                                    music,
+                                    &context,
+                                )
+                                .await
+                        }
+                        _ => Ok(None),
+                    }
+                }
                 crate::config::MediaLibraryKind::Shows => {
                     guess_provider_show_match(
                         &settings.metadata,
@@ -2956,11 +3181,7 @@ async fn run_automatic_movie_metadata_linking(
                 item_id: candidate.item_id,
                 library_id: candidate.library_id,
                 provider_id: provider_id.clone(),
-                item_type: if candidate.library_kind == crate::config::MediaLibraryKind::Shows {
-                    "show".into()
-                } else {
-                    "movie".into()
-                },
+                item_type: candidate.item_type.clone(),
                 display_title: candidate.display_title.clone(),
                 relative_path: candidate.relative_path.clone(),
                 external_id: result.external_id.clone(),
@@ -3050,12 +3271,17 @@ async fn run_automatic_movie_metadata_linking(
     if let Some((activity_id, _)) = &activity {
         complete_metadata_refresh_activity(activity_id).await;
     }
+    if let Some(id) = linked_activity_id {
+        complete_metadata_refresh_activity(&id).await;
+    }
 
     let pending_show_backfills = match db
-        .run(|conn| {
-            metadata_jobs::load(conn, linked_shows_needing_descendant_backfill, |(id, _)| {
-                *id
-            })
+        .run(move |conn| {
+            metadata_jobs::load(
+                conn,
+                |conn| linked_shows_needing_descendant_backfill(conn, library_id),
+                |(id, _)| *id,
+            )
         })
         .await
     {
@@ -3248,7 +3474,7 @@ async fn load_library_refresh_targets(
     db: &DbConn,
     library_id: i32,
 ) -> Result<Vec<MetadataRefreshTarget>, Status> {
-    let items = db
+    let mut items = db
         .run(move |conn| list_media_items(conn, Some(library_id)))
         .await
         .map_err(|error| {
@@ -3260,11 +3486,16 @@ async fn load_library_refresh_targets(
             Status::InternalServerError
         })?;
 
+    items.sort_by_cached_key(|item| {
+        item.music.as_deref().map(|music| {
+            crate::media::music::metadata_sort_key(&item.item_type, &item.display_title, music)
+        })
+    });
     let mut targets = Vec::new();
-    for item in items
-        .into_iter()
-        .filter(|item| item.parent_id.is_none() && supports_manual_metadata_linking(item))
-    {
+    for item in items.into_iter().filter(|item| {
+        supports_manual_metadata_linking(item)
+            && (item.parent_id.is_none() || matches!(item.item_type.as_str(), "album" | "track"))
+    }) {
         let revision = MetadataRevision::current(item.id);
         let item_id = item.id;
         let link = db
@@ -3362,68 +3593,85 @@ pub async fn scan_library(
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
     let library_summary = load_library_summary(&db, library_id).await?;
-    if !begin_catalog_scan_execution() {
+    start_library_scan(
+        db,
+        settings,
+        library_id,
+        library_summary.name.clone(),
+        "manual_library_scan",
+    )
+    .await;
+    Ok(Json(library_summary))
+}
+
+/// Queue a catalog scan followed by metadata matching and refresh.
+pub(super) async fn start_library_scan(
+    db: DbConn,
+    settings: Settings,
+    library_id: i32,
+    library_name: String,
+    source: &str,
+) {
+    if !ACTIVE_LIBRARY_SCANS.lock().await.insert(library_id) {
         log::info!(
-            "Skipping duplicate manual library {} scan request; a catalog scan is already running",
+            "Skipping duplicate library {} scan request; this library is already queued",
             library_id
         );
-        return Ok(Json(library_summary));
+        return;
     }
 
     let ffmpeg_settings = settings.ffmpeg.clone();
-    let library_name = library_summary.name.clone();
-    let activity_id = register_library_scan_activity(library_id, &library_name).await;
+    let activity_id = register_library_scan_activity(library_id, &library_name, source).await;
     tokio::spawn(async move {
+        // Serialize scans, but retain requests for other libraries in the queue.
+        let scan_guard = CATALOG_SCAN_EXECUTION.lock().await;
         mark_library_scan_activity_running(&activity_id).await;
-        log::info!(
-            "Starting manual media library catalog scan for library {} ({})",
-            library_id,
-            library_name
-        );
-        let sync_result = db
-            .run(move |conn| {
-                sync_persisted_library_catalog_for_library(conn, &ffmpeg_settings, library_id)
-            })
-            .await;
+        let scan_task = tokio::spawn(async move {
+            let result = db
+                .run(move |conn| {
+                    sync_persisted_library_catalog_for_library(conn, &ffmpeg_settings, library_id)
+                })
+                .await;
+            (db, result)
+        });
+        let sync_result = scan_task.await;
+        drop(scan_guard);
         let failed = match sync_result {
-            Ok(Some(summary)) => {
+            Ok((db, Ok(Some(summary)))) => {
                 log::info!(
-                    "Completed manual media library catalog scan for library {} ({}): {} file(s), \
-                     status {:?}",
+                    "Completed media library catalog scan for library {} ({}): {} file(s), status \
+                     {:?}",
                     summary.id,
                     summary.name,
                     summary.total_files,
                     summary.status
                 );
+                if let Err(status) =
+                    start_library_metadata_refresh(db, settings, library_id, summary.name).await
+                {
+                    log::error!(
+                        "Failed to start metadata refresh after library {library_id} scan: \
+                         {status}"
+                    );
+                }
                 false
             }
-            Ok(None) => {
-                log::warn!(
-                    "Manual media library catalog scan requested missing library {}",
-                    library_id
-                );
+            Ok((_, Ok(None))) => {
+                log::warn!("Catalog scan requested missing library {}", library_id);
+                true
+            }
+            Ok((_, Err(error))) => {
+                log::error!("Failed to scan library {}: {}", library_id, error);
                 true
             }
             Err(error) => {
-                log::error!(
-                    "Failed to run manual library scan for library {}: {}",
-                    library_id,
-                    error
-                );
+                log::error!("Library {library_id} scan worker stopped unexpectedly: {error}");
                 true
             }
         };
-        if failed {
-            log::warn!(
-                "Manual media library catalog scan did not complete successfully for library {}",
-                library_id
-            );
-        }
         complete_library_scan_activity(&activity_id, failed).await;
-        finish_catalog_scan_execution();
+        ACTIVE_LIBRARY_SCANS.lock().await.remove(&library_id);
     });
-
-    Ok(Json(library_summary))
 }
 
 /// Delete items currently marked missing from one library's active catalog.
@@ -3474,11 +3722,14 @@ pub async fn delete_library_missing_items(
 /// Return active backend activities such as metadata refresh work.
 #[openapi(tag = "Media")]
 #[get("/api/v1/system/activities")]
-pub async fn get_system_activities(_admin: AdminGuard) -> Json<SystemActivitiesResponse> {
-    Json(SystemActivitiesResponse {
+pub async fn get_system_activities(
+    _admin: AdminGuard,
+    db: DbConn,
+) -> Result<Json<SystemActivitiesResponse>, Status> {
+    Ok(Json(SystemActivitiesResponse {
         generated_at: current_timestamp(),
-        activities: current_system_activities().await,
-    })
+        activities: system_activities_with_ancestors(&db).await?,
+    }))
 }
 
 /// Return metadata provider status for the current server configuration.
@@ -3919,7 +4170,13 @@ pub async fn get_session_stream(
             session.decision.transcode_audio_codec.clone()
         };
 
+    let audio_only = db
+        .run(move |conn| get_media_item_summary(conn, session.item_id))
+        .await
+        .map_err(|_| Status::InternalServerError)?
+        .is_some_and(|item| item.media_kind == "audio");
     let spec = crate::transcode::TranscodeSpec {
+        audio_only,
         source_path,
         output_path: output_path.clone(),
         container,
@@ -4365,7 +4622,12 @@ pub async fn search_item_metadata(
     }
 
     for result in &mut results {
-        result.score = Some(metadata_search_score(&search_title, year, result));
+        let mut score = metadata_search_score(&search_title, year, result);
+        if item.item_type == "album" {
+            // Count is supporting evidence; incomplete albums can still be linked manually.
+            score *= album_track_count_score(item.child_count, result.track_count);
+        }
+        result.score = Some(score);
     }
     results.sort_by(|left, right| {
         right
@@ -4700,6 +4962,32 @@ async fn run_manual_library_metadata_refresh(
     library_name: String,
     prepared: PreparedLibraryMetadataRefresh,
 ) -> (DbConn, Settings, String) {
+    let is_music = db
+        .run(move |conn| {
+            use crate::db::schema::media_libraries::dsl as libraries;
+            use diesel::{
+                QueryDsl,
+                RunQueryDsl,
+            };
+            libraries::media_libraries
+                .find(library_id)
+                .select(libraries::kind)
+                .first::<String>(conn)
+        })
+        .await
+        .is_ok_and(|kind| kind == "music");
+    if is_music {
+        run_automatic_movie_metadata_linking(
+            &db,
+            &settings,
+            Some(library_id),
+            true,
+            prepared.automatch_activity,
+            prepared.refresh_activity,
+        )
+        .await;
+        return (db, settings, library_name);
+    }
     if let Some((activity_id, roots)) = prepared.refresh_activity {
         mark_metadata_refresh_activity_running(&activity_id).await;
         for root in roots {
@@ -4741,6 +5029,7 @@ async fn run_manual_library_metadata_refresh(
         Some(library_id),
         true,
         prepared.automatch_activity,
+        None,
     )
     .await;
     (db, settings, library_name)
@@ -4756,13 +5045,22 @@ pub async fn refresh_library_metadata(
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
     let library_summary = load_library_summary(&db, library_id).await?;
-    let library_name = library_summary.name.clone();
+    start_library_metadata_refresh(db, settings, library_id, library_summary.name.clone()).await?;
+    Ok(Json(library_summary))
+}
+
+async fn start_library_metadata_refresh(
+    db: DbConn,
+    settings: Settings,
+    library_id: i32,
+    library_name: String,
+) -> Result<(), Status> {
     if !begin_library_metadata_refresh(library_id).await {
         log::info!(
             "Skipping duplicate library {} metadata refresh request; a refresh is already running",
             library_id
         );
-        return Ok(Json(library_summary));
+        return Ok(());
     }
 
     let prepared =
@@ -4813,7 +5111,7 @@ pub async fn refresh_library_metadata(
         }
     });
 
-    Ok(Json(library_summary))
+    Ok(())
 }
 
 /// Serve poster or backdrop artwork for a linked media item, caching it locally on demand.
@@ -5359,6 +5657,7 @@ mod tests {
             backdrop_url: None,
             release_year: None,
             score: None,
+            track_count: None,
         }
     }
 
@@ -5371,6 +5670,15 @@ mod tests {
             metadata_search_score("The Matrix", None, &mismatched_case)
                 < metadata_search_score("The Matrix", None, &exact)
         );
+    }
+
+    #[test]
+    fn album_count_ranking_prefers_equal_counts_and_keeps_mismatches_selectable() {
+        assert_eq!(album_track_count_score(12, Some(12)), 1.0);
+        assert!(album_track_count_score(12, Some(24)) < album_track_count_score(12, Some(13)));
+        assert!(album_track_count_score(12, Some(13)) < album_track_count_score(12, None));
+        assert!(album_track_count_score(12, Some(24)) > 0.0);
+        assert_eq!(album_track_count_score(0, Some(12)), 1.0);
     }
 
     #[test]

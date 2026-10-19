@@ -34,6 +34,16 @@ beforeEach(() => {
   });
 });
 
+test('featured artists show real metadata and omit generic library filler when it is missing', () => {
+  const artist = item(301, { item_type: 'artist', overview: 'United States · Born 19 November 1973 in Savannah' });
+  state.libraryItems = [artist];
+  assert.match(renderHomeFeature(), /United States · Born 19 November 1973 in Savannah/);
+  artist.overview = '  ';
+  assert.doesNotMatch(renderHomeFeature(), /Artist from|your library|<p>\s*<\/p>/);
+  artist.overview = '<script>artist description</script>';
+  assert.match(renderHomeFeature(), /&lt;script&gt;artist description&lt;\/script&gt;/);
+});
+
 test('sort, genre, year, and watch status compose without mutating source items', () => {
   const items = [item(2, { display_title: 'Beta', release_year: 2001, genres: ['Drama'], playback_completed: true }), item(3, { release_year: 1999, genres: ['Drama'], playback_position_ms: 60_000 }), item(1, { release_year: 1999, genres: ['Drama'] }), item(4, { genres: ['Comedy'] })];
   const defaults = preferences.DEFAULT_BROWSE_PREFERENCES;

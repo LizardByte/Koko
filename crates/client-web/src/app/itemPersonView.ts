@@ -1,3 +1,4 @@
+import { renderAlbumTracks } from './music';
 /** Renders item detail, metadata search, person detail, and credit trays. */
 import type {
   ItemMetadataMatch,
@@ -59,6 +60,7 @@ export function renderMetadataSearchResults(): string {
             ${renderMetadataSearchProviderAttribution(result.provider_id)}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
+            ${result.track_count ? `<span>${result.track_count} tracks${selectedItem.item_type === 'album' && selectedItem.child_count ? ` · ${result.track_count === selectedItem.child_count ? 'matches your' : 'your album has'} ${selectedItem.child_count} tracks` : ''}</span>` : ''}
             ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
           </div>
         </div>
@@ -87,6 +89,7 @@ function libraryKindForItemType(itemType: string | undefined): string | undefine
   if (itemType === 'show') {
     return 'shows';
   }
+  if (['artist', 'album', 'track'].includes(itemType ?? '')) return 'music';
   if (itemType === 'movie') {
     return 'movies';
   }
@@ -760,6 +763,8 @@ function selectedItemChildSectionTitle(item: MediaItemDetail): string {
     return 'Seasons';
   }
 
+  if (item.item_type === 'artist') return 'Albums';
+  if (item.item_type === 'album') return 'Tracks';
   return item.item_type === 'season' ? 'Episodes' : 'Contained items';
 }
 
@@ -881,6 +886,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <div class="item-bar-identity" data-sticky-identity hidden>
               ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
             </div>
+            ${item.item_type === 'album' && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : ''}
             ${renderResumeButton(item, resumeMs)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
             ${playbackTarget ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
@@ -998,6 +1004,7 @@ export function renderEpisodeBrowser(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
+  if (item.item_type === 'album') return renderAlbumTracks(item);
   if (['show', 'season', 'episode'].includes(item.item_type)) return renderTvChildren(item);
 
   if (!item.children.length) {
@@ -1128,7 +1135,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}" data-item-page-id="${item.id}">
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''}" data-item-page-id="${item.id}">
       ${artwork.backdrop ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(artwork.backdrop)}');"></div>` : ''}
       ${renderSelectedItemIdentity(
         item,

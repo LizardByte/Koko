@@ -185,7 +185,9 @@ These run across multiple stages:
 - TheMovieDB and TheTVDB are implemented primary metadata providers for movies and TV.
 - ThemerrDB extends movie, show, and collection metadata with themes; TrailerDB adds movie and show extras through supported TMDB references.
 - The metadata system should stay provider-agnostic so future sources for music, books, photos, and local sidecar metadata can be added without redesigning the core media catalog.
-- Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO, music, and book providers remain planned.
+- [ ] Add AcoustID audio fingerprint matching using Chromaprint, configurable application credentials, and MusicBrainz recording IDs; retain searches and manual matching for ambiguous album editions.
+- MusicBrainz provides artist, album, and track metadata for music libraries, using embedded identifiers when available and conservative searches otherwise. Release covers come from the Cover Art Archive.
+- Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO and book providers remain planned.
 - Provider responses use endpoint-specific models, and refresh jobs bypass response caches while keeping the normal cache expiry and manual cache-clear controls.
 - Unlinking a movie or show immediately clears its provider metadata and any show descendants, and leaves it unlinked until an explicit rematch. Rematching clears the old metadata before fetching replacement data in the background.
 

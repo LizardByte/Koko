@@ -130,11 +130,25 @@ export interface MediaLibrary {
   error?: string;
 }
 
+export interface MusicMetadata {
+  artist: string;
+  album_artist: string;
+  album: string;
+  track_number?: number | null;
+  disc_number?: number | null;
+  year?: number | null;
+  genres: string[];
+  musicbrainz_artist_id?: string | null;
+  musicbrainz_release_id?: string | null;
+  musicbrainz_recording_id?: string | null;
+}
+
 export interface MediaItemSummary {
   id: number;
   library_id: number;
   parent_id?: number | null;
   item_type: string;
+  music?: MusicMetadata | null;
   display_title: string;
   display_subtitle?: string | null;
   artwork_item_id?: number | null;
@@ -381,6 +395,7 @@ export interface MetadataSearchResult {
   backdrop_url?: string;
   release_year?: number;
   score?: number;
+  track_count?: number;
 }
 
 export interface MediaShelf {
@@ -578,6 +593,7 @@ export interface LogEntriesResponse {
 }
 
 export interface MediaLibrarySettings {
+  use_embedded_music_tags?: boolean;
   name: string;
   path: string;
   paths: string[];

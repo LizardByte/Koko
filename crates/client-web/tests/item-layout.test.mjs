@@ -60,7 +60,7 @@ test('wrapped descriptions get Show more, expansion leaves the cover stable, and
   const description = { querySelector: (selector) => selector === '[data-measure-overflow]' ? text : toggle, getBoundingClientRect: () => ({ bottom: 300 + text.height + (toggle.hidden ? 0 : 56) }) };
   const identity = { querySelector: () => ({ getBoundingClientRect: () => ({ top: 20 }) }) };
   const scroller = { style, clientWidth: 1400, getBoundingClientRect: () => ({ top: 40, left: 88 }) };
-  const page = { isConnected: true, clientWidth: 1400, style, classList: { contains: () => episodeLayout }, closest: () => scroller, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [], querySelector: (selector) => ({ '.item-identity': identity, '.item-description-section': description }[selector]) };
+  const page = { isConnected: true, clientWidth: 1400, style, classList: { contains: (name) => name === 'episode-detail-page' && episodeLayout }, closest: () => scroller, getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [], querySelector: (selector) => ({ '.item-identity': identity, '.item-description-section': description }[selector]) };
   globalThis.getComputedStyle = (element) => ({ lineHeight: '24px', paddingTop: '16px', getPropertyValue: () => element === page ? '1' : '' });
   const controller = new AbortController();
   bindItemOpeningLayout(page, controller.signal);

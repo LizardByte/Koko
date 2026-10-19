@@ -126,7 +126,8 @@ export function formatChildCount(item: MediaItemSummary): string {
     return `${item.child_count} episode${item.child_count === 1 ? '' : 's'}`;
   }
 
-  return `${item.child_count} item${item.child_count === 1 ? '' : 's'}`;
+  const noun = item.item_type === 'artist' ? 'album' : item.item_type === 'album' ? 'track' : 'item';
+  return `${item.child_count} ${noun}${item.child_count === 1 ? '' : 's'}`;
 }
 
 export function libraryStatusLabel(status: string): string {

@@ -137,6 +137,7 @@ fn test_inspect_libraries_counts_media_types() {
     fs::write(nested.join("episode.mp4"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Primary library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -171,6 +172,7 @@ fn test_auto_scanner_resolves_to_library_kind_scanner() {
     fs::create_dir_all(&root).unwrap();
 
     let base_library = |kind: MediaLibraryKind| MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: format!("{kind:?}"),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -210,6 +212,7 @@ fn test_explicit_scanner_controls_inventory_independently_from_library_kind() {
     fs::write(root.join("album.flac"), b"audio").unwrap();
 
     let summaries = inspect_libraries(&[MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movie library with music scanner".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -238,6 +241,7 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
         .to_string();
     let libraries = vec![
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Empty".into(),
             path: String::new(),
             paths: vec![],
@@ -250,6 +254,7 @@ fn test_inspect_libraries_detects_missing_and_empty_paths() {
             allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Missing".into(),
             path: missing_path.clone(),
             paths: vec![missing_path],
@@ -279,6 +284,7 @@ fn test_movie_library_ignores_sidecar_audio_and_json_files() {
     fs::write(root.join("poster.jpg"), b"image").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -327,6 +333,7 @@ fn test_sync_library_catalog_persists_library_and_inventory() {
     fs::write(nested.join("episode.mp4"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Persistent library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -386,6 +393,7 @@ fn test_sync_library_catalog_updates_incrementally() {
     fs::write(root.join("song.mp3"), b"audio").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Incremental library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -456,6 +464,7 @@ fn test_sync_library_catalog_replaces_legacy_file_hashes() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Legacy hash library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -529,6 +538,7 @@ fn test_sync_library_catalog_repairs_path_duplicate_hashes() {
     fs::write(&movie_path, b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Path duplicate library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -598,6 +608,7 @@ fn test_sync_library_catalog_preserves_inventory_when_root_is_missing() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Removable drive".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -670,6 +681,7 @@ fn test_sync_library_catalog_skips_unreadable_file_without_poisoning_root() {
     fs::write(&locked_path, b"locked-video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -745,6 +757,7 @@ fn test_delete_missing_media_items_removes_active_rows_without_losing_history_me
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -899,6 +912,7 @@ fn test_sync_library_catalog_marks_missing_files_without_deleting_rows() {
     fs::write(second_root.join("preserved.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Multi-root library".into(),
         path: first_root.to_string_lossy().to_string(),
         paths: vec![
@@ -968,6 +982,7 @@ fn test_item_queries_and_search_work_on_persisted_catalog() {
     fs::write(nested.join("episode.mp4"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Query library".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1016,6 +1031,7 @@ fn test_shows_library_builds_show_season_episode_hierarchy() {
     fs::write(season.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1091,6 +1107,7 @@ fn test_show_metadata_placeholders_materialize_missing_descendants() {
     fs::write(season_one.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1276,6 +1293,7 @@ fn test_show_scanner_parses_documented_show_naming_forms() {
     .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1326,6 +1344,7 @@ fn test_shows_are_included_in_automatic_metadata_candidates() {
     fs::write(season.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1379,6 +1398,7 @@ fn test_refresh_metadata_candidates_retry_previously_attempted_unlinked_movies()
     fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1452,6 +1472,7 @@ fn test_show_recently_added_collapses_to_episode_season_or_show() {
     .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1517,6 +1538,7 @@ fn test_home_includes_real_collection_summaries() {
     fs::write(root.join("collection-two.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1712,6 +1734,7 @@ fn test_sync_restores_file_name_as_display_title() {
     fs::write(root.join("Movie Name.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1766,6 +1789,7 @@ fn test_movie_scan_strips_year_provider_tags_and_format_from_display_title() {
     .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1809,6 +1833,7 @@ fn test_item_detail_includes_linked_metadata_presentation() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -1942,6 +1967,7 @@ fn test_tv_ratings_keep_provider_and_inheritance_scope_and_season_artwork() {
     fs::create_dir_all(&season_path).unwrap();
     fs::write(season_path.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2064,6 +2090,7 @@ fn test_metadata_snapshot_upsert_keeps_shallow_people_without_enrichment() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2166,6 +2193,7 @@ fn test_metadata_snapshot_upsert_stores_person_external_ids() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2274,6 +2302,7 @@ fn test_metadata_links_can_store_multiple_locales_for_same_provider() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2355,6 +2384,7 @@ fn test_item_detail_uses_primary_metadata_link_only() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2443,6 +2473,7 @@ fn test_item_detail_merges_metadata_links_by_library_provider_order() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2527,6 +2558,7 @@ fn test_secondary_theme_song_metadata_is_stored_and_presented() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2619,6 +2651,7 @@ fn test_secondary_trailer_metadata_is_stored_per_locale_and_presented() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2827,6 +2860,7 @@ fn test_metadata_refresh_target_change_clears_cached_artwork_paths() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -2918,6 +2952,7 @@ fn test_preferred_item_metadata_link_rejects_episode_tmdb_link_with_wrong_show_e
     fs::write(beta.join("Beta Show - S01E01.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3004,6 +3039,7 @@ fn test_resolve_media_item_source_path_rejects_mismatched_backing_file() {
     fs::write(beta.join("Beta Show - S01E01.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3061,6 +3097,7 @@ fn test_persisted_library_summaries_include_metadata_refresh_progress() {
     fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3156,6 +3193,7 @@ fn test_secondary_theme_song_reference_inherits_from_linked_show() {
     .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3248,6 +3286,7 @@ fn test_item_detail_theme_song_inherits_from_show() {
     .unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3348,6 +3387,7 @@ fn test_secondary_theme_song_reference_includes_external_id_fallbacks() {
     fs::write(root.join("The Matrix (1999).mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3418,6 +3458,7 @@ fn test_themerr_movie_references_prefer_tvdb_tmdb_before_imdb_external_id() {
     fs::write(root.join("Top Gun Maverick (2022).mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3503,6 +3544,7 @@ fn test_themerr_references_include_tvdb_show_tmdb_fallback() {
     fs::write(season_dir.join("Mock Show - S01E01 - Pilot.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3581,6 +3623,7 @@ fn test_library_settings_are_persisted_in_database() {
     fs::create_dir_all(&updated_root).unwrap();
 
     let initial_libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -3601,6 +3644,7 @@ fn test_library_settings_are_persisted_in_database() {
     let updated = replace_library_settings(
         &mut connection,
         &[MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Shows".into(),
             path: updated_root.to_string_lossy().to_string(),
             paths: vec![updated_root.to_string_lossy().to_string()],
@@ -3639,6 +3683,7 @@ fn test_replace_library_settings_allows_duplicate_paths() {
         &mut connection,
         &[
             MediaLibrarySettings {
+                use_embedded_music_tags: false,
                 name: "Movies".into(),
                 path: movies.to_string_lossy().to_string(),
                 paths: vec![movies.to_string_lossy().to_string()],
@@ -3651,6 +3696,7 @@ fn test_replace_library_settings_allows_duplicate_paths() {
                 allowed_user_ids: vec![],
             },
             MediaLibrarySettings {
+                use_embedded_music_tags: false,
                 name: "Shows".into(),
                 path: movies.to_string_lossy().to_string(),
                 paths: vec![movies.to_string_lossy().to_string()],
@@ -3687,6 +3733,7 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
 
     let duplicate_libraries = vec![
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Movies".into(),
             path: media.to_string_lossy().to_string(),
             paths: vec![media.to_string_lossy().to_string()],
@@ -3699,6 +3746,7 @@ fn test_sync_library_catalog_initializes_scan_state_for_duplicate_paths() {
             allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Shows".into(),
             path: media.to_string_lossy().to_string(),
             paths: vec![media.to_string_lossy().to_string()],
@@ -3746,6 +3794,7 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
 
     let duplicate_libraries = vec![
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Movies - TMDB".into(),
             path: root.to_string_lossy().to_string(),
             paths: vec![root.to_string_lossy().to_string()],
@@ -3758,6 +3807,7 @@ fn test_sync_allows_duplicate_movie_libraries_with_same_path() {
             allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "Movies - TVDB".into(),
             path: root.to_string_lossy().to_string(),
             paths: vec![root.to_string_lossy().to_string()],
@@ -3844,6 +3894,7 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
 
     let duplicate_libraries = vec![
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "TV Shows - TMDB".into(),
             path: root.to_string_lossy().to_string(),
             paths: vec![root.to_string_lossy().to_string()],
@@ -3856,6 +3907,7 @@ fn test_sync_allows_duplicate_show_libraries_with_same_path() {
             allowed_user_ids: vec![],
         },
         MediaLibrarySettings {
+            use_embedded_music_tags: false,
             name: "TV Shows - TVDB".into(),
             path: root.to_string_lossy().to_string(),
             paths: vec![root.to_string_lossy().to_string()],
@@ -3958,6 +4010,7 @@ fn test_resolve_local_item_artwork_ignores_unlinked_media_file_id_collision() {
     fs::write(gamma.join("poster.jpg"), b"image").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -4036,6 +4089,7 @@ fn test_playback_progress_is_scoped_per_user() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -4104,6 +4158,7 @@ fn test_playback_progress_tracks_watch_count_and_last_watched() {
     fs::write(root.join("movie.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],
@@ -4188,6 +4243,7 @@ fn test_show_playback_target_resumes_in_progress_episode_per_user() {
     fs::write(season.join("Mock Show - S01E02 - Followup.mkv"), b"video").unwrap();
 
     let libraries = vec![MediaLibrarySettings {
+        use_embedded_music_tags: false,
         name: "Shows".into(),
         path: root.to_string_lossy().to_string(),
         paths: vec![root.to_string_lossy().to_string()],

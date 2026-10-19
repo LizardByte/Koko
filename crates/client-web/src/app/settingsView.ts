@@ -297,6 +297,7 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
         <div class="form-row">
           <label class="checkbox-inline"><input name="existing_library_recursive_${index}" type="checkbox" ${library.recursive ? 'checked' : ''} /> Recursive scan</label>
         </div>
+        <label class="checkbox-inline" data-music-tag-option ${library.kind === 'music' ? '' : 'hidden'}><input name="existing_library_use_embedded_music_tags_${index}" type="checkbox" ${library.use_embedded_music_tags ? 'checked' : ''} /> Use embedded music tags</label>
         <div class="form-row">
           <label>Provider language mode
             ${metadataLanguageModeSelect(`existing_library_metadata_language_mode_${index}`, library.metadata_language_mode)}
@@ -647,6 +648,8 @@ function renderAddLibraryForm(): string {
             </label>
             <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
           </div>
+          <label class="checkbox-inline" data-music-tag-option hidden><input name="library_use_embedded_music_tags" type="checkbox" /> Use embedded music tags</label>
+          <small class="muted" data-music-tag-option hidden>Off by default. Use folder and file names when matching music metadata.</small>
           <div class="form-row">
             <label>Provider language mode
               ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
@@ -759,6 +762,7 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
           path: paths[0] ?? library.path,
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
+          use_embedded_music_tags: formData.get(`existing_library_use_embedded_music_tags_${index}`) === 'on',
           kind: formDataString(formData.get(`existing_library_kind_${index}`), library.kind),
           scanner: formDataString(formData.get(`existing_library_scanner_${index}`), library.scanner ?? 'auto'),
           metadata_providers: formDataStrings(formData.getAll(providerField)),

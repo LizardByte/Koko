@@ -61,6 +61,7 @@ pub struct MediaLibrary {
     pub metadata_language_mode: String,
     pub metadata_languages_json: String,
     pub allowed_user_ids_json: String,
+    pub use_embedded_music_tags: bool,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
@@ -76,6 +77,7 @@ pub struct NewMediaLibrary {
     pub metadata_language_mode: String,
     pub metadata_languages_json: String,
     pub allowed_user_ids_json: String,
+    pub use_embedded_music_tags: bool,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug)]
@@ -175,6 +177,7 @@ pub struct MediaItem {
     pub updated_at: Option<i64>,
     pub missing_since: Option<i64>,
     pub deleted_at: Option<i64>,
+    pub metadata_match_attempted_at: Option<i64>,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]

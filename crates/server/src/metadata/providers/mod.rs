@@ -1,3 +1,6 @@
+mod musicbrainz;
+use musicbrainz::MusicBrainzMetadataProvider;
+
 pub(crate) mod themerr;
 pub(crate) mod tmdb;
 pub(crate) mod trailerdb;
@@ -27,6 +30,19 @@ use crate::metadata::{
 /// Boxed async result returned by metadata provider operations.
 pub type MetadataProviderFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
+
+/// Provider identifiers already matched on a music item's parents.
+#[derive(Debug, Default)]
+pub struct MusicMatchContext {
+    /// Number of active local track items in an album, across every disc.
+    pub track_count: Option<u32>,
+    /// Matched MusicBrainz album artist identifier.
+    pub artist_id: Option<String>,
+    /// Matched MusicBrainz edition identifier, when known.
+    pub release_id: Option<String>,
+    /// Matched MusicBrainz album identifier across editions.
+    pub release_group_id: Option<String>,
+}
 
 /// Provider contract for metadata implementations.
 pub trait MetadataProvider {
@@ -129,6 +145,18 @@ pub trait MetadataProvider {
         Box::pin(async { Ok(None) })
     }
 
+    /// Match a music item using local tags and embedded MusicBrainz identifiers.
+    fn guess_music_match<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        _item_type: &'a str,
+        _title: &'a str,
+        _music: &'a crate::media::MusicMetadata,
+        _context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Option<MetadataSearchResult>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Load provider-side descendant ids for a linked show.
     fn load_show_descendant_targets<'a>(
         &'a self,
@@ -210,7 +238,6 @@ struct TmdbMetadataProvider;
 struct TvdbMetadataProvider;
 struct ThemerrMetadataProvider;
 struct TrailerDbMetadataProvider;
-struct MusicBrainzMetadataProvider;
 struct OpenLibraryMetadataProvider;
 struct LocalNfoMetadataProvider;
 
@@ -596,25 +623,6 @@ impl MetadataProvider for TrailerDbMetadataProvider {
             external_id,
             locale_key,
         ))
-    }
-}
-
-impl MetadataProvider for MusicBrainzMetadataProvider {
-    fn descriptor(&self) -> MetadataProviderDescriptor {
-        MetadataProviderDescriptor {
-            id: MetadataProviderId::MusicBrainz,
-            display_name: "MusicBrainz".into(),
-            description: "Planned music metadata provider for albums, artists, and tracks.".into(),
-            supported_kinds: vec![MediaLibraryKind::Music],
-            requires_api_key: false,
-            implemented: false,
-            role: MetadataProviderRole::Primary,
-            extends_provider_ids: Vec::new(),
-            attribution_text: "MusicBrainz metadata is provided by MusicBrainz.".into(),
-            attribution_url: "https://musicbrainz.org/".into(),
-            logo_light_url: Some("/assets/providers/musicbrainz.svg".into()),
-            logo_dark_url: Some("/assets/providers/musicbrainz.svg".into()),
-        }
     }
 }
 

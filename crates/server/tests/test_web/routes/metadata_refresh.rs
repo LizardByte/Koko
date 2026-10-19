@@ -127,6 +127,7 @@ async fn automatic_descendants_publish_pending_work_and_count_child_failures() {
                 .unwrap();
             assert_eq!(activity.completed_items, 2);
             assert_eq!(activity.failed_items, 2);
+            assert_eq!(activity.item_ids, vec![SHOW]);
             record_metadata_refresh_activity_progress(&parent, SHOW, false).await;
             let activity = current_system_activities()
                 .await
@@ -155,6 +156,198 @@ async fn automatic_descendants_publish_pending_work_and_count_child_failures() {
 }
 
 #[tokio::test]
+async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
+    use diesel::{
+        ExpressionMethods,
+        QueryDsl,
+        RunQueryDsl,
+    };
+    const FIRST: i32 = 197_000_001;
+    const IDS: [i32; 7] = [
+        FIRST,
+        FIRST + 1,
+        FIRST + 2,
+        FIRST + 3,
+        FIRST + 4,
+        FIRST + 5,
+        FIRST + 6,
+    ];
+    const KINDS: [&str; 7] = [
+        "music",
+        "movies",
+        "shows",
+        "home_videos",
+        "photos",
+        "books",
+        "mixed",
+    ];
+    let root = std::env::temp_dir().join(format!(
+        "koko-auto-scan-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let album = root.join("Artist/Album");
+    std::fs::create_dir_all(&album).unwrap();
+    for number in 1..=10 {
+        std::fs::write(album.join(format!("{number:02} Song.flac")), b"audio").unwrap();
+    }
+    let season = root.join("Show/Season 1");
+    std::fs::create_dir_all(&season).unwrap();
+    std::fs::write(season.join("Show - S01E01 - Pilot.mkv"), b"video").unwrap();
+    std::fs::write(root.join("Movie (2020).mkv"), b"video").unwrap();
+    std::fs::write(root.join("Photo.jpg"), b"image").unwrap();
+    std::fs::write(root.join("Book.epub"), b"book").unwrap();
+    let rocket = rocket::custom(rocket::Config::figment().merge((
+        "databases.sqlite_db",
+        serde_json::json!({"url": root.join("catalog.db"), "pool_size": 9}),
+    )))
+    .attach(DbConn::fairing())
+    .ignite()
+    .await
+    .unwrap();
+    let db = DbConn::get_one(&rocket).await.unwrap();
+    let library_path = root.to_string_lossy().to_string();
+    db.run(move |conn| {
+        crate::db::configure_sqlite_connection(conn).unwrap();
+        crate::db::run_pending_sqlite_migrations(conn).unwrap();
+        conn.batch_execute(
+            "INSERT INTO users (id,username,password,admin) VALUES (1,'viewer','hash',0)",
+        )
+        .unwrap();
+        for (id, kind) in IDS.into_iter().zip(KINDS) {
+            diesel::sql_query(
+                "INSERT INTO media_libraries (id,name,path,kind,metadata_providers_json) VALUES \
+                 (?, 'Library', ?, ?, '[\"open_library\"]')",
+            )
+            .bind::<diesel::sql_types::Integer, _>(id)
+            .bind::<diesel::sql_types::Text, _>(&library_path)
+            .bind::<diesel::sql_types::Text, _>(kind)
+            .execute(conn)
+            .unwrap();
+        }
+    })
+    .await;
+    let mut settings = Settings::default();
+    settings.ffmpeg.ffprobe_path = "missing-auto-scan-test-ffprobe".into();
+    // An unimplemented provider exercises the complete queue without network calls.
+    settings.metadata.providers.clear();
+    let scan_guard = CATALOG_SCAN_EXECUTION.lock().await;
+    for id in IDS.into_iter().chain([FIRST]) {
+        let scan_db = DbConn::get_one(&rocket).await.unwrap();
+        scan_db
+            .run(|conn| crate::db::configure_sqlite_connection(conn).unwrap())
+            .await;
+        start_library_scan(
+            scan_db,
+            settings.clone(),
+            id,
+            "Library".into(),
+            "library_added",
+        )
+        .await;
+    }
+    let queued = current_system_activities()
+        .await
+        .into_iter()
+        .filter(|activity| activity.library_id.is_some_and(|id| IDS.contains(&id)))
+        .collect::<Vec<_>>();
+    assert_eq!(queued.len(), IDS.len());
+    assert!(
+        queued
+            .iter()
+            .all(|activity| activity.state == "queued" && activity.source == "library_added")
+    );
+    drop(scan_guard);
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let scans_done = !ACTIVE_LIBRARY_SCANS
+                .lock()
+                .await
+                .iter()
+                .any(|id| IDS.contains(id));
+            let metadata_done = !ACTIVE_LIBRARY_METADATA_REFRESHES
+                .read()
+                .await
+                .iter()
+                .any(|id| IDS.contains(id));
+            if scans_done && metadata_done {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    db.run(|conn| {
+        use crate::db::schema::media_items::dsl as items;
+        for (id, kind) in IDS.into_iter().zip(KINDS) {
+            let scanned = list_media_items(conn, Some(id)).unwrap();
+            assert!(
+                !scanned.is_empty(),
+                "{kind} library must scan automatically"
+            );
+            let home = crate::media::get_media_home(conn, Some(1), Some(id)).unwrap();
+            let continue_title = match kind {
+                "music" => "Continue listening",
+                "books" => "Continue reading",
+                _ => "Continue watching",
+            };
+            assert_eq!(home.shelves[0].title, continue_title);
+            if kind == "music" {
+                assert_eq!(home.shelves[1].items.len(), 1);
+                assert_eq!(home.shelves[1].items[0].item_type, "album");
+            }
+            if kind == "shows" {
+                assert!(scanned.iter().any(|item| item.item_type == "show"));
+                assert!(scanned.iter().any(|item| item.item_type == "episode"));
+            }
+            if kind != "music" && kind != "movies" {
+                continue;
+            }
+            let attempted = items::media_items
+                .filter(items::library_id.eq(id))
+                .filter(items::metadata_match_attempted_at.is_not_null())
+                .count()
+                .get_result::<i64>(conn)
+                .unwrap();
+            assert_eq!(
+                attempted as usize,
+                scanned.len(),
+                "{kind} items must be matched after scanning"
+            );
+            if kind != "music" {
+                continue;
+            }
+            assert_eq!(scanned.len(), 12);
+            assert_eq!(
+                scanned
+                    .iter()
+                    .filter(|item| item.item_type == "track")
+                    .count(),
+                10
+            );
+            assert_eq!(
+                attempted, 12,
+                "every item must be matched, beyond the normal eight-item batch"
+            );
+        }
+    })
+    .await;
+    assert!(
+        !current_system_activities()
+            .await
+            .iter()
+            .any(|activity| activity.library_id.is_some_and(|id| IDS.contains(&id)))
+    );
+    drop(db);
+    drop(rocket);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
 async fn cancelled_parent_cannot_claim_descendant_activity_ownership() {
     const CANCELLED: i32 = 196_000_001;
     let (activity_id, _) = register_metadata_refresh_activity(
@@ -178,5 +371,174 @@ async fn cancelled_parent_cannot_claim_descendant_activity_ownership() {
             .read()
             .await
             .contains_key(&CANCELLED)
+    );
+}
+
+#[tokio::test]
+async fn refreshing_tracks_keep_album_and_artist_busy_without_inflating_progress() {
+    const ARTIST: i32 = 198_000_001;
+    const ALBUM: i32 = ARTIST + 1;
+    const TRACK: i32 = ARTIST + 2;
+    let rocket = rocket::custom(rocket::Config::figment().merge((
+        "databases.sqlite_db",
+        serde_json::json!({"url": ":memory:", "pool_size": 1}),
+    )))
+    .attach(DbConn::fairing())
+    .ignite()
+    .await
+    .unwrap();
+    let db = DbConn::get_one(&rocket).await.unwrap();
+    db.run(|conn| {
+        crate::db::run_pending_sqlite_migrations(conn).unwrap();
+        conn.batch_execute(
+            "INSERT INTO media_libraries (id,name,path,kind) VALUES \
+             (198000001,'Music','music','music');
+            INSERT INTO media_items (id,library_id,parent_id,identity_key,item_type,display_title) \
+             VALUES
+            (198000001,198000001,NULL,'artist','artist','Artist'),
+            (198000002,198000001,198000001,'album','album','Album'),
+            (198000003,198000001,198000002,'track','track','Song');
+            INSERT INTO item_metadata_links \
+             (media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (198000001,'musicbrainz','f5093c06-23e3-404f-aeaa-40f72885ee3a','artist','matched'),
+            \
+             (198000002,'musicbrainz','d817f725-66c3-366d-8dd1-b22d49c8a766','release-group','\
+             matched');",
+        )
+        .unwrap();
+    })
+    .await;
+    db.run(|conn| {
+        let context = music_match_context(conn, TRACK).unwrap();
+        assert_eq!(
+            context.artist_id.as_deref(),
+            Some("f5093c06-23e3-404f-aeaa-40f72885ee3a")
+        );
+        assert_eq!(
+            context.release_group_id.as_deref(),
+            Some("d817f725-66c3-366d-8dd1-b22d49c8a766")
+        );
+    })
+    .await;
+    let (activity_id, _) = register_metadata_refresh_activity_for_items(
+        "library",
+        "automatic_match",
+        "Music".into(),
+        Some(ARTIST),
+        None,
+        None,
+        [ARTIST, ALBUM, TRACK]
+            .map(|id| (id, MetadataRevision::current(id)))
+            .to_vec(),
+    )
+    .await
+    .unwrap();
+    for id in [ARTIST, ALBUM] {
+        record_metadata_refresh_activity_progress(&activity_id, id, false).await;
+    }
+    let activity = system_activities_with_ancestors(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|activity| activity.id == activity_id)
+        .unwrap();
+    assert_eq!(activity.total_items, 3);
+    assert_eq!(activity.completed_items, 2);
+    assert!(activity.item_ids.contains(&ARTIST));
+    assert!(activity.item_ids.contains(&ALBUM));
+    assert!(activity.item_ids.contains(&TRACK));
+    record_metadata_refresh_activity_progress(&activity_id, TRACK, false).await;
+    let activity = system_activities_with_ancestors(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|activity| activity.id == activity_id)
+        .unwrap();
+    assert!(activity.item_ids.is_empty());
+    complete_metadata_refresh_activity(&activity_id).await;
+}
+
+#[test]
+fn library_selected_musicbrainz_is_available_with_legacy_global_flag_off() {
+    let settings = Settings::default();
+    let musicbrainz = settings
+        .metadata
+        .providers
+        .iter()
+        .find(|provider| provider.id == MetadataProviderId::MusicBrainz)
+        .unwrap();
+    assert!(!musicbrainz.enabled);
+    let available = available_automatic_metadata_providers(&settings);
+    assert!(available.contains(&MetadataProviderId::MusicBrainz));
+    assert!(!available.contains(&MetadataProviderId::Tmdb));
+    assert!(!available.contains(&MetadataProviderId::OpenLibrary));
+}
+
+#[tokio::test]
+async fn unmatched_albums_are_processed_before_already_linked_tracks() {
+    const ARTIST: i32 = 199_000_001;
+    const ALBUM: i32 = ARTIST + 1;
+    const TRACK: i32 = ARTIST + 2;
+    let rocket = rocket::custom(rocket::Config::figment().merge((
+        "databases.sqlite_db",
+        serde_json::json!({"url": ":memory:", "pool_size": 1}),
+    )))
+    .attach(DbConn::fairing())
+    .ignite()
+    .await
+    .unwrap();
+    let db = DbConn::get_one(&rocket).await.unwrap();
+    db.run(|conn| {
+        crate::db::run_pending_sqlite_migrations(conn).unwrap();
+        conn.batch_execute(
+            "INSERT INTO media_libraries (id,name,path,kind)
+            VALUES (199000001,'Music','music','music');
+            INSERT INTO media_items
+            (id,library_id,parent_id,identity_key,item_type,display_title,modified_at) VALUES
+            (199000001,199000001,NULL,'artist','artist','Artist',1),
+            (199000002,199000001,199000001,'album','album','Album',2),
+            (199000003,199000001,199000002,'track','track','Song',999);
+            INSERT INTO music_item_metadata (media_item_id,artist,album_artist,album) VALUES
+            (199000001,'Artist','Artist',''),
+            (199000002,'Artist','Artist','Album'),
+            (199000003,'Artist','Artist','Album');
+            INSERT INTO item_metadata_links
+            (media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (199000001,'musicbrainz','46510d46-ce20-4dde-b9ea-207e474353f4','artist','matched'),
+            (199000003,'musicbrainz','f5093c06-23e3-404f-aeaa-40f72885ee3a',
+             'recording','matched');",
+        )
+        .unwrap();
+    })
+    .await;
+    let roots = load_library_refresh_targets(&db, ARTIST).await.unwrap();
+    let mut work = roots
+        .into_iter()
+        .map(AutomaticMetadataWork::Refresh)
+        .collect::<Vec<_>>();
+    let (items, candidates) = db
+        .run(|conn| {
+            let candidates = metadata_jobs::load(
+                conn,
+                |conn| list_automatic_metadata_refresh_candidates(conn, Some(ARTIST), usize::MAX),
+                |candidate| candidate.item_id,
+            )
+            .unwrap();
+            (list_media_items(conn, Some(ARTIST)).unwrap(), candidates)
+        })
+        .await;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].0.item_id, ALBUM);
+    work.extend(
+        candidates
+            .into_iter()
+            .map(|(candidate, revision)| AutomaticMetadataWork::Match(candidate, revision)),
+    );
+    order_music_metadata_work(&items, &mut work);
+    assert_eq!(
+        work.iter()
+            .map(AutomaticMetadataWork::item_id)
+            .collect::<Vec<_>>(),
+        vec![ARTIST, ALBUM, TRACK]
     );
 }

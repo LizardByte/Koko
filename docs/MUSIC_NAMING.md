@@ -37,4 +37,12 @@ Open **Details and management → Source files** to inspect the server's full fi
 
 MusicBrainz requests share a rate limit of at most one request per second, including retries. Large libraries can therefore take time to match. Existing metadata remains available while background work runs. See the [MusicBrainz API documentation](https://musicbrainz.org/doc/MusicBrainz_API) and [Cover Art Archive API](https://musicbrainz.org/doc/Cover_Art_Archive/API).
 
+## Fanart.tv artwork
+
+Select **Fanart.tv** alongside **MusicBrainz** in each music library that should use it. It supplies artist portraits, backgrounds, and logos, and album covers identified by MusicBrainz release-group IDs. Use the arrows to choose provider priority, including moving Fanart.tv above MusicBrainz to prefer its artwork. MusicBrainz continues to identify artists, albums, and tracks. Local artwork takes priority over online providers. Tracks inherit artwork from their album or artist, without a separate Fanart.tv request per track. Refresh an existing library's metadata after enabling the provider to populate artwork.
+
+In **Settings → Providers → Fanart.tv**, users may save a [personal API key](https://fanart.tv/get-an-api-key/). This key is stored using Koko's credential store and sent as `client-key`; it determines the user's Fanart.tv access tier. Builds with a bundled project key work without a personal key. Builds without a project key require a personal key. The bundled project key is never included in settings responses or browser assets.
+
+For official builds, create the GitHub Actions repository secret **`FANART_PROJECT_API_KEY`**. The Rust release and Flatpak workflows pass it as **`KOKO_FANART_PROJECT_API_KEY`** only during server compilation. Flatpak uses `secret-env`, so the value is absent from exported manifests. Local builders can set the same environment variable before running Cargo. Missing secrets are allowed for forks and pull requests. The compiled server contains the key; it is not encrypted inside the binary. See the [Fanart.tv API documentation](https://api.fanart.tv/).
+
 AcoustID/Chromaprint audio fingerprint matching is planned in the [roadmap](./ROADMAP.md). This implementation uses MusicBrainz searches and optional embedded identifiers.

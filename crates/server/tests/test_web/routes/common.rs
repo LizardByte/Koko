@@ -97,7 +97,7 @@ async fn test_favicon_serves_application_icon_without_authentication() {
 }
 
 #[rocket::async_test]
-async fn test_all_provider_descriptors_serve_local_logo_assets() {
+async fn test_declared_provider_logos_are_served_as_local_image_assets() {
     let (client, token) = create_admin_test_client(Some("provider_logo_assets")).await;
     let providers_response = client
         .get("/api/v1/metadata/providers")
@@ -109,16 +109,14 @@ async fn test_all_provider_descriptors_serve_local_logo_assets() {
         .into_json()
         .await
         .expect("Expected provider descriptors");
-    assert_eq!(providers.len(), 7);
+    assert_eq!(providers.len(), 8);
 
     for provider in providers {
         for field in [
             "logo_light_url",
             "logo_dark_url",
         ] {
-            let url = provider[field]
-                .as_str()
-                .expect("Every provider must supply both logo variants");
+            let url = provider[field].as_str().expect("Expected a provider logo");
             assert!(
                 url.starts_with("/assets/providers/"),
                 "Expected a local logo: {url}"

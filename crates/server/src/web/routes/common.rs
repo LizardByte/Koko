@@ -77,6 +77,10 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
             ContentType::SVG,
             include_bytes!("../../../../../assets/providers/musicbrainz.svg"),
         ),
+        "fanart.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/fanart.png"),
+        ),
         "open-library.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/open-library.png"),

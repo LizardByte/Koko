@@ -261,6 +261,7 @@ pub(in crate::media) fn apply_summaries(
     if ids.is_empty() {
         return Ok(());
     }
+    apply_artwork_summaries(conn, items)?;
     let mut music = load_items(conn, &ids)?;
     let genres = load_genres(
         conn,
@@ -290,6 +291,71 @@ pub(in crate::media) fn apply_summaries(
             }
             item.display_subtitle = Some(music.artist.clone());
             item.music = Some(Box::new(music));
+        }
+    }
+    Ok(())
+}
+
+fn apply_artwork_summaries(
+    conn: &mut SqliteConnection,
+    items: &mut [MediaItemSummary],
+) -> Result<(), diesel::result::Error> {
+    use crate::db::schema::item_metadata_links::dsl as links;
+    // Only scalar artwork columns are needed for cards; never load provider payloads here.
+    let mut enabled_libraries = HashMap::new();
+    for item in items
+        .iter()
+        .filter(|item| matches!(item.item_type.as_str(), "artist" | "album"))
+    {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            enabled_libraries.entry(item.library_id)
+        {
+            entry.insert(
+                super::super::media_library_metadata_provider_order(conn, item.library_id)?
+                    .contains(&MetadataProviderId::Fanart),
+            );
+        }
+    }
+    let ids = items
+        .iter()
+        .filter(|item| enabled_libraries.get(&item.library_id) == Some(&true))
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    let mut artwork = HashMap::new();
+    for chunk in ids.chunks(500) {
+        let rows = links::item_metadata_links
+            .filter(links::media_item_id.eq_any(chunk))
+            .filter(links::provider_id.eq("fanart"))
+            .filter(links::relation_kind.eq("secondary"))
+            .filter(links::match_state.ne("unlinked"))
+            .select((
+                links::media_item_id,
+                links::backdrop_url,
+                links::logo_url,
+                links::updated_at,
+            ))
+            .load::<(i32, Option<String>, Option<String>, Option<i64>)>(conn)?;
+        for (id, backdrop, logo, updated_at) in rows {
+            artwork.insert(id, (backdrop.is_some(), logo.is_some(), updated_at));
+        }
+    }
+    for item in items {
+        if !enabled_libraries
+            .get(&item.library_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if let Some((backdrop, logo, updated_at)) = artwork.get(&item.id) {
+            if *backdrop && item.backdrop_url.is_none() {
+                item.backdrop_url =
+                    Some(format!("/api/v1/items/{}/artwork?kind=backdrop", item.id));
+            }
+            if *logo && item.logo_url.is_none() {
+                item.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item.id));
+            }
+            item.artwork_updated_at = item.artwork_updated_at.max(*updated_at);
         }
     }
     Ok(())

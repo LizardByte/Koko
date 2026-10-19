@@ -657,6 +657,7 @@ async fn persist_secondary_metadata_for_item(
             let mut had_error = false;
             for (item_type, database_id, external_id) in &references {
                 match fetch_provider_secondary_metadata(
+                    &settings.metadata,
                     provider_id.clone(),
                     item_type,
                     database_id,
@@ -667,38 +668,62 @@ async fn persist_secondary_metadata_for_item(
                 {
                     Ok(Some(details)) => {
                         found = true;
+                        let snapshot = StoredMetadataSnapshot {
+                            provider_id: provider_id.clone(),
+                            external_id: format!("{item_type}:{database_id}:{external_id}"),
+                            media_type: Some(item_type.clone()),
+                            title: None,
+                            overview: None,
+                            artwork_url: details.artwork_url.clone(),
+                            backdrop_url: details.backdrop_url.clone(),
+                            release_year: None,
+                            locale_key: locale_key.clone(),
+                            provider_locale_key: provider_locale.clone(),
+                            provider_payload_json: None,
+                        };
+                        let cached_assets = if snapshot.artwork_url.is_some()
+                            || snapshot.backdrop_url.is_some()
+                            || details.logo_url.is_some()
+                        {
+                            crate::metadata::persist_item_metadata_assets_with_logo(
+                                &snapshot,
+                                item_id,
+                                &settings.general.data_dir,
+                                details.logo_url.as_deref(),
+                            )
+                            .await
+                            .map_err(|error| {
+                                log::error!("Failed to cache secondary metadata artwork: {error}");
+                                Status::InternalServerError
+                            })?
+                        } else {
+                            (None, None, None)
+                        };
                         metadata_jobs::write(db, {
-                            let provider_id = provider_id.clone();
-                            let item_type = item_type.clone();
-                            let database_id = database_id.clone();
-                            let external_id = external_id.clone();
-                            let locale_key = locale_key.clone();
-                            let provider_locale = provider_locale.clone();
-                            let details = details.clone();
+                            let data_dir = settings.general.data_dir.clone();
                             let refresh_interval_seconds =
                                 metadata_refresh_interval_seconds(settings);
                             move |conn| {
-                                let snapshot = StoredMetadataSnapshot {
-                                    provider_id,
-                                    external_id: format!("{item_type}:{database_id}:{external_id}"),
-                                    media_type: Some(item_type),
-                                    title: None,
-                                    overview: None,
-                                    artwork_url: None,
-                                    backdrop_url: None,
-                                    release_year: None,
-                                    locale_key,
-                                    provider_locale_key: provider_locale,
-                                    provider_payload_json: None,
-                                };
-                                upsert_item_metadata_link(
+                                let summary = upsert_item_metadata_link(
                                     conn,
                                     item_id,
                                     &snapshot,
                                     &details,
                                     "secondary",
                                     refresh_interval_seconds,
-                                )
+                                )?;
+                                for (kind, path) in [
+                                    (ArtworkKind::Poster, cached_assets.0),
+                                    (ArtworkKind::Backdrop, cached_assets.1),
+                                    (ArtworkKind::Logo, cached_assets.2),
+                                ] {
+                                    if let Some(path) = path {
+                                        update_cached_artwork_path(
+                                            conn, summary.id, kind, &path, &data_dir,
+                                        )?;
+                                    }
+                                }
+                                Ok::<_, diesel::result::Error>(())
                             }
                         })
                         .await

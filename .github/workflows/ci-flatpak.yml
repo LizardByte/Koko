@@ -11,6 +11,9 @@ on:
       release_version:
         required: true
         type: string
+    secrets:
+      FANART_PROJECT_API_KEY:
+        required: false
 
 env:
   APP_ID: dev.lizardbyte.app.Koko
@@ -168,8 +171,10 @@ jobs:
 
       - name: Build Linux Flatpak
         working-directory: build
+        env:
+          KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
         run: |
-          sudo su "$(whoami)" -c "flatpak run org.flatpak.Builder \
+          sudo --preserve-env=KOKO_FANART_PROJECT_API_KEY su "$(whoami)" -c "flatpak run org.flatpak.Builder \
             --arch=${MATRIX_ARCH} \
             --force-clean \
             --repo=repo \

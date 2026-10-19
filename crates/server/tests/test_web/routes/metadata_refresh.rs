@@ -674,7 +674,14 @@ async fn refreshing_tracks_keep_album_and_artist_busy_without_inflating_progress
 
 #[test]
 fn library_selected_musicbrainz_is_available_with_legacy_global_flag_off() {
-    let settings = Settings::default();
+    let mut settings = Settings::default();
+    settings
+        .metadata
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == MetadataProviderId::Fanart)
+        .unwrap()
+        .api_key = Some("personal-test-key".into());
     let musicbrainz = settings
         .metadata
         .providers
@@ -686,6 +693,7 @@ fn library_selected_musicbrainz_is_available_with_legacy_global_flag_off() {
     assert!(available.contains(&MetadataProviderId::MusicBrainz));
     assert!(!available.contains(&MetadataProviderId::Tmdb));
     assert!(!available.contains(&MetadataProviderId::OpenLibrary));
+    assert!(!available.contains(&MetadataProviderId::Fanart));
 }
 
 #[tokio::test]

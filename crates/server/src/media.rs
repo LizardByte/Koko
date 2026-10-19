@@ -3164,8 +3164,11 @@ pub fn get_media_item_with_preferred_languages(
         if let Some(link) = primary_link {
             detail.metadata_refresh_state = Some(link.refresh_state.clone());
             detail.metadata_refresh_error = link.refresh_error.clone();
-            detail.artwork_updated_at = link.updated_at;
         }
+        detail.artwork_updated_at = metadata_links
+            .iter()
+            .filter_map(|link| link.updated_at)
+            .max();
         detail.trailer_title = presentation.trailer_title;
         detail.trailer_url = presentation.trailer_url;
         detail.theme_song_url = presentation.theme_song_url;
@@ -3643,6 +3646,9 @@ pub fn get_item_secondary_provider_references(
     item_id: i32,
     provider_id: MetadataProviderId,
 ) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    if provider_id == MetadataProviderId::Fanart {
+        return music_artwork_references(conn, item_id);
+    }
     let registry = MetadataRegistry::new();
     let Some(provider) = registry.provider(&provider_id) else {
         return Ok(Vec::new());
@@ -3653,6 +3659,50 @@ pub fn get_item_secondary_provider_references(
     }
 
     get_item_theme_song_source_references(conn, item_id, &source_provider_ids, provider)
+}
+
+fn music_artwork_references(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+) -> Result<Vec<(String, String, String)>, diesel::result::Error> {
+    use crate::db::schema::media_items::dsl as items;
+    let item_type = items::media_items
+        .find(item_id)
+        .filter(items::deleted_at.is_null())
+        .select(items::item_type)
+        .first::<String>(conn)
+        .optional()?;
+    let Some(item_type) = item_type.filter(|kind| matches!(kind.as_str(), "artist" | "album"))
+    else {
+        // Tracks inherit their album/artist artwork through the artwork endpoint.
+        return Ok(Vec::new());
+    };
+    let links = get_item_theme_song_source_metadata_links(
+        conn,
+        item_id,
+        &[MetadataProviderId::MusicBrainz],
+    )?;
+    let mut references = Vec::new();
+    for link in links {
+        let reference = match (item_type.as_str(), link.media_type.as_deref()) {
+            ("artist", Some("artist")) => Some(("musicbrainz", link.external_id)),
+            ("album", Some("release-group")) => {
+                Some(("musicbrainz_release_group", link.external_id))
+            }
+            ("album", Some("release")) => metadata_external_ids(conn, link.id)?
+                .into_iter()
+                .find(|(source, _)| source == "musicbrainz_release_group")
+                .map(|(_, id)| ("musicbrainz_release_group", id)),
+            _ => None,
+        };
+        if let Some((database, id)) = reference.filter(|(_, id)| valid_mbid(id)) {
+            let reference = (item_type.clone(), database.to_string(), id);
+            if !references.contains(&reference) {
+                references.push(reference);
+            }
+        }
+    }
+    Ok(references)
 }
 
 /// Return ordered YouTube trailer lookup candidates for a secondary metadata provider.

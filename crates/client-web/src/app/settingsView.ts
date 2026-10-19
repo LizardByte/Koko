@@ -144,16 +144,14 @@ function metadataProviderRoleOrder(provider: MetadataProviderStatus): number {
 
 function compareMetadataProviderOptions(selectedProviders: string[]): (left: MetadataProviderStatus, right: MetadataProviderStatus) => number {
   return (left, right) => {
-    return metadataProviderRoleOrder(left) - metadataProviderRoleOrder(right)
-      || metadataProviderSortIndex(selectedProviders, left.id) - metadataProviderSortIndex(selectedProviders, right.id)
+    return metadataProviderSortIndex(selectedProviders, left.id) - metadataProviderSortIndex(selectedProviders, right.id)
+      || metadataProviderRoleOrder(left) - metadataProviderRoleOrder(right)
       || left.display_name.localeCompare(right.display_name);
   };
 }
 
-function renderPrimaryProviderMoveButtons(label: string, isSecondary: boolean): string {
-  return isSecondary
-    ? ''
-    : `
+function renderProviderMoveButtons(label: string): string {
+  return `
             <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-up')}</button>
             <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-down')}</button>
           `;
@@ -163,7 +161,7 @@ function renderMetadataProviderOption(
   prefix: string,
   provider: MetadataProviderStatus,
   selected: Set<string>,
-  primaryPriority: number,
+  priority: number,
 ): string {
   const providerId = provider.id;
   const label = provider.display_name;
@@ -172,7 +170,7 @@ function renderMetadataProviderOption(
     ? provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
     : true;
   const checked = selected.has(providerId) && secondaryAvailable;
-  const providerPriorityLabel = isSecondary ? 'Secondary' : `Priority ${primaryPriority}`;
+  const providerPriorityLabel = `Priority ${priority}${isSecondary ? ' · Secondary' : ''}`;
 
   return `
       <div class="metadata-provider-option" data-provider-option="${providerId}" data-provider-role="${provider.role}" data-extends-provider-ids="${provider.extends_provider_ids.join(',')}">
@@ -191,7 +189,7 @@ function renderMetadataProviderOption(
           <span class="muted">${providerPriorityLabel}</span>
         </div>
         <div class="provider-option-actions">
-          ${renderPrimaryProviderMoveButtons(label, isSecondary)}
+          ${renderProviderMoveButtons(label)}
           <button type="button" class="secondary-button" data-provider-settings="${providerId}">${renderButtonContent('Settings', 'settings')}</button>
         </div>
       </div>
@@ -202,14 +200,10 @@ export function metadataProviderCheckboxes(prefix: string, selectedProviders: st
   const providers = libraryProviderOptions(libraryKind)
     .sort(compareMetadataProviderOptions(selectedProviders));
   const selected = new Set(selectedProviders);
-  let primaryPriority = 0;
 
   return `
     <div class="metadata-provider-list" data-provider-list="${prefix}">
-      ${providers.map((provider) => {
-        primaryPriority += provider.role === 'primary' ? 1 : 0;
-        return renderMetadataProviderOption(prefix, provider, selected, primaryPriority);
-      }).join('')}
+      ${providers.map((provider, index) => renderMetadataProviderOption(prefix, provider, selected, index + 1)).join('')}
     </div>
     `;
 }
@@ -517,15 +511,20 @@ export function renderProviderSettingsCard(provider: MetadataProviderSettings): 
   const apiKeyId = `${provider.id}-api-key`;
   const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
   const apiKeyDisabled = apiKeyConfigured ? '' : 'disabled';
+  const apiKeyLabel = provider.id === 'fanart' ? 'Personal API key (optional with bundled project key)' : 'API key';
+  const apiKeyHelp = provider.id === 'fanart'
+    ? '<small class="muted">Use your own <a href="https://fanart.tv/get-an-api-key/" target="_blank" rel="noreferrer">Fanart.tv personal key</a> for your account’s access tier. Official builds include a project key; other builds may require a personal key.</small>'
+    : '';
   const apiKeyField = showApiKey
     ? `<div class="api-key-field">
-        <label for="${apiKeyId}">API key</label>
+        <label for="${apiKeyId}">${escapeHtml(apiKeyLabel)}</label>
         <div class="input-group api-key-picker" role="group" aria-label="${escapeHtml(label)} API key" data-api-key-configured="${apiKeyConfigured}">
           <input id="${apiKeyId}" class="input-group-field" name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" data-api-key-draft />
           <input name="${provider.id}_clear_api_key" type="checkbox" data-api-key-removal hidden />
           <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyDisabled}>${renderIcon('x')}</button>
         </div>
         <small class="muted" data-api-key-status aria-live="polite" hidden>Saved API key will be cleared on save.</small>
+        ${apiKeyHelp}
       </div>`
     : '';
   const providerSettingsFields = showApiKey

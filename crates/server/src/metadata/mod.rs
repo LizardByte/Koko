@@ -490,6 +490,10 @@ pub struct ProviderEpisodeMetadataSnapshotFetch<'a> {
 /// Provider-normalized metadata fields that are persisted into Koko tables.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderMetadataDetails {
+    /// Artwork URL contributed by a secondary provider.
+    pub artwork_url: Option<String>,
+    /// Backdrop URL contributed by a secondary provider.
+    pub backdrop_url: Option<String>,
     /// External identifiers normalized into Koko's database.
     pub external_ids: Vec<ProviderExternalId>,
     /// Tagline or short promotional line.
@@ -950,11 +954,14 @@ pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProvid
                 .as_ref()
                 .map(|provider| provider.language.clone())
                 .unwrap_or_else(|| "en-US".into());
+            let bundled_key = descriptor.id == MetadataProviderId::Fanart
+                && providers::fanart::project_api_key().is_some();
             let configured = if descriptor.requires_api_key {
                 setting
                     .as_ref()
                     .map(metadata_provider_api_key_configured)
                     .unwrap_or(false)
+                    || bundled_key
             } else {
                 true
             };
@@ -2006,6 +2013,7 @@ pub async fn load_provider_show_descendant_targets(
 
 /// Resolve item-level metadata fields contributed by a secondary provider.
 pub async fn fetch_provider_secondary_metadata(
+    settings: &MetadataSettings,
     provider_id: MetadataProviderId,
     item_type: &str,
     database_id: &str,
@@ -2020,7 +2028,7 @@ pub async fn fetch_provider_secondary_metadata(
         )
     })?;
     provider
-        .fetch_secondary_metadata(item_type, database_id, external_id, locale_key)
+        .fetch_secondary_metadata(settings, item_type, database_id, external_id, locale_key)
         .await
 }
 
@@ -2190,7 +2198,10 @@ pub fn upsert_item_metadata_link(
                 } else {
                     None
                 },
-                genres_json: if snapshot.provider_id == MetadataProviderId::MusicBrainz {
+                genres_json: if matches!(
+                    snapshot.provider_id,
+                    MetadataProviderId::MusicBrainz | MetadataProviderId::Fanart
+                ) {
                     None
                 } else {
                     serde_json::to_string(&details.genres).ok()
@@ -3863,7 +3874,9 @@ fn provider_settings(
         .map(str::trim)
         .unwrap_or_default()
         .is_empty();
-    if requires_api_key && api_key_missing {
+    let bundled_key =
+        provider_id == MetadataProviderId::Fanart && providers::fanart::project_api_key().is_some();
+    if requires_api_key && api_key_missing && !bundled_key {
         return Err("requires an API key but none is configured.".into());
     }
 

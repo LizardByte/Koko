@@ -11,6 +11,7 @@ import { bindHoverPreview } from './hoverPreview';
 import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
 import { bindResumeHold } from './resumeHold';
 import { bindSettingsActions } from './settingsActions';
+import { bindProviderOrdering, syncProviderDependencyOptions } from './providerOrdering';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -776,33 +777,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-provider-move]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const option = button.closest<HTMLElement>('.metadata-provider-option');
-      const list = option?.closest<HTMLElement>('.metadata-provider-list');
-      if (!option || !list) {
-        return;
-      }
-      const primaryOptions = visiblePrimaryProviderOptions(list);
-      const index = primaryOptions.indexOf(option);
-      if (button.dataset.providerMove === 'up' && index > 0) {
-        list.insertBefore(option, primaryOptions[index - 1]);
-      }
-      if (button.dataset.providerMove === 'down' && index >= 0 && index < primaryOptions.length - 1) {
-        list.insertBefore(option, primaryOptions[index + 1].nextSibling);
-      }
-      syncProviderDependencyOptions(list);
-    });
-  });
-
-  document.querySelectorAll<HTMLInputElement>('.metadata-provider-list input[type="checkbox"]').forEach((input) => {
-    input.addEventListener('change', () => {
-      const list = input.closest<HTMLElement>('.metadata-provider-list');
-      if (list) {
-        syncProviderDependencyOptions(list);
-      }
-    });
-  });
+  bindProviderOrdering();
 
   document.querySelector<HTMLFormElement>('#search-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1687,59 +1662,6 @@ function bindApiKeyPickers(): void {
     sync();
   });
 }
-
-/** Return only primary providers offered for the current library type, in display order. */
-function visiblePrimaryProviderOptions(list: HTMLElement): HTMLElement[] {
-  return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option[data-provider-role="primary"]:not(.is-hidden)'));
-}
-
-function syncProviderDependencyOptions(list: HTMLElement): void {
-  const primaryOptions = visiblePrimaryProviderOptions(list);
-  primaryOptions.forEach((option, index) => {
-    const up = option.querySelector<HTMLButtonElement>('[data-provider-move="up"]');
-    const down = option.querySelector<HTMLButtonElement>('[data-provider-move="down"]');
-    if (up) up.disabled = index === 0;
-    if (down) down.disabled = index === primaryOptions.length - 1;
-  });
-  const selectedPrimaryIds = new Set(
-    Array.from(list.querySelectorAll<HTMLInputElement>('.metadata-provider-option[data-provider-role="primary"] input[type="checkbox"]:checked'))
-      .map((input) => input.value),
-  );
-  let priority = 0;
-  list.querySelectorAll<HTMLElement>('.metadata-provider-option').forEach((option) => {
-    const input = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
-    const role = option.dataset.providerRole ?? 'primary';
-    if (role === 'primary' && !option.classList.contains('is-hidden')) {
-      priority += 1;
-      if (label) {
-        label.textContent = `Priority ${priority}`;
-      }
-      return;
-    }
-    if (role === 'primary') {
-      return;
-    }
-
-    const extendsProviderIds = (option.dataset.extendsProviderIds ?? '')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const available = extendsProviderIds.some((providerId) => selectedPrimaryIds.has(providerId));
-    if (input) {
-      input.disabled = !available;
-      if (!available) {
-        input.checked = false;
-      }
-    }
-    option.classList.toggle('is-disabled', !available);
-    if (label) {
-      label.textContent = available ? 'Secondary' : 'Requires primary provider';
-    }
-  });
-}
-
-
 
 function syncAddLibraryProviderOptions(): void {
   const form = document.querySelector<HTMLFormElement>('#add-library-form');

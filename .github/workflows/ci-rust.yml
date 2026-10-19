@@ -9,6 +9,9 @@ on:
         default: ''
         required: false
         type: string
+    secrets:
+      FANART_PROJECT_API_KEY:
+        required: false
 
 env:
   MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -254,6 +257,8 @@ jobs:
 
       - name: Build
         if: matrix.run == 'build'
+        env:
+          KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
         run: |
           cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release \
             --message-format=json | tee "${RUNNER_TEMP}/cargo-build.json"

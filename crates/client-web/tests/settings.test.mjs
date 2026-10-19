@@ -18,7 +18,7 @@ await new Promise((resolve) => assetServer.listen(0, '127.0.0.1', resolve));
 after(() => new Promise((resolve) => assetServer.close(resolve)));
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderLogResults, renderLogViewer } = await server.ssrLoadModule('/src/app/logView.ts');
-const { renderSettingsPage, buildSettingsFromForm } = await server.ssrLoadModule('/src/app/settingsView.ts');
+const { renderSettingsPage, buildSettingsFromForm, metadataProviderCheckboxes } = await server.ssrLoadModule('/src/app/settingsView.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { getMockSettings, getMockMetadataProviders, updateMockSettings } = await server.ssrLoadModule('/src/mockApi.ts');
 const { providerAttributionLogo } = await server.ssrLoadModule('/src/app/providers.ts');
@@ -248,12 +248,12 @@ test('provider artwork comes from API descriptors and resolves against the API s
   }
 });
 
-test('every mock provider has working local logos in the development server', async () => {
+test('all declared mock provider logos work in the development server', async () => {
   const providers = getMockMetadataProviders();
-  assert.equal(providers.length, 7);
+  assert.equal(providers.length, 8);
   const origin = `http://127.0.0.1:${assetServer.address().port}`;
   for (const provider of providers) {
-    for (const url of [provider.logo_light_url, provider.logo_dark_url]) {
+    for (const url of [provider.logo_light_url, provider.logo_dark_url].filter(Boolean)) {
       assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png)$/);
       const response = await fetch(`${origin}${url}`);
       assert.equal(response.status, 200, url);
@@ -263,6 +263,54 @@ test('every mock provider has working local logos in the development server', as
   }
   assert.equal((await fetch(`${origin}/assets/providers/unknown.svg`)).status, 404);
   assert.equal((await fetch(`${origin}/assets/providers/README.md`)).status, 404);
+});
+
+test('Fanart.tv is selectable per music library only alongside MusicBrainz', () => {
+  const selected = metadataProviderCheckboxes('providers', ['musicbrainz', 'fanart'], 'music');
+  const fanartInput = selected.match(/<input[^>]*value="fanart"[^>]*>/)?.[0];
+  assert.match(fanartInput, /checked/);
+  assert.doesNotMatch(fanartInput, /disabled/);
+  assert.match(selected, /data-provider-role="secondary" data-extends-provider-ids="musicbrainz"/);
+  const noMusicBrainz = metadataProviderCheckboxes('providers', ['fanart'], 'music');
+  assert.match(noMusicBrainz.match(/<input[^>]*value="fanart"[^>]*>/)?.[0], /disabled/);
+  assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="fanart"/);
+});
+
+test('secondary providers retain their saved priority ahead of primary providers', () => {
+  const html = metadataProviderCheckboxes('providers', ['fanart', 'musicbrainz'], 'music');
+  assert.ok(html.indexOf('data-provider-option="fanart"') < html.indexOf('data-provider-option="musicbrainz"'));
+  const fanart = html.split('data-provider-option="fanart"')[1].split('data-provider-option=')[0];
+  assert.match(fanart, /Priority 1 · Secondary/);
+  assert.match(fanart, /aria-label="Move Fanart.tv up"/);
+  assert.match(fanart, /aria-label="Move Fanart.tv down"/);
+  state.route = { page: 'settings', section: 'libraries' };
+  const libraries = state.settingsResponse.settings.media.libraries;
+  const index = libraries.findIndex((library) => library.kind === 'music');
+  const form = new FormData();
+  form.set(`existing_library_name_${index}`, libraries[index].name);
+  form.set(`existing_library_paths_${index}`, libraries[index].path);
+  form.append(`existing_library_metadata_provider_${index}`, 'fanart');
+  form.append(`existing_library_metadata_provider_${index}`, 'musicbrainz');
+  const saved = buildSettingsFromForm(form).media.libraries[index].metadata_providers;
+  assert.deepEqual(saved, ['fanart', 'musicbrainz']);
+  const reopened = metadataProviderCheckboxes('providers', saved, 'music');
+  assert.ok(reopened.indexOf('data-provider-option="fanart"') < reopened.indexOf('data-provider-option="musicbrainz"'));
+});
+
+test('Fanart.tv settings accept personal keys without exposing saved credentials', () => {
+  state.route = { page: 'settings', section: 'providers' };
+  const provider = state.settingsResponse.settings.metadata.providers.find((entry) => entry.id === 'fanart');
+  provider.api_key = 'saved-personal-secret';
+  let html = renderSettingsPage();
+  assert.match(html, /Personal API key/);
+  assert.match(html, /https:\/\/fanart.tv\/get-an-api-key\//);
+  assert.doesNotMatch(html, /saved-personal-secret/);
+  assert.doesNotMatch(html, /name="fanart_project/);
+  const form = new FormData();
+  form.set('fanart_api_key', 'new-personal-secret');
+  assert.equal(buildSettingsFromForm(form).metadata.providers.find((entry) => entry.id === 'fanart').api_key, 'new-personal-secret');
+  form.set('fanart_clear_api_key', 'on');
+  assert.equal(buildSettingsFromForm(form).metadata.providers.find((entry) => entry.id === 'fanart').clear_api_key, true);
 });
 
 test('mock credential saves clear or replace saved keys without exposing plaintext', () => {

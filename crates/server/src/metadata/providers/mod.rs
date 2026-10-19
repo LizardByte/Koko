@@ -1,5 +1,7 @@
 mod musicbrainz;
 use musicbrainz::MusicBrainzMetadataProvider;
+pub(crate) mod fanart;
+use fanart::FanartMetadataProvider;
 
 pub(crate) mod themerr;
 pub(crate) mod tmdb;
@@ -207,6 +209,7 @@ pub trait MetadataProvider {
     /// Resolve item-level metadata fields contributed by a secondary provider.
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         _item_type: &'a str,
         _database_id: &'a str,
         _external_id: &'a str,
@@ -558,6 +561,7 @@ impl MetadataProvider for ThemerrMetadataProvider {
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
@@ -612,6 +616,7 @@ impl MetadataProvider for TrailerDbMetadataProvider {
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
@@ -685,6 +690,7 @@ impl MetadataRegistry {
                 Box::new(ThemerrMetadataProvider),
                 Box::new(TrailerDbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
+                Box::new(FanartMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),
             ],

@@ -106,6 +106,43 @@ fn test_metadata_provider_statuses_include_trailerdb() {
 }
 
 #[test]
+fn test_fanart_is_a_music_only_secondary_provider_with_optional_personal_credentials() {
+    let mut settings = MetadataSettings::default();
+    let status = list_provider_statuses(&settings)
+        .into_iter()
+        .find(|provider| provider.id == MetadataProviderId::Fanart)
+        .unwrap();
+    assert_eq!(status.display_name, "Fanart.tv");
+    assert_eq!(status.role, koko::metadata::MetadataProviderRole::Secondary);
+    assert_eq!(status.supported_kinds, vec![MediaLibraryKind::Music]);
+    assert_eq!(
+        status.extends_provider_ids,
+        vec![MetadataProviderId::MusicBrainz]
+    );
+    assert!(status.requires_api_key && status.implemented);
+    assert!(!status.enabled);
+    settings
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == MetadataProviderId::Fanart)
+        .unwrap()
+        .api_key = Some("personal-test-key".into());
+    assert!(
+        list_provider_statuses(&settings)
+            .iter()
+            .any(|provider| provider.id == MetadataProviderId::Fanart && provider.configured)
+    );
+    assert_eq!(
+        MetadataProviderId::from_storage_value("fanart"),
+        Some(MetadataProviderId::Fanart)
+    );
+    assert_eq!(
+        serde_json::to_string(&MetadataProviderId::Fanart).unwrap(),
+        "\"fanart\""
+    );
+}
+
+#[test]
 fn test_metadata_provider_statuses_respect_api_key_configuration() {
     let settings = MetadataSettings {
         providers: vec![MetadataProviderSettings {

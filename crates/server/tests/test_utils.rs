@@ -1,5 +1,9 @@
 //! Shared test utilities to eliminate code duplication across test files.
 
+// Compile the shared schema for integration fixtures without exposing database internals.
+#[path = "../src/db/schema.rs"]
+mod schema;
+
 // standard imports
 use std::sync::atomic::{
     AtomicU64,
@@ -23,6 +27,10 @@ use koko::web;
 static GLOBAL_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TEST_CLIENT_CREATION_LOCK: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
+// Route fixtures need a valid login, not repeated production-cost password hashing.
+// Authentication tests still exercise create_user and hash_password directly.
+static ADMIN_TEST_PASSWORD_HASH: Lazy<String> =
+    Lazy::new(|| bcrypt::hash("password123", 4).expect("Failed to hash the fixture password"));
 
 /// Enhanced test response structure with headers
 pub struct TestResponse {
@@ -254,8 +262,27 @@ pub async fn create_and_login_user(
 
 /// Isolated authenticated administrator for management and media route success tests.
 pub async fn create_admin_test_client(prefix: Option<&str>) -> (Client, String) {
+    use diesel::prelude::*;
+    use koko::db::DbConn;
+
+    use self::schema::users;
+
     let client = create_test_client(prefix).await;
-    let token = create_and_login_user(&client, "admin", "password123", true, None)
+    DbConn::get_one(client.rocket())
+        .await
+        .expect("Missing fixture database")
+        .run(|conn| {
+            diesel::insert_into(users::table)
+                .values((
+                    users::username.eq("admin"),
+                    users::password.eq(ADMIN_TEST_PASSWORD_HASH.as_str()),
+                    users::admin.eq(true),
+                ))
+                .execute(conn)
+                .expect("Failed to seed the fixture administrator");
+        })
+        .await;
+    let token = login_user(&client, "admin", "password123", Some(Status::Ok))
         .await
         .unwrap();
     (client, token)

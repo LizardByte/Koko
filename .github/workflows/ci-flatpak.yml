@@ -177,7 +177,8 @@ jobs:
           KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
           KOKO_LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
         run: |
-          sudo --preserve-env=KOKO_FANART_PROJECT_API_KEY,KOKO_LRCLIB_APPLICATION_ID su "$(whoami)" -c "flatpak run org.flatpak.Builder \
+          sudo --preserve-env=KOKO_FANART_PROJECT_API_KEY,KOKO_LRCLIB_APPLICATION_ID \
+            su "$(whoami)" -c "flatpak run org.flatpak.Builder \
             --arch=${MATRIX_ARCH} \
             --force-clean \
             --repo=repo \

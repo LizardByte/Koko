@@ -1,7 +1,9 @@
 //! Local music identities and tag normalization.
 
+mod playback;
 mod storage;
 use super::*;
+pub(super) use playback::album_playback_targets;
 pub(super) use storage::{
     apply_detail,
     apply_summaries,

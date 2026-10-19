@@ -34,6 +34,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_items,
         media::get_item,
         media::get_item_files,
+        media::get_item_credits,
         media::get_item_metadata,
         media::get_person,
         media::search_item_metadata,

@@ -136,7 +136,6 @@ use crate::metadata::{
     fetch_provider_secondary_metadata,
     get_item_metadata_summaries,
     get_metadata_person_for_languages,
-    get_metadata_person_locale_peer_ids,
     get_primary_item_metadata_link,
     guess_provider_movie_match,
     guess_provider_show_match,
@@ -156,7 +155,7 @@ use crate::metadata::{
     provider_uses_localized_metadata,
     resolve_metadata_asset_db_path,
     search_metadata_people_with_preferred_languages,
-    search_provider,
+    search_provider_with_artist,
     set_item_metadata_refresh_state,
     set_item_metadata_refresh_state_for_locale,
     sort_item_metadata_summaries_for_languages,
@@ -383,6 +382,12 @@ pub struct MetadataPersonResponse {
     pub person: MetadataPersonSummary,
     /// Media items linked to this person.
     pub credits: Vec<MetadataPersonItemCredit>,
+    /// Matching artists in libraries this user can access.
+    pub artists: Vec<MediaItemSummary>,
+    /// Albums by matching artists, replacing redundant artist cards on person pages.
+    pub albums: Vec<MediaItemSummary>,
+    /// Groups this person belongs or belonged to, with membership credit details.
+    pub groups: Vec<MetadataPersonItemCredit>,
 }
 
 /// One media item credit for a person.
@@ -1649,7 +1654,13 @@ fn music_match_context(
         QueryDsl,
         RunQueryDsl,
     };
-    let mut context = crate::metadata::MusicMatchContext::default();
+    let mut context = crate::metadata::MusicMatchContext {
+        duration_ms: items::media_items
+            .find(item_id)
+            .select(items::duration_ms)
+            .first(conn)?,
+        ..Default::default()
+    };
     let track_count = items::media_items
         .filter(items::parent_id.eq(item_id))
         .filter(items::item_type.eq("track"))
@@ -3446,8 +3457,17 @@ fn person_is_accessible(
     person_id: i32,
     user_id: Option<i32>,
 ) -> Result<bool, diesel::result::Error> {
-    let peers = get_metadata_person_locale_peer_ids(conn, person_id)?;
-    for credit in list_metadata_person_credit_summaries_for_person_ids(conn, &peers)? {
+    let identities = crate::metadata::identities::for_person(conn, person_id)?;
+    for artist_id in identities.artist_ids {
+        if let Some(item) = get_media_item_summary(conn, artist_id)? {
+            if user_can_access_library(conn, item.library_id, user_id)? {
+                return Ok(true);
+            }
+        }
+    }
+    for credit in
+        list_metadata_person_credit_summaries_for_person_ids(conn, &identities.person_ids)?
+    {
         if let Some(item) = get_media_item_summary(conn, credit.media_item_id)? {
             if user_can_access_library(conn, item.library_id, user_id)? {
                 return Ok(true);
@@ -4532,6 +4552,71 @@ pub async fn get_item_metadata(
     }))
 }
 
+fn accessible_person_credits(
+    conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+    person_ids: &[i32],
+    user_id: Option<i32>,
+    languages: &[String],
+) -> Result<Vec<MetadataPersonItemCredit>, diesel::result::Error> {
+    let mut credits = Vec::new();
+    let mut seen_items = std::collections::HashSet::new();
+    for credit in list_metadata_person_credit_summaries_for_person_ids(conn, person_ids)? {
+        if !seen_items.insert(credit.media_item_id) {
+            continue;
+        }
+        if let Some((item, hierarchy)) = crate::media::get_media_item_summary_with_hierarchy(
+            conn,
+            credit.media_item_id,
+            languages,
+        )? {
+            if user_can_access_library(conn, item.library_id, user_id)? {
+                credits.push(MetadataPersonItemCredit {
+                    credit,
+                    item,
+                    hierarchy,
+                });
+            }
+        }
+    }
+    Ok(credits)
+}
+
+/// Return local screen credits for the person identified by a music artist.
+#[openapi(tag = "Media")]
+#[get("/api/v1/items/<item_id>/credits")]
+pub async fn get_item_credits(
+    user_guard: UserGuard,
+    db: DbConn,
+    item_id: i32,
+) -> Result<Json<Vec<MetadataPersonItemCredit>>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
+    let user_id = current_user_id(Some(&user_guard))?;
+    let credits = db
+        .run(
+            move |conn| -> Result<Vec<MetadataPersonItemCredit>, diesel::result::Error> {
+                let item = get_media_item_summary(conn, item_id)?
+                    .ok_or(diesel::result::Error::NotFound)?;
+                if item.item_type != "artist" {
+                    return Ok(Vec::new());
+                }
+                let identities = crate::metadata::identities::for_artist(conn, item_id)?;
+                let languages = user_preferred_metadata_languages(conn, user_id)?;
+                Ok(
+                    accessible_person_credits(conn, &identities.person_ids, user_id, &languages)?
+                        .into_iter()
+                        .filter(|entry| entry.item.item_type != "artist")
+                        .collect(),
+                )
+            },
+        )
+        .await
+        .map_err(|error| {
+            log::error!("Failed to load artist {} credits: {}", item_id, error);
+            Status::InternalServerError
+        })?;
+    Ok(Json(credits))
+}
+
 /// Return one normalized person and the media items they are credited on.
 #[openapi(tag = "Media")]
 #[get("/api/v1/people/<person_id>")]
@@ -4546,34 +4631,48 @@ pub async fn get_person(
             let languages = user_preferred_metadata_languages(conn, user_id)?;
             let person = get_metadata_person_for_languages(conn, person_id, &languages)?
                 .ok_or(diesel::result::Error::NotFound)?;
-            let person_ids = get_metadata_person_locale_peer_ids(conn, person_id)?;
-            let mut credits = Vec::new();
-            let mut seen_items = std::collections::HashSet::new();
-            for credit in list_metadata_person_credit_summaries_for_person_ids(conn, &person_ids)? {
-                if !seen_items.insert(credit.media_item_id) {
-                    continue;
-                }
-                if let Some((item, hierarchy)) =
-                    crate::media::get_media_item_summary_with_hierarchy(
-                        conn,
-                        credit.media_item_id,
-                        &languages,
-                    )?
+            let identities = crate::metadata::identities::for_person(conn, person_id)?;
+            let credits =
+                accessible_person_credits(conn, &identities.person_ids, user_id, &languages)?;
+            let (music_credits, credits): (Vec<_>, Vec<_>) = credits
+                .into_iter()
+                .partition(|entry| entry.item.item_type == "artist");
+            let groups = music_credits
+                .into_iter()
+                .filter(|entry| entry.credit.department.as_deref() == Some("Members"))
+                .collect::<Vec<_>>();
+            let mut artists = Vec::new();
+            for id in identities.artist_ids {
+                if let Some((item, _)) =
+                    crate::media::get_media_item_summary_with_hierarchy(conn, id, &languages)?
                 {
-                    if !user_can_access_library(conn, item.library_id, user_id)? {
-                        continue;
+                    if user_can_access_library(conn, item.library_id, user_id)? {
+                        artists.push(item);
                     }
-                    credits.push(MetadataPersonItemCredit {
-                        credit,
-                        item,
-                        hierarchy,
-                    });
                 }
             }
-            if credits.is_empty() {
+            if credits.is_empty() && artists.is_empty() && groups.is_empty() {
                 return Err(diesel::result::Error::NotFound);
             }
-            Ok::<_, diesel::result::Error>(MetadataPersonResponse { person, credits })
+            let mut albums = Vec::new();
+            for artist in &artists {
+                albums.extend(
+                    crate::media::list_media_item_children_with_preferred_languages(
+                        conn, artist.id, &languages,
+                    )?
+                    .into_iter()
+                    .filter(|item| {
+                        item.item_type == "album" && item.library_id == artist.library_id
+                    }),
+                );
+            }
+            Ok::<_, diesel::result::Error>(MetadataPersonResponse {
+                person,
+                credits,
+                artists,
+                albums,
+                groups,
+            })
         })
         .await
         .map_err(|error| match error {
@@ -4638,18 +4737,37 @@ pub async fn get_person_image(
         .map_err(|_| Status::NotFound)
 }
 
+/// Optional filters for a manual metadata search.
+#[derive(Debug, rocket::FromForm, JsonSchema)]
+pub struct ItemMetadataSearchQuery {
+    /// Title override; otherwise use the current item title.
+    pub query: Option<String>,
+    /// Comma-separated provider IDs.
+    pub providers: Option<String>,
+    /// Optional release year.
+    pub year: Option<i32>,
+    /// Preferred metadata language.
+    pub language: Option<String>,
+    /// Artist or group credit for an album search; empty allows any artist.
+    pub artist: Option<String>,
+}
+
 /// Search a configured provider for metadata candidates for a media item.
 #[openapi(tag = "Media")]
-#[get("/api/v1/items/<item_id>/metadata/search?<query>&<providers>&<year>&<language>")]
+#[get("/api/v1/items/<item_id>/metadata/search?<search..>")]
 pub async fn search_item_metadata(
     _admin: AdminGuard,
     db: DbConn,
     item_id: i32,
-    query: Option<String>,
-    providers: Option<String>,
-    year: Option<i32>,
-    language: Option<String>,
+    search: ItemMetadataSearchQuery,
 ) -> Result<Json<Vec<MetadataSearchResult>>, Status> {
+    let ItemMetadataSearchQuery {
+        query,
+        providers,
+        year,
+        language,
+        artist,
+    } = search;
     let settings = current_settings();
     let metadata_settings = settings.metadata.clone();
     let item = db
@@ -4721,11 +4839,12 @@ pub async fn search_item_metadata(
             );
         }
 
-        match search_provider(
+        match search_provider_with_artist(
             &search_metadata_settings,
             provider_id.clone(),
             &effective_query,
             Some(expected_media_type),
+            artist.as_deref().filter(|_| item.item_type == "album"),
         )
         .await
         {
@@ -5849,6 +5968,24 @@ mod tests {
             metadata_search_score("The Matrix", None, &mismatched_case)
                 < metadata_search_score("The Matrix", None, &exact)
         );
+    }
+
+    #[test]
+    fn manual_album_search_query_keeps_artist_separate_from_title_and_other_filters() {
+        let search = rocket::form::Form::<ItemMetadataSearchQuery>::parse_encoded(
+            "query=Live%3A+Deluxe&artist=AC%2FDC+%26+Guests%2B&year=2001&providers=musicbrainz&\
+             language=en-US"
+                .into(),
+        )
+        .unwrap();
+        assert_eq!(search.query.as_deref(), Some("Live: Deluxe"));
+        assert_eq!(search.artist.as_deref(), Some("AC/DC & Guests+"));
+        assert_eq!(search.year, Some(2001));
+        assert_eq!(search.providers.as_deref(), Some("musicbrainz"));
+        assert_eq!(search.language.as_deref(), Some("en-US"));
+        let cleared =
+            rocket::form::Form::<ItemMetadataSearchQuery>::parse_encoded("artist=".into()).unwrap();
+        assert_eq!(cleared.artist.as_deref(), Some(""));
     }
 
     #[test]

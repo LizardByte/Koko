@@ -955,6 +955,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     navigateTo(backNavigationTarget().path);
   });
 
+  document.querySelector<HTMLInputElement>('#metadata-search-artist')?.addEventListener('input', (event) => {
+    state.metadataSearchArtist = (event.target as HTMLInputElement).value;
+  });
   document.querySelector<HTMLFormElement>('#metadata-search-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!state.selectedItem) {
@@ -963,9 +966,11 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
     const input = document.querySelector<HTMLInputElement>('#metadata-search-input');
     const yearInput = document.querySelector<HTMLInputElement>('#metadata-search-year');
+    const artistInput = document.querySelector<HTMLInputElement>('#metadata-search-artist');
     const languageInput = document.querySelector<HTMLInputElement>('#metadata-search-language');
     state.metadataSearchQuery = input?.value.trim() || selectedItemDefaultMetadataTitle();
     state.metadataSearchYear = yearInput?.value.trim() || selectedItemDefaultMetadataYear();
+    state.metadataSearchArtist = artistInput?.value.trim();
     state.metadataSearchLanguage = languageInput?.value.trim() || defaultMetadataSearchLanguage();
     state.metadataSearchProviders = Array.from(
       document.querySelectorAll<HTMLInputElement>('input[name="metadataSearchProvider"]:checked'),
@@ -975,6 +980,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       setButtonBusy(submitButton, true);
       state.metadataSearchResults = await searchItemMetadata(state.selectedItem.id, {
         query: state.metadataSearchQuery,
+        artist: state.metadataSearchArtist,
         providers: state.metadataSearchProviders,
         year: state.metadataSearchYear,
         language: state.metadataSearchLanguage,

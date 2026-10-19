@@ -48,6 +48,7 @@ use strsim::normalized_levenshtein;
 mod artwork;
 pub(crate) mod cache_policy;
 pub(crate) mod http;
+pub mod identities;
 mod providers;
 pub use providers::{
     MetadataProvider,
@@ -1385,6 +1386,17 @@ pub async fn search_provider(
     query: &str,
     media_type: Option<&str>,
 ) -> Result<Vec<MetadataSearchResult>, String> {
+    search_provider_with_artist(settings, provider_id, query, media_type, None).await
+}
+
+/// Search candidates with an editable artist credit for album matching.
+pub async fn search_provider_with_artist(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    query: &str,
+    media_type: Option<&str>,
+    artist: Option<&str>,
+) -> Result<Vec<MetadataSearchResult>, String> {
     let registry = MetadataRegistry::new();
     let provider = registry.provider(&provider_id).ok_or_else(|| {
         format!(
@@ -1392,7 +1404,9 @@ pub async fn search_provider(
             provider_display_name(&provider_id)
         )
     })?;
-    provider.search(settings, query, media_type).await
+    provider
+        .search_with_artist(settings, query, media_type, artist)
+        .await
 }
 
 /// Fetch and normalize one provider metadata snapshot.
@@ -3599,6 +3613,10 @@ pub(crate) fn metadata_response_cache_key(
     let mut hasher = Sha256::new();
     // Invalidate response snapshots written before endpoint-specific decoding.
     hasher.update(b"metadata-response-v2\0");
+    if *provider_id == MetadataProviderId::MusicBrainz {
+        // Older artist lookups did not request the external URL relationships.
+        hasher.update(b"artist-members-and-url-relations-v2\0");
+    }
     hasher.update(provider_id.as_storage_value().as_bytes());
     hasher.update([0]);
     hasher.update(kind.as_bytes());

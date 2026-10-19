@@ -17,7 +17,7 @@ Checked items describe implemented behavior. Unchecked items remain open; browse
 - [x] add a "scanner" module, which is responsible for file scanning, we should have different types of scanners
   - [x] movies scanner
   - [x] tv shows scanner
-  - [o] music scanner
+  - [x] music scanner
   - [o] photos scanner
   - [o] books scanner
 - [x] store media file hash in database to know when a file has changed, when it changes we should re-run ffprobe stuff
@@ -124,8 +124,11 @@ Checked items describe implemented behavior. Unchecked items remain open; browse
 
 - [ ] features: add podcast support, users should be able to add the podcasts they are specifically interested in and it should appear like a library with shows and episodes... we could also allow users to add custom rss feeds for podcasts that are not in the providers... not 100% sure how to search for podcasts and get metadata... any free APIs for this? maybe use a provider like itunes search api or something? https://affiliate.itunes.apple.com/resources/documentation/itunes-store-web-service-search-api/ ... this would be a new provider module for podcasts, and we would need to add a new media type for podcast episodes... the player would also need to be revamped to support audio only playback with a static image instead of a video... we could also add support for showing the episode transcript if available, maybe even with a karaoke style highlighting of the current line as it is being spoken
   - ref: https://github.com/advplyr/audiobookshelf/blob/master/server/providers/iTunes.js
-- [ ] features: add local music library support using musicbrainz as a metadata provider with crate https://crates.io/crates/musicbrainz_rs... this would be similar to podcasts but with albums and tracks instead of shows and episodes... the player would also need to be revamped to support audio only playback with a static image instead of a video (no more than 1 api call per second)
-- [ ] features: can we link people from tmdb/tvdb to musicbrainz people? I think tmdb has external ids for the imdb id, and so do musicbrainz, so we could use that as a common key to link them together
+- [ ] features: add audiobooks, including scanning, chapters, narrators, playback speed, and per-user listening progress. Evaluate [AudioSilo Meta](https://meta.audiosilo.app/) and its [public API](https://meta.audiosilo.app/docs/api) for audiobook metadata, preserving its data attribution requirements.
+  - Show ebooks and audiobooks together in a books library, with one work page offering **Read** and **Listen** when both are available. Keep reading and listening progress independent, preserve edition/language/narrator differences, support either format alone, and allow manual linking or separation of editions. See the [roadmap](./ROADMAP.md#metadata-strategy).
+- [x] features: add local music library support using musicbrainz as a metadata provider with crate https://crates.io/crates/musicbrainz_rs... this would be similar to podcasts but with albums and tracks instead of shows and episodes... the player would also need to be revamped to support audio only playback with a static image instead of a video (no more than 1 api call per second)
+- [x] features: can we link people from tmdb/tvdb to musicbrainz people? I think tmdb has external ids for the imdb id, and so do musicbrainz, so we could use that as a common key to link them together
+  - [x] Show MusicBrainz group members and solo performers in people rows, with individual person pages, membership details, screen credits, and links back to groups; keep membership separate from identity matching.
   - actually each db has external ids, so we can store all the external ids to link tmdb people to tvdb people, or any other provider
   - tmdb external ids:
     - Facebook

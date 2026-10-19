@@ -3,7 +3,7 @@ import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
 import { clearBrowseSessions } from './browseSession';
 
-type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getLogs' | 'searchItems'>;
+type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getItemCredits' | 'getLogs' | 'searchItems'>;
 
 /** Retain restored browsing data when the server's null scope means all libraries. */
 export function prepareBrowseRoute(state: AppState, route: AppRoute): void {
@@ -26,6 +26,7 @@ export async function loadRouteData(
   source: RouteApi = api,
 ): Promise<void> {
   if (route.page !== 'item' || state.itemSources?.itemId !== route.itemId) state.itemSources = undefined;
+  if (route.page !== 'item' || state.itemCredits?.itemId !== route.itemId) state.itemCredits = undefined;
   const admin = state.bootstrap?.current_user?.admin === true;
   if (!admin) {
     state.settingsResponse = undefined;
@@ -50,6 +51,7 @@ export async function loadRouteData(
         state.searchResults = [];
         state.selectedItem = undefined;
         state.itemSources = undefined;
+        state.itemCredits = undefined;
         state.selectedItemMetadata = undefined;
         state.selectedPlayback = undefined;
         state.selectedPerson = undefined;
@@ -76,6 +78,19 @@ export async function loadRouteData(
       if (isCurrent()) { state.libraryItemsLoading = false; render(); }
     }),
   ]);
+
+  const loadArtistCredits = async (itemId: number): Promise<void> => {
+    state.itemCredits = { itemId, loading: true, credits: [] };
+    render();
+    try {
+      const credits = await source.getItemCredits(itemId);
+      if (isCurrent()) state.itemCredits = { itemId, loading: false, credits };
+    } catch (error: unknown) {
+      if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) throw error;
+      if (isCurrent()) state.itemCredits = { itemId, loading: false, credits: [], error: error instanceof Error ? error.message : 'Request failed' };
+    }
+    if (isCurrent()) render();
+  };
 
   load('server capabilities', source.getCapabilities(), (value) => { state.capabilities = value; });
   load('libraries', source.getLibraries(), (value) => { state.libraries = value; });
@@ -108,7 +123,8 @@ export async function loadRouteData(
       state.selectedItem = item;
       state.libraryItemsLoading = true;
       render();
-      await loadItemSupportingData(item);
+      const credits = item.item_type === 'artist' ? loadArtistCredits(item.id) : Promise.resolve();
+      await Promise.all([loadItemSupportingData(item), credits]);
       return item;
     }), () => { /* The overview was published before its supporting sections. */ });
     load('linked metadata', source.getItemMetadata(route.itemId).finally(() => {

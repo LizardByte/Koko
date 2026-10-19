@@ -4,8 +4,8 @@ import { state } from './state';
 
 /** Resolve the backend-provided attribution logo against the configured API server. */
 export function providerAttributionLogo(providerId: string): string | undefined {
-  const provider = (state.selectedItemMetadata?.providers ?? state.metadataProviders)
-    .find((entry) => entry.id === providerId);
+  const provider = state.selectedItemMetadata?.providers.find((entry) => entry.id === providerId)
+    ?? state.metadataProviders.find((entry) => entry.id === providerId);
   const logoUrl = provider?.logo_dark_url ?? provider?.logo_light_url;
   return logoUrl ? resolveApiUrl(logoUrl) : undefined;
 }

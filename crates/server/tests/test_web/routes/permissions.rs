@@ -49,6 +49,7 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/search?query=film"),
     (Method::Get, "/api/v1/items/1"),
     (Method::Get, "/api/v1/items/1/files"),
+    (Method::Get, "/api/v1/items/1/credits"),
     (Method::Get, "/api/v1/items/1/metadata"),
     (Method::Get, "/api/v1/items/1/playback"),
     (Method::Get, "/api/v1/items/1/artwork"),
@@ -150,6 +151,157 @@ async fn fixture() -> (Client, String, String) {
         .await
         .unwrap();
     (client, admin, viewer)
+}
+
+#[rocket::async_test]
+async fn artist_and_person_links_aggregate_screen_credits_without_leaking_private_libraries() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "
+        INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) VALUES
+            (10,1,'artist','artist','Visible musician'), (11,2,'secret-artist','artist','Secret \
+             musician');
+        INSERT INTO item_metadata_links \
+             (id,media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (10,10,'musicbrainz','artist-mbid','artist','linked'),
+            (11,11,'musicbrainz','artist-mbid','artist','linked'),
+            (3,3,'tvdb','33','movie','linked');
+        INSERT INTO media_items (id,library_id,parent_id,identity_key,item_type,display_title) \
+             VALUES
+            (20,1,10,'visible-album','album','Visible album'),
+            (21,2,11,'secret-album','album','Secret album');
+        INSERT INTO item_metadata_external_ids (metadata_link_id,source,external_id) VALUES \
+             (10,'imdb','nm1');
+        INSERT INTO metadata_people (id,provider_id,external_id,name) VALUES (3,'tvdb','333','Same \
+             musician');
+        INSERT INTO metadata_person_external_ids (person_id,source,external_id) VALUES
+            (1,'imdb','nm1'), (1,'wikidata','Q1'), (3,'wikidata','Q1');
+        INSERT INTO metadata_person_credits (metadata_link_id,person_id,role) VALUES (3,3,'actor');
+        INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) VALUES
+            (12,1,'group','artist','Visible group'), (13,2,'secret-group','artist','Secret group'),
+            (14,1,'solo','artist','Music only artist');
+        INSERT INTO item_metadata_links \
+             (id,media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (12,12,'musicbrainz','group-mbid','artist','linked'),
+            (13,13,'musicbrainz','group-mbid','artist','linked'),
+            (14,14,'musicbrainz','solo-mbid','artist','linked');
+        INSERT INTO metadata_people (id,provider_id,external_id,name) VALUES
+            (5,'musicbrainz','member-mbid','Band member'),
+            (6,'musicbrainz','artist-mbid','Visible musician'),
+            (7,'musicbrainz','solo-mbid','Music only artist');
+        INSERT INTO metadata_person_external_ids (person_id,source,external_id) VALUES \
+             (5,'imdb','nm1');
+        INSERT INTO metadata_person_credits (metadata_link_id,person_id,role,department) VALUES
+            (12,5,'Member · guitar · 2005–present','Members'),
+            (13,5,'Former member','Members'), (10,6,'Artist','Artists'), (14,7,'Artist','Artists');
+
+    ",
+        )
+        .unwrap()
+    })
+    .await;
+    drop(db);
+
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/10/credits",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let credits: Value = serde_json::from_str(&text).unwrap();
+    let ids = credits
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|credit| credit["item"]["id"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&1) && ids.contains(&3));
+    assert_eq!(ids.len(), 2);
+    assert!(!text.contains("Secret"));
+
+    for person_id in [1, 3, 5, 6] {
+        let text = response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/people/{person_id}"),
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await;
+        let person: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(person["artists"].as_array().unwrap().len(), 1);
+        assert_eq!(person["artists"][0]["id"], 10);
+        assert_eq!(person["albums"].as_array().unwrap().len(), 1);
+        assert_eq!(person["albums"][0]["id"], 20);
+        assert_eq!(person["credits"].as_array().unwrap().len(), 2);
+        assert_eq!(person["groups"].as_array().unwrap().len(), 1);
+        assert_eq!(person["groups"][0]["item"]["id"], 12);
+        assert_eq!(
+            person["groups"][0]["credit"]["role"],
+            "Member · guitar · 2005–present"
+        );
+        assert!(!text.contains("Secret"));
+    }
+    let group_credits = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/12/credits",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(
+        serde_json::from_str::<Value>(&group_credits)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let solo_person = response(
+        &client,
+        Method::Get,
+        "/api/v1/people/7",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let solo: Value = serde_json::from_str(&solo_person).unwrap();
+    assert_eq!(solo["artists"][0]["id"], 14);
+    assert!(solo["credits"].as_array().unwrap().is_empty());
+    assert!(solo["groups"].as_array().unwrap().is_empty());
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/people/1",
+        Some(&admin),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["artists"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    response(
+        &client,
+        Method::Get,
+        "/api/v1/items/11/credits",
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
 }
 
 #[rocket::async_test]

@@ -41,6 +41,8 @@ import {
 } from './app/selectors';
 import { syncVisibleSpinners } from './app/spinners';
 import { state } from './app/state';
+import { itemArtwork } from './app/tvItemView';
+import { personBackdropUrl } from './app/itemPersonView';
 import { beginMetadataRequest, invalidateMetadataRequests } from './app/metadataRequests';
 import {
   renderHomePage,
@@ -61,9 +63,9 @@ import {
   clearStoredAuthToken,
   getAppBootstrap,
   getApiMode,
-  getArtworkUrl,
   getHome,
   getItem,
+  getItemCredits,
   getItemMetadata,
   getItems,
   getLibraries,
@@ -448,9 +450,8 @@ function render(preserveScroll = true): void {
     ? homeFeaturePreview()
     : undefined;
   const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
-    && (state.selectedItem.backdrop_url || state.selectedItemMetadata?.matches.some((match) => Boolean(match.backdrop_url || match.cached_backdrop_path)))
-      ? getArtworkUrl(state.selectedItem.id, 'backdrop', state.selectedItem.artwork_updated_at)
-      : pageBackdropUrlForHomePreview(homeFeature);
+    ? itemArtwork(state.selectedItem).backdrop
+    : state.route.page === 'person' ? personBackdropUrl() : pageBackdropUrlForHomePreview(homeFeature);
   const railCollapsed = isRailCollapsed();
   const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? ' home-page-backdrop'
@@ -494,6 +495,7 @@ function prepareRouteState(route: AppRoute, showLoading: boolean): void {
   }
   if (route.page === 'item' && state.selectedItem?.id !== route.itemId) {
     state.selectedItem = undefined;
+    state.itemCredits = undefined;
     state.selectedItemMetadata = undefined;
     state.selectedPlayback = undefined;
     state.itemManagementOpen = false;
@@ -502,6 +504,7 @@ function prepareRouteState(route: AppRoute, showLoading: boolean): void {
     state.libraryItems = [];
     state.metadataSearchResults = [];
     state.metadataSearchQuery = '';
+    state.metadataSearchArtist = undefined;
     state.metadataSearchYear = '';
     state.metadataSearchLanguage = '';
     state.metadataSearchProviders = [];
@@ -573,6 +576,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.settingsResponse = undefined;
       state.logsResponse = undefined;
       state.selectedItem = undefined;
+      state.itemCredits = undefined;
       state.selectedItemMetadata = undefined;
       state.selectedPerson = undefined;
       state.selectedPlayback = undefined;
@@ -661,6 +665,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     libraryItems: state.libraryItems,
     selectedItem: state.selectedItem,
     selectedItemMetadata: state.selectedItemMetadata,
+    itemCredits: state.itemCredits,
   });
   const [activitiesResponse, libraries, item, metadata] = await Promise.all([
     canManageServer() ? getSystemActivities() : Promise.resolve({ activities: [] }),
@@ -671,9 +676,10 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
   if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
   }
-  const [home, libraryItems] = await Promise.all([
+  const [home, libraryItems, credits] = await Promise.all([
     getHome(item.library_id),
     getItems(item.library_id),
+    item.item_type === 'artist' ? getItemCredits(itemId) : Promise.resolve(undefined),
   ]);
   if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
@@ -685,6 +691,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
   state.libraryItems = libraryItems;
   state.selectedItem = item;
   state.selectedItemMetadata = metadata;
+  state.itemCredits = credits ? { itemId, loading: false, credits } : undefined;
   state.error = undefined;
   return previousSnapshot !== snapshotJson({
     systemActivities: state.systemActivities,
@@ -693,6 +700,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     libraryItems: state.libraryItems,
     selectedItem: state.selectedItem,
     selectedItemMetadata: state.selectedItemMetadata,
+    itemCredits: state.itemCredits,
   }) || previousError !== state.error;
 }
 

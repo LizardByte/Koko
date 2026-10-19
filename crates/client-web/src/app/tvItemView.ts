@@ -3,6 +3,7 @@ import { escapeHtml, formatDuration } from './format';
 import { renderItemCard, renderMetadataRefreshBadge, renderWatchProgress } from './homeView';
 import { renderRating } from './ratingView';
 import { state } from './state';
+import { heroPresentation } from './hierarchy';
 import { renderButtonContent, renderIcon } from './ui';
 
 export function episodeCode(item: { season_number?: number | null; episode_number?: number | null }): string {
@@ -21,24 +22,24 @@ export function itemArtwork(item: MediaItemDetail): { poster?: string; logo?: st
   const isSeason = item.item_type === 'season';
   const coverRevision = item.artwork_updated_at ?? (isSeason ? show?.artwork_updated_at : undefined);
   const poster = item.poster_url || isSeason ? getArtworkUrl(item.id, 'poster', coverRevision) : undefined;
-  const logoItem = show?.logo_url ? show : item;
-  const logo = logoItem.logo_url ? getArtworkUrl(logoItem.id, 'logo', logoItem.artwork_updated_at) : undefined;
+  const inherited = heroPresentation(item, state.libraryItems);
+  const logo = inherited.logo ? getArtworkUrl(inherited.logo.id, 'logo', inherited.logo.artwork_updated_at) : undefined;
   const metadataBackdrop = state.selectedItemMetadata?.item_id === item.id
     && state.selectedItemMetadata.matches.some((match) => match.backdrop_url || match.cached_backdrop_path);
   let backdropItem: MediaItemSummary | undefined = item.backdrop_url || metadataBackdrop ? item : undefined;
-  backdropItem ??= [...item.hierarchy].reverse().find((ancestor) => ancestor.backdrop_url);
+  backdropItem ??= inherited.backdrop;
   return { poster, logo, backdrop: backdropItem ? getArtworkUrl(backdropItem.id, 'backdrop', backdropItem.artwork_updated_at) : undefined };
 }
 
 /** Keep the series identity visible alongside the season or episode's specific title. */
 export function renderTvTitle(item: MediaItemDetail, logo?: string): string {
-  const show = showForItem(item);
+  const identity = heroPresentation(item, state.libraryItems).identity;
   const episodeTitle = [episodeCode(item), item.display_title].filter(Boolean).join(' · ');
-  const title = show?.display_title ?? (item.item_type === 'episode' ? episodeTitle : item.display_title);
+  const title = identity.id !== item.id ? identity.display_title : (item.item_type === 'episode' ? episodeTitle : item.display_title);
   const heading = logo
     ? `<img class="item-title-logo" src="${escapeHtml(logo)}" alt="${escapeHtml(title)}" />`
     : `<h2 class="item-title-fallback">${escapeHtml(title)}</h2>`;
-  if (!show || !['season', 'episode'].includes(item.item_type)) return heading;
+  if (identity.id === item.id) return heading;
   const context = item.item_type === 'episode' ? episodeTitle : item.display_title;
   return `${heading}<h2 class="item-context-title">${escapeHtml(context)}</h2>`;
 }

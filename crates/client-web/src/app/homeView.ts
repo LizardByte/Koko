@@ -8,6 +8,7 @@ import { renderLoadingCards, renderLoadingDetail } from './loadingView';
 import { currentThemeSongYouTubeTarget } from './mediaTargets';
 import { playbackProgressPercent } from './playbackProgress';
 import { state } from './state';
+import { heroPresentation } from './hierarchy';
 import { canManageServer } from './auth';
 import type { BrowseFilter, HomeBrowseTab } from './types';
 import {
@@ -19,6 +20,7 @@ import {
   collectionSummaries,
   filteredTopLevelLibraryItems,
   homeFeaturePreview,
+  homePreviewItemsById,
   itemsForCollection,
   pageBackdropUrlForCollection,
   pageBackdropUrlForItem,
@@ -497,8 +499,9 @@ function renderCollectionFeature(collection: MediaCollectionSummary): string {
 }
 
 function renderItemFeature(item: MediaItemSummary): string {
+  const { identity, logo } = heroPresentation(item, [...homePreviewItemsById().values()]);
   const backdropUrl = pageBackdropUrlForItem(item);
-  const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
+  const logoUrl = logo ? getArtworkUrl(logo.id, 'logo', logo.artwork_updated_at) : undefined;
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
   const overview = item.overview?.trim();
 
@@ -506,8 +509,9 @@ function renderItemFeature(item: MediaItemSummary): string {
     <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
       <div class="home-feature-copy">
         ${logoUrl
-          ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
-          : `<h2>${escapeHtml(item.display_title)}</h2>`}
+          ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(identity.display_title)}" />`
+          : `<h2>${escapeHtml(identity.display_title)}</h2>`}
+        ${identity.id !== item.id ? `<p class="home-feature-context">${escapeHtml(item.display_title)}</p>` : ''}
         ${overview ? `<p>${escapeHtml(overview)}</p>` : ''}
         <div class="hero-meta-row">
           ${genreMarkup}

@@ -32,6 +32,100 @@ use koko::metadata::{
 
 struct MusicLibrary(PathBuf);
 
+#[test]
+fn continue_listening_groups_albums_and_resumes_the_latest_track_for_each_user() {
+    let fixture = MusicLibrary::new();
+    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    koko::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+    diesel::sql_query(
+        "INSERT INTO users (id,username,password,admin) VALUES \
+         (1,'alice','hash',1),(2,'bob','hash',1)",
+    )
+    .execute(&mut conn)
+    .unwrap();
+    let library = MediaLibrarySettings {
+        name: "Music".into(),
+        path: fixture.0.to_string_lossy().into(),
+        kind: MediaLibraryKind::Music,
+        recursive: true,
+        ..Default::default()
+    };
+    sync_library_catalog(
+        &mut conn,
+        &[library],
+        &FfmpegSettings {
+            ffprobe_path: "missing-test-ffprobe".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let items = list_media_items(&mut conn, None).unwrap();
+    let album = items.iter().find(|item| item.item_type == "album").unwrap();
+    let detail = get_media_item(&mut conn, album.id, "").unwrap().unwrap();
+    let first = detail.children[0].id;
+    let second = detail.children[1].id;
+    koko::media::upsert_playback_progress(&mut conn, 1, first, 5000, Some(120000), false).unwrap();
+    let home = koko::media::get_media_home(&mut conn, Some(1), Some(album.library_id)).unwrap();
+    assert_eq!(home.shelves[0].title, "Continue listening");
+    assert_eq!(home.shelves[0].items.len(), 1);
+    assert_eq!(home.shelves[0].items[0].id, album.id);
+    assert_eq!(home.shelves[0].items[0].item_type, "album");
+    assert!(
+        !koko::media::get_media_home(&mut conn, Some(2), None)
+            .unwrap()
+            .shelves[0]
+            .items
+            .iter()
+            .any(|item| item.id == album.id)
+    );
+    let mut detail = detail;
+    koko::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    let target = detail.playback_target.unwrap();
+    assert_eq!((target.item_id, target.start_ms), (first, 5000));
+    assert_eq!(target.label, "Continue album");
+    koko::media::upsert_playback_progress(&mut conn, 1, first, 120000, Some(120000), true).unwrap();
+    let mut detail = get_media_item(&mut conn, album.id, "").unwrap().unwrap();
+    koko::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    let target = detail.playback_target.unwrap();
+    assert_eq!((target.item_id, target.start_ms), (second, 0));
+    koko::media::upsert_playback_progress(&mut conn, 1, second, 18000, Some(120000), false)
+        .unwrap();
+    // The most recent track wins even if an older track still has unfinished progress.
+    diesel::sql_query("UPDATE playback_progress SET updated_at=1 WHERE media_item_id=?")
+        .bind::<sql_types::Integer, _>(first)
+        .execute(&mut conn)
+        .unwrap();
+    let mut detail = get_media_item(&mut conn, album.id, "").unwrap().unwrap();
+    koko::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    let target = detail.playback_target.unwrap();
+    assert_eq!((target.item_id, target.start_ms), (second, 18000));
+    assert_eq!(
+        koko::media::get_media_home(&mut conn, Some(1), None)
+            .unwrap()
+            .shelves[0]
+            .items
+            .len(),
+        1
+    );
+    koko::media::upsert_playback_progress(&mut conn, 1, second, 120000, Some(120000), true)
+        .unwrap();
+    assert!(
+        koko::media::get_media_home(&mut conn, Some(1), None)
+            .unwrap()
+            .shelves[0]
+            .items
+            .is_empty()
+    );
+    // Missing tracks never become resume targets.
+    diesel::sql_query("UPDATE media_items SET missing_since=1 WHERE id=?")
+        .bind::<sql_types::Integer, _>(second)
+        .execute(&mut conn)
+        .unwrap();
+    let mut detail = get_media_item(&mut conn, album.id, "").unwrap().unwrap();
+    koko::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    assert!(detail.playback_target.is_none());
+}
+
 impl MusicLibrary {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(

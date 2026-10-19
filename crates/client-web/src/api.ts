@@ -15,6 +15,7 @@ import {
   getMockUsers,
   getMockPlayback,
   getMockPerson,
+  getMockItemCredits,
   getMockSystemActivities,
   refreshMockLibraryMetadata,
   refreshMockItemMetadata,
@@ -380,6 +381,9 @@ export interface MetadataPersonItemCredit {
 export interface MetadataPersonResponse {
   person: MetadataPersonSummary;
   credits: MetadataPersonItemCredit[];
+  artists?: MediaItemSummary[];
+  albums?: MediaItemSummary[];
+  groups?: MetadataPersonItemCredit[];
 }
 
 export interface ItemMetadataResponse {
@@ -835,6 +839,7 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
     return searchMockItemMetadata(
       Number(itemMetadataSearchMatch[1]),
       url.searchParams.get('query') ?? undefined,
+      url.searchParams.get('artist') ?? undefined,
     ) as T;
   }
 
@@ -857,6 +862,9 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
   if (personMatch) {
     return getMockPerson(Number(personMatch[1])) as T;
   }
+
+  const creditsMatch = /^\/api\/v1\/items\/(\d+)\/credits$/.exec(url.pathname);
+  if (creditsMatch) return getMockItemCredits(Number(creditsMatch[1])) as T;
 
   const filesMatch = /^\/api\/v1\/items\/(\d+)\/files$/.exec(url.pathname);
   if (filesMatch) {
@@ -1188,6 +1196,10 @@ export function getItemMetadata(itemId: number): Promise<ItemMetadataResponse> {
   return requestJson<ItemMetadataResponse>('GET', `/api/v1/items/${itemId}/metadata`);
 }
 
+export function getItemCredits(itemId: number): Promise<MetadataPersonItemCredit[]> {
+  return requestJson<MetadataPersonItemCredit[]>('GET', `/api/v1/items/${itemId}/credits`);
+}
+
 export function getPerson(personId: number): Promise<MetadataPersonResponse> {
   return requestJson<MetadataPersonResponse>('GET', `/api/v1/people/${personId}`);
 }
@@ -1198,6 +1210,7 @@ export function getPersonImageUrl(personId: number): string {
 
 export interface MetadataSearchOptions {
   query?: string;
+  artist?: string;
   providers?: string[];
   year?: string;
   language?: string;
@@ -1209,6 +1222,7 @@ export function searchItemMetadata(itemId: number, options?: string | MetadataSe
   if (normalizedOptions?.query?.trim()) {
     params.set('query', normalizedOptions.query.trim());
   }
+  if (normalizedOptions?.artist !== undefined) params.set('artist', normalizedOptions.artist.trim());
   if (normalizedOptions?.providers?.length) {
     params.set('providers', normalizedOptions.providers.join(','));
   }

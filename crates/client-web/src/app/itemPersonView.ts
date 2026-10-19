@@ -1,3 +1,4 @@
+import { itemLineage } from './hierarchy';
 import { renderAlbumTracks } from './music';
 import { renderItemSources } from './itemSources';
 /** Renders item detail, metadata search, person detail, and credit trays. */
@@ -11,7 +12,7 @@ import type {
   MetadataPersonItemCredit,
   MetadataProviderStatus,
 } from '../api';
-import { getPersonImageUrl, resolveApiUrl } from '../api';
+import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { normalizedMetadataLanguages } from './formUtils';
 import { extractYouTubeVideoId } from './youtube';
@@ -110,6 +111,15 @@ export function defaultMetadataSearchProviderIds(): string[] {
 export function selectedItemDefaultMetadataTitle(): string {
   return state.selectedItem?.display_title.trim()
     || state.selectedItemMetadata?.matches[0]?.title?.trim()
+    || '';
+}
+
+export function selectedItemDefaultMetadataArtist(): string {
+  const item = state.selectedItem;
+  if (item?.item_type !== 'album') return '';
+  return itemLineage(item, state.libraryItems).find((ancestor) => ancestor.item_type === 'artist')?.display_title.trim()
+    || item.music?.album_artist?.trim()
+    || item.music?.artist?.trim()
     || '';
 }
 
@@ -271,6 +281,9 @@ export function renderPersonCredit(person: ItemMetadataPerson): string {
     imageUrl = getPersonImageUrl(person.person_id);
   } else if (person.image_url) {
     imageUrl = resolveApiUrl(person.image_url);
+  } else if (person.department === 'Artists' && state.selectedItem?.item_type === 'artist') {
+    // A solo artist's self-credit is the same identity; group members are separate people.
+    imageUrl = getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at);
   }
   const subtitle = person.character_name || person.role || person.department || '';
   return `
@@ -290,9 +303,13 @@ export function renderPeopleRail(): string {
     return '';
   }
 
-  const cast = people.filter(isCastCredit);
-  const crew = people.filter((person) => !isCastCredit(person));
-  return renderPeopleRow('Cast', cast, 'people') + renderPeopleRow('Crew', crew, 'crew');
+  const members = people.filter((person) => person.department === 'Members');
+  const artists = people.filter((person) => person.department === 'Artists');
+  const screenPeople = people.filter((person) => !['Members', 'Artists'].includes(person.department ?? ''));
+  const cast = screenPeople.filter(isCastCredit);
+  const crew = screenPeople.filter((person) => !isCastCredit(person));
+  return renderPeopleRow('People', artists, 'artists') + renderPeopleRow('Members', members, 'members')
+    + renderPeopleRow('Cast', cast, 'people') + renderPeopleRow('Crew', crew, 'crew');
 }
 
 /** Cast and crew share single rows of complete cards and separate navigation sections. */
@@ -560,7 +577,7 @@ export function renderPersonPage(): string {
 
   return `
     <section class="item-page person-page">
-      <section class="item-hero person-hero" data-nav-section="person-overview" data-nav-label="About ${escapeHtml(response.person.name)}">
+      <section class="item-hero person-hero ${personImageUrl ? '' : 'person-hero-without-photo'}" data-nav-section="person-overview" data-nav-label="About ${escapeHtml(response.person.name)}">
         <div class="detail-art item-poster person-poster ${personImageUrl ? 'has-image' : ''}">
           ${personImageUrl ? `<img src="${escapeHtml(personImageUrl)}" alt="${escapeHtml(response.person.name)}" />` : `<span>${escapeHtml(response.person.name.slice(0, 1).toUpperCase())}</span>`}
         </div>
@@ -568,7 +585,8 @@ export function renderPersonPage(): string {
           <h2 class="item-title-fallback">${escapeHtml(response.person.name)}</h2>
           <div class="hero-meta-row">
             <span class="tag">${escapeHtml(providerDisplayName(response.person.provider_id))}</span>
-            <span class="tag">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
+            ${credits.length ? `<span class="tag">${creditGroups.length} screen title${creditGroups.length === 1 ? '' : 's'}</span>` : ''}
+            ${response.albums?.length ? `<span class="tag">${response.albums.length} album${response.albums.length === 1 ? '' : 's'}</span>` : ''}
             ${response.person.birthday ? `<span class="tag">${escapeHtml([formatPersonDate(response.person.birthday), age].filter(Boolean).join(' · '))}</span>` : ''}
             ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
           </div>
@@ -582,22 +600,42 @@ export function renderPersonPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
+      ${response.albums?.length ? `
+        <section class="panel page-panel item-section" data-nav-section="music-credits" data-nav-label="Albums in your libraries">
+          <div class="section-heading"><h3>Albums in your libraries</h3></div>
+          <div class="item-grid hierarchy-item-grid">${response.albums.map(renderItemCard).join('')}</div>
+        </section>` : ''}
+
+      ${response.groups?.length ? `
+        <section class="panel page-panel item-section" data-nav-section="group-memberships" data-nav-label="Groups in your libraries">
+          <div class="section-heading"><h3>Groups in your libraries</h3></div>
+          <div class="item-grid hierarchy-item-grid">${response.groups.map((entry) => `<article class="music-membership-card">${renderItemCard(entry.item)}<p class="muted">${escapeHtml(entry.credit.role ?? 'Member')}</p></article>`).join('')}</div>
+        </section>` : ''}
+
+      ${credits.length ? `<section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
         <div class="section-heading section-heading-actions">
           <h3>Credits</h3>
           <span class="muted">${creditGroups.length} title${creditGroups.length === 1 ? '' : 's'}</span>
         </div>
         ${credits.length
           ? `<div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>`
-          : '<div class="empty-state tight">No linked items are stored for this person yet.</div>'}
-      </section>
+          : '<div class="empty-state tight">No matching screen credits are in your libraries.</div>'}
+      </section>` : ''}
     </section>
   `;
 }
 
 function personPortraitUrl(person: NonNullable<typeof state.selectedPerson>['person']): string | undefined {
   if (person.cached_image_path) return getPersonImageUrl(person.id);
-  return person.image_url ? resolveApiUrl(person.image_url) : undefined;
+  if (person.image_url) return resolveApiUrl(person.image_url);
+  const artist = state.selectedPerson?.artists?.find((item) => item.artwork_updated_at != null);
+  return artist ? getArtworkUrl(artist.id, 'poster', artist.artwork_updated_at) : undefined;
+}
+
+/** Artwork from an identity-linked artist also belongs on the person's music profile. */
+export function personBackdropUrl(): string | undefined {
+  const artist = state.selectedPerson?.artists?.find((item) => item.backdrop_url);
+  return artist ? getArtworkUrl(artist.id, 'backdrop', artist.artwork_updated_at) : undefined;
 }
 
 export function directGridChildren(grid: HTMLElement, selector: string): HTMLElement[] {
@@ -754,9 +792,7 @@ export function bindPersonCreditTrays(): void {
 }
 
 function selectedItemOverview(item: MediaItemDetail): string {
-  return item.overview
-    ?? state.selectedItemMetadata?.matches[0]?.overview
-    ?? 'No description is stored for this item yet.';
+  return item.overview?.trim() || state.selectedItemMetadata?.matches[0]?.overview?.trim() || '';
 }
 
 function selectedItemChildSectionTitle(item: MediaItemDetail): string {
@@ -860,7 +896,7 @@ function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTa
   if (!canResume) return '';
   const restartButton = item.playable
     ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over')
-    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent('Restart episode', 'rotate-ccw')}</button>`;
+    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent(item.item_type === 'album' ? 'Restart track' : 'Restart episode', 'rotate-ccw')}</button>`;
   return `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
     <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
       ${restartButton}
@@ -887,7 +923,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <div class="item-bar-identity" data-sticky-identity hidden>
               ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
             </div>
-            ${item.item_type === 'album' && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : ''}
+            ${item.item_type === 'album' && !playbackTarget && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : ''}
             ${renderResumeButton(item, resumeMs)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
             ${playbackTarget ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
@@ -897,6 +933,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
               <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
               <div class="item-more-menu">
+                ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
                 ${resumeMs > 0 || item.item_type === 'episode' ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over', true) : ''}
                 ${tvTargets.map((target) => renderPlaybackTargetButton(target, true, { id: target.label === 'Restart show' ? 'restart-show' : 'restart-season' })).join('')}
                 ${!tvTargets.length && restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true, { id: 'item-start-over' }) : ''}
@@ -1050,6 +1087,7 @@ function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
   return `
               <form id="metadata-search-form" class="metadata-search-form">
                 <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
+                ${state.selectedItem?.item_type === 'album' ? `<label for="metadata-search-artist">Artist / group</label><input id="metadata-search-artist" name="metadataSearchArtist" type="text" value="${escapeHtml(state.metadataSearchArtist ?? selectedItemDefaultMetadataArtist())}" placeholder="Artist / group" autocomplete="off" />` : ''}
                 <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
                 <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
                 ${renderMetadataSearchProviderControls()}
@@ -1090,8 +1128,22 @@ function renderSelectedItemSupportGrid(
   `;
 }
 
+function renderArtistScreenCredits(item: MediaItemDetail): string {
+  if (item.item_type !== 'artist') return '';
+  const response = state.itemCredits?.itemId === item.id ? state.itemCredits : undefined;
+  const groups = personCreditGroups(response?.credits ?? []);
+  return `<section class="panel page-panel item-section" data-nav-section="screen-credits" data-nav-label="Movies and shows">
+    <div class="section-heading section-heading-actions"><h3>Movies and shows</h3><span class="muted">${groups.length} title${groups.length === 1 ? '' : 's'}</span></div>
+    ${!response || response.loading ? '<div class="empty-state tight" role="status">Loading screen credits…</div>'
+      : response.error ? `<div class="empty-state tight" role="alert">Unable to load screen credits: ${escapeHtml(response.error)}</div>`
+        : groups.length ? `<div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>`
+          : '<div class="empty-state tight">No matching movies or shows are in your libraries.</div>'}
+  </section>`;
+}
+
 function renderSelectedItemPage(item: MediaItemDetail): string {
   const artwork = itemArtwork(item);
+  const overview = selectedItemOverview(item);
   const trailerOptions = currentTrailerOptions();
   const hasMultipleTrailers = trailerOptions.length > 1;
   const supportsManualLinking = canManuallyLinkMetadata(item);
@@ -1127,12 +1179,13 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
         ${actionsMarkup}
         ${renderSeasonTabs(item)}
       </div>
-      <section class="item-description-section" data-nav-section="description" data-nav-label="Description">
-        ${renderCollapsibleText(selectedItemOverview(item), `item-overview:${item.id}`, 'hero-description', true)}
-      </section>
+      ${overview ? `<section class="item-description-section" data-nav-section="description" data-nav-label="Description">
+        ${renderCollapsibleText(overview, `item-overview:${item.id}`, 'hero-description', true)}
+      </section>` : ''}
       <div class="item-support-content" id="item-support-content">
       ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
       ${renderSelectedItemChildrenSection(item)}
+      ${renderArtistScreenCredits(item)}
 
       ${renderItemExtrasRail()}
 

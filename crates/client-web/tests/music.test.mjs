@@ -9,7 +9,8 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { orderedAlbumTracks, albumPlaybackQueue, renderAlbumTracks } = await server.ssrLoadModule('/src/app/music.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
-const { renderItemPage } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
+const { renderItemPage, selectedItemDefaultMetadataArtist } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
+const { searchItemMetadata } = await server.ssrLoadModule('/src/api.ts');
 const { canManuallyLinkMetadata } = await server.ssrLoadModule('/src/app/selectors.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
 
@@ -48,6 +49,47 @@ test('music detail pages expose album playback, track rows, artist albums, and m
   assert.match(renderItemPage(), /<h3>Albums<\/h3>/);
 });
 
+
+test('album matching defaults the editable artist field from the parent and preserves edited or empty values', () => {
+  const original = { ...state };
+  const parent = { ...mock.getMockItem(301), display_title: 'Parent <group>' };
+  const album = { ...mock.getMockItem(302), hierarchy: [parent], music: { album_artist: 'Old folder name' } };
+  try {
+    Object.assign(state, {
+      bootstrap: { current_user: { id: 1, admin: true } }, route: { page: 'item', itemId: album.id },
+      selectedItem: album, selectedItemMetadata: undefined, metadataSearchArtist: undefined,
+      libraries: mock.getMockLibraries(), metadataProviders: mock.getMockMetadataProviders(),
+      libraryItems: [], itemManagementOpen: true,
+    });
+    assert.equal(selectedItemDefaultMetadataArtist(), 'Parent <group>');
+    assert.match(renderItemPage(), /id="metadata-search-artist"[^>]*value="Parent &lt;group&gt;"/);
+    state.metadataSearchArtist = 'Corrected & group';
+    assert.match(renderItemPage(), /id="metadata-search-artist"[^>]*value="Corrected &amp; group"/);
+    state.metadataSearchArtist = '';
+    assert.match(renderItemPage(), /id="metadata-search-artist"[^>]*value=""/);
+    state.selectedItem = { ...album, hierarchy: [] };
+    assert.equal(selectedItemDefaultMetadataArtist(), 'Old folder name');
+    state.selectedItem = mock.getMockItem(101);
+    assert.doesNotMatch(renderItemPage(), /id="metadata-search-artist"/);
+  } finally { Object.assign(state, original); }
+});
+
+test('album searches send the artist as its own encoded filter and allow clearing it', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(new URL(url, location.origin)); return new Response('[]', { headers: { 'content-type': 'application/json' } }); };
+  try {
+    await searchItemMetadata(302, { query: ' Live: Deluxe ', artist: ' AC/DC & Guests+ ', year: '2001', providers: ['musicbrainz'] });
+    assert.equal(requests[0].searchParams.get('query'), 'Live: Deluxe');
+    assert.equal(requests[0].searchParams.get('artist'), 'AC/DC & Guests+');
+    assert.equal(requests[0].searchParams.get('year'), '2001');
+    assert.equal(requests[0].searchParams.get('providers'), 'musicbrainz');
+    await searchItemMetadata(302, { query: 'Album', artist: '' });
+    assert.equal(requests[1].searchParams.get('artist'), '');
+    await searchItemMetadata(101, 'Movie');
+    assert.equal(requests[2].searchParams.has('artist'), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('music tag reading is opt-in for each library and is saved independently', async () => {
   const { renderSettingsPage, buildSettingsFromForm } = await server.ssrLoadModule('/src/app/settingsView.ts');

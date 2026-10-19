@@ -341,10 +341,10 @@ pub struct MediaItemSummary {
     pub missing_since: Option<i64>,
 }
 
-/// Episode target selected for container-level playback actions.
+/// Playable child selected for container-level playback actions.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct MediaPlaybackTarget {
-    /// Playable episode item identifier.
+    /// Playable episode or track item identifier.
     pub item_id: i32,
     /// Start position in milliseconds.
     pub start_ms: i64,
@@ -4346,11 +4346,11 @@ fn container_playback_progress(
     let Some(item) = load_media_item_row(conn, item_id)? else {
         return Ok(None);
     };
-    if !matches!(item.item_type.as_str(), "show" | "season") {
+    if !matches!(item.item_type.as_str(), "show" | "season" | "album") {
         return Ok(None);
     }
 
-    let episodes = playable_episode_targets(conn, &item)?;
+    let episodes = playable_container_targets(conn, &item)?;
     if episodes.is_empty() {
         return Ok(None);
     }
@@ -4433,7 +4433,7 @@ struct ContainerPlaybackTargets {
 }
 
 #[derive(Debug, Clone)]
-struct PlayableEpisodeTarget {
+struct PlayableContainerTarget {
     item: MediaItem,
     season_number: Option<i32>,
     episode_number: Option<i32>,
@@ -4444,11 +4444,14 @@ fn container_playback_targets(
     user_id: Option<i32>,
     item: &MediaItem,
 ) -> Result<ContainerPlaybackTargets, diesel::result::Error> {
+    if item.item_type == "album" {
+        return music::album_playback_targets(conn, user_id, item);
+    }
     if !matches!(item.item_type.as_str(), "show" | "season") {
         return Ok(ContainerPlaybackTargets::default());
     }
 
-    let episodes = playable_episode_targets(conn, item)?;
+    let episodes = playable_container_targets(conn, item)?;
     let Some(first_episode) = episodes.first() else {
         return Ok(ContainerPlaybackTargets::default());
     };
@@ -4460,7 +4463,7 @@ fn container_playback_targets(
     let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &episode_ids)?;
 
     let mut show_has_started = false;
-    let mut latest_resume: Option<(&PlayableEpisodeTarget, &PlaybackProgress, i64)> = None;
+    let mut latest_resume: Option<(&PlayableContainerTarget, &PlaybackProgress, i64)> = None;
     for episode in &episodes {
         let Some(progress) = progress_by_item_id.get(&episode.item.id) else {
             continue;
@@ -4519,7 +4522,7 @@ fn container_playback_targets(
 
 fn restart_playback_target(
     container: &MediaItem,
-    first_episode: &PlayableEpisodeTarget,
+    first_episode: &PlayableContainerTarget,
     primary: &MediaPlaybackTarget,
     show_has_started: bool,
 ) -> Option<MediaPlaybackTarget> {
@@ -4538,7 +4541,7 @@ fn restart_playback_target(
 }
 
 fn playback_target_from_episode(
-    episode: &PlayableEpisodeTarget,
+    episode: &PlayableContainerTarget,
     start_ms: i64,
     resume: bool,
     show_has_started: bool,
@@ -4592,13 +4595,49 @@ fn resumable_playback_position_ms(
     position_ms
 }
 
-fn playable_episode_targets(
+fn playable_container_targets(
     conn: &mut SqliteConnection,
     item: &MediaItem,
-) -> Result<Vec<PlayableEpisodeTarget>, diesel::result::Error> {
+) -> Result<Vec<PlayableContainerTarget>, diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let mut targets = match item.item_type.as_str() {
+        "album" => {
+            let mut tracks = media_items_dsl::media_items
+                .filter(media_items_dsl::parent_id.eq(item.id))
+                .filter(media_items_dsl::library_id.eq(item.library_id))
+                .filter(media_items_dsl::item_type.eq("track"))
+                .filter(media_items_dsl::playable.eq(true))
+                .filter(media_items_dsl::deleted_at.is_null())
+                .filter(media_items_dsl::missing_since.is_null())
+                .select(MediaItem::as_select())
+                .load::<MediaItem>(conn)?;
+            let music = music::load_items(
+                conn,
+                &tracks.iter().map(|track| track.id).collect::<Vec<_>>(),
+            )?;
+            tracks.sort_by(|left, right| {
+                let key = |track: &MediaItem| {
+                    let tags = music.get(&track.id).map(|(tags, _)| tags);
+                    (
+                        tags.and_then(|tags| tags.disc_number).unwrap_or(1),
+                        tags.and_then(|tags| tags.track_number).unwrap_or(i32::MAX),
+                    )
+                };
+                key(left)
+                    .cmp(&key(right))
+                    .then_with(|| left.display_title.cmp(&right.display_title))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            return Ok(tracks
+                .into_iter()
+                .map(|item| PlayableContainerTarget {
+                    item,
+                    season_number: None,
+                    episode_number: None,
+                })
+                .collect());
+        }
         "show" => {
             let seasons = media_items_dsl::media_items
                 .filter(media_items_dsl::parent_id.eq(item.id))
@@ -4625,7 +4664,7 @@ fn playable_episode_targets(
                 .select(MediaItem::as_select())
                 .load::<MediaItem>(conn)?
                 .into_iter()
-                .map(|episode| PlayableEpisodeTarget {
+                .map(|episode| PlayableContainerTarget {
                     season_number: episode.season_number.or_else(|| {
                         episode
                             .parent_id
@@ -4645,7 +4684,7 @@ fn playable_episode_targets(
             .select(MediaItem::as_select())
             .load::<MediaItem>(conn)?
             .into_iter()
-            .map(|episode| PlayableEpisodeTarget {
+            .map(|episode| PlayableContainerTarget {
                 season_number: episode.season_number.or(item.season_number),
                 episode_number: episode.episode_number,
                 item: episode,
@@ -4699,6 +4738,33 @@ fn get_continue_watching_items(
         let Some(row) = load_media_item_row(conn, progress.media_item_id)? else {
             continue;
         };
+
+        if row.item_type == "track" {
+            let Some(album) = row
+                .parent_id
+                .and_then(|id| visible_items_by_id.get(&id))
+                .filter(|album| album.item_type == "album" && album.missing_since.is_none())
+            else {
+                continue;
+            };
+            if !seen_continue_keys.insert(album.id) {
+                continue;
+            }
+            let Some(album_row) = load_media_item_row(conn, album.id)? else {
+                continue;
+            };
+            if progress.position_ms <= 0 && !progress.completed {
+                continue;
+            }
+            if music::album_playback_targets(conn, Some(user_id), &album_row)?
+                .primary
+                .is_some()
+                && (library_id.is_none() || Some(album.library_id) == library_id)
+            {
+                items.push(album.clone());
+            }
+            continue;
+        }
 
         if row.item_type == "episode" {
             let Some(episode) = visible_items_by_id.get(&row.id) else {

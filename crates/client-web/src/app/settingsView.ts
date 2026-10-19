@@ -184,6 +184,7 @@ function renderMetadataProviderOption(
               ${checked ? 'checked' : ''}
               ${secondaryAvailable ? '' : 'disabled'}
             />
+            ${renderProviderSettingsLogo(providerId, true)}
             ${escapeHtml(label)}
           </label>
           <span class="muted">${providerPriorityLabel}</span>
@@ -494,16 +495,20 @@ export function libraryScannerOptions(selectedScanner: string): string {
     .join('');
 }
 
-export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
-  const label = providerDisplayName(provider.id);
-  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
-  const logoUrl = providerAttributionLogo(provider.id);
-  const showApiKey = Boolean(status?.requires_api_key);
-  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
-  const logoMarkup = logoUrl ? `<span class="provider-settings-logo" aria-hidden="true">
+function renderProviderSettingsLogo(providerId: string, compact = false): string {
+  const logoUrl = providerAttributionLogo(providerId);
+  return logoUrl ? `<span class="provider-settings-logo${compact ? ' provider-source-logo' : ''}" aria-hidden="true">
     ${renderIcon('link-2', 'provider-logo-fallback')}
     <img data-provider-logo src="${escapeHtml(logoUrl)}" alt="" />
   </span>` : '';
+}
+
+export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
+  const label = providerDisplayName(provider.id);
+  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
+  const showApiKey = Boolean(status?.requires_api_key);
+  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
+  const logoMarkup = renderProviderSettingsLogo(provider.id);
   const providerRoleLabel = status?.role === 'secondary' ? 'Secondary' : 'Primary';
   const providerRoleTag = status?.role ? `<span class="tag">${escapeHtml(providerRoleLabel)}</span>` : '';
   const providerDescription = status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : '';

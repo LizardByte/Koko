@@ -33,9 +33,27 @@ When embedded tags are enabled, MusicBrainz identifiers can provide precise meta
 
 Without identifiers, Koko searches using titles and artist credits. Album matching also considers the total number of local tracks across all discs. Automatic matching requires a unique high-confidence result with the same track count; when several editions match but all belong to the same release group, Koko links that group without guessing a pressing. Ambiguous names and releases stay unmatched. An administrator can use the item's metadata management controls to select a MusicBrainz result manually; results show track counts, flag differences from the local album, and rank count matches higher. Incomplete albums can still be linked manually. Unlinking an artist or album clears its descendant metadata and prevents automatic relinking until an explicit rematch.
 
+Album metadata searches include an editable **Artist / group** field, initially filled from the parent artist's displayed name. Change it to search a different artist credit, or clear it for a title-only search. This search filter does not rename or rematch the parent artist.
+
 Open **Details and management → Source files** to inspect the server's full file paths, library folders, relative paths, original catalog titles, missing-file status, and available technical details. For artists, albums, series, and other groups, this includes files belonging to their children. Source files load on demand in pages, rather than adding large file lists to normal browsing responses. This panel is shared by all media types.
 
-MusicBrainz requests share a rate limit of at most one request per second, including retries. Large libraries can therefore take time to match. Existing metadata remains available while background work runs. See the [MusicBrainz API documentation](https://musicbrainz.org/doc/MusicBrainz_API) and [Cover Art Archive API](https://musicbrainz.org/doc/Cover_Art_Archive/API).
+The server uses the [`musicbrainz_rs`](https://crates.io/crates/musicbrainz_rs) client for MusicBrainz searches and lookups. MusicBrainz requests share a rate limit of at most one request per second, including retries. Large libraries can therefore take time to match. Existing metadata remains available while background work runs. See the [MusicBrainz API documentation](https://musicbrainz.org/doc/MusicBrainz_API) and [Cover Art Archive API](https://musicbrainz.org/doc/Cover_Art_Archive/API).
+
+## Movies and shows featuring a music artist
+
+An artist's **Movies and shows** section lists matching credits from your libraries. Shows expand into the credited seasons and episodes. Open a film or episode's cast or crew member to find their **Music in your libraries** section and return to the matching artist.
+
+Koko connects MusicBrainz artists with TMDB and TVDB people using shared registry identifiers such as IMDb and Wikidata, including connections through another provider. Names and shared social accounts are not sufficient to link people. Only items in libraries you can access are shown. This lists media in your collection, rather than a complete online filmography.
+
+Groups show a **Members** people row when MusicBrainz lists [band membership relationships](https://musicbrainz.org/relationship/5be4c609-9afa-4ea0-910b-12ffb71e3821); solo artists show a **People** row with the performer. Open a person to see their available details and individual screen credits. Members can include instrument/vocal roles, membership dates, former membership, and separate periods when someone rejoined. The person's **Groups in your libraries** section links back to their groups. Membership is a credit, so a member's screen appearances are not attributed to the group itself. MusicBrainz's community records may be incomplete, and unavailable member details do not prevent group metadata from refreshing.
+
+Person pages show albums from matching artists directly and reuse their available artist portraits and backgrounds. A member keeps their own portrait rather than borrowing the group's photo. Empty screen-credit sections are hidden.
+
+**Continue listening** groups tracks into one album card per user. Open the album and choose **Continue album** to resume the most recently played track at its saved position, followed by the remaining tracks in disc/track order. Finishing a track selects the next available track; finishing the final track removes the album from Continue listening. **Restart album** begins at the first available track. Shuffle queues are not currently supported.
+
+Album and track heroes inherit missing logos and backgrounds through the artist hierarchy while retaining their own title and cover. This same fallback also applies to seasons and episodes through their show hierarchy.
+
+Refresh existing artists' metadata once after upgrading to collect their MusicBrainz external links. Movies and shows also need stored person identifiers; refresh their metadata if those identifiers have not been collected yet. A normal file scan only processes new items.
 
 ## Fanart.tv artwork
 

@@ -31,6 +31,7 @@ beforeEach(() => {
   state.settingsResponse = getMockSettings();
   state.settingsCreation = undefined;
   state.metadataProviders = getMockMetadataProviders();
+  state.selectedItemMetadata = undefined;
   state.bootstrap = { current_user: { id: 1, username: 'admin', admin: true } };
   state.users = [state.bootstrap.current_user];
   state.isLoading = false;
@@ -351,6 +352,24 @@ test('provider ordering uses vertical arrows and logos include a fallback', () =
   state.metadataProviders[0].logo_dark_url = 'https://example.test/unavailable.svg';
   assert.match(renderSettingsPage(), /provider-logo-fallback/);
   assert.match(renderSettingsPage(), /data-provider-logo/);
+});
+
+test('library metadata sources show descriptor logos for existing and new libraries after viewing another media type', () => {
+  state.route = { page: 'settings', section: 'libraries' };
+  state.settingsCreation = 'libraries';
+  // Item-specific descriptors need not include the providers used by other libraries.
+  state.selectedItemMetadata = { item_id: 301, matches: [], providers: state.metadataProviders.filter((provider) => provider.id === 'musicbrainz') };
+  const html = renderSettingsPage();
+  for (const prefix of ['library_metadata_provider', 'existing_library_metadata_provider_0']) {
+    const label = [...html.matchAll(/<label class="checkbox-inline">([^]*?)<\/label>/g)]
+      .find((match) => match[1].includes(`name="${prefix}"`) && match[1].includes('value="tmdb"'))?.[1];
+    assert.ok(label, `Missing ${prefix} provider checkbox`);
+    assert.match(label, /provider-settings-logo provider-source-logo/);
+    assert.match(label, /data-provider-logo src="http:\/\/localhost\/assets\/providers\/tmdb.svg" alt=""/);
+    assert.match(label, /aria-hidden="true"/);
+  }
+  const music = metadataProviderCheckboxes('music', ['musicbrainz', 'fanart'], 'music');
+  for (const file of ['musicbrainz.svg', 'fanart.png']) assert.ok(music.includes(`/assets/providers/${file}`));
 });
 
 test('collapsed library cards retain the controls for every configured library', () => {

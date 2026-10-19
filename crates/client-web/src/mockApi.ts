@@ -13,6 +13,7 @@ import type {
   MediaItemDetail,
   MediaItemSources,
   MediaItemSummary,
+  MediaPlaybackTarget,
   MediaLibrary,
   MediaLibrarySettings,
   MediaSearchResult,
@@ -787,7 +788,10 @@ function metadataMatchesWithSecondaries(
 interface MockPlaybackProgress extends PlaybackProgressRequest {
   watch_count: number;
   last_watched_at?: number;
+  revision?: number;
 }
+
+let mockPlaybackRevision = 0;
 
 const playbackProgress = new Map<string, MockPlaybackProgress>();
 playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false, watch_count: 0 });
@@ -1196,23 +1200,40 @@ export function getMockItemSources(itemId: number, offset = 0, limit = 25): Medi
 
 export function getMockItem(itemId: number): MediaItemDetail | undefined {
   const item = items.find((item) => item.id === itemId);
-  return item ? applyMockPlaybackProgress(item) : undefined;
+  if (!item) return undefined;
+  const result = applyMockPlaybackProgress(item);
+  return item.item_type === 'album' ? { ...result, playback_target: mockAlbumPlaybackTarget(item.id) } : result;
+}
+
+function mockAlbumPlaybackTarget(albumId: number): MediaPlaybackTarget | undefined {
+  const tracks = items.filter((item) => item.parent_id === albumId && item.item_type === 'track' && item.playable && !item.missing_since)
+    .sort((left, right) => (left.music?.disc_number ?? 1) - (right.music?.disc_number ?? 1)
+      || (left.music?.track_number ?? Number.MAX_SAFE_INTEGER) - (right.music?.track_number ?? Number.MAX_SAFE_INTEGER) || left.id - right.id);
+  const userId = activeMockUserId();
+  const latest = tracks.map((track, index) => ({ index, progress: playbackProgress.get(`${userId}:${track.id}`) }))
+    .filter((entry) => entry.progress && (entry.progress.position_ms > 0 || entry.progress.completed))
+    .sort((left, right) => (right.progress?.revision ?? 0) - (left.progress?.revision ?? 0))[0];
+  const target = tracks[latest ? latest.index + (latest.progress?.completed ? 1 : 0) : 0];
+  return target ? { item_id: target.id, start_ms: latest && !latest.progress?.completed ? latest.progress?.position_ms ?? 0 : 0,
+    label: latest ? 'Continue album' : 'Play album', display_title: target.display_title, resume: Boolean(latest && !latest.progress?.completed) } : undefined;
 }
 
 export function getMockItemMetadata(itemId: number): ItemMetadataResponse | undefined {
-  return itemMetadata[itemId];
+  if (itemMetadata[itemId]) return itemMetadata[itemId];
+  const item = getMockItem(itemId);
+  if (!item) return undefined;
+  const kind = libraries.find((library) => library.id === item.library_id)?.kind;
+  return { item_id: itemId, providers: metadataProviders.filter((provider) => kind && provider.supported_kinds.includes(kind)), matches: [] };
 }
 
-export function searchMockItemMetadata(itemId: number, query?: string): MetadataSearchResult[] {
+export function searchMockItemMetadata(itemId: number, query?: string, artist?: string): MetadataSearchResult[] {
   const results = metadataSearchResults[itemId] ?? [];
   const normalized = query?.trim().toLowerCase();
-  if (!normalized) {
-    return [...results];
-  }
+  const artistQuery = getMockItem(itemId)?.item_type === 'album' ? artist?.trim().toLowerCase() : undefined;
 
   return results.filter((result) => {
-    return result.title.toLowerCase().includes(normalized)
-      || result.overview?.toLowerCase().includes(normalized);
+    return (!normalized || result.title.toLowerCase().includes(normalized) || result.overview?.toLowerCase().includes(normalized))
+      && (!artistQuery || result.overview?.toLowerCase().includes(artistQuery));
   });
 }
 
@@ -1256,11 +1277,19 @@ export function getMockHome(libraryId?: number): MediaHome {
   let continueTitle = 'Continue watching';
   if (kind === 'music') continueTitle = 'Continue listening';
   else if (kind === 'books') continueTitle = 'Continue reading';
-  const continueWatching = filteredItems.filter((item) => {
+  const continueItems = filteredItems.filter((item) => {
     const userId = activeMockUserId();
     const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
     return Boolean(progress && !progress.completed && progress.position_ms > 0);
   });
+  const continueWatching = [...new Map(continueItems.flatMap((item) => {
+    if (item.item_type !== 'track') return [[item.id, item] as const];
+    const album = filteredItems.find((entry) => entry.id === item.parent_id && entry.item_type === 'album');
+    return album && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album' ? [[album.id, album] as const] : [];
+  })).values()];
+  for (const album of filteredItems.filter((entry) => entry.item_type === 'album')) {
+    if (!continueWatching.some((item) => item.id === album.id) && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album') continueWatching.push(album);
+  }
   const recentlyAdded = [...filteredItems].sort((left, right) => (right.modified_at ?? 0) - (left.modified_at ?? 0));
   const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
 
@@ -1469,6 +1498,7 @@ export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProg
     const completedTransition = payload.completed && !existing?.completed;
     playbackProgress.set(key, {
       ...payload,
+      revision: ++mockPlaybackRevision,
       watch_count: (existing?.watch_count ?? 0) + (completedTransition ? 1 : 0),
       last_watched_at: completedTransition
         ? Math.floor(Date.now() / 1000)
@@ -1641,7 +1671,13 @@ export function getMockPerson(personId: number): MetadataPersonResponse {
       image_url: personCredit.image_url,
     },
     credits,
+    artists: personId === 1 ? [artist] : [],
+    albums: personId === 1 ? items.filter((item) => item.item_type === 'album' && item.parent_id === artist.id) : [],
   };
+}
+
+export function getMockItemCredits(itemId: number): MetadataPersonResponse['credits'] {
+  return itemId === artist.id ? getMockPerson(1).credits : [];
 }
 
 export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {

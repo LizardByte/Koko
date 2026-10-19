@@ -1,13 +1,14 @@
 //! MusicBrainz artist, release, and recording metadata.
 
 mod artist;
+mod client;
+mod external_ids;
+mod members;
 
+#[cfg(test)]
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
 use serde::Deserialize;
-use tokio::sync::Mutex;
-use tokio::time::Instant;
 
 use super::*;
 use crate::media::{
@@ -15,18 +16,10 @@ use crate::media::{
     valid_mbid,
 };
 
-static NEXT_REQUEST: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
-const API_ROOT: &str = "https://musicbrainz.org/ws/2";
 #[cfg(test)]
 tokio::task_local! {
     static TEST_API_ROOT: String;
 }
-const USER_AGENT: &str = concat!(
-    "Koko/",
-    env!("CARGO_PKG_VERSION"),
-    " (https://github.com/LizardByte/Koko)"
-);
-
 /// MusicBrainz's read-only provider; public lookups do not need credentials.
 pub(super) struct MusicBrainzMetadataProvider;
 
@@ -42,6 +35,7 @@ struct Entity {
     country: Option<String>,
     score: Option<u32>,
     track_count: Option<u32>,
+    length: Option<i64>,
     media: Vec<Medium>,
     artist_credit: Vec<ArtistCredit>,
     genres: Vec<Genre>,
@@ -49,6 +43,9 @@ struct Entity {
     release_group: Option<ReleaseGroup>,
     #[serde(flatten)]
     artist_details: artist::ArtistDetails,
+    relations: Vec<external_ids::Relation>,
+    #[serde(rename = "koko-members")]
+    members: Vec<members::Member>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,78 +166,12 @@ fn entity_type(media_type: &str) -> Result<&'static str, String> {
     }
 }
 
-async fn request(url: reqwest::Url) -> Result<serde_json::Value, String> {
-    // One gate covers automatic jobs, manual searches, refreshes, and retries.
-    let mut next = NEXT_REQUEST.lock().await;
-    for attempt in 0..3 {
-        if let Some(deadline) = *next {
-            tokio::time::sleep_until(deadline).await;
-        }
-        *next = Some(Instant::now() + Duration::from_millis(1100));
-        let response = crate::metadata::http::client()
-            .get(url.clone())
-            .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .send()
-            .await
-            .map_err(|error| format!("MusicBrainz request failed: {error}"))?;
-        let status = response.status();
-        if attempt < 2 && matches!(status.as_u16(), 429 | 503) {
-            let delay = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(2)
-                .clamp(1, 60);
-            *next = Some(Instant::now() + Duration::from_secs(delay));
-            continue;
-        }
-        return response
-            .error_for_status()
-            .map_err(|error| format!("MusicBrainz request failed: {error}"))?
-            .json()
-            .await
-            .map_err(|error| format!("Invalid MusicBrainz response: {error}"));
-    }
-    unreachable!()
-}
-
-fn query_url(
-    entity: &str,
-    id: Option<&str>,
-    parameters: &[(&str, &str)],
-) -> reqwest::Url {
-    #[cfg(test)]
-    let api_root = TEST_API_ROOT
-        .try_with(Clone::clone)
-        .unwrap_or_else(|_| API_ROOT.into());
-    #[cfg(not(test))]
-    let api_root = API_ROOT;
-    let mut url = reqwest::Url::parse(&format!(
-        "{api_root}/{entity}{}",
-        id.map(|id| format!("/{id}")).unwrap_or_default()
-    ))
-    .expect("MusicBrainz API URL");
-    url.query_pairs_mut()
-        .append_pair("fmt", "json")
-        .extend_pairs(parameters.iter().copied());
-    url
-}
-
 async fn search_entities(
     query: &str,
     media_type: &str,
 ) -> Result<Vec<Entity>, String> {
     let entity = entity_type(media_type)?;
-    let payload = request(query_url(
-        entity,
-        None,
-        &[
-            ("query", query),
-            ("limit", "20"),
-        ],
-    ))
-    .await?;
+    let payload = client::search(query, entity).await?;
     let key = format!("{entity}s");
     serde_json::from_value(
         payload
@@ -369,13 +300,23 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
 
     fn search<'a>(
         &'a self,
-        _settings: &'a MetadataSettings,
+        settings: &'a MetadataSettings,
         query: &'a str,
         media_type: Option<&'a str>,
     ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        self.search_with_artist(settings, query, media_type, None)
+    }
+
+    fn search_with_artist<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        query: &'a str,
+        media_type: Option<&'a str>,
+        artist: Option<&'a str>,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
         Box::pin(async move {
             let entity = entity_type(media_type.unwrap_or("release"))?;
-            let query = quoted(query.trim());
+            let query = manual_search_query(entity, query, artist);
             Ok(search_entities(&query, entity)
                 .await?
                 .iter()
@@ -444,8 +385,14 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
                     ));
                 }
             }
+            let mut entities = search_entities(&query, entity).await?;
+            // The same song can have studio, live, and remixed recordings in one release group.
+            // Prefer a unique duration agreement; never guess between equally plausible versions.
+            if entity == "recording" {
+                narrow_recordings_by_duration(&mut entities, context.duration_ms);
+            }
             Ok(choose_match(
-                &search_entities(&query, entity).await?,
+                &entities,
                 entity,
                 title,
                 artist,
@@ -459,21 +406,31 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
         _settings: &'a MetadataSettings,
         external_id: &'a str,
         media_type: &'a str,
-        _include_person_details: bool,
+        include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(async move {
             let entity = entity_type(media_type)?;
             if !valid_mbid(external_id) {
                 return Err("MusicBrainz identifiers must be UUIDs".into());
             }
-            let includes = match entity {
-                "artist" => "genres",
-                "release" => "artist-credits+genres+release-groups",
-                _ => "artist-credits+genres",
-            };
-            let payload =
-                request(query_url(entity, Some(external_id), &[("inc", includes)])).await?;
+            let mut payload = client::fetch(external_id, entity).await?;
+            if entity == "artist" {
+                members::enrich(&mut payload, include_person_details).await;
+            }
             snapshot_from_payload(external_id, entity, payload)
+        })
+    }
+
+    fn fetch_person_metadata<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        external_id: &'a str,
+    ) -> MetadataProviderFuture<'a, Option<ProviderMetadataPerson>> {
+        Box::pin(async move {
+            if !valid_mbid(external_id) {
+                return Err("MusicBrainz identifiers must be UUIDs".into());
+            }
+            Ok(members::person(&client::person(external_id).await?))
         })
     }
 
@@ -481,26 +438,116 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
         &self,
         snapshot: &StoredMetadataSnapshot,
     ) -> ProviderMetadataDetails {
-        let entity = snapshot
+        let payload = snapshot
             .provider_payload_json
             .as_deref()
-            .and_then(|raw| serde_json::from_str::<Entity>(raw).ok());
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+        let entity = payload
+            .as_ref()
+            .and_then(|raw| serde_json::from_value::<Entity>(raw.clone()).ok());
         ProviderMetadataDetails {
+            people: if snapshot.media_type.as_deref() == Some("artist") {
+                payload
+                    .as_ref()
+                    .zip(entity.as_ref())
+                    .map(|(payload, entity)| members::credits(payload, &entity.members))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
             external_ids: entity
                 .as_ref()
-                .and_then(|entity| entity.release_group.as_ref())
-                .filter(|group| valid_mbid(&group.id))
-                .map(|group| crate::metadata::ProviderExternalId {
-                    source: "musicbrainz_release_group".into(),
-                    external_id: group.id.clone(),
+                .map(|entity| {
+                    let mut ids = if snapshot.media_type.as_deref() == Some("artist") {
+                        external_ids::artist_ids(&entity.relations)
+                    } else {
+                        Vec::new()
+                    };
+                    if let Some(group) = entity
+                        .release_group
+                        .as_ref()
+                        .filter(|group| valid_mbid(&group.id))
+                    {
+                        ids.push(crate::metadata::ProviderExternalId {
+                            source: "musicbrainz_release_group".into(),
+                            external_id: group.id.clone(),
+                        });
+                    }
+                    ids
                 })
-                .into_iter()
-                .collect(),
+                .unwrap_or_default(),
             genres: entity
                 .map(|entity| entity.genres.into_iter().map(|genre| genre.name).collect())
                 .unwrap_or_default(),
             ..ProviderMetadataDetails::default()
         }
+    }
+}
+
+fn manual_search_query(
+    entity: &str,
+    title: &str,
+    artist: Option<&str>,
+) -> String {
+    let artist = artist.map(str::trim).filter(|value| !value.is_empty());
+    match (entity, artist) {
+        ("release" | "release-group", Some(artist)) => {
+            let field = if entity == "release" { "release" } else { "releasegroup" };
+            format!(
+                "{field}:{} AND artist:{}",
+                quoted(title.trim()),
+                quoted(artist)
+            )
+        }
+        _ => quoted(title.trim()),
+    }
+}
+
+fn narrow_recordings_by_duration(
+    entities: &mut Vec<Entity>,
+    duration: Option<i64>,
+) {
+    let Some(duration) = duration.filter(|duration| *duration > 0) else {
+        return;
+    };
+    let agrees = |candidate: &Entity| {
+        candidate
+            .length
+            .is_some_and(|length| length > 0 && length.abs_diff(duration) <= 2000)
+    };
+    if entities.iter().any(agrees) {
+        entities.retain(agrees);
+    } else {
+        entities.retain(|candidate| candidate.length.is_none_or(|length| length <= 0));
+    }
+}
+
+#[cfg(test)]
+mod recording_duration_tests {
+    use super::*;
+    #[test]
+    fn studio_recordings_are_distinguished_from_remixes_without_guessing_ties() {
+        let rows = serde_json::json!([
+            {"id":"cd83ca98-3d2e-4a83-abd0-92b117cbc080", "title":"Seven Nation Army",
+                "score":100, "length":258000},
+            {"id":"1f9e42d1-97dd-4226-a44b-4ec30b197c07","title":"Seven Nation Army","score":100},
+            {"id":"24cc8311-98fd-423a-bed1-97728f5eabc5", "title":"Seven Nation Army",
+                "score":100, "length":231813}
+        ]);
+        let mut entities: Vec<Entity> = serde_json::from_value(rows.clone()).unwrap();
+        narrow_recordings_by_duration(&mut entities, Some(232027));
+        assert_eq!(
+            choose_match(&entities, "recording", "Seven Nation Army", None, None)
+                .unwrap()
+                .external_id,
+            "24cc8311-98fd-423a-bed1-97728f5eabc5"
+        );
+        let mut entities: Vec<Entity> = serde_json::from_value(rows).unwrap();
+        entities[0].length = Some(232000);
+        narrow_recordings_by_duration(&mut entities, Some(232027));
+        assert!(choose_match(&entities, "recording", "Seven Nation Army", None, None).is_none());
+        narrow_recordings_by_duration(&mut entities, Some(500000));
+        assert!(entities.is_empty());
     }
 }
 
@@ -615,6 +662,180 @@ fn snapshot_from_payload(
 mod tests {
     use super::*;
     const MBID: &str = "f5093c06-23e3-404f-aeaa-40f72885ee3a";
+
+    #[tokio::test]
+    async fn manual_album_search_sends_the_edited_artist_as_an_escaped_credit_filter() {
+        use std::io::{
+            Read,
+            Write,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let root = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut buffer = [0; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let headers = String::from_utf8_lossy(&buffer[..size]);
+            let url = reqwest::Url::parse(&format!(
+                "http://localhost{}",
+                headers.split_whitespace().nth(1).unwrap()
+            ))
+            .unwrap();
+            assert_eq!(url.path(), "/ws/2/release");
+            let query = url
+                .query_pairs()
+                .find(|(key, _)| key == "query")
+                .unwrap()
+                .1
+                .into_owned();
+            assert_eq!(
+                query,
+                r#"release:"Live\: Deluxe" AND artist:"AC\/DC \& Guests\+""#
+            );
+            let body = serde_json::json!({"releases": [{
+                "id": MBID,
+                "title": "Live: Deluxe",
+                "track-count": 12,
+                "artist-credit": [{"artist": {"name": "AC/DC & Guests+"}}]
+            }]})
+            .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                 {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let results = TEST_API_ROOT
+            .scope(root, async {
+                crate::metadata::search_provider_with_artist(
+                    &MetadataSettings::default(),
+                    MetadataProviderId::MusicBrainz,
+                    " Live: Deluxe ",
+                    Some("release"),
+                    Some(" AC/DC & Guests+ "),
+                )
+                .await
+                .unwrap()
+            })
+            .await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].track_count, Some(12));
+        assert_eq!(results[0].external_id, MBID);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn clearing_the_artist_filter_restores_title_only_search_and_other_entities_ignore_it() {
+        for artist in [None, Some(""), Some("  ")] {
+            assert_eq!(manual_search_query("release", "Album", artist), "\"Album\"");
+        }
+        assert_eq!(
+            manual_search_query("artist", "Artist", Some("Other")),
+            "\"Artist\""
+        );
+    }
+
+    #[tokio::test]
+    async fn artist_lookup_requests_url_relationships_and_stores_normalized_identifiers() {
+        use diesel::{
+            Connection,
+            QueryDsl,
+            RunQueryDsl,
+        };
+        use std::io::{
+            Read,
+            Write,
+        };
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let root = format!("http://{}/ws/2", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0; 4096];
+                let size = stream.read(&mut chunk).unwrap();
+                assert!(size > 0 && headers.len() < 16384);
+                headers.extend_from_slice(&chunk[..size]);
+            }
+            let headers = String::from_utf8(headers).unwrap();
+            let url = reqwest::Url::parse(&format!(
+                "http://localhost{}",
+                headers.split_whitespace().nth(1).unwrap()
+            ))
+            .unwrap();
+            assert_eq!(url.path(), format!("/ws/2/artist/{MBID}"));
+            let includes = url
+                .query_pairs()
+                .find(|(key, _)| key == "inc")
+                .unwrap()
+                .1
+                .into_owned();
+            assert!(includes.contains("url-rels") && includes.contains("genres"));
+            let body =
+                serde_json::json!({"id": MBID, "name": "Musician", "type": "Person", "relations": [
+                    {"url": {"resource": "https://www.imdb.com/name/nm0000173/"}},
+                    {"url": {"resource": "https://www.wikidata.org/wiki/Q1744"}},
+                    {"url": {"resource": "https://www.imdb.com/title/tt12345/"}}
+                ]})
+                .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                 {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        TEST_API_ROOT
+            .scope(root, async {
+                let snapshot = MusicBrainzMetadataProvider
+                    .fetch_snapshot(&MetadataSettings::default(), MBID, "artist", false)
+                    .await
+                    .unwrap();
+                let mut conn = diesel::SqliteConnection::establish(":memory:").unwrap();
+                crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+                diesel::sql_query(
+                    "INSERT INTO media_libraries (id,name,path,kind) VALUES \
+                     (1,'Music','music','music')",
+                )
+                .execute(&mut conn)
+                .unwrap();
+                diesel::sql_query(
+                    "INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) \
+                     VALUES (1,1,'artist','artist','Musician')",
+                )
+                .execute(&mut conn)
+                .unwrap();
+                crate::metadata::upsert_item_metadata_snapshot(&mut conn, 1, &snapshot).unwrap();
+                use crate::db::schema::item_metadata_external_ids::dsl as ids;
+                let stored = ids::item_metadata_external_ids
+                    .select((ids::source, ids::external_id))
+                    .order(ids::source)
+                    .load::<(String, String)>(&mut conn)
+                    .unwrap();
+                assert_eq!(
+                    stored,
+                    [
+                        ("imdb".into(), "nm0000173".into()),
+                        ("musicbrainz".into(), MBID.into()),
+                        ("wikidata".into(), "Q1744".into())
+                    ]
+                );
+            })
+            .await;
+        server.join().unwrap();
+    }
 
     #[test]
     fn edition_without_cover_uses_its_release_group_artwork() {
@@ -768,11 +989,17 @@ mod tests {
 
     #[test]
     fn url_parameters_keep_query_syntax_out_of_paths() {
-        let url = query_url("release", None, &[("query", "release:\"A & B\"")]);
+        let request = client::search_request(
+            "release:\"A & B+C%\"",
+            "release",
+            &musicbrainz_rs::MusicBrainzClient::default(),
+        )
+        .unwrap();
+        let url = reqwest::Url::parse(&request.uri().to_string()).unwrap();
         assert_eq!(url.path(), "/ws/2/release");
         assert!(
             url.query_pairs()
-                .any(|(key, value)| key == "query" && value == "release:\"A & B\"")
+                .any(|(key, value)| key == "query" && value == "release:\"A & B+C%\"")
         );
         assert!(entity_type("movie").is_err());
     }
@@ -862,7 +1089,8 @@ mod tests {
                 assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(990));
             }
         });
-        let (first, second) = tokio::join!(request(url.clone()), request(url));
+        let (first, second) =
+            tokio::join!(client::test_request(url.clone()), client::test_request(url));
         first.unwrap();
         second.unwrap();
         server.join().unwrap();
@@ -909,6 +1137,7 @@ mod tests {
                         Err(error) => panic!("MusicBrainz test request did not arrive: {error}"),
                     }
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

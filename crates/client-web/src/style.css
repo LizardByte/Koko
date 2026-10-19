@@ -1928,6 +1928,43 @@ legend {
   max-width: 240px;
 }
 
+.item-hero.person-hero {
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.item-hero.person-hero-without-photo {
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: center;
+}
+
+.person-hero-without-photo .person-poster {
+  width: 80px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.music-membership-card {
+  min-width: 0;
+}
+
+.music-membership-card .media-card {
+  width: 100%;
+}
+
+.music-membership-card p {
+  margin: 0.6rem 0 0;
+}
+
+@media (max-width: 700px) {
+  .item-hero.person-hero {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .person-hero .person-poster {
+    width: 80px;
+  }
+}
+
 .section-heading-actions {
   display: flex;
   justify-content: space-between;
@@ -2013,8 +2050,9 @@ legend {
 }
 
 .metadata-attribution img {
-  max-width: 36px;
-  max-height: 36px;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
   object-fit: contain;
 }
 
@@ -2418,6 +2456,19 @@ legend {
   height: calc(100% - 0.7rem);
   object-fit: contain;
   opacity: 0;
+}
+
+.provider-settings-logo.provider-source-logo {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+}
+
+.provider-settings-logo.provider-source-logo img {
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .provider-settings-logo.is-loaded img {

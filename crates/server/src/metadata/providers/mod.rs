@@ -36,6 +36,8 @@ pub type MetadataProviderFuture<'a, T> =
 /// Provider identifiers already matched on a music item's parents.
 #[derive(Debug, Default)]
 pub struct MusicMatchContext {
+    /// Local recording duration, used to distinguish studio, live, and remix recordings.
+    pub duration_ms: Option<i64>,
     /// Number of active local track items in an album, across every disc.
     pub track_count: Option<u32>,
     /// Matched MusicBrainz album artist identifier.
@@ -80,6 +82,17 @@ pub trait MetadataProvider {
         _media_type: Option<&'a str>,
     ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
         unsupported_provider_operation(self.descriptor().display_name, "search")
+    }
+
+    /// Search with an optional artist credit when the provider supports it.
+    fn search_with_artist<'a>(
+        &'a self,
+        settings: &'a MetadataSettings,
+        query: &'a str,
+        media_type: Option<&'a str>,
+        _artist: Option<&'a str>,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        self.search(settings, query, media_type)
     }
 
     /// Fetch one provider metadata snapshot.

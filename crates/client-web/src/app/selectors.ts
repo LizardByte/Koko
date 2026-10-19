@@ -5,6 +5,7 @@ import { state } from './state';
 import { browseReturnPath } from './browseSession';
 import { browseItems } from './browsePreferences';
 import { humanizeItemType } from './ui';
+import { heroPresentation } from './hierarchy';
 
 export type HomeFeaturePreview =
   | { kind: 'collection'; collection: MediaCollectionSummary }
@@ -337,9 +338,10 @@ export function homePreviewCandidates(): MediaItemSummary[] {
   }
 }
 
-export function pageBackdropUrlForItem(item: Pick<MediaItemSummary, 'id' | 'backdrop_url' | 'artwork_updated_at'> | undefined): string | undefined {
-  return item?.backdrop_url
-    ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at)
+export function pageBackdropUrlForItem(item: MediaItemSummary | undefined): string | undefined {
+  const backdrop = item ? heroPresentation(item, [...homePreviewItemsById().values()]).backdrop : undefined;
+  return backdrop
+    ? getArtworkUrl(backdrop.id, 'backdrop', backdrop.artwork_updated_at)
     : undefined;
 }
 

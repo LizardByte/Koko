@@ -22,6 +22,7 @@ export const state: AppState = {
   metadataSearchResults: [],
   searchQuery: '',
   metadataSearchQuery: '',
+  metadataSearchArtist: undefined,
   metadataSearchYear: '',
   metadataSearchLanguage: 'en',
   metadataSearchProviders: [],

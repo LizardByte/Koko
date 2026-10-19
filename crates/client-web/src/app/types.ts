@@ -11,6 +11,7 @@ import type {
   MediaLibrary,
   MediaSearchResult,
   MetadataPersonResponse,
+  MetadataPersonItemCredit,
   MetadataProviderStatus,
   MetadataSearchResult,
   PlaybackDecision,
@@ -125,10 +126,12 @@ export interface AppState {
   selectedItemMetadata?: ItemMetadataResponse;
   itemMetadataLoading: boolean;
   selectedPerson?: MetadataPersonResponse;
+  itemCredits?: { itemId: number; loading: boolean; credits: MetadataPersonItemCredit[]; error?: string };
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
   searchQuery: string;
   metadataSearchQuery: string;
+  metadataSearchArtist?: string;
   metadataSearchYear: string;
   metadataSearchLanguage: string;
   metadataSearchProviders: string[];

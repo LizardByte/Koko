@@ -7,6 +7,7 @@ import {
   getMockHome,
   getMockItems,
   getMockItem,
+  getMockItemSources,
   getMockItemMetadata,
   getMockLibraries,
   getMockMetadataProviders,
@@ -191,6 +192,37 @@ export interface MediaPlaybackTarget {
   season_number?: number | null;
   episode_number?: number | null;
   resume: boolean;
+}
+
+export interface MediaItemSourceFile {
+  id: number;
+  item_id: number;
+  item_type: string;
+  display_title: string;
+  path: string;
+  source_root_path: string;
+  relative_path: string;
+  file_size: number;
+  modified_at?: number;
+  missing_since?: number;
+  container?: string;
+  duration_ms?: number;
+  bit_rate?: number;
+  width?: number;
+  height?: number;
+  video_codec?: string;
+  audio_codec?: string;
+}
+
+export interface MediaItemSources {
+  item_id: number;
+  catalog_title: string;
+  offset: number;
+  limit: number;
+  total_files: number;
+  missing_files: number;
+  total_size: number;
+  files: MediaItemSourceFile[];
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
@@ -826,6 +858,12 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
     return getMockPerson(Number(personMatch[1])) as T;
   }
 
+  const filesMatch = /^\/api\/v1\/items\/(\d+)\/files$/.exec(url.pathname);
+  if (filesMatch) {
+    const sources = getMockItemSources(Number(filesMatch[1]), Number(url.searchParams.get('offset') ?? 0), Number(url.searchParams.get('limit') ?? 25));
+    if (!sources) throw new ApiError(404, 'Item not found');
+    return sources as T;
+  }
   const itemMatch = /^\/api\/v1\/items\/(\d+)$/.exec(url.pathname);
   if (itemMatch) {
     const item = getMockItem(Number(itemMatch[1]));
@@ -1132,6 +1170,10 @@ export async function searchItems(query: string): Promise<MediaSearchResult[]> {
 
 export function getItem(itemId: number): Promise<MediaItemDetail> {
   return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
+}
+
+export function getItemSourceFiles(itemId: number, offset = 0, limit = 25): Promise<MediaItemSources> {
+  return requestJson<MediaItemSources>('GET', `/api/v1/items/${itemId}/files?offset=${offset}&limit=${limit}`);
 }
 
 export function getMetadataProviders(): Promise<MetadataProviderStatus[]> {

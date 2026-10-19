@@ -1,8 +1,14 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
 pub(crate) mod music;
+mod source_files;
 pub use music::MusicMetadata;
 pub(crate) use music::valid_mbid;
+pub use source_files::{
+    MediaItemSourceFile,
+    MediaItemSources,
+    get_item_source_files,
+};
 
 // standard imports
 use std::collections::{

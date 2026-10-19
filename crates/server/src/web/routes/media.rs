@@ -4096,6 +4096,29 @@ pub async fn get_item(
     Ok(Json(item))
 }
 
+/// Return a bounded page of source files for any item, including its descendants.
+#[openapi(tag = "Media")]
+#[get("/api/v1/items/<item_id>/files?<offset>&<limit>")]
+pub async fn get_item_files(
+    user_guard: UserGuard,
+    db: DbConn,
+    item_id: i32,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Json<crate::media::MediaItemSources>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
+    db.run(move |conn| {
+        crate::media::get_item_source_files(conn, item_id, offset.unwrap_or(0), limit.unwrap_or(25))
+    })
+    .await
+    .map_err(|error| {
+        log::error!("Failed to load source files for item {item_id}: {error}");
+        Status::InternalServerError
+    })?
+    .map(Json)
+    .ok_or(Status::NotFound)
+}
+
 /// Create a new playback session.
 #[openapi(tag = "Media")]
 #[post("/api/v1/sessions", format = "json", data = "<request>")]

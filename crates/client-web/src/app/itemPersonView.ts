@@ -1,4 +1,5 @@
 import { renderAlbumTracks } from './music';
+import { renderItemSources } from './itemSources';
 /** Renders item detail, metadata search, person detail, and credit trays. */
 import type {
   ItemMetadataMatch,
@@ -943,7 +944,7 @@ function selectedItemTechnicalFacts(item: MediaItemDetail): Array<{ label: strin
     { label: 'Duration', value: formatDuration(item.duration_ms) },
     {
       label: 'Format',
-      value: [item.container?.toUpperCase(), item.media_kind.toUpperCase()].filter(Boolean).join(' • ') || 'Unknown',
+      value: item.container?.toUpperCase() || 'Unknown',
     },
     {
       label: 'Codecs',
@@ -955,7 +956,7 @@ function selectedItemTechnicalFacts(item: MediaItemDetail): Array<{ label: strin
     },
     { label: 'Bitrate', value: formatBitRate(item.bit_rate) },
     { label: 'Size', value: formatFileSize(item.file_size) },
-  ];
+  ].filter((fact) => fact.value !== 'Unknown');
 }
 
 function renderSelectedItemFactList(item: MediaItemDetail): string {
@@ -1073,29 +1074,7 @@ function renderSelectedItemSupportGrid(
         ${renderSelectedItemFactList(item)}
         ${state.selectedPlayback?.reason ? `<p class="muted playback-detail-reason">${escapeHtml(state.selectedPlayback.reason)}</p>` : ''}
       <div class="item-support-grid">
-        <section class="panel page-panel item-section">
-          <div class="section-heading">
-            <h3>File and library</h3>
-          </div>
-          <div class="item-info-list">
-            <div>
-              <span class="label">Library</span>
-              <strong>${escapeHtml(library?.name ?? 'Unknown')}</strong>
-            </div>
-            <div>
-              <span class="label">Folders</span>
-              <strong>${escapeHtml(String(library?.paths.length ?? 0))}</strong>
-            </div>
-            <div>
-              <span class="label">Source</span>
-              <strong>${escapeHtml(item.relative_path)}</strong>
-            </div>
-            <div>
-              <span class="label">Updated</span>
-              <strong>${escapeHtml(formatTimestamp(item.modified_at))}</strong>
-            </div>
-          </div>
-        </section>
+        ${renderItemSources(item, library?.name ?? 'Unknown')}
 
         ${canManageUsers() ? `<section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
           <div class="section-heading section-heading-actions">

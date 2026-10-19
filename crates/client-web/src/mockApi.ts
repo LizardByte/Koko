@@ -11,6 +11,7 @@ import type {
   MediaCollectionSummary,
   MediaHome,
   MediaItemDetail,
+  MediaItemSources,
   MediaItemSummary,
   MediaLibrary,
   MediaLibrarySettings,
@@ -1148,6 +1149,25 @@ export function getMockLogs(
     log_path: 'C:/Users/Mock/AppData/Local/Koko/data/koko.log',
     entries: entries.slice(0, Math.max(1, limit)),
   };
+}
+
+export function getMockItemSources(itemId: number, offset = 0, limit = 25): MediaItemSources | undefined {
+  const root = items.find((item) => item.id === itemId);
+  if (!root) return undefined;
+  const descendants = new Set([itemId]);
+  for (const id of descendants) {
+    for (const child of items.filter((item) => item.parent_id === id && item.library_id === root.library_id)) descendants.add(child.id);
+  }
+  const sourceRoot = libraries.find((library) => library.id === root.library_id)?.paths[0] ?? '';
+  const files = items.filter((item) => descendants.has(item.id) && item.playable && item.relative_path).map((item) => ({
+    ...item, id: item.id, item_id: item.id, source_root_path: sourceRoot,
+    path: `${sourceRoot}/${item.relative_path}`, file_size: item.file_size ?? 0, missing_since: item.missing_since ?? undefined,
+  }));
+  offset = Math.max(0, offset);
+  limit = Math.max(1, Math.min(100, limit));
+  return { item_id: itemId, catalog_title: root.display_title, offset, limit,
+    total_files: files.length, missing_files: files.filter((file) => file.missing_since).length,
+    total_size: files.reduce((sum, file) => sum + file.file_size, 0), files: files.slice(offset, offset + limit) };
 }
 
 export function getMockItem(itemId: number): MediaItemDetail | undefined {

@@ -667,6 +667,10 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
     state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
+    if (state.itemManagementOpen) void loadItemSources(render);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-item-sources-page]').forEach((button) => {
+    button.addEventListener('click', () => { void loadItemSources(render, Number(button.dataset.itemSourcesPage)); });
   });
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1767,3 +1771,4 @@ function syncAddLibraryProviderOptions(): void {
   }
   form.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 }
+import { loadItemSources } from './itemSources';

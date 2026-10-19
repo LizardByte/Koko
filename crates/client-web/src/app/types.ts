@@ -6,6 +6,7 @@ import type {
   LogEntriesResponse,
   MediaHome,
   MediaItemDetail,
+  MediaItemSources,
   MediaItemSummary,
   MediaLibrary,
   MediaSearchResult,
@@ -137,6 +138,7 @@ export interface AppState {
   browseFiltersOpen: boolean;
   libraryPage: number;
   itemManagementOpen: boolean;
+  itemSources?: { itemId: number; userId?: number; loading: boolean; data?: MediaItemSources; error?: string };
   itemMoreOpen: boolean;
   resumeOptionsOpen: boolean;
   expandedCreditId?: number;

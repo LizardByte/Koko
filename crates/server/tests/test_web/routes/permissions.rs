@@ -48,6 +48,7 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/items"),
     (Method::Get, "/api/v1/search?query=film"),
     (Method::Get, "/api/v1/items/1"),
+    (Method::Get, "/api/v1/items/1/files"),
     (Method::Get, "/api/v1/items/1/metadata"),
     (Method::Get, "/api/v1/items/1/playback"),
     (Method::Get, "/api/v1/items/1/artwork"),
@@ -357,6 +358,7 @@ async fn library_grants_filter_items_collections_people_and_counts() {
     }
     for path in [
         "/api/v1/items/1",
+        "/api/v1/items/1/files",
         "/api/v1/items/3",
         "/api/v1/home?library_id=3",
         "/api/v1/items?library_id=3",
@@ -375,6 +377,7 @@ async fn library_grants_filter_items_collections_people_and_counts() {
         "/api/v1/home?library_id=2",
         "/api/v1/items?library_id=2",
         "/api/v1/items/2",
+        "/api/v1/items/2/files",
         "/api/v1/items/2/metadata",
         "/api/v1/items/2/playback",
         "/api/v1/items/2/artwork",

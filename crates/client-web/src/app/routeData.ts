@@ -25,6 +25,7 @@ export async function loadRouteData(
   isCurrent: () => boolean,
   source: RouteApi = api,
 ): Promise<void> {
+  if (route.page !== 'item' || state.itemSources?.itemId !== route.itemId) state.itemSources = undefined;
   const admin = state.bootstrap?.current_user?.admin === true;
   if (!admin) {
     state.settingsResponse = undefined;
@@ -48,6 +49,7 @@ export async function loadRouteData(
         state.libraryItems = [];
         state.searchResults = [];
         state.selectedItem = undefined;
+        state.itemSources = undefined;
         state.selectedItemMetadata = undefined;
         state.selectedPlayback = undefined;
         state.selectedPerson = undefined;

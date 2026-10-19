@@ -8,7 +8,7 @@ export function itemLineage(item: MediaItemSummary, catalog: MediaItemSummary[] 
   let current = item;
   while (current.parent_id != null) {
     const parent = byId.get(current.parent_id);
-    if (!parent || parent.library_id !== item.library_id || seen.has(parent.id)) break;
+    if (parent?.library_id !== item.library_id || seen.has(parent.id)) break;
     lineage.push(parent);
     seen.add(parent.id);
     current = parent;

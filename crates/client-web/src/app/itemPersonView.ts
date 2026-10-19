@@ -4,6 +4,7 @@ import { renderItemSources } from './itemSources';
 /** Renders item detail, metadata search, person detail, and credit trays. */
 import type {
   ItemMetadataMatch,
+  MetadataSearchResult,
   ItemMetadataPerson,
   MediaItemDetail,
   MediaItemExtra,
@@ -62,7 +63,7 @@ export function renderMetadataSearchResults(): string {
             ${renderMetadataSearchProviderAttribution(result.provider_id)}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
-            ${result.track_count ? `<span>${result.track_count} tracks${selectedItem.item_type === 'album' && selectedItem.child_count ? ` · ${result.track_count === selectedItem.child_count ? 'matches your' : 'your album has'} ${selectedItem.child_count} tracks` : ''}</span>` : ''}
+            ${renderTrackCountMatch(result, selectedItem)}
             ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
           </div>
         </div>
@@ -583,13 +584,7 @@ export function renderPersonPage(): string {
         </div>
         <div class="detail-summary item-summary">
           <h2 class="item-title-fallback">${escapeHtml(response.person.name)}</h2>
-          <div class="hero-meta-row">
-            <span class="tag">${escapeHtml(providerDisplayName(response.person.provider_id))}</span>
-            ${credits.length ? `<span class="tag">${creditGroups.length} screen title${creditGroups.length === 1 ? '' : 's'}</span>` : ''}
-            ${response.albums?.length ? `<span class="tag">${response.albums.length} album${response.albums.length === 1 ? '' : 's'}</span>` : ''}
-            ${response.person.birthday ? `<span class="tag">${escapeHtml([formatPersonDate(response.person.birthday), age].filter(Boolean).join(' · '))}</span>` : ''}
-            ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
-          </div>
+          ${renderPersonTags(response, creditGroups.length, age)}
           ${response.person.birth_place ? `<p class="hero-tagline">${escapeHtml(response.person.birth_place)}</p>` : ''}
           ${response.person.biography ? renderCollapsibleText(response.person.biography, `person-biography:${response.person.id}`) : ''}
           ${knownForMarkup}
@@ -615,11 +610,9 @@ export function renderPersonPage(): string {
       ${credits.length ? `<section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
         <div class="section-heading section-heading-actions">
           <h3>Credits</h3>
-          <span class="muted">${creditGroups.length} title${creditGroups.length === 1 ? '' : 's'}</span>
+          <span class="muted">${escapeHtml(countLabel(creditGroups.length, 'title'))}</span>
         </div>
-        ${credits.length
-          ? `<div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>`
-          : '<div class="empty-state tight">No matching screen credits are in your libraries.</div>'}
+        <div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>
       </section>` : ''}
     </section>
   `;
@@ -894,9 +887,10 @@ interface SelectedItemActionsOptions {
 function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTarget?: MediaPlaybackTarget): string {
   const canResume = resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0;
   if (!canResume) return '';
+  const restartLabel = item.item_type === 'album' ? 'Restart track' : 'Restart episode';
   const restartButton = item.playable
     ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over')
-    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent(item.item_type === 'album' ? 'Restart track' : 'Restart episode', 'rotate-ccw')}</button>`;
+    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent(restartLabel, 'rotate-ccw')}</button>`;
   return `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
     <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
       ${restartButton}
@@ -934,9 +928,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
               <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
               <div class="item-more-menu">
-                ${['album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-enqueue="${item.id}" data-music-next="true">${renderButtonContent('Play next', 'skip-forward')}</button><button type="button" class="secondary-button" data-music-enqueue="${item.id}">${renderButtonContent('Add to queue', 'list-music')}</button>` : ''}
-                ${['artist', 'album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-radio="${item.id}">${renderButtonContent('Start radio', 'radio')}</button>` : ''}
-                ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
+                ${renderMusicActions(item, playbackTarget)}
                 ${resumeMs > 0 || item.item_type === 'episode' ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over', true) : ''}
                 ${tvTargets.map((target) => renderPlaybackTargetButton(target, true, { id: target.label === 'Restart show' ? 'restart-show' : 'restart-season' })).join('')}
                 ${!tvTargets.length && restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true, { id: 'item-start-over' }) : ''}
@@ -1137,10 +1129,7 @@ function renderArtistScreenCredits(item: MediaItemDetail): string {
   const groups = personCreditGroups(response?.credits ?? []);
   return `<section class="panel page-panel item-section" data-nav-section="screen-credits" data-nav-label="Movies and shows">
     <div class="section-heading section-heading-actions"><h3>Movies and shows</h3><span class="muted">${groups.length} title${groups.length === 1 ? '' : 's'}</span></div>
-    ${!response || response.loading ? '<div class="empty-state tight" role="status">Loading screen credits…</div>'
-      : response.error ? `<div class="empty-state tight" role="alert">Unable to load screen credits: ${escapeHtml(response.error)}</div>`
-        : groups.length ? `<div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>`
-          : '<div class="empty-state tight">No matching movies or shows are in your libraries.</div>'}
+    ${artistCreditContents(response, groups)}
   </section>`;
 }
 
@@ -1215,4 +1204,39 @@ export function renderItemPage(): string {
   }
 
   return renderSelectedItemPage(state.selectedItem);
+}
+
+function renderTrackCountMatch(result: MetadataSearchResult, item: MediaItemDetail): string {
+  if (!result.track_count) return '';
+  let comparison = '';
+  if (item.item_type === 'album' && item.child_count) {
+    const label = result.track_count === item.child_count ? 'matches your' : 'your album has';
+    comparison = ` · ${label} ${item.child_count} tracks`;
+  }
+  return `<span>${result.track_count} tracks${comparison}</span>`;
+}
+
+function renderPersonTags(response: NonNullable<typeof state.selectedPerson>, screenTitles: number, age: string | undefined): string {
+  const person = response.person;
+  const tags = [`<span class="tag">${escapeHtml(providerDisplayName(person.provider_id))}</span>`];
+  if (response.credits.length) tags.push(`<span class="tag">${escapeHtml(countLabel(screenTitles, 'screen title'))}</span>`);
+  if (response.albums?.length) tags.push(`<span class="tag">${escapeHtml(countLabel(response.albums.length, 'album'))}</span>`);
+  if (person.birthday) tags.push(`<span class="tag">${escapeHtml([formatPersonDate(person.birthday), age].filter(Boolean).join(' · '))}</span>`);
+  if (person.gender) tags.push(`<span class="tag">${escapeHtml(person.gender)}</span>`);
+  return `<div class="hero-meta-row">${tags.join('')}</div>`;
+}
+
+function renderMusicActions(item: MediaItemDetail, playbackTarget?: MediaPlaybackTarget): string {
+  return `
+                ${['album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-enqueue="${item.id}" data-music-next="true">${renderButtonContent('Play next', 'skip-forward')}</button><button type="button" class="secondary-button" data-music-enqueue="${item.id}">${renderButtonContent('Add to queue', 'list-music')}</button>` : ''}
+                ${['artist', 'album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-radio="${item.id}">${renderButtonContent('Start radio', 'radio')}</button>` : ''}
+                ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
+  `;
+}
+
+function artistCreditContents(response: typeof state.itemCredits, groups: PersonCreditGroup[]): string {
+  if (!response || response.loading) return '<div class="empty-state tight" role="status">Loading screen credits…</div>';
+  if (response.error) return `<div class="empty-state tight" role="alert">Unable to load screen credits: ${escapeHtml(response.error)}</div>`;
+  if (groups.length) return `<div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>`;
+  return '<div class="empty-state tight">No matching movies or shows are in your libraries.</div>';
 }

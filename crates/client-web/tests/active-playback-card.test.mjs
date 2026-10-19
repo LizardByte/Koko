@@ -11,7 +11,7 @@ const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderHomeShelfEntry, renderItemCard, renderPlaylistDetailPage } = await server.ssrLoadModule('/src/app/homeView.ts');
 const { playlistPlaybackButtonContent, renderPlaylistTracks } = await server.ssrLoadModule('/src/app/music.ts');
 const { musicCardStatus, setMusicPlayback, clearMusicPlayback, activeMusicPlayback, musicPlaybackPlaylist } = await server.ssrLoadModule('/src/app/musicPlaybackState.ts');
-const { configureMusicPlayer, resumeMusicQueue, musicQueue } = await server.ssrLoadModule('/src/app/musicPlayer.ts');
+const { configureAudioPlayer, resumeMusicQueue, audioQueue } = await server.ssrLoadModule('/src/app/audioPlayer.ts');
 const { savePlaylist, getArtworkUrl } = await server.ssrLoadModule('/src/api.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
 const song = { ...mock.getMockItem(103), artwork_item_id: 302 }, album = mock.getMockItem(302);
@@ -152,23 +152,23 @@ test('reopening the active radio navigates without fetching, resetting position,
   const paths = [], requests = [];
   try {
     state.bootstrap = { current_user: { id: 1 } };
-    configureMusicPlayer({ navigate: path => paths.push(path), changed: () => {}, saved: async () => {} });
+    configureAudioPlayer({ navigate: path => paths.push(path), changed: () => {}, saved: async () => {} });
     globalThis.fetch = async (url) => { requests.push(url); return new Response('{}', { status: 404 }); };
-    musicQueue.replace([song, mock.getMockItem(104), song]);
-    musicQueue.cursor = 1;
-    musicQueue.shuffle = true;
-    musicQueue.repeat = 'all';
-    const order = [...musicQueue.order], entries = musicQueue.entries;
+    audioQueue.replace([song, mock.getMockItem(104), song]);
+    audioQueue.cursor = 1;
+    audioQueue.shuffle = true;
+    audioQueue.repeat = 'all';
+    const order = [...audioQueue.order], entries = audioQueue.entries;
     for (const paused of [false, true]) {
       const active = { ...playback, queueId: 77, paused };
       setMusicPlayback(active);
       await resumeMusicQueue(77, '/libraries/3/items/playlists/77');
       assert.equal(activeMusicPlayback(), active);
-      assert.equal(musicQueue.entries, entries);
-      assert.deepEqual(musicQueue.order, order);
-      assert.equal(musicQueue.cursor, 1);
-      assert.equal(musicQueue.shuffle, true);
-      assert.equal(musicQueue.repeat, 'all');
+      assert.equal(audioQueue.entries, entries);
+      assert.deepEqual(audioQueue.order, order);
+      assert.equal(audioQueue.cursor, 1);
+      assert.equal(audioQueue.shuffle, true);
+      assert.equal(audioQueue.repeat, 'all');
     }
     assert.deepEqual(paths, ['/libraries/3/items/playlists/77', '/libraries/3/items/playlists/77']);
     assert.deepEqual(requests, []);
@@ -184,9 +184,9 @@ test('reopening the active radio navigates without fetching, resetting position,
     globalThis.fetch = originalFetch;
     state.bootstrap = original;
     clearMusicPlayback();
-    musicQueue.replace([]);
-    musicQueue.shuffle = false;
-    musicQueue.repeat = 'off';
-    configureMusicPlayer({ navigate: () => {}, changed: () => {}, saved: async () => {} });
+    audioQueue.replace([]);
+    audioQueue.shuffle = false;
+    audioQueue.repeat = 'off';
+    configureAudioPlayer({ navigate: () => {}, changed: () => {}, saved: async () => {} });
   }
 });

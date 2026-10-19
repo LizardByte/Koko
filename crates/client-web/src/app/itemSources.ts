@@ -1,5 +1,5 @@
 /** Lazy, paginated source inspection shared by all present and future item kinds. */
-import { ApiError, getItemSourceFiles, type MediaItemDetail, type MediaItemSourceFile } from '../api';
+import { ApiError, getItemSourceFiles, type MediaItemDetail, type MediaItemSourceFile, type MediaItemSources } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { state } from './state';
 
@@ -55,20 +55,33 @@ export function renderItemSources(item: MediaItemDetail, libraryName: string): s
   const sources = state.itemSources?.itemId === item.id && state.itemSources.userId === state.bootstrap?.current_user?.id ? state.itemSources : undefined;
   const data = sources?.data;
   const offset = data?.offset ?? 0;
-  const button = (label: string, page: number, disabled = false) => `<button type="button" class="secondary-button" data-item-sources-page="${page}" ${sources?.loading || disabled ? 'disabled' : ''}>${label}</button>`;
+  const button = (label: string, page: number, disabled = false) => sourceButton(label, page, Boolean(sources?.loading || disabled));
   return `<section class="panel page-panel item-section item-sources" aria-label="Source files">
     <div class="section-heading section-heading-actions"><h3>Source files</h3>${button('Refresh files', offset)}</div>
     <div class="item-info-list">${fact('Library', libraryName)}${fact('Item type', item.item_type)}
       ${data ? fact('Local catalog title', data.catalog_title) : ''}
-      ${data ? fact('Files', `${data.total_files}${data.missing_files ? ` (${data.missing_files} missing)` : ''}`) + fact('Total size', data.total_size ? formatFileSize(data.total_size) : '0 B') : ''}</div>
+      ${data ? sourceTotals(data) : ''}</div>
     ${sources?.loading ? '<p role="status">Loading source files…</p>' : ''}
     ${sources?.error ? `<p role="alert">${escapeHtml(sources.error)}</p>` : ''}
     ${!sources ? '<p class="muted">Source files load when media details are opened.</p>' : ''}
     ${data?.total_files === 0 ? '<p class="muted">No source files are attached to this item or its children.</p>' : ''}
     ${data ? `<ul class="source-file-list">${data.files.map((file) => renderFile(file, item.id)).join('')}</ul>` : ''}
-    ${data && data.total_files > 0 ? `<div class="source-file-pagination">
-      ${button('Previous', Math.max(0, offset - data.limit), offset === 0)}
-      <span>${data.files.length ? offset + 1 : 0}–${offset + data.files.length} of ${data.total_files} files</span>
-      ${button('Next', offset + data.limit, offset + data.limit >= data.total_files)}</div>` : ''}
+    ${sourcePagination(data, Boolean(sources?.loading))}
   </section>`;
+}
+
+function sourceButton(label: string, page: number, disabled: boolean): string {
+  return `<button type="button" class="secondary-button" data-item-sources-page="${page}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+}
+function sourceTotals(data: MediaItemSources): string {
+  const missing = data.missing_files ? ` (${data.missing_files} missing)` : '';
+  return fact('Files', String(data.total_files) + missing) + fact('Total size', data.total_size ? formatFileSize(data.total_size) : '0 B');
+}
+function sourcePagination(data: MediaItemSources | undefined, loading: boolean): string {
+  if (!data || data.total_files <= 0) return '';
+  const start = data.files.length ? data.offset + 1 : 0;
+  return `<div class="source-file-pagination">
+    ${sourceButton('Previous', Math.max(0, data.offset - data.limit), loading || data.offset === 0)}
+    <span>${start}–${data.offset + data.files.length} of ${data.total_files} files</span>
+    ${sourceButton('Next', data.offset + data.limit, loading || data.offset + data.limit >= data.total_files)}</div>`;
 }

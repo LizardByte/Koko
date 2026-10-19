@@ -7,13 +7,13 @@ globalThis.localStorage={getItem:()=>null};
 const server=await createServer({root:fileURLToPath(new URL('..',import.meta.url)),server:{middlewareMode:true,hmr:false,ws:false}});
 after(()=>server.close());
 const {apiErrorMessage}=await server.ssrLoadModule('/src/apiErrors.ts');
-const {boundedMenuPosition,musicMediaMetadata,revealPanelEntry}=await server.ssrLoadModule('/src/app/musicPlayerSupport.ts');
+const {boundedMenuPosition,musicMediaMetadata,revealPanelEntry}=await server.ssrLoadModule('/src/app/audioPlayerSupport.ts');
 const {renderWatchProgress,renderShelfStack,homeShelfEntries}=await server.ssrLoadModule('/src/app/homeView.ts');
 const {state}=await server.ssrLoadModule('/src/app/state.ts');
 const {renderAlbumTracks,renderActiveAlbumButton}=await server.ssrLoadModule('/src/app/music.ts');
 const {setMusicPlayback,clearMusicPlayback,musicPlaybackItem}=await server.ssrLoadModule('/src/app/musicPlaybackState.ts');
-const {renderMusicPlayer,currentLyricText}=await server.ssrLoadModule('/src/app/musicPlayerView.ts');
-const {MusicQueue}=await server.ssrLoadModule('/src/app/musicQueue.ts');
+const {renderAudioPlayer,currentLyricText}=await server.ssrLoadModule('/src/app/audioPlayerView.ts');
+const {AudioQueue}=await server.ssrLoadModule('/src/app/audioQueue.ts');
 const mock=await server.ssrLoadModule('/src/mockApi.ts');
 
 test('shared API errors hide raw HTML, backend JSON and server details while retaining validation guidance',()=>{
@@ -21,8 +21,8 @@ test('shared API errors hide raw HTML, backend JSON and server details while ret
     const message=apiErrorMessage(status,body);assert.ok(message.length>10);assert.doesNotMatch(message,/[<>{}]|SQL|private/);
   }
   assert.equal(apiErrorMessage(422,'{"message":"Playlist name is required."}'),'Playlist name is required.');
-  assert.match(apiErrorMessage(422,'{"error":{"reason":"Unprocessable Entity"}}'),/Check your entries/);
-  assert.match(apiErrorMessage(400,'<html>broken</html>'),/Check your entries/);
+  assert.match(apiErrorMessage(422,'{"error":{"reason":"Unprocessable Entity"}}'),/Please try again/);
+  assert.match(apiErrorMessage(400,'<html>broken</html>'),/Please try again/);
 });
 test('song menus stay within the viewport and above the dock including narrow layouts',()=>{
   for(const width of [320,390,1280])for(const left of [0,width-40])for(const top of [0,500]) {
@@ -57,13 +57,13 @@ test('track numbers remain before a separate listening indicator for both progre
 });
 
 test('inline lyrics have a single expansion target without a moving close button',()=>{
-  const queue=new MusicQueue();queue.replace([mock.getMockItem(103)]);
-  const html=renderMusicPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,lyricsEnabled:true,lyricsLoading:false,saving:false});
+  const queue=new AudioQueue();queue.replace([mock.getMockItem(103)]);
+  const html=renderAudioPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,lyricsEnabled:true,lyricsLoading:false,saving:false});
   assert.match(html,/data-current-lyric/);
   assert.match(html,/class="music-inline-lyrics" hidden/);
   assert.doesNotMatch(html,/Open lyrics|Looking up lyrics|No timed lyrics/);
   assert.doesNotMatch(html,/hide-lyrics|Hide lyrics/);
-  assert.match(html,/aria-label="Stop music"/);
+  assert.match(html,/aria-label="Stop audio"/);
 });
 
 test('inline lyrics remain empty before the first timed line and during blank instrumental gaps',()=>{
@@ -77,8 +77,8 @@ test('inline lyrics remain empty before the first timed line and during blank in
 });
 
 test('missing saved lyrics direct users to metadata refresh instead of a playback lookup',()=>{
-  const queue=new MusicQueue();queue.replace([{id:1,display_title:'Song',item_type:'track'}]);
-  const html=renderMusicPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyrics:{instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'},lyricsLoading:false,saving:false});
+  const queue=new AudioQueue();queue.replace([{id:1,display_title:'Song',item_type:'track'}]);
+  const html=renderAudioPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyrics:{instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'},lyricsLoading:false,saving:false});
   assert.match(html,/Select LRCLIB in the library’s metadata sources/);
   assert.match(html,/refresh this track’s metadata/);
   assert.doesNotMatch(html,/Looking up lyrics|Lyrics from|retry-lyrics/);
@@ -144,7 +144,7 @@ test('live music overlays saved progress, identifies the current row and changes
 test('panel scrolling changes only the panel, and lyrics errors have no lookup retry control',()=>{
   const container={scrollTop:0,clientHeight:300,getBoundingClientRect:()=>({top:50})};
   revealPanelEntry(container,{getBoundingClientRect:()=>({top:800,height:60})});assert.equal(container.scrollTop,630);
-  const queue=new MusicQueue();queue.replace([mock.getMockItem(103)]);
-  const html=renderMusicPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyricsError:'Please retry',lyricsLoading:false,saving:false});
+  const queue=new AudioQueue();queue.replace([mock.getMockItem(103)]);
+  const html=renderAudioPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyricsError:'Please retry',lyricsLoading:false,saving:false});
   assert.match(html,/data-current-lyric/);assert.doesNotMatch(html,/Try lyrics again|retry-lyrics/);assert.match(html,/Jump to current lyrics/);assert.match(html,/class="player-volume"/);
 });

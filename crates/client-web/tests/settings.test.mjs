@@ -283,7 +283,7 @@ test('LRCLIB is a keyless library-selectable music agent without a MusicBrainz d
   assert.match(input, /checked/);
   assert.doesNotMatch(input, /disabled/);
   assert.match(html, /data-provider-option="lrclib" data-provider-role="secondary" data-extends-provider-ids=""/);
-  assert.match(html, /\/assets\/providers\/lrclib.ico/);
+  assert.match(html, /\/assets\/providers\/lrclib.png/);
   assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="lrclib"/);
   const index = state.settingsResponse.settings.media.libraries.findIndex((library) => library.kind === 'music');
   const form = new FormData();

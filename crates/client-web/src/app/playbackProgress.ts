@@ -33,5 +33,7 @@ export function playbackProgressPercent(item: MediaItemSummary): number | undefi
 }
 
 export function playbackAction(item:MediaItemSummary):'listened'|'read'|'watched' {
-  return item.media_kind==='audio' || ['artist','album','track'].includes(item.item_type) ? 'listened' : item.media_kind==='book' || item.item_type==='book' ? 'read' : 'watched';
+  if (item.media_kind === 'audio' || ['artist', 'album', 'track'].includes(item.item_type)) return 'listened';
+  if (item.media_kind === 'book' || item.item_type === 'book') return 'read';
+  return 'watched';
 }

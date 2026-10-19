@@ -1,6 +1,7 @@
 //! Web server utilities for the application.
 
 // modules
+mod errors;
 pub(crate) mod routes;
 
 // lib imports
@@ -115,6 +116,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
             "Private API responses",
             |request, response| {
                 Box::pin(async move {
+                    errors::normalize(request, response).await;
                     let path = request.uri().path();
                     if path.starts_with("/api/")
                         || matches!(path.as_str(), "/login" | "/logout" | "/user_info")

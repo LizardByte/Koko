@@ -27,8 +27,9 @@ export function syncProviderDependencyOptions(list: HTMLElement): void {
       if (!available) input.checked = false;
     }
     option.classList.toggle('is-disabled', !available);
+    const secondaryLabel = secondary ? ' · Secondary' : '';
     if (label) label.textContent = available
-      ? `Priority ${index + 1}${secondary ? ' · Secondary' : ''}`
+      ? `Priority ${index + 1}${secondaryLabel}`
       : 'Requires primary provider';
   });
 }

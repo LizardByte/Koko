@@ -89,8 +89,8 @@ impl MetadataProvider for LrclibMetadataProvider {
             extends_provider_ids: Vec::new(),
             attribution_text: "Lyrics provided by LRCLIB.".into(),
             attribution_url: "https://lrclib.net/".into(),
-            logo_light_url: Some("/assets/providers/lrclib.ico".into()),
-            logo_dark_url: Some("/assets/providers/lrclib.ico".into()),
+            logo_light_url: Some("/assets/providers/lrclib.png".into()),
+            logo_dark_url: Some("/assets/providers/lrclib.png".into()),
         }
     }
 }

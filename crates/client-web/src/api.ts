@@ -210,7 +210,7 @@ export interface MusicPlaylistDetail {
 }
 
 export function getPlaylists(libraryId?: number): Promise<MusicPlaylistDetail[]> {
-  return requestJson('GET', `/api/v1/playlists${libraryId === undefined ? '' : `?library_id=${libraryId}`}`);
+  return requestJson('GET', '/api/v1/playlists' + (libraryId === undefined ? '' : '?library_id=' + libraryId));
 }
 export function getPlaylist(id: number): Promise<MusicPlaylistDetail> { return requestJson('GET', `/api/v1/playlists/${id}`); }
 export function savePlaylist(name: string, itemIds: number[], temporary = false, seedItemId?: number): Promise<MusicPlaylistDetail> { return requestJson('POST', '/api/v1/playlists', { name, item_ids: itemIds, temporary, seed_item_id: seedItemId }); }
@@ -828,8 +828,8 @@ function getMockGetResponse<T>(method: string, url: URL): T {
   if (url.pathname === '/api/v1/playlists') return getMockPlaylists(url.searchParams.has('library_id') ? Number(url.searchParams.get('library_id')) : undefined) as T;
   const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
   if (playlist) return getMockPlaylist(Number(playlist[1])) as T;
-  if (/\/lyrics$/.test(url.pathname)) return { synced_lyrics: Array.from({length:42},(_,index)=>`[${String(Math.floor(index*5/60)).padStart(2,'0')}:${String(index*5%60).padStart(2,'0')}.00]${index % 7 === 0 ? '' : `Preview lyric line ${index+1}`}`).join('\n'), instrumental: false, source: 'LRCLIB', source_url: 'https://lrclib.net' } as T;
-  if (/\/radio$/.test(url.pathname)) return { items: getMockItems(3).filter((item) => item.item_type === 'track'), source: 'ListenBrainz' } as T;
+  if (url.pathname.endsWith('/lyrics')) return { synced_lyrics: Array.from({length:42},(_,index)=>`[${String(Math.floor(index*5/60)).padStart(2,'0')}:${String(index*5%60).padStart(2,'0')}.00]${index % 7 === 0 ? '' : 'Preview lyric line ' + (index+1)}`).join('\n'), instrumental: false, source: 'LRCLIB', source_url: 'https://lrclib.net' } as T;
+  if (url.pathname.endsWith('/radio')) return { items: getMockItems(3).filter((item) => item.item_type === 'track'), source: 'ListenBrainz' } as T;
   switch (url.pathname) {
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
@@ -1077,7 +1077,7 @@ function requestHeaders(body?: unknown): Record<string, string> {
 
 async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), /\/radio$/.test(path) ? 30000 : REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS);
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),

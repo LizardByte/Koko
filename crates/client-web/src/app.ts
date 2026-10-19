@@ -41,9 +41,8 @@ import {
 } from './app/selectors';
 import { syncVisibleSpinners } from './app/spinners';
 import { state } from './app/state';
-import { configureMusicPlayer, syncMusicPlayer } from './app/musicPlayer';
+import { configureAudioPlayer, syncAudioPlayer } from './app/audioPlayer';
 import { itemArtwork } from './app/tvItemView';
-import { personBackdropUrl } from './app/itemPersonView';
 import { beginMetadataRequest, invalidateMetadataRequests } from './app/metadataRequests';
 import {
   renderHomePage,
@@ -52,6 +51,7 @@ import {
 import {
   renderItemPage,
   renderPersonPage,
+  personBackdropUrl,
 } from './app/itemPersonView';
 import { renderSettingsPage } from './app/settingsView';
 import type { AppRoute } from './app/types';
@@ -423,7 +423,7 @@ function renderNavigationHint(): string {
 }
 
 function render(preserveScroll = true): void {
-  syncMusicPlayer();
+  syncAudioPlayer();
   if (!state.isPlayerOpen && !state.activeTrailer) {
     document.body.style.cursor = '';
   }
@@ -451,9 +451,7 @@ function render(preserveScroll = true): void {
   const homeFeature = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? homeFeaturePreview()
     : undefined;
-  const pageBackdropUrl = state.route.page === 'item' && state.selectedItem
-    ? itemArtwork(state.selectedItem).backdrop
-    : state.route.page === 'person' ? personBackdropUrl() : pageBackdropUrlForHomePreview(homeFeature);
+  const pageBackdropUrl = currentPageBackdrop(homeFeature);
   const railCollapsed = isRailCollapsed();
   const pageBackdropScopeClass = state.route.page === 'home' || state.route.page === 'browse-detail'
     ? ' home-page-backdrop'
@@ -805,7 +803,7 @@ export function startApp(): void {
 
   appStarted = true;
   configurePlaybackController({ render, refreshData });
-  configureMusicPlayer({ changed: () => { syncThemeSongPlayer(); render(); }, navigate: navigateTo, saved: () => refreshData(false) });
+  configureAudioPlayer({ changed: () => { syncThemeSongPlayer(); render(); }, navigate: navigateTo, saved: () => refreshData(false) });
   bindGlobalInputHandlers(state);
 
   globalThis.addEventListener('popstate', () => {
@@ -822,4 +820,10 @@ export function startApp(): void {
 
   render();
   void refreshData();
+}
+
+function currentPageBackdrop(homeFeature: ReturnType<typeof homeFeaturePreview>): string | undefined {
+  if (state.route.page === 'item' && state.selectedItem) return itemArtwork(state.selectedItem).backdrop;
+  if (state.route.page === 'person') return personBackdropUrl();
+  return pageBackdropUrlForHomePreview(homeFeature);
 }

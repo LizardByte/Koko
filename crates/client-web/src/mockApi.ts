@@ -560,7 +560,7 @@ const metadataProviders: MetadataProviderStatus[] = [
     requires_api_key: false, implemented: true, role: 'secondary', extends_provider_ids: [],
     enabled: false, configured: true, language: 'en-US',
     attribution_text: 'Lyrics provided by LRCLIB.', attribution_url: 'https://lrclib.net/',
-    logo_light_url: '/assets/providers/lrclib.ico', logo_dark_url: '/assets/providers/lrclib.ico',
+    logo_light_url: '/assets/providers/lrclib.png', logo_dark_url: '/assets/providers/lrclib.png',
   },
   {
     id: 'fanart',
@@ -1259,7 +1259,8 @@ function mockAlbumPlaybackTarget(albumId: number): MediaPlaybackTarget | undefin
   const latest = tracks.map((track, index) => ({ index, progress: playbackProgress.get(`${userId}:${track.id}`) }))
     .filter((entry) => entry.progress && (entry.progress.position_ms > 0 || entry.progress.completed))
     .sort((left, right) => (right.progress?.revision ?? 0) - (left.progress?.revision ?? 0))[0];
-  const target = tracks[latest ? latest.index + (latest.progress?.completed ? 1 : 0) : 0];
+  const nextIndex = latest ? latest.index + Number(Boolean(latest.progress?.completed)) : 0;
+  const target = tracks[nextIndex];
   return target ? { item_id: target.id, start_ms: latest && !latest.progress?.completed ? latest.progress?.position_ms ?? 0 : 0,
     label: latest ? 'Continue album' : 'Play album', display_title: target.display_title, resume: Boolean(latest && !latest.progress?.completed) } : undefined;
 }

@@ -35,7 +35,8 @@ export function itemArtwork(item: MediaItemDetail): { poster?: string; logo?: st
 export function renderTvTitle(item: MediaItemDetail, logo?: string): string {
   const identity = heroPresentation(item, state.libraryItems).identity;
   const episodeTitle = [episodeCode(item), item.display_title].filter(Boolean).join(' · ');
-  const title = identity.id !== item.id ? identity.display_title : (item.item_type === 'episode' ? episodeTitle : item.display_title);
+  const itemTitle = item.item_type === 'episode' ? episodeTitle : item.display_title;
+  const title = identity.id !== item.id ? identity.display_title : itemTitle;
   const heading = logo
     ? `<img class="item-title-logo" src="${escapeHtml(logo)}" alt="${escapeHtml(title)}" />`
     : `<h2 class="item-title-fallback">${escapeHtml(title)}</h2>`;

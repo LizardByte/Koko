@@ -40,7 +40,8 @@ export function musicCardStatus(target: MusicCardTarget): MusicCardStatus | unde
     ? active.queueId === target.queueId
     : target.itemId === active.item.id
       || (active.queueId === undefined && target.albumId !== undefined && target.albumId === active.item.parent_id);
-  return matches ? active.paused ? 'paused' : 'playing' : undefined;
+  if (!matches) return undefined;
+  return active.paused ? 'paused' : 'playing';
 }
 
 export function setMusicPlayback(playback: MusicPlaybackState | undefined): void {

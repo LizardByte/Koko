@@ -273,7 +273,7 @@ export function renderPlaylistDetailPage(): string {
             <span class="tag">${items.length} songs</span>
           </div>
           <div class="detail-actions">
-            ${matches ? `<button type="button" data-play-playlist="${detail!.playlist.id}" ${items.some((item) => item.playable && !item.missing_since) ? '' : 'disabled'}>${playlistPlaybackButtonContent(detail!)}</button><button type="button" class="secondary-button" data-delete-playlist="${detail!.playlist.id}">${renderButtonContent(`Delete ${kind}`, 'trash-2')}</button>` : ''}
+            ${matches ? `<button type="button" data-play-playlist="${detail!.playlist.id}" ${playlistDisabled(items)}>${playlistPlaybackButtonContent(detail!)}</button><button type="button" class="secondary-button" data-delete-playlist="${detail!.playlist.id}">${renderButtonContent('Delete ' + kind, 'trash-2')}</button>` : ''}
             <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
           </div>
         </div>
@@ -868,7 +868,7 @@ function browseSelect(name: string, label: string, value: string, options: Array
 
 export function renderLibraryToolbar(): string {
   const kind=activeLibrary()?.kind;
-  const statusLabels=kind==='music' ? ['Listening status','Unlistened','Listened'] : kind==='books' ? ['Reading status','Unread','Read'] : ['Watch status','Unwatched','Watched'];
+  const statusLabels = ({ music: ['Listening status', 'Unlistened', 'Listened'], books: ['Reading status', 'Unread', 'Read'] } as Record<string, string[]>)[kind ?? ''] ?? ['Watch status', 'Unwatched', 'Watched'];
   const allItems = filteredTopLevelLibraryItems();
   const preferences = state.browsePreferences;
   const genres = [...new Set(allItems.flatMap((item) => item.genres))].sort((left, right) => left.localeCompare(right));
@@ -1145,3 +1145,5 @@ export function renderHomeNavbar(): string {
     </header>
   `;
 }
+
+function playlistDisabled(items: MediaItemSummary[]): string { return items.some((item) => item.playable && !item.missing_since) ? '' : 'disabled'; }

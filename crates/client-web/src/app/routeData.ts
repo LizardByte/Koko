@@ -101,19 +101,15 @@ export async function loadRouteData(
   load('metadata providers', source.getMetadataProviders(), (value) => { state.metadataProviders = value; });
   if (admin) load('background activity', source.getSystemActivities(), (value) => { state.systemActivities = value.activities; });
   // Settings supply per-library language preferences on item pages; other browsing pages do not need them.
-  if (admin && (route.page === 'settings' || route.page === 'item')) {
+  if (needsRouteSettings(route, admin)) {
     load('settings', source.getSettings(), (value) => { state.settingsResponse = value; });
   }
-  if (route.page === 'settings' && route.section === 'users' && state.bootstrap?.current_user?.admin) {
+  if (isUserSettingsRoute(route, admin)) {
     load('users', source.getUsers(), (value) => { state.users = value; });
   }
 
   if (route.page === 'home' || route.page === 'browse-detail') {
-    if (source.getPlaylists) load('playlists', source.getPlaylists(route.libraryId), (value) => { state.playlists = value; });
-    if (route.page === 'browse-detail' && route.kind === 'playlist' && source.getPlaylist && /^\d+$/.test(route.key)) {
-      state.selectedPlaylist = undefined;
-      load('playlist', source.getPlaylist(Number(route.key)), (value) => { state.selectedPlaylist = value; });
-    }
+    loadPlaylistRoutes(state, route, source, load);
     load('featured media', source.getHome(route.libraryId), (value) => { state.home = value; });
     state.libraryItemsLoading = !state.home;
     load('library titles', source.getItems(route.libraryId).finally(() => {
@@ -157,4 +153,21 @@ export async function loadRouteData(
     }));
   }
   await Promise.all(tasks);
+}
+
+function needsRouteSettings(route: AppRoute, admin: boolean): boolean {
+  return admin && (route.page === 'settings' || route.page === 'item');
+}
+type RouteLoader = <T>(label: string, request: Promise<T>, apply: (value: T) => void) => void;
+function loadPlaylistRoutes(state: AppState, route: AppRoute, source: RouteApi, load: RouteLoader): void {
+  if (route.page !== 'home' && route.page !== 'browse-detail') return;
+  if (source.getPlaylists) load('playlists', source.getPlaylists(route.libraryId), value => { state.playlists = value; });
+  if (route.page === 'browse-detail' && route.kind === 'playlist' && source.getPlaylist && /^\d+$/.test(route.key)) {
+    state.selectedPlaylist = undefined;
+    load('playlist', source.getPlaylist(Number(route.key)), value => { state.selectedPlaylist = value; });
+  }
+}
+
+function isUserSettingsRoute(route: AppRoute, admin: boolean): boolean {
+  return admin && route.page === 'settings' && route.section === 'users';
 }

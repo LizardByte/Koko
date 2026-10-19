@@ -499,7 +499,8 @@ export function libraryScannerOptions(selectedScanner: string): string {
 
 function renderProviderSettingsLogo(providerId: string, compact = false): string {
   const logoUrl = providerAttributionLogo(providerId);
-  return logoUrl ? `<span class="provider-settings-logo${compact ? ' provider-source-logo' : ''}" aria-hidden="true">
+  const compactClass = compact ? ' provider-source-logo' : '';
+  return logoUrl ? `<span class="provider-settings-logo${compactClass}" aria-hidden="true">
     ${renderIcon('link-2', 'provider-logo-fallback')}
     <img data-provider-logo src="${escapeHtml(logoUrl)}" alt="" />
   </span>` : '';

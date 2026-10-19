@@ -70,6 +70,7 @@ use crate::db::models::{
     ScanState,
     User,
 };
+use crate::db::schema::media_file_libraries as catalog_memberships;
 use crate::metadata::{
     ArtworkKind,
     DEFAULT_METADATA_LOCALE,
@@ -218,20 +219,6 @@ struct LibraryMetadataRefreshCounts {
     completed_items: i64,
     failed_items: i64,
 }
-
-const CATALOG_MEDIA_FILE_COLUMNS: &str =
-    "\
-      files.id AS id,files.path AS path,memberships.id AS library_file_id,memberships.library_id \
-     AS library_id,memberships.source_root_path AS source_root_path,memberships.relative_path AS \
-     relative_path,files.file_size AS file_size,files.modified_at AS modified_at,files.media_kind \
-     AS media_kind,files.file_hash AS file_hash,memberships.display_title AS \
-     display_title,files.container AS container,files.duration_ms AS duration_ms,files.bit_rate \
-     AS bit_rate,files.width AS width,files.height AS height,files.video_codec AS \
-     video_codec,files.audio_codec AS audio_codec,files.metadata_json AS \
-     metadata_json,files.metadata_updated_at AS \
-     metadata_updated_at,memberships.metadata_match_attempted_at AS \
-     metadata_match_attempted_at,memberships.media_item_id AS \
-     media_item_id,memberships.missing_since AS missing_since,memberships.deleted_at AS deleted_at";
 
 /// Persisted media file summary for a library.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
@@ -720,56 +707,56 @@ pub struct AutomaticMetadataCandidate {
     pub music: Option<MusicMetadata>,
 }
 
-#[derive(Debug, Clone, diesel::QueryableByName)]
+#[derive(Debug, Clone, diesel::Queryable, diesel::Selectable)]
 #[diesel(table_name = crate::db::schema::media_files)]
 struct CatalogMediaFile {
-    #[diesel(sql_type = sql_types::Integer)]
+    #[diesel(select_expression = crate::db::schema::media_files::id)]
     id: i32,
-    #[diesel(sql_type = sql_types::Text)]
+    #[diesel(select_expression = crate::db::schema::media_files::path)]
     path: String,
-    #[diesel(sql_type = sql_types::Integer)]
+    #[diesel(select_expression = catalog_memberships::id)]
     library_file_id: i32,
-    #[diesel(sql_type = sql_types::Integer)]
+    #[diesel(select_expression = catalog_memberships::library_id)]
     library_id: i32,
-    #[diesel(sql_type = sql_types::Text)]
+    #[diesel(select_expression = catalog_memberships::source_root_path)]
     source_root_path: String,
-    #[diesel(sql_type = sql_types::Text)]
+    #[diesel(select_expression = catalog_memberships::relative_path)]
     relative_path: String,
-    #[diesel(sql_type = sql_types::BigInt)]
+    #[diesel(select_expression = crate::db::schema::media_files::file_size)]
     file_size: i64,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = crate::db::schema::media_files::modified_at)]
     modified_at: Option<i64>,
-    #[diesel(sql_type = sql_types::Text)]
+    #[diesel(select_expression = crate::db::schema::media_files::media_kind)]
     media_kind: String,
-    #[diesel(sql_type = sql_types::Text)]
+    #[diesel(select_expression = crate::db::schema::media_files::file_hash)]
     file_hash: String,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
+    #[diesel(select_expression = catalog_memberships::display_title)]
     display_title: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
+    #[diesel(select_expression = crate::db::schema::media_files::container)]
     container: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = crate::db::schema::media_files::duration_ms)]
     duration_ms: Option<i64>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = crate::db::schema::media_files::bit_rate)]
     bit_rate: Option<i64>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
+    #[diesel(select_expression = crate::db::schema::media_files::width)]
     width: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
+    #[diesel(select_expression = crate::db::schema::media_files::height)]
     height: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
+    #[diesel(select_expression = crate::db::schema::media_files::video_codec)]
     video_codec: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
+    #[diesel(select_expression = crate::db::schema::media_files::audio_codec)]
     audio_codec: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Text>)]
+    #[diesel(select_expression = crate::db::schema::media_files::metadata_json)]
     metadata_json: Option<String>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = crate::db::schema::media_files::metadata_updated_at)]
     metadata_updated_at: Option<i64>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = catalog_memberships::metadata_match_attempted_at)]
     metadata_match_attempted_at: Option<i64>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::Integer>)]
+    #[diesel(select_expression = catalog_memberships::media_item_id)]
     media_item_id: Option<i32>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = catalog_memberships::missing_since)]
     missing_since: Option<i64>,
-    #[diesel(sql_type = sql_types::Nullable<sql_types::BigInt>)]
+    #[diesel(select_expression = catalog_memberships::deleted_at)]
     deleted_at: Option<i64>,
 }
 
@@ -1247,43 +1234,53 @@ fn load_catalog_files_for_library(
     library_id: i32,
     include_deleted: bool,
 ) -> Result<Vec<CatalogMediaFile>, diesel::result::Error> {
-    let deleted_filter = if include_deleted { "" } else { " AND memberships.deleted_at IS NULL" };
-    let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
-         media_files AS files ON files.id = memberships.media_file_id WHERE \
-         memberships.library_id = ?{deleted_filter} ORDER BY memberships.relative_path ASC"
-    );
-    diesel::sql_query(sql)
-        .bind::<sql_types::Integer, _>(library_id)
-        .load::<CatalogMediaFile>(conn)
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as files,
+    };
+    let mut query = membership::table
+        .inner_join(files::table)
+        .filter(membership::library_id.eq(library_id))
+        .select(CatalogMediaFile::as_select())
+        .into_boxed();
+    if !include_deleted {
+        query = query.filter(membership::deleted_at.is_null());
+    }
+    query.order(membership::relative_path.asc()).load(conn)
 }
 
 fn load_active_catalog_files(
     conn: &mut SqliteConnection
 ) -> Result<Vec<CatalogMediaFile>, diesel::result::Error> {
-    let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
-         media_files AS files ON files.id = memberships.media_file_id WHERE \
-         memberships.deleted_at IS NULL AND memberships.missing_since IS NULL ORDER BY \
-         files.modified_at DESC, files.id ASC"
-    );
-    diesel::sql_query(sql).load::<CatalogMediaFile>(conn)
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as files,
+    };
+    membership::table
+        .inner_join(files::table)
+        .filter(membership::deleted_at.is_null())
+        .filter(membership::missing_since.is_null())
+        .order((files::modified_at.desc(), files::id.asc()))
+        .select(CatalogMediaFile::as_select())
+        .load(conn)
 }
 
 fn load_catalog_file_for_item(
     conn: &mut SqliteConnection,
     item_id: i32,
 ) -> Result<Option<CatalogMediaFile>, diesel::result::Error> {
-    let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
-         media_files AS files ON files.id = memberships.media_file_id WHERE \
-         memberships.media_item_id = ? AND memberships.deleted_at IS NULL ORDER BY memberships.id \
-         ASC LIMIT 1"
-    );
-    diesel::sql_query(sql)
-        .bind::<sql_types::Integer, _>(item_id)
-        .load::<CatalogMediaFile>(conn)
-        .map(|mut rows| rows.pop())
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as files,
+    };
+    membership::table
+        .inner_join(files::table)
+        .filter(membership::media_item_id.eq(item_id))
+        .filter(membership::deleted_at.is_null())
+        .order(membership::id.asc())
+        .select(CatalogMediaFile::as_select())
+        .first(conn)
+        .optional()
 }
 
 fn load_catalog_file_for_library_path(
@@ -1292,18 +1289,19 @@ fn load_catalog_file_for_library_path(
     source_root_path: &str,
     relative_path: &str,
 ) -> Result<Option<CatalogMediaFile>, diesel::result::Error> {
-    let sql = format!(
-        "SELECT {CATALOG_MEDIA_FILE_COLUMNS} FROM media_file_libraries AS memberships INNER JOIN \
-         media_files AS files ON files.id = memberships.media_file_id WHERE \
-         memberships.library_id = ? AND memberships.source_root_path = ? AND \
-         memberships.relative_path = ? ORDER BY memberships.id ASC LIMIT 1"
-    );
-    diesel::sql_query(sql)
-        .bind::<sql_types::Integer, _>(library_id)
-        .bind::<sql_types::Text, _>(source_root_path)
-        .bind::<sql_types::Text, _>(relative_path)
-        .load::<CatalogMediaFile>(conn)
-        .map(|mut rows| rows.pop())
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as files,
+    };
+    membership::table
+        .inner_join(files::table)
+        .filter(membership::library_id.eq(library_id))
+        .filter(membership::source_root_path.eq(source_root_path))
+        .filter(membership::relative_path.eq(relative_path))
+        .order(membership::id.asc())
+        .select(CatalogMediaFile::as_select())
+        .first(conn)
+        .optional()
 }
 
 fn load_media_file_by_path(
@@ -1362,10 +1360,13 @@ fn clear_metadata_match_attempts_for_media_file(
 fn delete_unreferenced_media_files(
     conn: &mut SqliteConnection
 ) -> Result<usize, diesel::result::Error> {
-    diesel::sql_query(
-        "DELETE FROM media_files WHERE NOT EXISTS ( SELECT 1 FROM media_file_libraries WHERE \
-         media_file_libraries.media_file_id = media_files.id )",
-    )
+    use crate::db::schema::{
+        media_file_libraries as membership,
+        media_files as files,
+    };
+    diesel::delete(files::table.filter(diesel::dsl::not(diesel::dsl::exists(
+        membership::table.filter(membership::media_file_id.eq(files::id)),
+    ))))
     .execute(conn)
 }
 

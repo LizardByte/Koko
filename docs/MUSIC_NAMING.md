@@ -1,6 +1,6 @@
 # Music libraries
 
-Create a library in **Settings → Libraries**, choose **Music**, add one or more folders, and select **MusicBrainz** as its metadata provider. No API key is required. Use **Scan now** to discover files; metadata matching runs in the background. Library access permissions apply to music browsing, artwork, and playback.
+Create a library in **Settings → Libraries**, choose **Music**, add one or more folders, and select **MusicBrainz** as its metadata provider. No API key is required for MusicBrainz. New libraries scan and match metadata automatically. Subsequent scans fetch metadata only for newly discovered items; use **Refresh metadata** to refresh existing items or retry earlier failed matches. This scan behavior applies to every library type. Library access permissions apply to music browsing, artwork, and playback.
 
 Koko groups music into **artist → album → track**. When embedded tags are enabled, album artist tags keep compilations together even when individual tracks credit different performers. Open an album to see tracks in disc and track order, and choose **Play album** to play its available tracks sequentially. Playing a track continues through the remaining tracks on that album.
 

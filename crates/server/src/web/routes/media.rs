@@ -1419,17 +1419,17 @@ async fn register_metadata_refresh_activity_for_items(
     Some((activity_id, queued_item_ids))
 }
 
-async fn register_manual_library_automatch_activity(
+async fn register_library_automatch_activity(
     db: &DbConn,
     library_id: i32,
+    scope: AutomaticMetadataScope,
 ) -> Option<(String, Vec<i32>)> {
+    let manual = matches!(scope, AutomaticMetadataScope::AllUnmatched);
     let candidates = match db
         .run(move |conn| {
             metadata_jobs::load(
                 conn,
-                |conn| {
-                    list_automatic_metadata_refresh_candidates(conn, Some(library_id), usize::MAX)
-                },
+                |conn| scope.candidates(conn, Some(library_id)),
                 |candidate| candidate.item_id,
             )
         })
@@ -1452,8 +1452,13 @@ async fn register_manual_library_automatch_activity(
 
     register_metadata_refresh_activity_for_items(
         "library",
-        "manual_library_automatch",
-        "Match unlinked library metadata".into(),
+        if manual { "manual_library_automatch" } else { "automatic_match" },
+        if manual {
+            "Match unlinked library metadata"
+        } else {
+            "Get metadata for new library items"
+        }
+        .into(),
         Some(library_id),
         None,
         None,
@@ -2909,7 +2914,8 @@ async fn cache_deferred_person_image(
 fn linked_shows_needing_descendant_backfill(
     conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
     library_id: Option<i32>,
-) -> Result<Vec<(i32, String)>, diesel::result::Error> {
+    scope: &AutomaticMetadataScope,
+) -> Result<Vec<(i32, MetadataProviderId, String)>, diesel::result::Error> {
     let items = list_media_items(conn, library_id)?;
     let mut pending = Vec::new();
 
@@ -2917,8 +2923,13 @@ fn linked_shows_needing_descendant_backfill(
         let Some(link) = get_primary_item_metadata_link(conn, show.id)? else {
             continue;
         };
-        if link.provider_id != MetadataProviderId::Tmdb.as_storage_value()
-            || link.media_type.as_deref() != Some("tv")
+        let Some(provider_id) = MetadataProviderId::from_storage_value(&link.provider_id) else {
+            continue;
+        };
+        if !matches!(
+            (&provider_id, link.media_type.as_deref()),
+            (MetadataProviderId::Tmdb, Some("tv")) | (MetadataProviderId::Tvdb, Some("series"))
+        ) || link.match_state == "unlinked"
         {
             continue;
         }
@@ -2929,7 +2940,10 @@ fn linked_shows_needing_descendant_backfill(
             .into_iter()
             .filter(|item| item.item_type == "season")
         {
-            if descendant_metadata_needs_backfill(get_primary_item_metadata_link(conn, season.id)?)
+            if scope.includes(season.id)
+                && descendant_metadata_needs_backfill(get_primary_item_metadata_link(
+                    conn, season.id,
+                )?)
             {
                 needs_backfill = true;
                 break;
@@ -2938,6 +2952,7 @@ fn linked_shows_needing_descendant_backfill(
             let episodes = list_media_item_children(conn, season.id)?;
             if episodes.into_iter().any(|episode| {
                 episode.item_type == "episode"
+                    && scope.includes(episode.id)
                     && descendant_metadata_needs_backfill(
                         get_primary_item_metadata_link(conn, episode.id)
                             .ok()
@@ -2950,7 +2965,7 @@ fn linked_shows_needing_descendant_backfill(
         }
 
         if needs_backfill {
-            pending.push((show.id, link.external_id));
+            pending.push((show.id, provider_id, link.external_id));
         }
     }
 
@@ -2969,9 +2984,46 @@ fn available_automatic_metadata_providers(settings: &Settings) -> HashSet<Metada
     // exposed by provider settings and must not override that selection.
     list_provider_statuses(&settings.metadata)
         .into_iter()
-        .filter(|provider| provider.configured && provider.implemented)
+        .filter(|provider| {
+            provider.configured
+                && provider.implemented
+                && provider.role == MetadataProviderRole::Primary
+        })
         .map(|provider| provider.id)
         .collect()
+}
+
+#[derive(Clone)]
+enum AutomaticMetadataScope {
+    AllUnmatched,
+    NewItems(HashSet<i32>),
+}
+
+impl AutomaticMetadataScope {
+    fn includes(
+        &self,
+        item_id: i32,
+    ) -> bool {
+        match self {
+            Self::AllUnmatched => true,
+            Self::NewItems(ids) => ids.contains(&item_id),
+        }
+    }
+
+    fn candidates(
+        &self,
+        conn: &mut rocket_sync_db_pools::diesel::SqliteConnection,
+        library_id: Option<i32>,
+    ) -> Result<Vec<crate::media::AutomaticMetadataCandidate>, diesel::result::Error> {
+        let mut candidates = match self {
+            Self::AllUnmatched => {
+                list_automatic_metadata_refresh_candidates(conn, library_id, usize::MAX)?
+            }
+            Self::NewItems(_) => list_automatic_metadata_candidates(conn, library_id, usize::MAX)?,
+        };
+        candidates.retain(|candidate| self.includes(candidate.item_id));
+        Ok(candidates)
+    }
 }
 
 enum AutomaticMetadataWork {
@@ -3014,23 +3066,17 @@ async fn run_automatic_movie_metadata_linking(
     db: &DbConn,
     settings: &crate::config::Settings,
     library_id: Option<i32>,
-    retry_previously_attempted: bool,
+    scope: AutomaticMetadataScope,
     activity: Option<(String, Vec<i32>)>,
     linked_music_refresh: Option<(String, Vec<MetadataRefreshTarget>)>,
 ) {
     let ready_providers = available_automatic_metadata_providers(settings);
-
+    let candidate_scope = scope.clone();
     let mut candidates = match db
         .run(move |conn| {
             metadata_jobs::load(
                 conn,
-                |conn| {
-                    if retry_previously_attempted {
-                        list_automatic_metadata_refresh_candidates(conn, library_id, usize::MAX)
-                    } else {
-                        list_automatic_metadata_candidates(conn, library_id, 8)
-                    }
-                },
+                |conn| candidate_scope.candidates(conn, library_id),
                 |candidate| candidate.item_id,
             )
         })
@@ -3052,7 +3098,11 @@ async fn run_automatic_movie_metadata_linking(
             .collect::<Vec<_>>();
         register_metadata_refresh_activity_for_items(
             "library",
-            if retry_previously_attempted { "manual_library_automatch" } else { "automatic_match" },
+            if matches!(scope, AutomaticMetadataScope::AllUnmatched) {
+                "manual_library_automatch"
+            } else {
+                "automatic_match"
+            },
             "Match unlinked library metadata".into(),
             library_id,
             None,
@@ -3275,12 +3325,13 @@ async fn run_automatic_movie_metadata_linking(
         complete_metadata_refresh_activity(&id).await;
     }
 
+    let backfill_scope = scope.clone();
     let pending_show_backfills = match db
         .run(move |conn| {
             metadata_jobs::load(
                 conn,
-                |conn| linked_shows_needing_descendant_backfill(conn, library_id),
-                |(id, _)| *id,
+                |conn| linked_shows_needing_descendant_backfill(conn, library_id, &backfill_scope),
+                |(id, _, _)| *id,
             )
         })
         .await
@@ -3295,18 +3346,19 @@ async fn run_automatic_movie_metadata_linking(
         }
     };
 
-    for ((show_item_id, external_id), revision) in pending_show_backfills {
+    for ((show_item_id, provider_id, external_id), revision) in pending_show_backfills {
         match revision
             .scope(load_show_descendant_refresh_targets(
                 db,
                 settings,
                 show_item_id,
-                MetadataProviderId::Tmdb,
+                provider_id,
                 &external_id,
             ))
             .await
         {
-            Ok(targets) => {
+            Ok(mut targets) => {
+                targets.retain(|target| scope.includes(target.item_id));
                 if let Err(status) =
                     execute_metadata_refresh_targets(db, targets, settings, None).await
                 {
@@ -3604,7 +3656,7 @@ pub async fn scan_library(
     Ok(Json(library_summary))
 }
 
-/// Queue a catalog scan followed by metadata matching and refresh.
+/// Queue a catalog scan followed by metadata matching for newly discovered items only.
 pub(super) async fn start_library_scan(
     db: DbConn,
     settings: Settings,
@@ -3629,7 +3681,35 @@ pub(super) async fn start_library_scan(
         let scan_task = tokio::spawn(async move {
             let result = db
                 .run(move |conn| {
-                    sync_persisted_library_catalog_for_library(conn, &ffmpeg_settings, library_id)
+                    use crate::db::schema::media_items::dsl as items;
+                    use diesel::{
+                        ExpressionMethods,
+                        QueryDsl,
+                        RunQueryDsl,
+                    };
+                    // Include inactive rows: rediscovering an existing item must not
+                    // overwrite its metadata either. Read scalar IDs, not browse cards.
+                    let previous = items::media_items
+                        .filter(items::library_id.eq(library_id))
+                        .select(items::id)
+                        .load::<i32>(conn)?
+                        .into_iter()
+                        .collect::<HashSet<_>>();
+                    let summary = sync_persisted_library_catalog_for_library(
+                        conn,
+                        &ffmpeg_settings,
+                        library_id,
+                    )?;
+                    let current = items::media_items
+                        .filter(items::library_id.eq(library_id))
+                        .filter(items::deleted_at.is_null())
+                        .select(items::id)
+                        .load::<i32>(conn)?;
+                    let new_ids = current
+                        .into_iter()
+                        .filter(|id| !previous.contains(id))
+                        .collect();
+                    Ok::<_, diesel::result::Error>(summary.map(|summary| (summary, new_ids)))
                 })
                 .await;
             (db, result)
@@ -3637,7 +3717,7 @@ pub(super) async fn start_library_scan(
         let sync_result = scan_task.await;
         drop(scan_guard);
         let failed = match sync_result {
-            Ok((db, Ok(Some(summary)))) => {
+            Ok((db, Ok(Some((summary, new_ids))))) => {
                 log::info!(
                     "Completed media library catalog scan for library {} ({}): {} file(s), status \
                      {:?}",
@@ -3646,8 +3726,14 @@ pub(super) async fn start_library_scan(
                     summary.total_files,
                     summary.status
                 );
-                if let Err(status) =
-                    start_library_metadata_refresh(db, settings, library_id, summary.name).await
+                if let Err(status) = start_library_metadata_refresh(
+                    db,
+                    settings,
+                    library_id,
+                    summary.name,
+                    AutomaticMetadataScope::NewItems(new_ids),
+                )
+                .await
                 {
                     log::error!(
                         "Failed to start metadata refresh after library {library_id} scan: \
@@ -4948,20 +5034,35 @@ async fn prepare_manual_library_metadata_refresh(
             return Err(status);
         }
     }
-    let automatch_activity = register_manual_library_automatch_activity(db, library_id).await;
+    let automatch_activity =
+        register_library_automatch_activity(db, library_id, AutomaticMetadataScope::AllUnmatched)
+            .await;
     Ok(PreparedLibraryMetadataRefresh {
         refresh_activity,
         automatch_activity,
     })
 }
 
-async fn run_manual_library_metadata_refresh(
+async fn run_library_metadata_refresh(
     db: DbConn,
     settings: Settings,
     library_id: i32,
     library_name: String,
     prepared: PreparedLibraryMetadataRefresh,
+    scope: AutomaticMetadataScope,
 ) -> (DbConn, Settings, String) {
+    if matches!(scope, AutomaticMetadataScope::NewItems(_)) {
+        run_automatic_movie_metadata_linking(
+            &db,
+            &settings,
+            Some(library_id),
+            scope,
+            prepared.automatch_activity,
+            None,
+        )
+        .await;
+        return (db, settings, library_name);
+    }
     let is_music = db
         .run(move |conn| {
             use crate::db::schema::media_libraries::dsl as libraries;
@@ -4981,7 +5082,7 @@ async fn run_manual_library_metadata_refresh(
             &db,
             &settings,
             Some(library_id),
-            true,
+            AutomaticMetadataScope::AllUnmatched,
             prepared.automatch_activity,
             prepared.refresh_activity,
         )
@@ -5027,7 +5128,7 @@ async fn run_manual_library_metadata_refresh(
         &db,
         &settings,
         Some(library_id),
-        true,
+        AutomaticMetadataScope::AllUnmatched,
         prepared.automatch_activity,
         None,
     )
@@ -5045,7 +5146,14 @@ pub async fn refresh_library_metadata(
 ) -> Result<Json<PersistedLibrarySummary>, Status> {
     let settings = current_settings();
     let library_summary = load_library_summary(&db, library_id).await?;
-    start_library_metadata_refresh(db, settings, library_id, library_summary.name.clone()).await?;
+    start_library_metadata_refresh(
+        db,
+        settings,
+        library_id,
+        library_summary.name.clone(),
+        AutomaticMetadataScope::AllUnmatched,
+    )
+    .await?;
     Ok(Json(library_summary))
 }
 
@@ -5054,23 +5162,42 @@ async fn start_library_metadata_refresh(
     settings: Settings,
     library_id: i32,
     library_name: String,
+    scope: AutomaticMetadataScope,
 ) -> Result<(), Status> {
-    if !begin_library_metadata_refresh(library_id).await {
-        log::info!(
-            "Skipping duplicate library {} metadata refresh request; a refresh is already running",
-            library_id
-        );
+    if matches!(&scope, AutomaticMetadataScope::NewItems(ids) if ids.is_empty()) {
         return Ok(());
     }
+    while !begin_library_metadata_refresh(library_id).await {
+        if matches!(scope, AutomaticMetadataScope::AllUnmatched) {
+            log::info!(
+                "Skipping duplicate library {} metadata refresh request; a refresh is already \
+                 running",
+                library_id
+            );
+            return Ok(());
+        }
+        // A scan may finish while another metadata job owns this library. Keep
+        // its new items queued instead of silently losing their initial lookup.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 
-    let prepared =
-        match prepare_manual_library_metadata_refresh(&db, library_id, &library_name).await {
-            Ok(prepared) => prepared,
-            Err(status) => {
-                finish_library_metadata_refresh(library_id).await;
-                return Err(status);
-            }
-        };
+    let prepared_result = match &scope {
+        AutomaticMetadataScope::NewItems(_) => Ok(PreparedLibraryMetadataRefresh {
+            refresh_activity: None,
+            automatch_activity: register_library_automatch_activity(&db, library_id, scope.clone())
+                .await,
+        }),
+        AutomaticMetadataScope::AllUnmatched => {
+            prepare_manual_library_metadata_refresh(&db, library_id, &library_name).await
+        }
+    };
+    let prepared = match prepared_result {
+        Ok(prepared) => prepared,
+        Err(status) => {
+            finish_library_metadata_refresh(library_id).await;
+            return Err(status);
+        }
+    };
     let activity_ids = prepared
         .refresh_activity
         .iter()
@@ -5078,12 +5205,14 @@ async fn start_library_metadata_refresh(
         .chain(prepared.automatch_activity.iter().map(|(id, _)| id.clone()))
         .collect::<Vec<_>>();
     tokio::spawn(async move {
-        let refresh_task = tokio::spawn(run_manual_library_metadata_refresh(
+        let refresh_people = matches!(scope, AutomaticMetadataScope::AllUnmatched);
+        let refresh_task = tokio::spawn(run_library_metadata_refresh(
             db,
             settings,
             library_id,
             library_name,
             prepared,
+            scope,
         ));
         let people_refresh = match refresh_task.await {
             Ok(resources) => Some(resources),
@@ -5101,7 +5230,9 @@ async fn start_library_metadata_refresh(
             cancel_metadata_refresh_activity(&activity_id).await;
         }
         finish_library_metadata_refresh(library_id).await;
-        if let Some((people_db, people_settings, people_library_name)) = people_refresh {
+        if let Some((people_db, people_settings, people_library_name)) =
+            people_refresh.filter(|_| refresh_people)
+        {
             tokio::spawn(run_library_metadata_people_refresh(
                 people_db,
                 people_settings,

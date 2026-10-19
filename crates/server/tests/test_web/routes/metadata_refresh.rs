@@ -5,6 +5,109 @@ const SHOW: i32 = 195_000_001;
 const SEASON: i32 = 195_000_002;
 const EPISODE: i32 = 195_000_003;
 
+async fn wait_for_library_scans_and_metadata(library_ids: &[i32]) {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let scans_done = !ACTIVE_LIBRARY_SCANS
+                .lock()
+                .await
+                .iter()
+                .any(|id| library_ids.contains(id));
+            let metadata_done = !ACTIVE_LIBRARY_METADATA_REFRESHES
+                .read()
+                .await
+                .iter()
+                .any(|id| library_ids.contains(id));
+            if scans_done && metadata_done {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn existing_scan_metadata(
+    conn: &mut diesel::SqliteConnection,
+    ids: &[i32],
+) -> (Vec<(i32, Option<i64>)>, String) {
+    use crate::db::schema::{
+        item_metadata_links::dsl as links,
+        media_items::dsl as items,
+    };
+    use diesel::{
+        ExpressionMethods,
+        QueryDsl,
+        RunQueryDsl,
+        SelectableHelper,
+    };
+    let attempts = items::media_items
+        .filter(items::id.eq_any(ids))
+        .order(items::id)
+        .select((items::id, items::metadata_match_attempted_at))
+        .load(conn)
+        .unwrap();
+    let metadata = links::item_metadata_links
+        .filter(links::media_item_id.eq_any(ids))
+        .order(links::id)
+        .select(crate::db::models::ItemMetadataLink::as_select())
+        .load::<crate::db::models::ItemMetadataLink>(conn)
+        .unwrap();
+    (attempts, format!("{metadata:?}"))
+}
+
+#[test]
+fn scan_backfills_only_new_show_descendants_for_each_show_provider() {
+    use diesel::Connection;
+    let mut conn = diesel::SqliteConnection::establish(":memory:").unwrap();
+    crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+    conn.batch_execute(
+        "INSERT INTO media_libraries (id,name,path,kind) VALUES
+        (1,'Shows','shows','shows');
+        INSERT INTO media_items (id,library_id,parent_id,identity_key,item_type,display_title) \
+         VALUES
+        (1,1,NULL,'tmdb-show','show','TMDB show'),
+        (2,1,1,'tmdb-season','season','Season 1'),
+        (3,1,2,'tmdb-old','episode','Old episode'),
+        (4,1,2,'tmdb-new','episode','New episode'),
+        (5,1,NULL,'tvdb-show','show','TVDB show'),
+        (6,1,5,'tvdb-season','season','Season 1'),
+        (7,1,6,'tvdb-old','episode','Old episode'),
+        (8,1,6,'tvdb-new','episode','New episode');
+        INSERT INTO item_metadata_links
+            (media_item_id,provider_id,external_id,media_type,refresh_state) VALUES
+        (1,'tmdb','123','tv','fresh'), (2,'tmdb','old-season','tv_season','error'),
+        (3,'tmdb','old-episode','tv_episode','error'),
+        (5,'tvdb','456','series','fresh'), (6,'tvdb','old-season','season','error'),
+        (7,'tvdb','old-episode','episode','error');",
+    )
+    .unwrap();
+    let empty = AutomaticMetadataScope::NewItems(HashSet::new());
+    assert!(
+        linked_shows_needing_descendant_backfill(&mut conn, Some(1), &empty)
+            .unwrap()
+            .is_empty()
+    );
+    for (new_episode, show, provider, external_id) in [
+        (4, 1, MetadataProviderId::Tmdb, "123"),
+        (8, 5, MetadataProviderId::Tvdb, "456"),
+    ] {
+        let scope = AutomaticMetadataScope::NewItems(HashSet::from([new_episode]));
+        assert_eq!(
+            linked_shows_needing_descendant_backfill(&mut conn, Some(1), &scope).unwrap(),
+            vec![(show, provider, external_id.into())]
+        );
+    }
+    let manual = AutomaticMetadataScope::AllUnmatched;
+    assert_eq!(
+        linked_shows_needing_descendant_backfill(&mut conn, Some(1), &manual)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 fn target(
     item_id: i32,
     item_type: &str,
@@ -261,26 +364,7 @@ async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
             .all(|activity| activity.state == "queued" && activity.source == "library_added")
     );
     drop(scan_guard);
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        loop {
-            let scans_done = !ACTIVE_LIBRARY_SCANS
-                .lock()
-                .await
-                .iter()
-                .any(|id| IDS.contains(id));
-            let metadata_done = !ACTIVE_LIBRARY_METADATA_REFRESHES
-                .read()
-                .await
-                .iter()
-                .any(|id| IDS.contains(id));
-            if scans_done && metadata_done {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    wait_for_library_scans_and_metadata(&IDS).await;
     db.run(|conn| {
         use crate::db::schema::media_items::dsl as items;
         for (id, kind) in IDS.into_iter().zip(KINDS) {
@@ -342,6 +426,136 @@ async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
             .iter()
             .any(|activity| activity.library_id.is_some_and(|id| IDS.contains(&id)))
     );
+
+    // Seed edited, fresh, failed, and never-attempted older items. Scanning must
+    // preserve every metadata field and must not retry older failed matches.
+    let (old_ids, before) = db
+        .run(|conn| {
+            use crate::db::schema::media_items::dsl as items;
+            let ids = items::media_items
+                .filter(items::library_id.eq_any(IDS))
+                .select(items::id)
+                .load::<i32>(conn)
+                .unwrap();
+            for id in &ids {
+                diesel::sql_query(
+                    "UPDATE media_items SET metadata_match_attempted_at =
+                CASE WHEN id % 3 = 0 THEN NULL ELSE 123 END WHERE id = ?",
+                )
+                .bind::<diesel::sql_types::Integer, _>(id)
+                .execute(conn)
+                .unwrap();
+                if id % 3 == 0 {
+                    continue;
+                }
+                diesel::sql_query(
+                    "INSERT INTO item_metadata_links
+                (media_item_id,provider_id,external_id,media_type,title,overview,refresh_state,
+                 last_refreshed_at,next_refresh_at,refresh_error,updated_at)
+                SELECT id,'tmdb',CAST(id AS TEXT),
+                CASE WHEN item_type='show' THEN 'tv' ELSE 'movie' END,
+                'My edited title','My edited overview',
+                CASE WHEN id % 2 = 0 THEN 'error' ELSE 'fresh' END,
+                100,1,'Original error',101 FROM media_items WHERE id = ?",
+                )
+                .bind::<diesel::sql_types::Integer, _>(id)
+                .execute(conn)
+                .unwrap();
+            }
+            let before = existing_scan_metadata(conn, &ids);
+            (ids, before)
+        })
+        .await;
+    for add_files in [false, true] {
+        if add_files {
+            let new_album = root.join("Artist/Second Album");
+            std::fs::create_dir_all(&new_album).unwrap();
+            for number in 1..=10 {
+                std::fs::write(new_album.join(format!("{number:02} New.flac")), b"audio").unwrap();
+            }
+            std::fs::write(root.join("Second movie.mkv"), b"video").unwrap();
+            std::fs::write(season.join("Show - S01E02 - New.mkv"), b"video").unwrap();
+            std::fs::write(root.join("Second photo.jpg"), b"image").unwrap();
+            std::fs::write(root.join("Second book.epub"), b"book").unwrap();
+            // Even a changed existing file should keep its linked metadata.
+            std::fs::write(root.join("Movie (2020).mkv"), b"changed video").unwrap();
+        }
+        if add_files {
+            assert!(begin_library_metadata_refresh(FIRST).await);
+        }
+        for id in IDS {
+            let scan_db = DbConn::get_one(&rocket).await.unwrap();
+            start_library_scan(
+                scan_db,
+                settings.clone(),
+                id,
+                "Library".into(),
+                "manual_library_scan",
+            )
+            .await;
+        }
+        if add_files {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let count = db
+                        .run(|conn| list_media_items(conn, Some(FIRST)).unwrap().len())
+                        .await;
+                    if count > 12 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            finish_library_metadata_refresh(FIRST).await;
+        }
+        wait_for_library_scans_and_metadata(&IDS).await;
+        let original_ids = old_ids.clone();
+        let (after, new_items) = db
+            .run(move |conn| {
+                let after = existing_scan_metadata(conn, &original_ids);
+                let new_items = list_media_items(conn, None)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|item| !original_ids.contains(&item.id))
+                    .collect::<Vec<_>>();
+                (after, new_items)
+            })
+            .await;
+        assert_eq!(
+            before, after,
+            "scan must leave existing metadata and attempts unchanged"
+        );
+        assert_eq!(!new_items.is_empty(), add_files);
+        if add_files {
+            let new_ids = new_items.iter().map(|item| item.id).collect::<Vec<_>>();
+            let attempts = db
+                .run(move |conn| existing_scan_metadata(conn, &new_ids).0)
+                .await;
+            for id in [FIRST, FIRST + 1] {
+                let eligible = new_items
+                    .iter()
+                    .filter(|item| item.library_id == id)
+                    .map(|item| item.id)
+                    .collect::<Vec<_>>();
+                assert!(!eligible.is_empty());
+                assert!(
+                    attempts
+                        .iter()
+                        .filter(|(id, _)| eligible.contains(id))
+                        .all(|(_, attempted)| attempted.is_some_and(|timestamp| timestamp > 123))
+                );
+            }
+            assert_eq!(
+                new_items
+                    .iter()
+                    .filter(|item| item.library_id == FIRST)
+                    .count(),
+                11
+            );
+        }
+    }
     drop(db);
     drop(rocket);
     let _ = std::fs::remove_dir_all(root);

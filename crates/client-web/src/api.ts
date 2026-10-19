@@ -38,6 +38,7 @@ import {
   runMockScheduledTask,
 } from './mockApi';
 
+import { apiErrorMessage } from './apiErrors';
 const REQUEST_TIMEOUT_MS = 15000;
 
 export interface ServerCapabilities {
@@ -1096,12 +1097,8 @@ export class ApiError extends Error {
 
 async function responseError(response: Response): Promise<Error> {
   const responseText = (await response.text()).trim();
-  return new ApiError(
-    response.status,
-    responseText
-      ? `${response.status} ${response.statusText}: ${responseText}`
-      : `${response.status} ${response.statusText}`,
-  );
+  console.warn('API request failed',{url:response.url,status:response.status,body:responseText});
+  return new ApiError(response.status,apiErrorMessage(response.status,responseText));
 }
 
 async function handleErrorResponse<T>(method: string, path: string, body: unknown, response: Response): Promise<T> {
@@ -1118,8 +1115,9 @@ async function handleErrorResponse<T>(method: string, path: string, body: unknow
 
 function handleRequestFailure<T>(method: string, path: string, body: unknown, error: unknown): T {
   if (error instanceof DOMException && error.name === 'AbortError') {
-    throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`);
+    throw new Error('The request took too long. Check your connection and try again.');
   }
+  if(error instanceof TypeError)throw new Error('Cannot connect to the server. Check your connection and try again.');
   if (import.meta.env.DEV) {
     return getMockJsonFallback<T>(method, path, body);
   }

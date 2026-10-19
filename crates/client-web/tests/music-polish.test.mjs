@@ -6,6 +6,7 @@ globalThis.location={origin:'http://localhost',pathname:'/'};
 globalThis.localStorage={getItem:()=>null};
 const server=await createServer({root:fileURLToPath(new URL('..',import.meta.url)),server:{middlewareMode:true,hmr:false,ws:false}});
 after(()=>server.close());
+const {apiErrorMessage}=await server.ssrLoadModule('/src/apiErrors.ts');
 const {boundedMenuPosition,musicMediaMetadata,revealPanelEntry}=await server.ssrLoadModule('/src/app/musicPlayerSupport.ts');
 const {renderWatchProgress,renderShelfStack,homeShelfEntries}=await server.ssrLoadModule('/src/app/homeView.ts');
 const {state}=await server.ssrLoadModule('/src/app/state.ts');
@@ -15,6 +16,14 @@ const {renderMusicPlayer,currentLyricText}=await server.ssrLoadModule('/src/app/
 const {MusicQueue}=await server.ssrLoadModule('/src/app/musicQueue.ts');
 const mock=await server.ssrLoadModule('/src/mockApi.ts');
 
+test('shared API errors hide raw HTML, backend JSON and server details while retaining validation guidance',()=>{
+  for(const status of [401,403,404,429,500,502,503,504])for(const body of ['<!DOCTYPE html><h1>Unknown error</h1>','{"error":{"description":"SQL error at private/path"}}']) {
+    const message=apiErrorMessage(status,body);assert.ok(message.length>10);assert.doesNotMatch(message,/[<>{}]|SQL|private/);
+  }
+  assert.equal(apiErrorMessage(422,'{"message":"Playlist name is required."}'),'Playlist name is required.');
+  assert.match(apiErrorMessage(422,'{"error":{"reason":"Unprocessable Entity"}}'),/Check your entries/);
+  assert.match(apiErrorMessage(400,'<html>broken</html>'),/Check your entries/);
+});
 test('song menus stay within the viewport and above the dock including narrow layouts',()=>{
   for(const width of [320,390,1280])for(const left of [0,width-40])for(const top of [0,500]) {
     const bounds=boundedMenuPosition({right:left+40,top,bottom:top+40},170,160,width,560);

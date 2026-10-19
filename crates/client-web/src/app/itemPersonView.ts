@@ -1,5 +1,5 @@
+import { renderActiveAlbumButton, renderAlbumTracks } from './music';
 import { itemLineage } from './hierarchy';
-import { renderAlbumTracks } from './music';
 import { renderItemSources } from './itemSources';
 /** Renders item detail, metadata search, person detail, and credit trays. */
 import type {
@@ -916,6 +916,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
   } = options;
   const tvTargets = tvRestartTargets(item);
   const targetSubtitle = playbackTarget ? [playbackTarget.display_title, selectedItemRemainingTime(item)].filter(Boolean).join(' · ') : undefined;
+  const activeAlbumButton = item.item_type === 'album' ? renderActiveAlbumButton(item.id) : '';
 
   return `
           <div class="detail-actions" id="item-playback-actions">
@@ -923,16 +924,18 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <div class="item-bar-identity" data-sticky-identity hidden>
               ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
             </div>
-            ${item.item_type === 'album' && !playbackTarget && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : ''}
+            ${activeAlbumButton || (item.item_type === 'album' && !playbackTarget && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : '')}
             ${renderResumeButton(item, resumeMs)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
-            ${playbackTarget ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
-            ${renderResumeOptions(item, resumeMs, playbackTarget)}
+            ${playbackTarget && !activeAlbumButton ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
+            ${activeAlbumButton ? '' : renderResumeOptions(item, resumeMs, playbackTarget)}
             </div>
             ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
             <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
               <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
               <div class="item-more-menu">
+                ${['album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-enqueue="${item.id}" data-music-next="true">${renderButtonContent('Play next', 'skip-forward')}</button><button type="button" class="secondary-button" data-music-enqueue="${item.id}">${renderButtonContent('Add to queue', 'list-music')}</button>` : ''}
+                ${['artist', 'album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-radio="${item.id}">${renderButtonContent('Start radio', 'radio')}</button>` : ''}
                 ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
                 ${resumeMs > 0 || item.item_type === 'episode' ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over', true) : ''}
                 ${tvTargets.map((target) => renderPlaybackTargetButton(target, true, { id: target.label === 'Restart show' ? 'restart-show' : 'restart-season' })).join('')}

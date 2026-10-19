@@ -386,3 +386,64 @@ table! {
 
 joinable!(music_item_metadata -> media_items (media_item_id));
 joinable!(music_item_genres -> media_items (media_item_id));
+
+table! {
+    music_playlists (id) {
+        id -> Integer,
+        user_id -> Integer,
+        name -> Text,
+        created_at -> BigInt,
+        updated_at -> BigInt,
+        temporary -> Bool,
+        current_index -> Integer,
+        position_ms -> BigInt,
+        completed -> Bool,
+        shuffle -> Bool,
+        repeat_mode -> Text,
+        artwork_item_id -> Nullable<Integer>,
+    }
+}
+table! {
+    music_playlist_entries (playlist_id, position) {
+        playlist_id -> Integer,
+        position -> Integer,
+        media_item_id -> Integer,
+    }
+}
+joinable!(music_playlists -> users (user_id));
+joinable!(music_playlists -> media_items (artwork_item_id));
+joinable!(music_playlist_entries -> music_playlists (playlist_id));
+joinable!(music_playlist_entries -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(music_playlists, music_playlist_entries);
+allow_tables_to_appear_in_same_query!(music_playlists, media_items);
+allow_tables_to_appear_in_same_query!(music_playlists, users);
+allow_tables_to_appear_in_same_query!(music_playlist_entries, media_items);
+allow_tables_to_appear_in_same_query!(music_playlist_entries, users);
+
+table! {
+    music_progress_context (user_id, media_item_id) {
+        user_id -> Integer,
+        media_item_id -> Integer,
+    }
+}
+
+table! {
+    music_lyrics (media_item_id) {
+        media_item_id -> Integer,
+        track_title -> Text,
+        artist_name -> Text,
+        album_name -> Text,
+        duration_ms -> Nullable<BigInt>,
+        plain_lyrics -> Nullable<Text>,
+        synced_lyrics -> Nullable<Text>,
+        instrumental -> Bool,
+        source -> Text,
+        source_url -> Text,
+        lookup_status -> Text,
+        checked_at -> BigInt,
+        next_check_at -> BigInt,
+        last_error -> Nullable<Text>,
+    }
+}
+joinable!(music_lyrics -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(music_lyrics, media_items);

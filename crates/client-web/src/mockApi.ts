@@ -14,6 +14,8 @@ import type {
   MediaItemSources,
   MediaItemSummary,
   MediaPlaybackTarget,
+  MusicPlaylistDetail,
+  MusicQueueState,
   MediaLibrary,
   MediaLibrarySettings,
   MediaSearchResult,
@@ -37,6 +39,31 @@ import type {
 } from './api';
 
 let nextLibraryId = 4;
+let nextPlaylistId = 1;
+const mockPlaylists = new Map<number, { owner: number; detail: MusicPlaylistDetail }>();
+export function getMockPlaylists(libraryId?: number): MusicPlaylistDetail[] {
+  return [...mockPlaylists.values()].filter((entry) => entry.owner === activeMockUserId() && !entry.detail.playlist.temporary).map(({ detail }) => ({ ...detail, items: detail.items.filter((item) => libraryId === undefined || item.library_id === libraryId) })).filter((entry) => libraryId === undefined || entry.items.length > 0);
+}
+export function getMockPlaylist(id: number): MusicPlaylistDetail {
+  const entry = mockPlaylists.get(id); if (!entry || entry.owner !== activeMockUserId()) throw new Error('Playlist not found');
+  const source = entry.detail.playlist.artwork_item_id ? getMockItem(entry.detail.playlist.artwork_item_id) : undefined;
+  entry.detail.artwork = source ? { item_id: source.id, library_id: source.library_id, updated_at: source.artwork_updated_at } : undefined;
+  return entry.detail;
+}
+export function saveMockPlaylist(name: string, ids: number[],temporary=false,seedItemId?:number): MusicPlaylistDetail {
+  const owner = activeMockUserId(); if (owner === undefined) throw new Error('Sign in first');
+  const seed = temporary ? getMockItem(seedItemId ?? ids[0]) : undefined;
+  const source = seed?.item_type === 'track' && seed.parent_id ? getMockItem(seed.parent_id) : seed;
+  const detail = { playlist: { id: nextPlaylistId++, name, temporary, artwork_item_id: source?.id, created_at: Date.now() / 1000, updated_at: Date.now() / 1000 }, items: ids.map((id) => getMockItem(id)!).filter(Boolean) };
+  mockPlaylists.set(detail.playlist.id, { owner, detail }); return getMockPlaylist(detail.playlist.id);
+}
+export function deleteMockPlaylist(id: number): void { getMockPlaylist(id); mockPlaylists.delete(id); }
+export function updateMockQueue(id:number,kind:string,body:MusicQueueState & {name:string}):MusicPlaylistDetail|undefined {
+  const detail=getMockPlaylist(id);
+  if(kind==='name') { detail.playlist.name=body.name; detail.playlist.temporary=false; return detail; }
+  Object.assign(detail.playlist,body);
+  detail.items=body.item_ids.map((id)=>getMockItem(id)!).filter(Boolean);
+}
 let nextUserId = 2;
 const AUTH_TOKEN_STORAGE_KEY = 'koko-client-web-auth-token';
 
@@ -789,6 +816,7 @@ interface MockPlaybackProgress extends PlaybackProgressRequest {
   watch_count: number;
   last_watched_at?: number;
   revision?: number;
+  last_played_at?: number;
 }
 
 let mockPlaybackRevision = 0;
@@ -811,6 +839,7 @@ function applyMockPlaybackProgress<T extends { id: number }>(item: T): T {
     playback_completed: progress.completed,
     watch_count: progress.watch_count,
     last_watched_at: progress.last_watched_at,
+    last_played_at: progress.last_played_at,
   };
 }
 
@@ -1201,7 +1230,7 @@ export function getMockItemSources(itemId: number, offset = 0, limit = 25): Medi
 export function getMockItem(itemId: number): MediaItemDetail | undefined {
   const item = items.find((item) => item.id === itemId);
   if (!item) return undefined;
-  const result = applyMockPlaybackProgress(item);
+  const result = {...applyMockPlaybackProgress(item),children:item.children.map(applyMockPlaybackProgress)};
   return item.item_type === 'album' ? { ...result, playback_target: mockAlbumPlaybackTarget(item.id) } : result;
 }
 
@@ -1274,13 +1303,13 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
 export function getMockHome(libraryId?: number): MediaHome {
   const filteredItems = getMockItems(libraryId);
   const kind = libraries.find((library) => library.id === libraryId)?.kind;
-  let continueTitle = 'Continue watching';
+  let continueTitle = libraryId === undefined ? 'Continue playing' : 'Continue watching';
   if (kind === 'music') continueTitle = 'Continue listening';
   else if (kind === 'books') continueTitle = 'Continue reading';
   const continueItems = filteredItems.filter((item) => {
     const userId = activeMockUserId();
     const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
-    return Boolean(progress && !progress.completed && progress.position_ms > 0);
+    return Boolean(progress && !progress.completed && progress.position_ms > 0 && !progress.radio);
   });
   const continueWatching = [...new Map(continueItems.flatMap((item) => {
     if (item.item_type !== 'track') return [[item.id, item] as const];
@@ -1288,13 +1317,15 @@ export function getMockHome(libraryId?: number): MediaHome {
     return album && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album' ? [[album.id, album] as const] : [];
   })).values()];
   for (const album of filteredItems.filter((entry) => entry.item_type === 'album')) {
-    if (!continueWatching.some((item) => item.id === album.id) && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album') continueWatching.push(album);
+    const hasAlbumListening=items.some(track=>track.parent_id===album.id && Boolean(playbackProgress.get(`${activeMockUserId()}:${track.id}`)) && !playbackProgress.get(`${activeMockUserId()}:${track.id}`)?.radio);
+    if (hasAlbumListening && !continueWatching.some((item) => item.id === album.id) && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album') continueWatching.push(album);
   }
   const recentlyAdded = [...filteredItems].sort((left, right) => (right.modified_at ?? 0) - (left.modified_at ?? 0));
   const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
 
   return {
     library_id: libraryId ?? null,
+    listening_queues:[...mockPlaylists.values()].filter(entry=>entry.owner===activeMockUserId() && entry.detail.playlist.temporary && !entry.detail.playlist.completed && entry.detail.items.some(item=>libraryId===undefined || item.library_id===libraryId)).map(entry=>getMockPlaylist(entry.detail.playlist.id)),
     shelves: [
       { id: 'continue_watching', title: continueTitle, items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
@@ -1499,6 +1530,7 @@ export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProg
     playbackProgress.set(key, {
       ...payload,
       revision: ++mockPlaybackRevision,
+      last_played_at: Date.now() / 1000,
       watch_count: (existing?.watch_count ?? 0) + (completedTransition ? 1 : 0),
       last_watched_at: completedTransition
         ? Math.floor(Date.now() / 1000)

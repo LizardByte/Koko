@@ -187,6 +187,7 @@ These run across multiple stages:
 - The metadata system should stay provider-agnostic so future sources for music, books, photos, and local sidecar metadata can be added without redesigning the core media catalog.
 - [ ] Add AcoustID audio fingerprint matching using Chromaprint, configurable application credentials, and MusicBrainz recording IDs; retain searches and manual matching for ambiguous album editions.
 - MusicBrainz provides artist, album, and track metadata for music libraries, using embedded identifiers when available and conservative searches otherwise. Release covers come from the Cover Art Archive.
+- Music uses a persistent bottom player with editable queues, shuffle/repeat, private server playlists, on-demand LRCLIB lyrics, and ListenBrainz radio mixes limited to accessible local songs.
 - Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO and book providers remain planned.
 - [ ] Add audiobook scanning, chapter navigation, narration details, playback speed controls, and per-user listening progress.
 - [ ] Evaluate [AudioSilo Meta](https://meta.audiosilo.app/) and its [public API](https://meta.audiosilo.app/docs/api) as an audiobook metadata provider for works, recordings, authors, narrators, series, identifiers, covers, and chapters. Its factual core is CC0; community descriptions, characters, and recaps are CC BY-SA 4.0 and require appropriate attribution.

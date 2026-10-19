@@ -5,6 +5,11 @@ import {
   getMockCapabilities,
   getMockBootstrap,
   getMockHome,
+  getMockPlaylists,
+  getMockPlaylist,
+  saveMockPlaylist,
+  deleteMockPlaylist,
+  updateMockQueue,
   getMockItems,
   getMockItem,
   getMockItemSources,
@@ -181,6 +186,7 @@ export interface MediaItemSummary {
   playback_completed?: boolean;
   watch_count?: number;
   last_watched_at?: number | null;
+  last_played_at?: number | null;
   missing_since?: number | null;
   hierarchy?: MediaItemSummary[];
 }
@@ -194,6 +200,27 @@ export interface MediaPlaybackTarget {
   episode_number?: number | null;
   resume: boolean;
 }
+
+export interface MusicPlaylistDetail {
+  playlist: { id: number; name: string; created_at: number; updated_at: number; temporary?: boolean; current_index?: number; position_ms?: number; completed?: boolean; shuffle?: boolean; repeat_mode?: 'off'|'all'|'one'; artwork_item_id?: number | null };
+  items: MediaItemSummary[];
+  artwork?: { item_id: number; library_id: number; updated_at?: number | null } | null;
+}
+
+export function getPlaylists(libraryId?: number): Promise<MusicPlaylistDetail[]> {
+  return requestJson('GET', `/api/v1/playlists${libraryId === undefined ? '' : `?library_id=${libraryId}`}`);
+}
+export function getPlaylist(id: number): Promise<MusicPlaylistDetail> { return requestJson('GET', `/api/v1/playlists/${id}`); }
+export function savePlaylist(name: string, itemIds: number[], temporary = false, seedItemId?: number): Promise<MusicPlaylistDetail> { return requestJson('POST', '/api/v1/playlists', { name, item_ids: itemIds, temporary, seed_item_id: seedItemId }); }
+export interface MusicQueueState { item_ids: number[]; current_index: number; position_ms: number; completed: boolean; shuffle: boolean; repeat_mode: 'off'|'all'|'one' }
+export function updateMusicQueue(id:number, queue:MusicQueueState):Promise<void> { return requestJson('PUT',`/api/v1/playlists/${id}/queue`,queue); }
+export function saveRadioPlaylist(id:number,name:string):Promise<MusicPlaylistDetail> { return requestJson('PUT',`/api/v1/playlists/${id}/name`,{name}); }
+export function deletePlaylist(id: number): Promise<void> { return requestJson('DELETE', `/api/v1/playlists/${id}`); }
+
+export interface MusicLyrics { plain_lyrics?: string; synced_lyrics?: string; instrumental: boolean; source: string; source_url: string }
+export interface MusicRadio { items: MediaItemSummary[]; source: string; message?: string }
+export function getMusicLyrics(id: number, refresh = false): Promise<MusicLyrics> { return requestJson('GET', `/api/v1/items/${id}/lyrics${refresh ? '?refresh=true' : ''}`); }
+export function getMusicRadio(id: number): Promise<MusicRadio> { return requestJson('GET', `/api/v1/items/${id}/radio`); }
 
 export interface MediaItemSourceFile {
   id: number;
@@ -470,6 +497,7 @@ export interface MediaHome {
   library_id?: number | null;
   shelves: MediaShelf[];
   collections: MediaCollectionSummary[];
+  listening_queues?: MusicPlaylistDetail[];
 }
 
 export interface PlaybackDecision {
@@ -726,6 +754,7 @@ export interface PlaybackProgressRequest {
   position_ms: number;
   duration_ms?: number;
   completed: boolean;
+  radio?: boolean;
 }
 
 export interface LinkMetadataRequest {
@@ -793,6 +822,11 @@ function useMockApi(): void {
 }
 
 function getMockGetResponse<T>(method: string, url: URL): T {
+  if (url.pathname === '/api/v1/playlists') return getMockPlaylists(url.searchParams.has('library_id') ? Number(url.searchParams.get('library_id')) : undefined) as T;
+  const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
+  if (playlist) return getMockPlaylist(Number(playlist[1])) as T;
+  if (/\/lyrics$/.test(url.pathname)) return { synced_lyrics: Array.from({length:42},(_,index)=>`[${String(Math.floor(index*5/60)).padStart(2,'0')}:${String(index*5%60).padStart(2,'0')}.00]${index % 7 === 0 ? '' : `Preview lyric line ${index+1}`}`).join('\n'), instrumental: false, source: 'LRCLIB', source_url: 'https://lrclib.net' } as T;
+  if (/\/radio$/.test(url.pathname)) return { items: getMockItems(3).filter((item) => item.item_type === 'track'), source: 'ListenBrainz' } as T;
   switch (url.pathname) {
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
@@ -891,6 +925,8 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
 }
 
 function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
+  const queue = /^\/api\/v1\/playlists\/(\d+)\/(queue|name)$/.exec(url.pathname);
+  if (queue) return updateMockQueue(Number(queue[1]),queue[2],body as MusicQueueState & {name:string}) as T;
   if (url.pathname === '/api/v1/settings') {
     return updateMockSettings(body as SettingsSnapshot) as T;
   }
@@ -904,6 +940,7 @@ function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
 }
 
 function getMockPostResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/api/v1/playlists') { const request = body as { name: string; item_ids: number[]; temporary?:boolean; seed_item_id?:number }; return saveMockPlaylist(request.name, request.item_ids,request.temporary,request.seed_item_id) as T; }
   if (url.pathname === '/login') {
     return loginMockUser(body as LoginRequest) as T;
   }
@@ -977,6 +1014,8 @@ function createMockPlaybackSessionResponse<T>(body?: unknown): T {
 }
 
 function getMockDeleteResponse<T>(method: string, url: URL): T {
+  const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
+  if (playlist) { deleteMockPlaylist(Number(playlist[1])); return undefined as T; }
   const unlinkMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
   if (unlinkMetadataMatch) {
     return unlinkMockItemMetadata(Number(unlinkMetadataMatch[1])) as T;
@@ -1035,7 +1074,7 @@ function requestHeaders(body?: unknown): Record<string, string> {
 
 async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), /\/lyrics$|\/radio$/.test(path) ? 30000 : REQUEST_TIMEOUT_MS);
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),

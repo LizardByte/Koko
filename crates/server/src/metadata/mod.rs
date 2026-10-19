@@ -2368,6 +2368,11 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
     }
     diesel::delete(links::item_metadata_links.filter(links::media_item_id.eq_any(&ids)))
         .execute(conn)?;
+    diesel::delete(
+        crate::db::schema::music_lyrics::table
+            .filter(crate::db::schema::music_lyrics::media_item_id.eq_any(&ids)),
+    )
+    .execute(conn)?;
     if !prevent_automatic_match {
         diesel::update(items::media_items.filter(items::id.eq_any(&ids)))
             .set(items::metadata_match_attempted_at.eq(None::<i64>))

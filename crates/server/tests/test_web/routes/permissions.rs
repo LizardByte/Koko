@@ -40,6 +40,12 @@ const ADMIN_ROUTES: &[(Method, &str)] = &[
 ];
 
 const USER_ROUTES: &[(Method, &str)] = &[
+    (Method::Put, "/api/v1/playlists/1/queue"),
+    (Method::Put, "/api/v1/playlists/1/name"),
+    (Method::Get, "/api/v1/playlists"),
+    (Method::Get, "/api/v1/playlists/1"),
+    (Method::Get, "/api/v1/items/1/lyrics"),
+    (Method::Get, "/api/v1/items/1/radio"),
     (Method::Get, "/api/v1/system/capabilities"),
     (Method::Get, "/api/v1/metadata/providers"),
     (Method::Get, "/api/v1/metadata/locales"),
@@ -64,6 +70,507 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/people/1/image"),
     (Method::Get, "/api/v1/user-profile-images/example.png"),
 ];
+
+#[rocket::async_test]
+async fn radio_queue_resumes_one_mix_preserves_duplicate_positions_and_promotes_on_save() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "INSERT INTO \
+             media_items(id,library_id,parent_id,identity_key,item_type,display_title,playable,\
+             media_kind,duration_ms) VALUES
+        (30,1,NULL,'artist','artist','Artist',0,'audio',NULL),
+        (31,1,30,'album','album','Album',0,'audio',NULL),
+        (32,1,31,'song-a','track','Song A',1,'audio',200000),
+        (33,1,31,'song-b','track','Song B',1,'audio',200000);",
+        )
+        .unwrap()
+    })
+    .await;
+    let saved = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Song A radio","item_ids":[32,33,32],"temporary":true}),
+        Status::Ok,
+    )
+    .await;
+    let saved: Value = serde_json::from_str(&saved).unwrap();
+    let id = saved["playlist"]["id"].as_i64().unwrap();
+    let path = format!("/api/v1/playlists/{id}");
+    let queue = json!({
+        "item_ids":[33,32,32], "current_index":2, "position_ms":55000,
+        "completed":false,"shuffle":true,"repeat_mode":"all"
+    });
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&admin),
+        queue.clone(),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        queue.clone(),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/items/32/progress",
+        Some(&viewer),
+        json!({"position_ms":55000,"duration_ms":200000,"completed":false,"radio":true}),
+        Status::Ok,
+    )
+    .await;
+    let loaded = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let loaded: Value = serde_json::from_str(&loaded).unwrap();
+    assert_eq!(loaded["playlist"]["current_index"], 2);
+    assert_eq!(loaded["playlist"]["position_ms"], 55000);
+    assert_eq!(loaded["items"][2]["id"], 32);
+    let home = response(
+        &client,
+        Method::Get,
+        "/api/v1/home",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let home: Value = serde_json::from_str(&home).unwrap();
+    assert_eq!(home["listening_queues"][0]["playlist"]["id"], id);
+    assert!(
+        !home["shelves"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == 31)
+    );
+    let listed = response(
+        &client,
+        Method::Get,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(listed, "[]");
+    let mut complete = queue.clone();
+    complete["completed"] = json!(true);
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        complete,
+        Status::NoContent,
+    )
+    .await;
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(home["listening_queues"].as_array().unwrap().is_empty());
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        queue,
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/name"),
+        Some(&admin),
+        json!({"name":"Mine"}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/name"),
+        Some(&viewer),
+        json!({"name":"Saved radio"}),
+        Status::Ok,
+    )
+    .await;
+    let listed: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/playlists",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["playlist"]["id"], id);
+    assert_eq!(listed[0]["playlist"]["temporary"], false);
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(home["listening_queues"].as_array().unwrap().is_empty());
+    // Explicit album playback restores album Continue listening semantics.
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/items/32/progress",
+        Some(&viewer),
+        json!({"position_ms":60000,"duration_ms":200000,"completed":false}),
+        Status::Ok,
+    )
+    .await;
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(
+        home["shelves"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == 31)
+    );
+    let invalid = json!({
+        "item_ids":[32],"current_index":1,"position_ms":0,
+        "completed":false,"shuffle":false,"repeat_mode":"off"
+    });
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        invalid,
+        Status::BadRequest,
+    )
+    .await;
+}
+
+#[rocket::async_test]
+async fn music_playlists_preserve_order_duplicates_ownership_and_revoked_library_access() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "INSERT INTO media_items \
+             (id,library_id,identity_key,item_type,display_title,playable,media_kind) VALUES \
+             (20,1,'song-one','track','Song one',1,'audio'),(21,1,'song-two','track','Song \
+             two',1,'audio'),(22,2,'secret-song','track','Secret song',1,'audio')",
+        )
+        .unwrap()
+    })
+    .await;
+    let text = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"My queue","item_ids":[21,20,21]}),
+        Status::Ok,
+    )
+    .await;
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    let id = saved["playlist"]["id"].as_i64().unwrap();
+    let path = format!("/api/v1/playlists/{id}");
+    assert_eq!(
+        saved["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![21, 20, 21]
+    );
+    // Read it back through another request, proving it is stored rather than only returned on save.
+    let loaded = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&loaded).unwrap()["items"],
+        saved["items"]
+    );
+    response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Delete,
+        &path,
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Secret","item_ids":[20,22]}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Wrong type","item_ids":[1]}),
+        Status::NotFound,
+    )
+    .await;
+    for seed in [22, 1, 999999] {
+        response(
+            &client,
+            Method::Post,
+            "/api/v1/playlists",
+            Some(&viewer),
+            json!({"name":"Invalid source","item_ids":[20],"temporary":true,"seed_item_id":seed}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    let radio = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Song radio","item_ids":[20,21],"temporary":true,"seed_item_id":20}),
+        Status::Ok,
+    )
+    .await;
+    let radio: Value = serde_json::from_str(&radio).unwrap();
+    assert_eq!(radio["artwork"]["item_id"], 20);
+    response(
+        &client,
+        Method::Delete,
+        &format!("/api/v1/playlists/{}", radio["playlist"]["id"]),
+        Some(&viewer),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":" ","item_ids":[20]}),
+        Status::BadRequest,
+    )
+    .await;
+    let listed = response(
+        &client,
+        Method::Get,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    db.run(|conn| {
+        conn.batch_execute("UPDATE media_libraries SET allowed_user_ids_json='[3]' WHERE id=1")
+            .unwrap()
+    })
+    .await;
+    let hidden = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(
+        serde_json::from_str::<Value>(&hidden).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    response(
+        &client,
+        Method::Delete,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+}
+
+#[rocket::async_test]
+async fn music_discovery_checks_item_access_before_provider_requests() {
+    let (client, _, viewer) = fixture().await;
+    for endpoint in ["lyrics", "radio"] {
+        response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/items/2/{endpoint}"),
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+        response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/items/999999/{endpoint}"),
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "INSERT INTO media_items \
+             (id,library_id,identity_key,item_type,display_title,playable,media_kind) VALUES \
+             (20,1,'song','track','Visible song',1,'audio'),(21,2,'secret-song','track','Secret \
+             song',1,'audio');
+             INSERT INTO music_item_metadata(media_item_id,artist,album_artist,album) VALUES
+             (20,'Artist','Artist','Album'), (21,'Artist','Artist','Album');
+             INSERT INTO music_lyrics
+             (media_item_id,track_title,artist_name,album_name,plain_lyrics,source,source_url,
+              lookup_status,checked_at,next_check_at) VALUES
+             (20,'Visible song','Artist','Album','Public lyrics',
+              'LRCLIB','https://lrclib.net/','found',1,1),
+             (21,'Secret song','Artist','Album','Private lyrics',
+              'LRCLIB','https://lrclib.net/','found',1,1);",
+        )
+        .unwrap()
+    })
+    .await;
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/20/radio",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(!text.contains("Secret song"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["items"][0]["id"],
+        20
+    );
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/20/lyrics",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["plain_lyrics"],
+        "Public lyrics"
+    );
+    for path in [
+        "/api/v1/items/21/lyrics",
+        "/api/v1/items/21/lyrics?refresh=true",
+    ] {
+        response(
+            &client,
+            Method::Get,
+            path,
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    response(
+        &client,
+        Method::Get,
+        "/api/v1/items/1/lyrics",
+        Some(&viewer),
+        json!({}),
+        Status::BadRequest,
+    )
+    .await;
+}
 
 async fn response(
     client: &Client,

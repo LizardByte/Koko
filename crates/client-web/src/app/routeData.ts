@@ -3,13 +3,15 @@ import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
 import { clearBrowseSessions } from './browseSession';
 
-type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getItemCredits' | 'getLogs' | 'searchItems'>;
+type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getItemCredits' | 'getLogs' | 'searchItems'> & Partial<Pick<typeof api, 'getPlaylists' | 'getPlaylist'>>;
 
 /** Retain restored browsing data when the server's null scope means all libraries. */
 export function prepareBrowseRoute(state: AppState, route: AppRoute): void {
   if (route.page !== 'home' && route.page !== 'browse-detail') return;
   if (!state.home || (state.home.library_id ?? undefined) !== route.libraryId) {
     state.home = undefined;
+    state.playlists = undefined;
+    state.selectedPlaylist = undefined;
     state.libraryItems = [];
     state.homePreviewItemId = undefined;
     state.homePreviewCollectionId = undefined;
@@ -47,6 +49,8 @@ export async function loadRouteData(
       if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) {
         clearBrowseSessions();
         state.home = undefined;
+        state.playlists = undefined;
+        state.selectedPlaylist = undefined;
         state.libraryItems = [];
         state.searchResults = [];
         state.selectedItem = undefined;
@@ -105,6 +109,11 @@ export async function loadRouteData(
   }
 
   if (route.page === 'home' || route.page === 'browse-detail') {
+    if (source.getPlaylists) load('playlists', source.getPlaylists(route.libraryId), (value) => { state.playlists = value; });
+    if (route.page === 'browse-detail' && route.kind === 'playlist' && source.getPlaylist && /^\d+$/.test(route.key)) {
+      state.selectedPlaylist = undefined;
+      load('playlist', source.getPlaylist(Number(route.key)), (value) => { state.selectedPlaylist = value; });
+    }
     load('featured media', source.getHome(route.libraryId), (value) => { state.home = value; });
     state.libraryItemsLoading = !state.home;
     load('library titles', source.getItems(route.libraryId).finally(() => {

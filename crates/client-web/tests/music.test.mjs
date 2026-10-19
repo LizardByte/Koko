@@ -10,7 +10,7 @@ after(() => server.close());
 const { orderedAlbumTracks, albumPlaybackQueue, renderAlbumTracks } = await server.ssrLoadModule('/src/app/music.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderItemPage, selectedItemDefaultMetadataArtist } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
-const { searchItemMetadata } = await server.ssrLoadModule('/src/api.ts');
+const { searchItemMetadata, getMusicLyrics } = await server.ssrLoadModule('/src/api.ts');
 const { canManuallyLinkMetadata } = await server.ssrLoadModule('/src/app/selectors.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
 
@@ -109,7 +109,21 @@ test('music tag reading is opt-in for each library and is saved independently', 
   assert.equal(buildSettingsFromForm(form).media.libraries[index].use_embedded_music_tags, false);
 });
 
+test('normal lyric playback reuses saved outcomes while explicit retry requests a refresh', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(new URL(url, location.origin)); return new Response('{}', { headers: { 'content-type': 'application/json' } }); };
+  try {
+    await getMusicLyrics(303);
+    await getMusicLyrics(303, true);
+    assert.equal(requests[0].pathname, '/api/v1/items/303/lyrics');
+    assert.equal(requests[0].searchParams.has('refresh'), false);
+    assert.equal(requests[1].searchParams.get('refresh'), 'true');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('resume shelves use listening for music, reading for books, and watching for video', () => {
+  assert.equal(mock.getMockHome().shelves[0].title, 'Continue playing');
   assert.equal(mock.getMockHome(3).shelves[0].title, 'Continue listening');
   assert.equal(mock.getMockHome(1).shelves[0].title, 'Continue watching');
   assert.equal(mock.getMockHome(2).shelves[0].title, 'Continue watching');

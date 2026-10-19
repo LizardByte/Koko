@@ -157,6 +157,96 @@ impl Drop for MusicLibrary {
 }
 
 #[test]
+fn continue_playback_exposes_latest_activity_for_albums_movies_and_shows() {
+    let fixture = MusicLibrary::new();
+    for path in [
+        "Other Artist/Other Album/01 Third.flac",
+        "Movies/Film.mp4",
+        "Series/Example/Season 01/Example.S01E01.mp4",
+        "Series/Example/Season 01/Example.S01E02.mp4",
+    ] {
+        let path = fixture.0.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"media").unwrap();
+    }
+    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    koko::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+    diesel::sql_query("INSERT INTO users (id,username,password,admin) VALUES (1,'alice','hash',1)")
+        .execute(&mut conn)
+        .unwrap();
+    let libraries = [
+        ("Music", fixture.0.clone(), MediaLibraryKind::Music),
+        ("Movies", fixture.0.join("Movies"), MediaLibraryKind::Movies),
+        ("Shows", fixture.0.join("Series"), MediaLibraryKind::Shows),
+    ]
+    .map(|(name, path, kind)| MediaLibrarySettings {
+        name: name.into(),
+        path: path.to_string_lossy().into(),
+        kind,
+        recursive: true,
+        ..Default::default()
+    });
+    sync_library_catalog(
+        &mut conn,
+        &libraries,
+        &FfmpegSettings {
+            ffprobe_path: "missing-test-ffprobe".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let items = list_media_items(&mut conn, None).unwrap();
+    let album = items
+        .iter()
+        .find(|item| item.item_type == "album" && item.display_title == "Folder Album")
+        .unwrap();
+    let track = items
+        .iter()
+        .find(|item| item.parent_id == Some(album.id))
+        .unwrap();
+    let movie = items.iter().find(|item| item.item_type == "movie").unwrap();
+    let episode = items
+        .iter()
+        .find(|item| item.item_type == "episode" && item.episode_number == Some(1))
+        .unwrap();
+    for (id, timestamp, completed) in [
+        (track.id, 10_i64, false),
+        (movie.id, 20, false),
+        (episode.id, 30, true),
+    ] {
+        koko::media::upsert_playback_progress(&mut conn, 1, id, 60000, Some(120000), completed)
+            .unwrap();
+        diesel::sql_query(
+            "UPDATE playback_progress SET updated_at=? WHERE user_id=1 AND media_item_id=?",
+        )
+        .bind::<sql_types::BigInt, _>(timestamp)
+        .bind::<sql_types::Integer, _>(id)
+        .execute(&mut conn)
+        .unwrap();
+    }
+    let home = koko::media::get_media_home(&mut conn, Some(1), None).unwrap();
+    let entries = &home.shelves[0].items;
+    assert_eq!(
+        entries
+            .iter()
+            .map(|item| item.last_played_at)
+            .collect::<Vec<_>>(),
+        vec![Some(30), Some(20), Some(10)]
+    );
+    // A finished episode advances to the next episode but keeps the show's latest activity.
+    assert_eq!(entries[0].episode_number, Some(2));
+    assert_eq!(entries[1].id, movie.id);
+    assert_eq!(entries[2].id, album.id);
+    koko::media::upsert_playback_progress(&mut conn, 1, track.id, 90000, Some(120000), false)
+        .unwrap();
+    let home = koko::media::get_media_home(&mut conn, Some(1), None).unwrap();
+    assert_eq!(home.shelves[0].items[0].id, album.id);
+    let home = koko::media::get_media_home(&mut conn, Some(1), Some(album.library_id)).unwrap();
+    assert_eq!(home.shelves[0].items.len(), 1);
+    assert_eq!(home.shelves[0].items[0].id, album.id);
+}
+
+#[test]
 fn album_named_disc_folders_form_one_album_and_keep_track_ids_on_rescan() {
     let fixture = MusicLibrary::new();
     for disc in 1..=2 {

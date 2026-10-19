@@ -1,4 +1,6 @@
 import { clearBrowseSessions } from './browseSession';
+import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './musicPlayer';
+import { bindSongMenus } from './musicPlayerSupport';
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
@@ -45,7 +47,7 @@ import { syncVisibleSpinners } from './spinners';
 import { state } from './state';
 import { mutateMetadata } from './metadataRequests';
 import type { HomeBrowseTab } from './types';
-import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
+import { browseDetailPath, homeBrowsePath, homeShelfEntries, renderHomeShelfEntry, renderHomeFeature, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
 import {
   bindPersonCreditTrays,
   defaultMetadataSearchLanguage,
@@ -65,6 +67,7 @@ import {
   deleteMissingItems,
   getLogs,
   getUsers,
+  deletePlaylist,
   linkItemMetadata,
   unlinkItemMetadata,
   loginUser,
@@ -385,15 +388,16 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   }
 
   const renderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
-  if (!Number.isFinite(renderedCount) || renderedCount >= shelf.items.length) {
+  const entries = homeShelfEntries(shelf);
+  if (!Number.isFinite(renderedCount) || renderedCount >= entries.length) {
     row.dataset.lazyComplete = 'true';
     return false;
   }
 
-  const nextCount = Math.min(shelf.items.length, renderedCount + HOME_SHELF_CHUNK_SIZE);
-  row.insertAdjacentHTML('beforeend', shelf.items.slice(renderedCount, nextCount).map(renderItemCard).join(''));
+  const nextCount = Math.min(entries.length, renderedCount + HOME_SHELF_CHUNK_SIZE);
+  row.insertAdjacentHTML('beforeend', entries.slice(renderedCount, nextCount).map(renderHomeShelfEntry).join(''));
   row.dataset.lazyRenderedCount = String(nextCount);
-  row.dataset.lazyComplete = nextCount >= shelf.items.length ? 'true' : 'false';
+  row.dataset.lazyComplete = nextCount >= entries.length ? 'true' : 'false';
   bindMediaCardInteractions(row);
   createIcons({ icons });
   syncVisibleSpinners();
@@ -721,6 +725,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
 
   document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
+    stopMusic();
     try {
       await logoutUser();
     } catch (error) {
@@ -1182,13 +1187,36 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     button.addEventListener('click', async () => {
       try {
         if (button.dataset.playMusicAlbumId && state.selectedItem) await startMusicPlayback(state.selectedItem);
-        else await startPlaybackForItemId(Number(button.dataset.playMusicTrackId), 0);
+        else if (!await toggleCurrentMusic(Number(button.dataset.playMusicTrackId))) await startPlaybackForItemId(Number(button.dataset.playMusicTrackId), 0);
       } catch (error) {
         state.error = error instanceof Error ? error.message : 'Failed to start music playback.';
         render();
       }
     });
   });
+  document.querySelector<HTMLButtonElement>('[data-toggle-music-album]')?.addEventListener('click', () => {
+    void toggleCurrentMusic().catch((error) => { state.error = error instanceof Error ? error.message : 'Unable to change playback.'; render(); });
+  });
+  // Delegate radio resumes so cards appended by shelf pagination work too.
+  document.addEventListener('click', (event) => {
+    const button = (event.target as Element).closest<HTMLElement>('[data-resume-radio]');
+    if (button) void resumeMusicQueue(Number(button.dataset.resumeRadio), browseDetailPath('playlist', button.dataset.resumeRadio!)).catch((error) => {
+      state.error = error instanceof Error ? error.message : 'Unable to resume radio.'; render();
+    });
+  }, { signal });
+  document.querySelectorAll<HTMLButtonElement>('[data-music-enqueue], [data-music-radio], [data-play-playlist], [data-play-playlist-track], [data-delete-playlist]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.closest<HTMLElement>('[popover]')?.hidePopover();
+      try {
+        if (button.dataset.musicEnqueue) await queueMusicItem(Number(button.dataset.musicEnqueue), button.dataset.musicNext === 'true');
+        else if (button.dataset.musicRadio) await startMusicRadio(Number(button.dataset.musicRadio));
+        else if (button.dataset.playPlaylist) await playMusicPlaylist(Number(button.dataset.playPlaylist));
+        else if (button.dataset.playPlaylistTrack) await playMusicPlaylist(Number(button.dataset.playPlaylistTrack), Number(button.dataset.playlistIndex));
+        else if (button.dataset.deletePlaylist) { await deletePlaylist(Number(button.dataset.deletePlaylist)); state.homeTab = 'playlists'; navigateTo(homeBrowsePath()); }
+      } catch (error) { state.error = error instanceof Error ? error.message : 'Music operation failed.'; render(); }
+    });
+  });
+  bindSongMenus(signal);
 
   document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => {
     const playFrom = async (startMs: number): Promise<void> => {

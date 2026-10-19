@@ -7,10 +7,11 @@ export function resumablePlaybackPositionMs(item: MediaItemDetail): number {
   }
   const positionMs = item.playback_position_ms ?? 0;
   const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
-  if (positionMs < 30_000) {
+  const minimum=item.media_kind==='audio' ? 1000 : 30000;
+  if (positionMs < minimum) {
     return 0;
   }
-  if (durationMs > 0 && durationMs - positionMs < 30_000) {
+  if (durationMs > 0 && durationMs - positionMs < (item.media_kind==='audio' ? 0 : 30000)) {
     return 0;
   }
 
@@ -24,9 +25,13 @@ export function playbackProgressPercent(item: MediaItemSummary): number | undefi
   }
   const positionMs = item.playback_position_ms ?? 0;
   const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
-  if (positionMs < 30_000 || durationMs <= 0 || durationMs - positionMs < 30_000) {
+  if (positionMs < (item.media_kind==='audio' ? 1000 : 30000) || durationMs <= 0 || durationMs - positionMs < (item.media_kind==='audio' ? 0 : 30000)) {
     return undefined;
   }
 
   return Math.min(99, Math.max(1, Math.round((positionMs / durationMs) * 100)));
+}
+
+export function playbackAction(item:MediaItemSummary):'listened'|'read'|'watched' {
+  return item.media_kind==='audio' || ['artist','album','track'].includes(item.item_type) ? 'listened' : item.media_kind==='book' || item.item_type==='book' ? 'read' : 'watched';
 }

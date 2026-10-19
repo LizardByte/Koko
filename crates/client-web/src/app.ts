@@ -41,6 +41,7 @@ import {
 } from './app/selectors';
 import { syncVisibleSpinners } from './app/spinners';
 import { state } from './app/state';
+import { configureMusicPlayer, syncMusicPlayer } from './app/musicPlayer';
 import { itemArtwork } from './app/tvItemView';
 import { personBackdropUrl } from './app/itemPersonView';
 import { beginMetadataRequest, invalidateMetadataRequests } from './app/metadataRequests';
@@ -422,6 +423,7 @@ function renderNavigationHint(): string {
 }
 
 function render(preserveScroll = true): void {
+  syncMusicPlayer();
   if (!state.isPlayerOpen && !state.activeTrailer) {
     document.body.style.cursor = '';
   }
@@ -803,6 +805,7 @@ export function startApp(): void {
 
   appStarted = true;
   configurePlaybackController({ render, refreshData });
+  configureMusicPlayer({ changed: () => { syncThemeSongPlayer(); render(); }, navigate: navigateTo, saved: () => refreshData(false) });
   bindGlobalInputHandlers(state);
 
   globalThis.addEventListener('popstate', () => {

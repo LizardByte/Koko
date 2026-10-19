@@ -1,6 +1,8 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
+pub(crate) mod lyrics;
 pub(crate) mod music;
+pub mod playlists;
 mod source_files;
 pub use music::MusicMetadata;
 pub(crate) use music::valid_mbid;
@@ -337,6 +339,8 @@ pub struct MediaItemSummary {
     pub watch_count: i32,
     /// Last time the current user completed this item as Unix seconds.
     pub last_watched_at: Option<i64>,
+    /// Last playback activity for this item or its playable children, in Unix seconds.
+    pub last_played_at: Option<i64>,
     /// When this item was first observed as missing from disk.
     pub missing_since: Option<i64>,
 }
@@ -473,6 +477,8 @@ pub struct MediaItemDetail {
     pub watch_count: i32,
     /// Last time the current user completed this item as Unix seconds.
     pub last_watched_at: Option<i64>,
+    /// Last playback activity for this item or its playable children, in Unix seconds.
+    pub last_played_at: Option<i64>,
     /// When this item was first observed as missing from disk.
     pub missing_since: Option<i64>,
 }
@@ -606,6 +612,8 @@ pub struct MediaHome {
     pub shelves: Vec<MediaShelf>,
     /// Real collection groupings derived from linked metadata.
     pub collections: Vec<MetadataCollectionSummary>,
+    /// Resumable radio mixes, separate from album progress.
+    pub listening_queues: Vec<playlists::MusicPlaylistDetail>,
 }
 
 /// Codec/container/format capabilities that a client declares to the server.
@@ -3376,6 +3384,7 @@ pub fn get_media_home_with_preferred_languages(
     let continue_title = match library_kind.as_deref() {
         Some("music") => "Continue listening",
         Some("books") => "Continue reading",
+        None => "Continue playing",
         _ => "Continue watching",
     };
     let recently_added = sort_recently_added(&items);
@@ -3398,8 +3407,13 @@ pub fn get_media_home_with_preferred_languages(
     }
     collections.retain(|collection| !collection.item_ids.is_empty());
 
+    let listening_queues = user_id
+        .map(|user| playlists::ongoing(conn, user, library_id))
+        .transpose()?
+        .unwrap_or_default();
     Ok(MediaHome {
         library_id,
+        listening_queues,
         shelves: vec![
             MediaShelf {
                 id: "continue_watching".into(),
@@ -4172,6 +4186,7 @@ fn apply_playback_progress_to_summary(
     summary: &mut MediaItemSummary,
     progress: &PlaybackProgress,
 ) {
+    summary.last_played_at = progress.updated_at;
     apply_playback_values_to_summary(
         summary,
         progress.position_ms,
@@ -4186,6 +4201,7 @@ fn apply_playback_progress_to_detail(
     detail: &mut MediaItemDetail,
     progress: &PlaybackProgress,
 ) {
+    detail.last_played_at = progress.updated_at;
     apply_playback_values_to_detail(
         detail,
         progress.position_ms,
@@ -4262,6 +4278,7 @@ fn apply_user_playback_progress_to_summaries(
         if let Some(progress) = progress_by_item_id.get(&item.id) {
             apply_playback_progress_to_summary(item, progress);
         } else if let Some(progress) = container_playback_progress(conn, user_id, item.id)? {
+            item.last_played_at = progress.last_played_at;
             apply_playback_values_to_summary(
                 item,
                 progress.position_ms,
@@ -4290,6 +4307,7 @@ pub fn apply_user_playback_context_to_detail(
     if let Some(progress) = progress_by_item_id.get(&detail.id) {
         apply_playback_progress_to_detail(detail, progress);
     } else if let Some(progress) = container_playback_progress(conn, user_id, detail.id)? {
+        detail.last_played_at = progress.last_played_at;
         apply_playback_values_to_detail(
             detail,
             progress.position_ms,
@@ -4308,6 +4326,7 @@ pub fn apply_user_playback_context_to_detail(
         if let Some(progress) = progress_by_item_id.get(&item.id) {
             apply_playback_progress_to_summary(item, progress);
         } else if let Some(progress) = container_playback_progress(conn, user_id, item.id)? {
+            item.last_played_at = progress.last_played_at;
             apply_playback_values_to_summary(
                 item,
                 progress.position_ms,
@@ -4331,6 +4350,7 @@ pub fn apply_user_playback_context_to_detail(
 
 #[derive(Debug, Clone)]
 struct PlaybackProgressValues {
+    last_played_at: Option<i64>,
     position_ms: i64,
     duration_ms: Option<i64>,
     completed: bool,
@@ -4370,6 +4390,7 @@ fn container_playback_progress(
     let mut fallback_duration_units = 0_i64;
     let mut complete_watch_counts = Vec::new();
     let mut last_watched_at = None;
+    let mut last_played_at = None;
 
     for episode in &episodes {
         fallback_duration_units += 1_000;
@@ -4403,6 +4424,7 @@ fn container_playback_progress(
         }
         complete_watch_counts.push(progress.watch_count);
         last_watched_at = last_watched_at.max(progress.last_watched_at);
+        last_played_at = last_played_at.max(progress.updated_at);
     }
 
     let watch_count = complete_watch_counts.into_iter().min().unwrap_or_default();
@@ -4418,6 +4440,7 @@ fn container_playback_progress(
     }
 
     Ok(Some(PlaybackProgressValues {
+        last_played_at,
         position_ms,
         duration_ms,
         completed,
@@ -4732,6 +4755,7 @@ fn get_continue_watching_items(
         .select(PlaybackProgress::as_select())
         .load::<PlaybackProgress>(conn)?;
 
+    let radio_items = playlists::radio_context_items(conn, user_id)?;
     let mut items = Vec::new();
     let mut seen_continue_keys = HashSet::new();
     for progress in progress_rows {
@@ -4740,6 +4764,9 @@ fn get_continue_watching_items(
         };
 
         if row.item_type == "track" {
+            if radio_items.contains(&row.id) {
+                continue;
+            }
             let Some(album) = row
                 .parent_id
                 .and_then(|id| visible_items_by_id.get(&id))
@@ -4761,7 +4788,9 @@ fn get_continue_watching_items(
                 .is_some()
                 && (library_id.is_none() || Some(album.library_id) == library_id)
             {
-                items.push(album.clone());
+                let mut album = album.clone();
+                album.last_played_at = progress.updated_at;
+                items.push(album);
             }
             continue;
         }
@@ -4802,6 +4831,7 @@ fn get_continue_watching_items(
                 apply_playback_progress_to_summary(&mut target, &progress);
                 target
             };
+            target.last_played_at = progress.updated_at;
             apply_continue_watching_episode_presentation(&mut target, show, &visible_items_by_id);
 
             if library_id.is_none() || Some(target.library_id) == library_id {
@@ -5719,6 +5749,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         playback_completed: false,
         watch_count: 0,
         last_watched_at: None,
+        last_played_at: None,
         missing_since: item.missing_since,
     }
 }
@@ -6398,6 +6429,7 @@ fn to_media_item_detail(
         playback_completed: false,
         watch_count: 0,
         last_watched_at: None,
+        last_played_at: None,
         missing_since: item.missing_since,
     }
 }
@@ -6825,6 +6857,7 @@ mod tests {
             playback_completed: false,
             watch_count: 0,
             last_watched_at: None,
+            last_played_at: None,
             missing_since: None,
         }
     }

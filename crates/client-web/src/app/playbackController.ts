@@ -1,4 +1,4 @@
-import { albumPlaybackQueue } from './music';
+import { playMusicItem, musicIsActive, stopMusic } from './musicPlayer';
 /** Controls trailer, theme-song, and browser playback UI state. */
 import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
@@ -23,7 +23,6 @@ import { buildYouTubeWatchUrl, extractYouTubeVideoId, loadYouTubeIframeApi } fro
 type RenderCallback = (preserveScroll?: boolean) => void;
 type RefreshDataCallback = (showLoading?: boolean) => Promise<void>;
 
-let musicQueue: number[] = [];
 let playbackRequest = 0;
 
 let renderApp: RenderCallback = () => undefined;
@@ -377,7 +376,7 @@ function themeSongLayer(): HTMLElement {
 }
 
 function currentThemeSongSource(): ThemeSongSource | undefined {
-  if (state.isPlayerOpen || state.activeTrailer) {
+  if (state.isPlayerOpen || state.activeTrailer || musicIsActive()) {
     return undefined;
   }
 
@@ -591,7 +590,6 @@ export function closeActivePlaybackSession(): void {
   state.isPlayerOpen = false;
   document.body.style.cursor = '';
   playbackRequest += 1;
-  musicQueue = [];
   const sessionToClose = state.activePlaybackSession;
   state.activePlaybackItem = undefined;
   state.activePlaybackSession = undefined;
@@ -644,19 +642,8 @@ async function startMediaPlayback(item: MediaItemDetail, startMs: number): Promi
 
 /** Start an album in disc/track order, optionally beginning at a selected track. */
 export async function startMusicPlayback(item: MediaItemDetail, startMs = 0): Promise<void> {
-  const request = ++playbackRequest;
-  let album: MediaItemDetail | undefined;
-  if (item.item_type === 'album') album = item;
-  else if (item.parent_id) album = await getItem(item.parent_id);
-  if (request !== playbackRequest) return;
-  const startTrackId = item.item_type === 'track' ? item.id : undefined;
-  const queue = album?.item_type === 'album' ? albumPlaybackQueue(album, startTrackId) : [item.id];
-  const firstId = queue.shift();
-  if (firstId === undefined) return;
-  const first = item.id === firstId ? item : await getItem(firstId);
-  if (request !== playbackRequest) return;
-  musicQueue = queue;
-  await startMediaPlayback(first, startMs);
+  if (state.isPlayerOpen) closeActivePlaybackSession();
+  await playMusicItem(item, startMs);
 }
 
 /** Start a track with its remaining album queue, or another playable media item. */
@@ -665,7 +652,7 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
     await startMusicPlayback(item, startMs);
     return;
   }
-  musicQueue = [];
+  stopMusic();
   await startMediaPlayback(item, startMs);
 }
 
@@ -1402,15 +1389,6 @@ export function bindPlayerProgress(): void {
   });
 
   player.addEventListener('ended', () => {
-    if (playbackItem.item_type === 'track' && state.activePlaybackItem?.id === playbackItem.id) {
-      const nextId = musicQueue.shift();
-      if (nextId !== undefined) {
-        const request = playbackRequest;
-        void getItem(nextId).then((next) => {
-          if (request === playbackRequest) return startMediaPlayback(next, 0);
-        }).catch((error) => { state.error = error instanceof Error ? error.message : 'Unable to play the next track.'; render(); });
-      }
-    }
     updatePlayButtons();
     showControls();
     void updatePlaybackProgress(playbackItem.id, {

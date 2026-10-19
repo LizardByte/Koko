@@ -408,7 +408,7 @@ pub enum MediaSearchResult {
     /// Media item result such as a movie, show, season, episode, or future item type.
     Item {
         /// Matching media item.
-        item: MediaItemSummary,
+        item: Box<MediaItemSummary>,
     },
     /// Collection grouping result.
     Collection {
@@ -505,6 +505,9 @@ pub struct PlaybackProgressRequest {
     pub duration_ms: Option<i64>,
     /// Whether playback has completed.
     pub completed: bool,
+    /// True when the song is part of a radio mix, rather than album listening.
+    #[serde(default)]
+    pub radio: bool,
 }
 
 /// Request payload for linking a media item to provider metadata.
@@ -2218,7 +2221,13 @@ async fn execute_metadata_refresh_target(
 
     let failed = target
         .revision
-        .scope(execute_metadata_refresh_target_inner(db, target, settings))
+        .scope(async {
+            let failed = execute_metadata_refresh_target_inner(db, target, settings).await;
+            if target.item_type == "track" && target.revision.is_current() {
+                super::music::refresh_metadata_lyrics(db, target.item_id, true).await;
+            }
+            failed
+        })
         .await;
     finish_metadata_refresh_execution(target.item_id, target.revision).await;
     failed
@@ -3332,6 +3341,16 @@ async fn run_automatic_movie_metadata_linking(
             }
         }
 
+        if candidate.item_type == "track" && revision.is_current() {
+            revision
+                .scope(super::music::refresh_metadata_lyrics(
+                    db,
+                    candidate.item_id,
+                    matches!(scope, AutomaticMetadataScope::AllUnmatched),
+                ))
+                .await;
+        }
+
         if candidate.library_kind != crate::config::MediaLibraryKind::Shows {
             let attempted_at = current_timestamp();
             if let Err(error) = db
@@ -3421,7 +3440,7 @@ async fn run_automatic_movie_metadata_linking(
     }
 }
 
-async fn require_item_access(
+pub(super) async fn require_item_access(
     db: &DbConn,
     item_id: i32,
     user: &UserGuard,
@@ -4485,7 +4504,8 @@ pub async fn update_item_progress(
             payload.position_ms,
             payload.duration_ms,
             payload.completed,
-        )
+        )?;
+        crate::media::playlists::set_radio_context(conn, user_id, item_id, payload.radio)
     })
     .await
     .map_err(|error| {
@@ -5642,7 +5662,9 @@ pub async fn search_items(
                 conn, user_id, &query, None, &languages,
             )?
             .into_iter()
-            .map(|item| MediaSearchResult::Item { item })
+            .map(|item| MediaSearchResult::Item {
+                item: Box::new(item),
+            })
             .collect::<Vec<_>>();
             if !normalized_query.is_empty() {
                 let visible_item_ids = list_media_items_for_user_with_preferred_languages(
@@ -5703,6 +5725,56 @@ mod metadata_refresh_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn music_metadata_matching_populates_lyrics_and_only_explicit_refresh_rechecks_them() {
+        const TRACK: i32 = 192000005;
+        let (_rocket, db) = super::super::music::tests::lyrics_database(TRACK).await;
+        let (url, worker) = super::super::music::tests::mock_lyrics(vec![
+            ("200 OK", r#"{"plainLyrics":"Original lyric"}"#),
+            ("200 OK", r#"{"plainLyrics":"Updated lyric"}"#),
+        ]);
+        let mut settings = Settings::default();
+        // No primary provider is available: optional lyrics still work for unmatched songs.
+        settings.metadata.providers.clear();
+        super::super::music::TEST_LYRICS_URL
+            .scope(url, async {
+                for _ in 0..2 {
+                    run_automatic_movie_metadata_linking(
+                        &db,
+                        &settings,
+                        Some(1),
+                        AutomaticMetadataScope::NewItems(HashSet::from([TRACK])),
+                        None,
+                        None,
+                    )
+                    .await;
+                    let saved = db
+                        .run(|conn| crate::media::lyrics::load(conn, TRACK))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(saved.plain_lyrics.as_deref(), Some("Original lyric"));
+                }
+                run_automatic_movie_metadata_linking(
+                    &db,
+                    &settings,
+                    Some(1),
+                    AutomaticMetadataScope::AllUnmatched,
+                    None,
+                    None,
+                )
+                .await;
+                worker.join().unwrap();
+                let saved = db
+                    .run(|conn| crate::media::lyrics::load(conn, TRACK))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(saved.plain_lyrics.as_deref(), Some("Updated lyric"));
+            })
+            .await;
+    }
 
     #[tokio::test]
     async fn fetched_show_metadata_survives_descendant_discovery_failure() {

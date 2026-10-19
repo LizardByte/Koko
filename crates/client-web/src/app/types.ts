@@ -5,6 +5,7 @@ import type {
   ItemMetadataResponse,
   LogEntriesResponse,
   MediaHome,
+  MusicPlaylistDetail,
   MediaItemDetail,
   MediaItemSources,
   MediaItemSummary,
@@ -108,6 +109,8 @@ export interface AppState {
   capabilities?: ServerCapabilities;
   libraries: MediaLibrary[];
   home?: MediaHome;
+  playlists?: MusicPlaylistDetail[];
+  selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];
   libraryItemsLoading: boolean;
   searchResults: MediaSearchResult[];
@@ -177,6 +180,7 @@ export interface AppState {
 
 /** Lucide icon names intentionally allowed by the web UI renderer. */
 export type AppIconName =
+  | 'locate-fixed'
   | 'arrow-left'
   | 'arrow-right'
   | 'book'
@@ -207,6 +211,12 @@ export type AppIconName =
   | 'play'
   | 'plus'
   | 'refresh-cw'
+  | 'repeat'
+  | 'repeat-1'
+  | 'shuffle'
+  | 'list-music'
+  | 'mic-2'
+  | 'radio'
   | 'rotate-ccw'
   | 'save'
   | 'search'

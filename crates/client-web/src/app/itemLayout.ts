@@ -32,7 +32,7 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
   const bar = page.querySelector<HTMLElement>('.item-action-dock');
   const scroller = page.closest<HTMLElement>('.main-shell');
   const rows = Array.from(page.querySelectorAll<HTMLElement>('[data-item-row]'));
-  if (!identity || !description || !text || !scroller) return;
+  if (!identity || !scroller) return;
   let frame: number | undefined;
   const setSize = (name: string, value: number): void => {
     const next = `${Math.round(value * 10) / 10}px`;
@@ -41,9 +41,11 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
   const measure = (): void => {
     frame = undefined;
     if (signal.aborted || !page.isConnected) return;
-    const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight) || 24;
-    const collapsedHeight = lineHeight * 6;
-    if (toggle) toggle.hidden = text.scrollHeight <= collapsedHeight + 1;
+    if (text && toggle) {
+      const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight) || 24;
+      const collapsedHeight = lineHeight * 6;
+      toggle.hidden = text.scrollHeight <= collapsedHeight + 1;
+    }
     const title = identity.querySelector<HTMLElement>('.item-title-logo, .item-title-fallback') ?? identity;
     const pageTop = page.getBoundingClientRect().top;
     const titleTop = title.getBoundingClientRect().top;
@@ -71,7 +73,7 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     frame ??= requestAnimationFrame(measure);
   };
   const observer = new ResizeObserver(schedule);
-  [identity, description, scroller, ...rows, ...(bar ? [bar] : [])].forEach((element) => observer.observe(element));
+  [identity, scroller, ...rows, ...(description ? [description] : []), ...(bar ? [bar] : [])].forEach((element) => observer.observe(element));
   globalThis.addEventListener('resize', schedule, { signal });
   signal.addEventListener('abort', () => {
     observer.disconnect();

@@ -12,6 +12,8 @@ on:
     secrets:
       FANART_PROJECT_API_KEY:
         required: false
+      LRCLIB_APPLICATION_ID:
+        required: false
 
 env:
   MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -259,6 +261,7 @@ jobs:
         if: matrix.run == 'build'
         env:
           KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
+          KOKO_LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
         run: |
           cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release \
             --message-format=json | tee "${RUNNER_TEMP}/cargo-build.json"

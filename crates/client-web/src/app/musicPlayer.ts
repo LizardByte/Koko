@@ -19,7 +19,6 @@ let writes = Promise.resolve();
 let refreshOnSave = false;
 let radioQueueId:number|undefined, playingKey:number|undefined, radioContext=false;
 let revealPanel=false, focusPanel=false, lastLyric:HTMLElement|undefined, followLyrics=true;
-const lyricsCache=new Map<string,NonNullable<MusicPlayerViewState['lyrics']>>();
 let callbacks = { changed: () => {}, navigate: (_path: string) => {}, saved: async () => {} };
 const view: MusicPlayerViewState = { queue: musicQueue, loading: false, paused: true, volume: 1, muted: false, lyricsEnabled: true, lyricsLoading: false, saving: false };
 
@@ -376,14 +375,13 @@ export async function playMusicPlaylist(id: number, selectedIndex?: number): Pro
   await playCurrent(startMs,false);
   void callbacks.saved();
 }
-async function loadLyrics(refresh = false): Promise<void> {
+async function loadLyrics(): Promise<void> {
   if (!current) return;
   const id = current.id, token = generation;
-  const key = JSON.stringify([id, current.display_title, current.music?.artist, current.music?.album, current.duration_ms, current.artwork_updated_at]);
   if(view.lyricsLoading)return;
   view.lyricsLoading = true; view.lyricsError = undefined; paint();
-  try { const lyrics = (!refresh && lyricsCache.get(key)) || await getMusicLyrics(id, refresh); if (token === generation) { view.lyrics = lyrics; if(lyricsCache.size>=100)lyricsCache.clear(); lyricsCache.set(key,lyrics); revealPanel=true; } }
-  catch (error) { if (token === generation) { view.lyricsError = error instanceof ApiError && error.status===404 ? 'No lyrics were found for this song.' : 'The lyrics service is temporarily unavailable. Try again.'; } }
+  try { const lyrics = await getMusicLyrics(id); if (token === generation) { view.lyrics = lyrics; revealPanel=true; } }
+  catch (error) { if (token === generation) { view.lyricsError = error instanceof ApiError && error.status===404 ? 'This song is no longer available.' : 'Saved lyrics could not be loaded.'; } }
   finally { if (token === generation) { view.lyricsLoading = false; paint(); } }
 }
 function seek(position: number): void {
@@ -409,7 +407,6 @@ async function act(action: string): Promise<void> {
     case 'mute': audio.muted = !audio.muted; break;
     case 'queue': if(view.panel==='queue')closePanel(); else { view.panel='queue'; revealPanel=true; focusPanel=true; paint(); } break;
     case 'lyrics': if(view.panel==='lyrics') { closePanel(); break; } view.panel='lyrics'; view.lyricsEnabled=true; followLyrics=true; revealPanel=true; focusPanel=true; if (!view.lyrics) await loadLyrics(); else paint(); break;
-    case 'retry-lyrics': await loadLyrics(true); break;
     case 'follow-lyrics': followLyrics=true; lastLyric=undefined; updateTimeline(); break;
     case 'close-panel': closePanel(); break;
     case 'clear': musicQueue.clearUpcoming(); persist(); paint(); callbacks.changed(); break;

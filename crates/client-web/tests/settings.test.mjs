@@ -251,14 +251,14 @@ test('provider artwork comes from API descriptors and resolves against the API s
 
 test('all declared mock provider logos work in the development server', async () => {
   const providers = getMockMetadataProviders();
-  assert.equal(providers.length, 8);
+  assert.equal(providers.length, 9);
   const origin = `http://127.0.0.1:${assetServer.address().port}`;
   for (const provider of providers) {
     for (const url of [provider.logo_light_url, provider.logo_dark_url].filter(Boolean)) {
-      assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png)$/);
+      assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png|ico)$/);
       const response = await fetch(`${origin}${url}`);
       assert.equal(response.status, 200, url);
-      assert.equal(response.headers.get('content-type'), url.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
+      assert.equal(response.headers.get('content-type'), url.endsWith('.svg') ? 'image/svg+xml' : url.endsWith('.ico') ? 'image/x-icon' : 'image/png');
       assert.ok((await response.arrayBuffer()).byteLength > 0);
     }
   }
@@ -275,6 +275,27 @@ test('Fanart.tv is selectable per music library only alongside MusicBrainz', () 
   const noMusicBrainz = metadataProviderCheckboxes('providers', ['fanart'], 'music');
   assert.match(noMusicBrainz.match(/<input[^>]*value="fanart"[^>]*>/)?.[0], /disabled/);
   assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="fanart"/);
+});
+
+test('LRCLIB is a keyless library-selectable music agent without a MusicBrainz dependency', () => {
+  const html = metadataProviderCheckboxes('providers', ['lrclib'], 'music');
+  const input = html.match(/<input[^>]*value="lrclib"[^>]*>/)?.[0];
+  assert.match(input, /checked/);
+  assert.doesNotMatch(input, /disabled/);
+  assert.match(html, /data-provider-option="lrclib" data-provider-role="secondary" data-extends-provider-ids=""/);
+  assert.match(html, /\/assets\/providers\/lrclib.ico/);
+  assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="lrclib"/);
+  const index = state.settingsResponse.settings.media.libraries.findIndex((library) => library.kind === 'music');
+  const form = new FormData();
+  form.set(`existing_library_name_${index}`, 'Music');
+  form.set(`existing_library_paths_${index}`, '/music');
+  form.append(`existing_library_metadata_provider_${index}`, 'lrclib');
+  assert.deepEqual(buildSettingsFromForm(form).media.libraries[index].metadata_providers, ['lrclib']);
+  state.route = { page: 'settings', section: 'providers' };
+  const settingsHtml = renderSettingsPage();
+  assert.match(settingsHtml, /LRCLIB/);
+  assert.match(settingsHtml, /Playback reads saved lyrics/);
+  assert.doesNotMatch(settingsHtml, /name="lrclib_api_key"/);
 });
 
 test('secondary providers retain their saved priority ahead of primary providers', () => {

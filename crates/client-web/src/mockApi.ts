@@ -553,6 +553,16 @@ const metadataProviders: MetadataProviderStatus[] = [
     enabled: true, configured: true, language: 'en-US',
   },
   {
+    id: 'lrclib',
+    display_name: 'LRCLIB',
+    description: 'Plain and synchronized lyrics saved during track metadata refreshes. Playback reads saved lyrics without contacting LRCLIB.',
+    supported_kinds: ['music'],
+    requires_api_key: false, implemented: true, role: 'secondary', extends_provider_ids: [],
+    enabled: false, configured: true, language: 'en-US',
+    attribution_text: 'Lyrics provided by LRCLIB.', attribution_url: 'https://lrclib.net/',
+    logo_light_url: '/assets/providers/lrclib.ico', logo_dark_url: '/assets/providers/lrclib.ico',
+  },
+  {
     id: 'fanart',
     logo_light_url: '/assets/providers/fanart.png',
     logo_dark_url: '/assets/providers/fanart.png',
@@ -928,6 +938,13 @@ let settings: SettingsSnapshot = {
       },
       {
         id: 'fanart',
+        enabled: false,
+        api_key: null,
+        api_key_configured: false,
+        language: 'en-US',
+      },
+      {
+        id: 'lrclib',
         enabled: false,
         api_key: null,
         api_key_configured: false,

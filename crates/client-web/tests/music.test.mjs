@@ -109,16 +109,16 @@ test('music tag reading is opt-in for each library and is saved independently', 
   assert.equal(buildSettingsFromForm(form).media.libraries[index].use_embedded_music_tags, false);
 });
 
-test('normal lyric playback reuses saved outcomes while explicit retry requests a refresh', async () => {
+test('playback lyrics requests only read saved lyrics without a provider refresh parameter', async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url) => { requests.push(new URL(url, location.origin)); return new Response('{}', { headers: { 'content-type': 'application/json' } }); };
   try {
     await getMusicLyrics(303);
-    await getMusicLyrics(303, true);
+    await getMusicLyrics(303);
     assert.equal(requests[0].pathname, '/api/v1/items/303/lyrics');
     assert.equal(requests[0].searchParams.has('refresh'), false);
-    assert.equal(requests[1].searchParams.get('refresh'), 'true');
+    assert.equal(requests[1].searchParams.has('refresh'), false);
   } finally { globalThis.fetch = originalFetch; }
 });
 

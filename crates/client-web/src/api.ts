@@ -221,7 +221,7 @@ export function deletePlaylist(id: number): Promise<void> { return requestJson('
 
 export interface MusicLyrics { plain_lyrics?: string; synced_lyrics?: string; instrumental: boolean; source: string; source_url: string }
 export interface MusicRadio { items: MediaItemSummary[]; source: string; message?: string }
-export function getMusicLyrics(id: number, refresh = false): Promise<MusicLyrics> { return requestJson('GET', `/api/v1/items/${id}/lyrics${refresh ? '?refresh=true' : ''}`); }
+export function getMusicLyrics(id: number): Promise<MusicLyrics> { return requestJson('GET', `/api/v1/items/${id}/lyrics`); }
 export function getMusicRadio(id: number): Promise<MusicRadio> { return requestJson('GET', `/api/v1/items/${id}/radio`); }
 
 export interface MediaItemSourceFile {
@@ -1077,7 +1077,7 @@ function requestHeaders(body?: unknown): Record<string, string> {
 
 async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), /\/lyrics$|\/radio$/.test(path) ? 30000 : REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), /\/radio$/.test(path) ? 30000 : REQUEST_TIMEOUT_MS);
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),

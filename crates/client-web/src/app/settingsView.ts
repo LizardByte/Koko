@@ -167,7 +167,7 @@ function renderMetadataProviderOption(
   const label = provider.display_name;
   const isSecondary = provider.role === 'secondary';
   const secondaryAvailable = isSecondary
-    ? provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
+    ? !provider.extends_provider_ids.length || provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
     : true;
   const checked = selected.has(providerId) && secondaryAvailable;
   const providerPriorityLabel = `Priority ${priority}${isSecondary ? ' · Secondary' : ''}`;

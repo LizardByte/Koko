@@ -81,6 +81,10 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/fanart.png"),
         ),
+        "lrclib.ico" => (
+            ContentType::Icon,
+            include_bytes!("../../../../../assets/providers/lrclib.ico"),
+        ),
         "open-library.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/open-library.png"),

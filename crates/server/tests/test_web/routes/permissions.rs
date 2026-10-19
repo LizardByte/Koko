@@ -537,7 +537,7 @@ async fn music_discovery_checks_item_access_before_provider_requests() {
     let text = response(
         &client,
         Method::Get,
-        "/api/v1/items/20/lyrics",
+        "/api/v1/items/20/lyrics?refresh=true",
         Some(&viewer),
         json!({}),
         Status::Ok,

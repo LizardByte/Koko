@@ -76,6 +76,14 @@ test('inline lyrics remain empty before the first timed line and during blank in
   assert.equal(currentLyricText('',2),'');
 });
 
+test('missing saved lyrics direct users to metadata refresh instead of a playback lookup',()=>{
+  const queue=new MusicQueue();queue.replace([{id:1,display_title:'Song',item_type:'track'}]);
+  const html=renderMusicPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyrics:{instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'},lyricsLoading:false,saving:false});
+  assert.match(html,/Select LRCLIB in the library’s metadata sources/);
+  assert.match(html,/refresh this track’s metadata/);
+  assert.doesNotMatch(html,/Looking up lyrics|Lyrics from|retry-lyrics/);
+});
+
 test('radio cards share Continue listening with albums and count all cards for pagination',()=>{
   const original=state.home;
   const track=mock.getMockItem(103),album=mock.getMockItem(302);
@@ -133,10 +141,10 @@ test('live music overlays saved progress, identifies the current row and changes
     assert.equal(musicPlaybackItem(track).playback_position_ms,track.playback_position_ms);
   } finally {clearMusicPlayback();}
 });
-test('panel scrolling changes only the panel, and lyrics expose a retry and compact expansion',()=>{
+test('panel scrolling changes only the panel, and lyrics errors have no lookup retry control',()=>{
   const container={scrollTop:0,clientHeight:300,getBoundingClientRect:()=>({top:50})};
   revealPanelEntry(container,{getBoundingClientRect:()=>({top:800,height:60})});assert.equal(container.scrollTop,630);
   const queue=new MusicQueue();queue.replace([mock.getMockItem(103)]);
   const html=renderMusicPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyricsError:'Please retry',lyricsLoading:false,saving:false});
-  assert.match(html,/data-current-lyric/);assert.match(html,/Try lyrics again/);assert.match(html,/Jump to current lyrics/);assert.match(html,/class="player-volume"/);
+  assert.match(html,/data-current-lyric/);assert.doesNotMatch(html,/Try lyrics again|retry-lyrics/);assert.match(html,/Jump to current lyrics/);assert.match(html,/class="player-volume"/);
 });

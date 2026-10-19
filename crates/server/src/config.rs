@@ -354,7 +354,9 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             clear_api_key: false,
             language: default_metadata_language(),
         },
-        MetadataProviderId::MusicBrainz | MetadataProviderId::Fanart => MetadataProviderSettings {
+        MetadataProviderId::MusicBrainz
+        | MetadataProviderId::Fanart
+        | MetadataProviderId::Lrclib => MetadataProviderSettings {
             id,
             enabled: false,
             api_key: None,
@@ -557,6 +559,8 @@ pub enum MetadataProviderId {
     MusicBrainz,
     /// Fanart.tv artwork extension for MusicBrainz music metadata.
     Fanart,
+    /// LRCLIB plain and synchronized lyrics for local music tracks.
+    Lrclib,
     /// Open Library for book metadata.
     OpenLibrary,
     /// Local NFO files and sidecar metadata.
@@ -576,6 +580,7 @@ impl MetadataProviderId {
             MetadataProviderId::Tvdb => "tvdb",
             MetadataProviderId::MusicBrainz => "musicbrainz",
             MetadataProviderId::Fanart => "fanart",
+            MetadataProviderId::Lrclib => "lrclib",
             MetadataProviderId::OpenLibrary => "open_library",
             MetadataProviderId::LocalNfo => "local_nfo",
             MetadataProviderId::Themerr => "themerr",
@@ -590,6 +595,7 @@ impl MetadataProviderId {
             "tvdb" => Some(MetadataProviderId::Tvdb),
             "musicbrainz" => Some(MetadataProviderId::MusicBrainz),
             "fanart" => Some(MetadataProviderId::Fanart),
+            "lrclib" => Some(MetadataProviderId::Lrclib),
             "open_library" => Some(MetadataProviderId::OpenLibrary),
             "local_nfo" => Some(MetadataProviderId::LocalNfo),
             "themerr" => Some(MetadataProviderId::Themerr),
@@ -861,6 +867,7 @@ impl Default for MetadataSettings {
                 default_metadata_provider_settings(MetadataProviderId::Tvdb),
                 default_metadata_provider_settings(MetadataProviderId::MusicBrainz),
                 default_metadata_provider_settings(MetadataProviderId::Fanart),
+                default_metadata_provider_settings(MetadataProviderId::Lrclib),
                 default_metadata_provider_settings(MetadataProviderId::OpenLibrary),
                 default_metadata_provider_settings(MetadataProviderId::LocalNfo),
                 default_metadata_provider_settings(MetadataProviderId::Themerr),
@@ -1013,6 +1020,7 @@ pub fn normalize_settings(settings: &mut Settings) {
         MetadataProviderId::Tvdb,
         MetadataProviderId::MusicBrainz,
         MetadataProviderId::Fanart,
+        MetadataProviderId::Lrclib,
         MetadataProviderId::OpenLibrary,
         MetadataProviderId::LocalNfo,
         MetadataProviderId::Themerr,

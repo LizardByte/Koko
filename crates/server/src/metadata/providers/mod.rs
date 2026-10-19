@@ -2,6 +2,8 @@ mod musicbrainz;
 use musicbrainz::MusicBrainzMetadataProvider;
 pub(crate) mod fanart;
 use fanart::FanartMetadataProvider;
+pub(crate) mod lrclib;
+use lrclib::LrclibMetadataProvider;
 
 pub(crate) mod themerr;
 pub(crate) mod tmdb;
@@ -704,6 +706,7 @@ impl MetadataRegistry {
                 Box::new(TrailerDbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
                 Box::new(FanartMetadataProvider),
+                Box::new(LrclibMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),
             ],

@@ -52,9 +52,10 @@ function renderPanel(view: MusicPlayerViewState): string {
   </section>`;
 }
 function renderLyrics(view: MusicPlayerViewState): string {
-  if (view.lyricsLoading) return '<p role="status">Looking up lyrics…</p>';
-  if (view.lyricsError) return `<p role="status">${escapeHtml(view.lyricsError)}</p><button type="button" class="secondary-button" data-music-action="retry-lyrics">Try lyrics again</button>`;
-  if (!view.lyrics) return '<p>No lyrics have been requested.</p>';
+  if (view.lyricsLoading) return '<p role="status">Loading saved lyrics…</p>';
+  if (view.lyricsError) return `<p role="status">${escapeHtml(view.lyricsError)}</p>`;
+  if (!view.lyrics) return '<p>No saved lyrics have been loaded.</p>';
+  if (!view.lyrics.instrumental && !view.lyrics.synced_lyrics?.trim() && !view.lyrics.plain_lyrics?.trim()) return '<p>No saved lyrics are available. Select LRCLIB in the library’s metadata sources and refresh this track’s metadata to look for lyrics.</p>';
   const lines = parseTimedLyrics(view.lyrics.synced_lyrics ?? '');
   const text = view.lyrics.instrumental ? '<p>Instrumental</p>' : lines.length ? `<div class="music-lyrics">${lines.map((line) => `<p data-lyric-time="${line.time}">${escapeHtml(line.text)}</p>`).join('')}</div>` : `<pre class="music-lyrics">${escapeHtml(view.lyrics.plain_lyrics ?? 'No lyrics are available for this song.')}</pre>`;
   return `${text}<p class="muted">Lyrics from <a href="${escapeHtml(view.lyrics.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(view.lyrics.source)}</a></p>`;

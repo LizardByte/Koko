@@ -25,6 +25,18 @@ pub struct MusicLyrics {
     pub source_url: String,
 }
 
+impl MusicLyrics {
+    pub(crate) fn empty() -> Self {
+        Self {
+            plain_lyrics: None,
+            synced_lyrics: None,
+            instrumental: false,
+            source: "LRCLIB".into(),
+            source_url: "https://lrclib.net/".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Lookup {
     pub title: String,
@@ -217,7 +229,8 @@ pub(crate) mod tests {
         crate::db::run_pending_sqlite_migrations(conn).unwrap();
         crate::db::configure_sqlite_connection(conn).unwrap();
         conn.batch_execute(&format!(
-            "INSERT INTO media_libraries(id,name,path,kind) VALUES(1,'Music','/music','music');
+            "INSERT INTO media_libraries(id,name,path,kind,metadata_providers_json) \
+             VALUES(1,'Music','/music','music','[\"lrclib\"]');
             INSERT INTO media_items(id,library_id,identity_key,item_type,display_title,duration_ms)
             VALUES({id},1,'song','track','Song',180000);
             INSERT INTO music_item_metadata(media_item_id,artist,album_artist,album)

@@ -59,6 +59,32 @@ fn test_metadata_provider_statuses_include_tmdb() {
 }
 
 #[test]
+fn lrclib_is_a_keyless_music_metadata_agent_without_primary_dependencies() {
+    let status = list_provider_statuses(&MetadataSettings::default())
+        .into_iter()
+        .find(|provider| provider.id == MetadataProviderId::Lrclib)
+        .unwrap();
+    assert_eq!(status.display_name, "LRCLIB");
+    assert_eq!(status.role, koko::metadata::MetadataProviderRole::Secondary);
+    assert_eq!(status.supported_kinds, vec![MediaLibraryKind::Music]);
+    assert!(status.extends_provider_ids.is_empty());
+    assert!(status.implemented && status.configured && !status.requires_api_key);
+    assert_eq!(
+        MetadataProviderId::from_storage_value("lrclib"),
+        Some(MetadataProviderId::Lrclib)
+    );
+    let mut library = MediaLibrarySettings {
+        kind: MediaLibraryKind::Music,
+        metadata_providers: vec![MetadataProviderId::Lrclib],
+        ..Default::default()
+    };
+    library.normalize();
+    let saved: MediaLibrarySettings =
+        serde_json::from_str(&serde_json::to_string(&library).unwrap()).unwrap();
+    assert_eq!(saved.metadata_providers, vec![MetadataProviderId::Lrclib]);
+}
+
+#[test]
 fn test_metadata_provider_statuses_include_tvdb() {
     let statuses = list_provider_statuses(&MetadataSettings::default());
     let tvdb = statuses

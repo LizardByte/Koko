@@ -109,7 +109,7 @@ async fn test_declared_provider_logos_are_served_as_local_image_assets() {
         .into_json()
         .await
         .expect("Expected provider descriptors");
-    assert_eq!(providers.len(), 8);
+    assert_eq!(providers.len(), 9);
 
     for provider in providers {
         for field in [
@@ -132,6 +132,10 @@ async fn test_declared_provider_logos_are_served_as_local_image_assets() {
                 let svg = std::str::from_utf8(&bytes).expect("Expected a UTF-8 SVG");
                 assert!(svg.contains("<svg") && svg.contains("</svg>"));
                 assert!(!svg.contains("<script") && !svg.contains("href=\"http"));
+            } else if url.ends_with(".ico") {
+                assert_eq!(content_type, ContentType::Icon);
+                let image = image::load_from_memory(&bytes).expect("Expected a valid icon");
+                assert!(image.width() > 0 && image.height() > 0);
             } else {
                 assert_eq!(content_type, ContentType::PNG);
                 let image = image::load_from_memory(&bytes).expect("Expected a valid PNG");

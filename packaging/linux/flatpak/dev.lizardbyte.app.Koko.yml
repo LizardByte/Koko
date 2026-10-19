@@ -43,6 +43,7 @@ modules:
     build-options:
       secret-env:
         - KOKO_FANART_PROJECT_API_KEY
+        - KOKO_LRCLIB_APPLICATION_ID
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
       env:
         # CMake applies jitterentropy's required -O0 after the SDK's optimization flags.

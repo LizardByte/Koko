@@ -50,6 +50,9 @@ pub(crate) mod cache_policy;
 pub(crate) mod http;
 pub mod identities;
 mod providers;
+#[cfg(test)]
+pub(crate) use providers::lrclib::TEST_LYRICS_URL;
+pub(crate) use providers::lrclib::fetch_lyrics;
 pub use providers::{
     MetadataProvider,
     MetadataRegistry,
@@ -128,7 +131,7 @@ pub struct MetadataProviderDescriptor {
 pub enum MetadataProviderRole {
     /// Provider can be the primary source of item metadata.
     Primary,
-    /// Provider enriches metadata from one or more primary providers.
+    /// Provider enriches item metadata, optionally requiring a primary provider.
     Secondary,
 }
 

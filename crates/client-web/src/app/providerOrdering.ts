@@ -1,4 +1,4 @@
-/** Library provider order controls preference; secondary providers still need a matching primary. */
+/** Library provider order controls preference; honor each provider's declared dependencies. */
 function visibleProviderOptions(list: HTMLElement): HTMLElement[] {
   return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option:not(.is-hidden)'));
 }
@@ -21,7 +21,7 @@ export function syncProviderDependencyOptions(list: HTMLElement): void {
     const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
     const secondary = option.dataset.providerRole === 'secondary';
     const dependencies = (option.dataset.extendsProviderIds ?? '').split(',').map((id) => id.trim()).filter(Boolean);
-    const available = !secondary || dependencies.some((id) => selectedPrimaryIds.has(id));
+    const available = !secondary || !dependencies.length || dependencies.some((id) => selectedPrimaryIds.has(id));
     if (input && secondary) {
       input.disabled = !available;
       if (!available) input.checked = false;

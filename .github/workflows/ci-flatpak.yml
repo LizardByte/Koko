@@ -14,6 +14,8 @@ on:
     secrets:
       FANART_PROJECT_API_KEY:
         required: false
+      LRCLIB_APPLICATION_ID:
+        required: false
 
 env:
   APP_ID: dev.lizardbyte.app.Koko
@@ -173,8 +175,9 @@ jobs:
         working-directory: build
         env:
           KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
+          KOKO_LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
         run: |
-          sudo --preserve-env=KOKO_FANART_PROJECT_API_KEY su "$(whoami)" -c "flatpak run org.flatpak.Builder \
+          sudo --preserve-env=KOKO_FANART_PROJECT_API_KEY,KOKO_LRCLIB_APPLICATION_ID su "$(whoami)" -c "flatpak run org.flatpak.Builder \
             --arch=${MATRIX_ARCH} \
             --force-clean \
             --repo=repo \

@@ -1,4 +1,4 @@
-//! Stored and on-demand lyrics and radio. Audio always comes from authorized local
+//! Stored lyrics and radio. Audio always comes from authorized local
 //! files.
 pub use crate::media::lyrics::MusicLyrics;
 use crate::media::lyrics::{
@@ -33,10 +33,7 @@ use rocket_okapi::{
     },
     openapi,
 };
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::Serialize;
 use std::{
     collections::{
         HashMap,
@@ -77,31 +74,20 @@ static LYRIC_LOOKUPS: Lazy<Mutex<HashMap<i32, Weak<Mutex<()>>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(test)]
-tokio::task_local! { pub(super) static TEST_LYRICS_URL: String; }
+pub(super) use crate::metadata::TEST_LYRICS_URL;
 
 async fn provider_json(
     url: &str,
     params: &[(&str, String)],
 ) -> Result<Option<serde_json::Value>, Status> {
-    provider_json_with_cache(url, params, true).await
-}
-
-async fn provider_json_with_cache(
-    url: &str,
-    params: &[(&str, String)],
-    use_cached: bool,
-) -> Result<Option<serde_json::Value>, Status> {
     let request = CLIENT
         .get(url)
         .query(params)
-        .timeout(Duration::from_secs(
-            if url.starts_with("https://lrclib.net/") { 12 } else { 6 },
-        ))
         .build()
         .map_err(|_| Status::BadRequest)?;
     let key = request.url().to_string();
     if let Some((time, payload)) = CACHE.lock().await.get(&key) {
-        if use_cached && time.elapsed() < Duration::from_secs(3600) {
+        if time.elapsed() < Duration::from_secs(3600) {
             return Ok(Some(payload.clone()));
         }
     }
@@ -112,7 +98,7 @@ async fn provider_json_with_cache(
         response.status().is_server_error()
             || response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
     });
-    // Transient provider failures must not require changing tracks to retry lyrics.
+    // Retry transient recommendation-service failures once before using local radio.
     let response = if retry {
         rocket::tokio::time::sleep(Duration::from_millis(250)).await;
         CLIENT.execute(request).await
@@ -139,38 +125,48 @@ async fn provider_json_with_cache(
     }
     let payload =
         serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| Status::BadGateway)?;
-    if use_cached {
-        let mut cache = CACHE.lock().await;
-        if cache.len() >= 128 {
-            cache.clear();
-        }
-        cache.insert(key, (Instant::now(), payload.clone()));
+    let mut cache = CACHE.lock().await;
+    if cache.len() >= 128 {
+        cache.clear();
     }
+    cache.insert(key, (Instant::now(), payload.clone()));
     Ok(Some(payload))
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LrcResponse {
-    plain_lyrics: Option<String>,
-    synced_lyrics: Option<String>,
-    #[serde(default)]
-    instrumental: bool,
-}
-
-/// Read saved lyrics, filling the database on demand. Refresh bypasses cached lookup outcomes.
+/// Read saved lyrics without contacting a provider or modifying lookup outcomes.
 #[openapi(tag = "Media")]
-#[get("/api/v1/items/<id>/lyrics?<refresh>")]
+#[get("/api/v1/items/<id>/lyrics")]
 pub async fn lyrics(
     user: UserGuard,
     db: DbConn,
     id: i32,
-    refresh: Option<bool>,
 ) -> Result<Json<MusicLyrics>, Status> {
     super::media::require_item_access(&db, id, &user).await?;
-    refresh_track_lyrics(&db, id, refresh.unwrap_or(false))
-        .await
-        .map(Json)
+    read_track_lyrics(&db, id).await.map(Json)
+}
+
+async fn read_track_lyrics(
+    db: &DbConn,
+    id: i32,
+) -> Result<MusicLyrics, Status> {
+    db.run(move |conn| {
+        let item = media::get_media_item(conn, id, "")?.ok_or(diesel::result::Error::NotFound)?;
+        let Some(lookup) = Lookup::from_item(&item) else {
+            return Ok::<_, diesel::result::Error>(None);
+        };
+        Ok(Some(
+            lyrics_store::load(conn, id)?
+                .filter(|stored| stored.matches(&lookup) && stored.lookup_status == "found")
+                .map(|stored| stored.lyrics())
+                .unwrap_or_else(MusicLyrics::empty),
+        ))
+    })
+    .await
+    .map_err(|error| match error {
+        diesel::result::Error::NotFound => Status::NotFound,
+        _ => Status::InternalServerError,
+    })?
+    .ok_or(Status::BadRequest)
 }
 
 async fn refresh_track_lyrics(
@@ -196,13 +192,16 @@ async fn refresh_track_lyrics_inner(
         lock
     };
     let _guard = lock.lock().await;
-    let (lookup, previous) = db
+    let (lookup, previous, selected) = db
         .run(move |conn| {
             let item =
                 media::get_media_item(conn, id, "")?.ok_or(diesel::result::Error::NotFound)?;
             Ok::<_, diesel::result::Error>((
                 Lookup::from_item(&item),
                 lyrics_store::load(conn, id)?,
+                media::get_library_metadata_providers(conn, item.library_id)?.is_some_and(
+                    |providers| providers.contains(&crate::config::MetadataProviderId::Lrclib),
+                ),
             ))
         })
         .await
@@ -211,6 +210,12 @@ async fn refresh_track_lyrics_inner(
             _ => Status::InternalServerError,
         })?;
     let lookup = lookup.ok_or(Status::BadRequest)?;
+    if !selected {
+        return Ok(previous
+            .filter(|stored| stored.matches(&lookup) && stored.lookup_status == "found")
+            .map(|stored| stored.lyrics())
+            .unwrap_or_else(MusicLyrics::empty));
+    }
     let now = crate::utils::current_timestamp();
     if let Some(stored) = previous
         .as_ref()
@@ -222,35 +227,12 @@ async fn refresh_track_lyrics_inner(
             Ok(stored.lyrics())
         };
     }
-    #[cfg(not(test))]
-    let url = "https://lrclib.net/api/get".to_owned();
-    #[cfg(test)]
-    // Background metadata tests must never contact the real lyrics service.
-    let url = TEST_LYRICS_URL.try_with(Clone::clone).unwrap_or_default();
-    // The database owns lyric freshness, including misses and transient failures.
-    let result = provider_json_with_cache(&url, &lookup.params(), false)
-        .await
-        .and_then(|data| {
-            data.map(serde_json::from_value::<LrcResponse>)
-                .transpose()
-                .map_err(|_| Status::BadGateway)
-        });
-    let stored = match result {
-        Ok(data) => StoredLyrics::result(
-            id,
-            &lookup,
-            MusicLyrics {
-                plain_lyrics: data.as_ref().and_then(|lyrics| lyrics.plain_lyrics.clone()),
-                synced_lyrics: data
-                    .as_ref()
-                    .and_then(|lyrics| lyrics.synced_lyrics.clone()),
-                instrumental: data.is_some_and(|lyrics| lyrics.instrumental),
-                source: "LRCLIB".into(),
-                source_url: "https://lrclib.net/".into(),
-            },
-            now,
-        ),
-        Err(_) => StoredLyrics::failure(id, &lookup, previous, now),
+    let stored = match crate::metadata::fetch_lyrics(&lookup).await {
+        Ok(data) => StoredLyrics::result(id, &lookup, data, now),
+        Err(error) => {
+            log::debug!("LRCLIB lookup for track {id} failed: {error}");
+            StoredLyrics::failure(id, &lookup, previous, now)
+        }
     };
     let response =
         if stored.lookup_status == "error" { Err(Status::BadGateway) } else { Ok(stored.lyrics()) };
@@ -634,6 +616,7 @@ pub(crate) mod tests {
                         Err(error) => panic!("Expected a lyric request: {error}"),
                     }
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -657,7 +640,138 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
-    async fn on_demand_lyrics_are_saved_and_concurrent_playback_reuses_database() {
+    async fn playback_reads_saved_lyrics_without_lookup_even_for_missing_or_expired_results() {
+        const TRACK: i32 = 192000005;
+        let (_rocket, db) = lyrics_database(TRACK).await;
+        TEST_LYRICS_URL
+            .scope("http://127.0.0.1:1/must-not-contact".into(), async {
+                assert_eq!(
+                    read_track_lyrics(&db, TRACK).await.unwrap(),
+                    MusicLyrics::empty()
+                );
+                assert!(
+                    db.run(|conn| lyrics_store::load(conn, TRACK))
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+                db.run(|conn| {
+                    let item = media::get_media_item(conn, TRACK, "").unwrap().unwrap();
+                    let lookup = Lookup::from_item(&item).unwrap();
+                    lyrics_store::save(
+                        conn,
+                        &lookup,
+                        &StoredLyrics::result(
+                            TRACK,
+                            &lookup,
+                            MusicLyrics {
+                                plain_lyrics: Some("Saved only".into()),
+                                ..MusicLyrics::empty()
+                            },
+                            1,
+                        ),
+                    )
+                    .unwrap();
+                })
+                .await;
+                assert_eq!(
+                    read_track_lyrics(&db, TRACK)
+                        .await
+                        .unwrap()
+                        .plain_lyrics
+                        .as_deref(),
+                    Some("Saved only")
+                );
+                db.run(|conn| {
+                    conn.batch_execute(
+                        "UPDATE music_lyrics SET lookup_status='missing', next_check_at=1",
+                    )
+                    .unwrap()
+                })
+                .await;
+                assert_eq!(
+                    read_track_lyrics(&db, TRACK).await.unwrap(),
+                    MusicLyrics::empty()
+                );
+                assert_eq!(
+                    db.run(|conn| lyrics_store::load(conn, TRACK))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .next_check_at,
+                    1
+                );
+            })
+            .await;
+    }
+
+    #[rocket::async_test]
+    async fn lyrics_metadata_agent_selection_is_library_scoped_and_disabling_preserves_saved_text()
+    {
+        const TRACK: i32 = 192000006;
+        let (_rocket, db) = lyrics_database(TRACK).await;
+        db.run(|conn| {
+            conn.batch_execute(
+                "UPDATE media_libraries SET metadata_providers_json='[\"musicbrainz\"]'",
+            )
+            .unwrap()
+        })
+        .await;
+        TEST_LYRICS_URL
+            .scope("http://127.0.0.1:1/must-not-contact".into(), async {
+                refresh_metadata_lyrics(&db, TRACK, true).await;
+                assert!(
+                    db.run(|conn| lyrics_store::load(conn, TRACK))
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            })
+            .await;
+        // No primary metadata provider or MusicBrainz match is necessary.
+        db.run(|conn| {
+            conn.batch_execute("UPDATE media_libraries SET metadata_providers_json='[\"lrclib\"]'")
+                .unwrap()
+        })
+        .await;
+        let (url, worker) = mock_lyrics(vec![(
+            "200 OK",
+            r#"{"plainLyrics":"Selected library lyrics"}"#,
+        )]);
+        TEST_LYRICS_URL
+            .scope(url, refresh_metadata_lyrics(&db, TRACK, true))
+            .await;
+        worker.join().unwrap();
+        let saved = db
+            .run(|conn| lyrics_store::load(conn, TRACK))
+            .await
+            .unwrap()
+            .unwrap();
+        db.run(|conn| {
+            conn.batch_execute(
+                "UPDATE media_libraries SET metadata_providers_json='[\"musicbrainz\"]'",
+            )
+            .unwrap()
+        })
+        .await;
+        TEST_LYRICS_URL
+            .scope("http://127.0.0.1:1/must-not-contact".into(), async {
+                refresh_metadata_lyrics(&db, TRACK, true).await;
+                assert_eq!(read_track_lyrics(&db, TRACK).await.unwrap(), saved.lyrics());
+                assert_eq!(
+                    db.run(|conn| lyrics_store::load(conn, TRACK))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .checked_at,
+                    saved.checked_at
+                );
+            })
+            .await;
+    }
+
+    #[rocket::async_test]
+    async fn metadata_lyrics_are_saved_and_concurrent_refreshes_reuse_database() {
         let (_rocket, db) = lyrics_database(192000001).await;
         let (url, worker) = mock_lyrics(vec![(
             "200 OK",
@@ -966,13 +1080,5 @@ pub(crate) mod tests {
         );
         assert_eq!(fallback.source, "Local library metadata");
         assert!(fallback.message.is_some());
-    }
-
-    #[test]
-    fn lyrics_accept_instrumental_and_missing_optional_text() {
-        let response: LrcResponse =
-            serde_json::from_value(serde_json::json!({"instrumental":true})).unwrap();
-        assert!(response.instrumental);
-        assert!(response.plain_lyrics.is_none() && response.synced_lyrics.is_none());
     }
 }

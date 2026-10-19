@@ -7,7 +7,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { bindProviderOrdering, syncProviderDependencyOptions } = await server.ssrLoadModule('/src/app/providerOrdering.ts');
 
-function fixture() {
+function fixture(includeLyrics = false) {
   const options = [];
   const list = {
     querySelectorAll: () => options.filter((option) => !option.hidden),
@@ -16,7 +16,9 @@ function fixture() {
       options.splice(reference ? options.indexOf(reference) : options.length, 0, option);
     },
   };
-  for (const [id, role, dependencies] of [['musicbrainz', 'primary', ''], ['local_nfo', 'primary', ''], ['fanart', 'secondary', 'musicbrainz']]) {
+  const providers = [['musicbrainz', 'primary', ''], ['local_nfo', 'primary', ''], ['fanart', 'secondary', 'musicbrainz']];
+  if (includeLyrics) providers.push(['lrclib', 'secondary', '']);
+  for (const [id, role, dependencies] of providers) {
     const input = new EventTarget();
     Object.assign(input, { value: id, checked: id !== 'local_nfo', disabled: false, closest: () => list });
     const label = { textContent: '' };
@@ -42,6 +44,20 @@ function fixture() {
   syncProviderDependencyOptions(list);
   return { options, list, primary: options[0], local: options[1], fanart: options[2] };
 }
+
+test('independent lyric agents remain selected and reorderable without a primary provider', () => {
+  const { options, primary, local, fanart, list } = fixture(true);
+  const lyrics = options[3];
+  primary.input.checked = false;
+  local.input.checked = false;
+  syncProviderDependencyOptions(list);
+  assert.equal(lyrics.input.checked, true);
+  assert.equal(lyrics.input.disabled, false);
+  assert.equal(fanart.input.disabled, true);
+  lyrics.up.dispatchEvent(new Event('click'));
+  assert.equal(options[2], lyrics);
+  assert.equal(lyrics.label.textContent, 'Priority 3 · Secondary');
+});
 
 test('clicking Fanart.tv arrows moves it across primary providers and updates priorities', () => {
   const { options, primary, local, fanart } = fixture();

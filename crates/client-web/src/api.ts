@@ -109,6 +109,7 @@ export interface UpdateUserRequest {
 }
 
 export interface MediaLibrary {
+  exclude_from_home?: boolean;
   id: number;
   name: string;
   path: string;
@@ -657,6 +658,7 @@ export interface LogEntriesResponse {
 }
 
 export interface MediaLibrarySettings {
+  exclude_from_home?: boolean;
   use_embedded_music_tags?: boolean;
   name: string;
   path: string;

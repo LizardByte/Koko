@@ -55,6 +55,7 @@ const SQLITE_MIGRATION_ORDER: &[&str] = &[
     "e729b1a43c60",
     "f43a8d196e20",
     "7d91b6c42e80",
+    "8b37cf9162d0",
     "93e6b42ca108",
 ];
 

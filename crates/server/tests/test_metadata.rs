@@ -203,6 +203,7 @@ fn test_metadata_provider_id_supports_trailerdb() {
 fn test_settings_persistence_clears_library_definitions() {
     let mut settings = Settings::default();
     settings.media.libraries.push(MediaLibrarySettings {
+        exclude_from_home: false,
         use_embedded_music_tags: false,
         name: "Movies".into(),
         path: "C:/Media/Movies".into(),

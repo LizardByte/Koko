@@ -443,6 +443,9 @@ pub enum MediaLibraryMetadataLanguageMode {
 /// A configured media-library root.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq, Default)]
 pub struct MediaLibrarySettings {
+    /// Exclude this library from the combined Home feed without restricting access.
+    #[serde(default)]
+    pub exclude_from_home: bool,
     /// Read descriptive tags embedded in music files. Disabled by default.
     #[serde(default)]
     pub use_embedded_music_tags: bool,

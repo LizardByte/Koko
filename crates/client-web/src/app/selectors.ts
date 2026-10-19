@@ -74,7 +74,13 @@ export function backNavigationTarget(): { label: string; path: string } {
 }
 
 export function topLevelLibraryItems(): MediaItemSummary[] {
-  return state.libraryItems.filter((item) => item.parent_id == null);
+  return homeVisibleLibraryItems().filter((item) => item.parent_id == null);
+}
+
+function homeVisibleLibraryItems(): MediaItemSummary[] {
+  if (state.route.page !== 'home' || activeLibraryId() !== undefined) return state.libraryItems;
+  const excluded = new Set(state.libraries.filter((library) => library.exclude_from_home).map((library) => library.id));
+  return state.libraryItems.filter((item) => !excluded.has(item.library_id));
 }
 
 export function rootItemById(): Map<number, MediaItemSummary> {
@@ -140,7 +146,7 @@ export function categorySummaries(): Array<{ genre: string; count: number; items
   const rootsById = rootItemById();
   const categories = new Map<string, Map<number, MediaItemSummary>>();
 
-  state.libraryItems.forEach((item) => {
+  homeVisibleLibraryItems().forEach((item) => {
     if (!item.genres.length) {
       return;
     }

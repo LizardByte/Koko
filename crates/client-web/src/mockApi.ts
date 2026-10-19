@@ -1301,7 +1301,8 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
 }
 
 export function getMockHome(libraryId?: number): MediaHome {
-  const filteredItems = getMockItems(libraryId);
+  const excluded = new Set(libraryId === undefined ? libraries.filter((library) => library.exclude_from_home).map((library) => library.id) : []);
+  const filteredItems = getMockItems(libraryId).filter((item) => !excluded.has(item.library_id));
   const kind = libraries.find((library) => library.id === libraryId)?.kind;
   let continueTitle = libraryId === undefined ? 'Continue playing' : 'Continue watching';
   if (kind === 'music') continueTitle = 'Continue listening';
@@ -1325,7 +1326,7 @@ export function getMockHome(libraryId?: number): MediaHome {
 
   return {
     library_id: libraryId ?? null,
-    listening_queues:[...mockPlaylists.values()].filter(entry=>entry.owner===activeMockUserId() && entry.detail.playlist.temporary && !entry.detail.playlist.completed && entry.detail.items.some(item=>libraryId===undefined || item.library_id===libraryId)).map(entry=>getMockPlaylist(entry.detail.playlist.id)),
+    listening_queues:[...mockPlaylists.values()].filter(entry=>entry.owner===activeMockUserId() && entry.detail.playlist.temporary && !entry.detail.playlist.completed && entry.detail.items.some(item=>libraryId===undefined || item.library_id===libraryId)).map(entry=>getMockPlaylist(entry.detail.playlist.id)).filter(queue=>!excluded.has(queue.items[queue.playlist.current_index ?? 0]?.library_id) && (!queue.artwork || !excluded.has(queue.artwork.library_id))),
     shelves: [
       { id: 'continue_watching', title: continueTitle, items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
@@ -1400,6 +1401,7 @@ export function getMockSettings(): SettingsResponse {
 /** Apply credential edits without returning saved keys or transient removal flags. */
 export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResponse {
   settings = structuredClone(nextSettings);
+  libraries.forEach((library, index) => { library.exclude_from_home = Boolean(settings.media.libraries[index]?.exclude_from_home); });
   for (const provider of settings.metadata.providers) {
     if (provider.clear_api_key) {
       provider.api_key_configured = false;
@@ -1446,6 +1448,7 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
   normalizedLibrary.allowed_user_ids = normalizedLibrary.allowed_user_ids ?? [];
   settings.media.libraries.push(normalizedLibrary);
   libraries.push({
+    exclude_from_home: Boolean(normalizedLibrary.exclude_from_home),
     id: nextLibraryId,
     name: normalizedLibrary.name,
     path: normalizedLibrary.path,

@@ -244,6 +244,7 @@ table! {
         metadata_languages_json -> Text,
         allowed_user_ids_json -> Text,
         use_embedded_music_tags -> Bool,
+        exclude_from_home -> Bool,
     }
 }
 

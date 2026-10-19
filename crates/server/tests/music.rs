@@ -303,6 +303,7 @@ fn music_library_scans_tags_matches_and_preserves_track_identity() {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
     koko::db::run_pending_sqlite_migrations(&mut conn).unwrap();
     let library = MediaLibrarySettings {
+        exclude_from_home: false,
         use_embedded_music_tags: true,
         name: "Music".into(),
         path: fixture.0.to_string_lossy().into(),

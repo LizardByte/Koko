@@ -155,6 +155,8 @@ pub struct TranscodingCapability {
 /// Persisted media library summary with a stable database identity.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct PersistedLibrarySummary {
+    /// Whether this library is excluded from the combined Home feed.
+    pub exclude_from_home: bool,
     /// Stable database identifier for the library.
     pub id: i32,
     /// Human-friendly library name.
@@ -1200,6 +1202,7 @@ pub fn get_persisted_library_summaries(
             let metadata_counts = refresh_counts.get(&library.id).cloned().unwrap_or_default();
             let scanner = settings.scanner.effective_for_kind(&settings.kind);
             PersistedLibrarySummary {
+                exclude_from_home: settings.exclude_from_home,
                 id: library.id,
                 name: settings.name,
                 path: settings.path,
@@ -1800,6 +1803,7 @@ fn sync_library_catalog_filtered(
         }
 
         persisted.push(PersistedLibrarySummary {
+            exclude_from_home: library.exclude_from_home,
             id: library_row.id,
             name: inspection.summary.name,
             path: inspection.summary.path,
@@ -3363,13 +3367,25 @@ pub fn get_media_home_with_preferred_languages(
     library_id: Option<i32>,
     preferred_languages: &[String],
 ) -> Result<MediaHome, diesel::result::Error> {
-    let items = list_media_items_for_user_with_preferred_languages(
+    let mut items = list_media_items_for_user_with_preferred_languages(
         conn,
         user_id,
         library_id,
         preferred_languages,
     )?;
 
+    let excluded_libraries = if library_id.is_none() {
+        use crate::db::schema::media_libraries::dsl as libraries;
+        libraries::media_libraries
+            .filter(libraries::exclude_from_home.eq(true))
+            .select(libraries::id)
+            .load::<i32>(conn)?
+            .into_iter()
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+    items.retain(|item| !excluded_libraries.contains(&item.library_id));
     let continue_watching = get_continue_watching_items(conn, user_id, library_id, &items)?;
     let library_kind = if let Some(id) = library_id {
         use crate::db::schema::media_libraries::dsl as libraries;
@@ -3407,10 +3423,21 @@ pub fn get_media_home_with_preferred_languages(
     }
     collections.retain(|collection| !collection.item_ids.is_empty());
 
-    let listening_queues = user_id
+    let mut listening_queues = user_id
         .map(|user| playlists::ongoing(conn, user, library_id))
         .transpose()?
         .unwrap_or_default();
+    // Keep queue order intact; a hidden library must not supply the Home card's song or artwork.
+    listening_queues.retain(|queue| {
+        queue
+            .artwork
+            .as_ref()
+            .is_none_or(|artwork| !excluded_libraries.contains(&artwork.library_id))
+            && queue
+                .items
+                .get(queue.playlist.current_index.max(0) as usize)
+                .is_some_and(|item| !excluded_libraries.contains(&item.library_id))
+    });
     Ok(MediaHome {
         library_id,
         listening_queues,
@@ -5307,6 +5334,7 @@ fn media_library_settings_from_row(row: MediaLibrary) -> MediaLibrarySettings {
     };
 
     let mut library = MediaLibrarySettings {
+        exclude_from_home: row.exclude_from_home,
         use_embedded_music_tags: row.use_embedded_music_tags,
         name: row.name,
         path: paths.first().cloned().unwrap_or_default(),
@@ -5329,6 +5357,7 @@ fn media_library_record_values(library: &MediaLibrarySettings) -> NewMediaLibrar
     let primary_path = normalized.primary_path();
 
     NewMediaLibrary {
+        exclude_from_home: normalized.exclude_from_home,
         use_embedded_music_tags: normalized.use_embedded_music_tags,
         name: normalized.name,
         path: primary_path,

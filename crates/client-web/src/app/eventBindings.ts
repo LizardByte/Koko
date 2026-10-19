@@ -1577,6 +1577,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       path: paths[0] ?? '',
       paths,
       recursive: formData.get('library_recursive') === 'on',
+      exclude_from_home: formData.get('library_exclude_from_home') === 'on',
       kind: formDataString(formData.get('library_kind'), 'movies'),
       use_embedded_music_tags: formData.get('library_use_embedded_music_tags') === 'on',
       scanner: formDataString(formData.get('library_scanner'), 'auto'),

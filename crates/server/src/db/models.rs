@@ -62,6 +62,7 @@ pub struct MediaLibrary {
     pub metadata_languages_json: String,
     pub allowed_user_ids_json: String,
     pub use_embedded_music_tags: bool,
+    pub exclude_from_home: bool,
 }
 
 #[derive(Insertable, AsChangeset, Debug, Clone)]
@@ -78,6 +79,7 @@ pub struct NewMediaLibrary {
     pub metadata_languages_json: String,
     pub allowed_user_ids_json: String,
     pub use_embedded_music_tags: bool,
+    pub exclude_from_home: bool,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Associations, Debug)]

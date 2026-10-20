@@ -49,6 +49,26 @@ pub fn favicon() -> (ContentType, &'static [u8]) {
 #[get("/assets/providers/<filename>")]
 pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Status> {
     let asset: (ContentType, &'static [u8]) = match filename {
+        "librivox.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/librivox.png"),
+        ),
+        "comicvine.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/comicvine.svg"),
+        ),
+        "libex-light.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/libex-light.png"),
+        ),
+        "libex-dark.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/libex-dark.png"),
+        ),
+        "audiosilo.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/audiosilo.svg"),
+        ),
         "tmdb.svg" => (
             ContentType::SVG,
             include_bytes!("../../../../../assets/providers/tmdb.svg"),

@@ -49,7 +49,13 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("sql/migrations");
 /// Diesel stores migration versions as text and normally sorts pending migrations
 /// by that text. Keep the opaque revision IDs here in the exact order they must
 /// be applied.
-const SQLITE_MIGRATION_ORDER: &[&str] = &["a54d52c8da5e", "c18f43d2a9b7"];
+const SQLITE_MIGRATION_ORDER: &[&str] = &[
+    "a54d52c8da5e",
+    "c18f43d2a9b7",
+    "d7e92a604b31",
+    "e6a4130b982c",
+    "f91b72d640ac",
+];
 
 #[derive(Debug)]
 struct MigrationOrderError(String);

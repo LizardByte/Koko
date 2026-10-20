@@ -1,0 +1,1 @@
+DROP TABLE audiobook_recording_selections;

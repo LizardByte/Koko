@@ -282,7 +282,7 @@ fn content_type_for_path(path: &std::path::Path) -> ContentType {
         .unwrap_or(ContentType::Binary)
 }
 
-async fn open_ranged_file(
+pub(super) async fn open_ranged_file(
     path: PathBuf,
     range: &RangeHeader,
 ) -> Result<RangedFile, Status> {
@@ -642,21 +642,47 @@ async fn persist_secondary_metadata_for_item(
     let library_languages = load_item_library_metadata_languages(db, library_id).await?;
 
     for provider_id in secondary_providers {
+        let manual_audiosilo = if provider_id == MetadataProviderId::AudioSilo {
+            metadata_jobs::write(db, move |conn| {
+                Ok(get_item_metadata_summaries(conn, item_id)?
+                    .into_iter()
+                    .find(|link| {
+                        link.provider_id == MetadataProviderId::AudioSilo
+                            && link.relation_kind == "secondary"
+                            && !link.external_id.starts_with("audiobook:libex:")
+                            && link.match_state == "linked"
+                    })
+                    .map(|link| {
+                        link.external_id
+                            .strip_prefix("audiobook:audiosilo:")
+                            .unwrap_or(&link.external_id)
+                            .to_string()
+                    }))
+            })
+            .await
+            .map_err(|_| Status::InternalServerError)?
+        } else {
+            None
+        };
         let uses_localized_metadata = provider_uses_localized_metadata(provider_id.clone());
         let languages = metadata_locales_for_provider(provider_id.clone(), &library_languages);
-        let references = metadata_jobs::write(db, {
-            let provider_id = provider_id.clone();
-            move |conn| get_item_secondary_provider_references(conn, item_id, provider_id)
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to resolve secondary metadata references for media item {}: {}",
-                item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
+        let references = if let Some(id) = manual_audiosilo {
+            vec![("audiobook".into(), "audiosilo".into(), id)]
+        } else {
+            metadata_jobs::write(db, {
+                let provider_id = provider_id.clone();
+                move |conn| get_item_secondary_provider_references(conn, item_id, provider_id)
+            })
+            .await
+            .map_err(|error| {
+                log::error!(
+                    "Failed to resolve secondary metadata references for media item {}: {}",
+                    item_id,
+                    error
+                );
+                Status::InternalServerError
+            })?
+        };
 
         for locale_key in &languages {
             let provider_locale = uses_localized_metadata
@@ -687,7 +713,7 @@ async fn persist_secondary_metadata_for_item(
                             release_year: None,
                             locale_key: locale_key.clone(),
                             provider_locale_key: provider_locale.clone(),
-                            provider_payload_json: None,
+                            provider_payload_json: details.provider_payload_json.clone(),
                         };
                         let cached_assets = if snapshot.artwork_url.is_some()
                             || snapshot.backdrop_url.is_some()
@@ -910,12 +936,24 @@ async fn persist_snapshot_for_item(
         let snapshot = snapshot.clone();
         let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
         move |conn| {
-            upsert_item_metadata_snapshot_with_refresh_interval(
-                conn,
-                item_id,
-                &snapshot,
-                refresh_interval_seconds,
-            )
+            if snapshot.provider_id == MetadataProviderId::AudioSilo {
+                let details = crate::metadata::provider_metadata_details(&snapshot);
+                upsert_item_metadata_link(
+                    conn,
+                    item_id,
+                    &snapshot,
+                    &details,
+                    "secondary",
+                    refresh_interval_seconds,
+                )
+            } else {
+                upsert_item_metadata_snapshot_with_refresh_interval(
+                    conn,
+                    item_id,
+                    &snapshot,
+                    refresh_interval_seconds,
+                )
+            }
         }
     })
     .await
@@ -998,7 +1036,94 @@ async fn persist_snapshot_for_item(
         summary.cached_logo_path = Some(logo_path_string);
     }
 
-    persist_secondary_metadata_for_item(db, item_id, settings).await?;
+    if snapshot.provider_id != MetadataProviderId::AudioSilo {
+        persist_secondary_metadata_for_item(db, item_id, settings).await?;
+    }
+
+    if snapshot.provider_id == MetadataProviderId::Libex {
+        // A written work is a separate identity from the selected Audible recording.
+        let context = db
+            .run(move |conn| {
+                let Some(item) = get_media_item_summary(conn, item_id)? else {
+                    return Ok(None);
+                };
+                let shared_work = item
+                    .parent_id
+                    .and_then(|parent| get_media_item_summary(conn, parent).ok().flatten())
+                    .filter(|parent| parent.item_type == "book_work");
+                // Shared works have their own matching job and revision. A narration refresh
+                // must not overwrite an independently selected book identity.
+                Ok::<_, diesel::result::Error>(
+                    shared_work.is_none().then_some((item.library_id, item_id)),
+                )
+            })
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+        if let Some((library_id, work_id)) = context {
+            let providers = load_item_library_metadata_providers(db, library_id).await?;
+            let has_work = metadata_jobs::write(db, move |conn| {
+                Ok(get_item_metadata_summaries(conn, work_id)?
+                    .iter()
+                    .any(|link| {
+                        link.provider_id == MetadataProviderId::OpenLibrary
+                            && link.match_state == "linked"
+                    }))
+            })
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+            if providers.contains(&MetadataProviderId::OpenLibrary) && !has_work {
+                if let Some(book) = snapshot
+                    .provider_payload_json
+                    .as_deref()
+                    .and_then(crate::metadata::providers::libex::recording_metadata)
+                {
+                    let registry = crate::metadata::MetadataRegistry::new();
+                    let provider = registry
+                        .provider(&MetadataProviderId::OpenLibrary)
+                        .expect("registered Open Library");
+                    let result = async {
+                        let Some(work) = crate::metadata::providers::openlibrary::guess(
+                            &book.title,
+                            &book.author,
+                        )
+                        .await?
+                        else {
+                            return Ok::<_, String>(());
+                        };
+                        let work = provider
+                            .fetch_snapshot(&settings.metadata, &work.external_id, "book", false)
+                            .await?;
+                        // Avoid recursion: this additional source has no recording or secondary
+                        // job.
+                        let data_dir = settings.general.data_dir.clone();
+                        let assets =
+                            persist_item_metadata_assets(&work, work_id, &data_dir).await?;
+                        metadata_jobs::write(db, move |conn| {
+                            let summary = crate::metadata::upsert_item_metadata_snapshot(
+                                conn, work_id, &work,
+                            )?;
+                            if let Some(path) = assets.0 {
+                                update_cached_artwork_path(
+                                    conn,
+                                    summary.id,
+                                    ArtworkKind::Poster,
+                                    &path,
+                                    &data_dir,
+                                )?;
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .map_err(|error| error.to_string())
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        log::warn!("Optional Open Library work metadata unavailable: {error}");
+                    }
+                }
+            }
+        }
+    }
 
     Ok(summary)
 }
@@ -1006,7 +1131,17 @@ async fn persist_snapshot_for_item(
 fn supports_manual_metadata_linking(item: &MediaItemSummary) -> bool {
     matches!(
         item.item_type.as_str(),
-        "movie" | "show" | "artist" | "album" | "track"
+        "movie"
+            | "show"
+            | "artist"
+            | "album"
+            | "track"
+            | "audiobook"
+            | "book"
+            | "book_work"
+            | "book_author"
+            | "comic_series"
+            | "comic_issue"
     )
 }
 
@@ -1015,6 +1150,16 @@ fn provider_search_media_type(
     item: &MediaItemSummary,
 ) -> Option<&'static str> {
     match (provider_id, item.item_type.as_str()) {
+        (MetadataProviderId::ComicVine, "comic_issue") => Some("comic_issue"),
+        (MetadataProviderId::ComicVine, "comic_series") => Some("comic_series"),
+        (MetadataProviderId::OpenLibrary, "book_author") => Some("author"),
+        (MetadataProviderId::OpenLibrary, "audiobook" | "book" | "book_work") => Some("book"),
+        (
+            MetadataProviderId::AudioSilo
+            | MetadataProviderId::Libex
+            | MetadataProviderId::LibriVox,
+            "audiobook",
+        ) => Some("audiobook"),
         (_, "movie") => Some("movie"),
         (MetadataProviderId::MusicBrainz, "artist") => Some("artist"),
         (MetadataProviderId::MusicBrainz, "album") => Some("release"),
@@ -1076,6 +1221,37 @@ fn album_track_count_score(
         }
         None => 0.95,
     }
+}
+
+/// Preserve provider relevance for author namesakes; name equality cannot prove identity.
+fn rank_metadata_search_results(
+    item: &MediaItemSummary,
+    title: &str,
+    year: Option<i32>,
+    results: &mut [MetadataSearchResult],
+) {
+    if item.item_type == "book_author" {
+        for result in results {
+            result.score = None;
+        }
+        return;
+    }
+    for result in &mut *results {
+        let mut score =
+            metadata_search_score(title, year.filter(|_| item.item_type != "artist"), result);
+        if item.item_type == "album" {
+            // Count is supporting evidence; incomplete albums can still be linked manually.
+            score *= album_track_count_score(item.child_count, result.track_count);
+        }
+        result.score = Some(score);
+    }
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.title.cmp(&right.title))
+    });
 }
 
 fn metadata_search_casing_penalty(
@@ -3150,6 +3326,20 @@ fn available_automatic_metadata_providers(settings: &Settings) -> HashSet<Metada
         .collect()
 }
 
+/// A written-work match is a fallback while other enabled sources can identify the narration.
+fn is_recording_match(
+    provider: &MetadataProviderId,
+    external_id: &str,
+) -> bool {
+    match provider {
+        MetadataProviderId::Libex | MetadataProviderId::LibriVox => {
+            external_id.ends_with("/recording")
+        }
+        MetadataProviderId::AudioSilo => external_id.split('/').count() == 2,
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 enum AutomaticMetadataScope {
     AllUnmatched,
@@ -3342,6 +3532,86 @@ async fn run_automatic_movie_metadata_linking(
                         _ => Ok(None),
                     }
                 }
+                crate::config::MediaLibraryKind::Books => {
+                    match (provider_id, candidate.audiobook.as_ref()) {
+                        (MetadataProviderId::OpenLibrary, _)
+                            if candidate.item_type == "book_author" =>
+                        {
+                            crate::metadata::providers::openlibrary::guess_author(
+                                &candidate.display_title,
+                            )
+                            .await
+                        }
+                        (MetadataProviderId::LibriVox, Some(book))
+                            if candidate.item_type == "audiobook" =>
+                        {
+                            let id = candidate.item_id;
+                            let data_dir = settings.general.data_dir.clone();
+                            let local = db
+                                .run(move |conn| crate::media::get_media_item(conn, id, &data_dir))
+                                .await
+                                .ok()
+                                .flatten();
+                            let runtime = local.as_ref().and_then(|item| item.duration_ms);
+                            let parts = local
+                                .as_ref()
+                                .map(|item| {
+                                    item.children
+                                        .iter()
+                                        .map(|part| {
+                                            crate::metadata::providers::librivox::RecordingFile {
+                                                path: part.relative_path.clone(),
+                                                duration_ms: part.duration_ms.filter(|_| {
+                                                    part.playable && part.missing_since.is_none()
+                                                }),
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            crate::metadata::providers::librivox::guess(book, runtime, &parts).await
+                        }
+                        (MetadataProviderId::Libex, Some(book))
+                            if candidate.item_type == "audiobook" =>
+                        {
+                            crate::metadata::providers::libex::guess(&settings.metadata, book).await
+                        }
+                        (MetadataProviderId::AudioSilo, Some(book)) => {
+                            let id = candidate.item_id;
+                            let duration = db
+                                .run(move |conn| crate::media::get_media_item_summary(conn, id))
+                                .await
+                                .ok()
+                                .flatten()
+                                .and_then(|item| item.duration_ms);
+                            crate::metadata::providers::audiosilo::guess(book, duration).await
+                        }
+                        (MetadataProviderId::OpenLibrary, Some(book))
+                            if candidate.item_type == "book_work" =>
+                        {
+                            crate::metadata::providers::openlibrary::guess(
+                                &book.title,
+                                &book.author,
+                            )
+                            .await
+                        }
+                        (MetadataProviderId::OpenLibrary, None)
+                            if candidate.item_type == "book" =>
+                        {
+                            let author = candidate
+                                .relative_path
+                                .rsplit_once('/')
+                                .map(|(parent, _)| parent.rsplit('/').next().unwrap_or_default())
+                                .unwrap_or_default();
+                            crate::metadata::providers::openlibrary::guess(
+                                &candidate.display_title,
+                                author,
+                            )
+                            .await
+                        }
+                        _ => Ok(None),
+                    }
+                }
                 crate::config::MediaLibraryKind::Shows => {
                     guess_provider_show_match(
                         &settings.metadata,
@@ -3363,9 +3633,15 @@ async fn run_automatic_movie_metadata_linking(
             };
             match guess_result {
                 Ok(Some(result)) => {
-                    guessed_provider_id = Some(provider_id.clone());
-                    guess = Some(result);
-                    break;
+                    let work_only = candidate.item_type == "audiobook"
+                        && !is_recording_match(provider_id, &result.external_id);
+                    if !work_only || guess.is_none() {
+                        guessed_provider_id = Some(provider_id.clone());
+                        guess = Some(result);
+                    }
+                    if !work_only {
+                        break;
+                    }
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -3722,7 +3998,11 @@ async fn load_library_refresh_targets(
     let mut targets = Vec::new();
     for item in items.into_iter().filter(|item| {
         supports_manual_metadata_linking(item)
-            && (item.parent_id.is_none() || matches!(item.item_type.as_str(), "album" | "track"))
+            && (item.parent_id.is_none()
+                || matches!(
+                    item.item_type.as_str(),
+                    "album" | "track" | "book_work" | "book" | "audiobook" | "comic_issue"
+                ))
     }) {
         let revision = MetadataRevision::current(item.id);
         let item_id = item.id;
@@ -4980,7 +5260,12 @@ pub async fn search_item_metadata(
                     provider_id.clone(),
                     &effective_query,
                     Some(expected_media_type),
-                    artist.as_deref().filter(|_| item.item_type == "album"),
+                    artist.as_deref().filter(|_| {
+                        matches!(
+                            item.item_type.as_str(),
+                            "album" | "audiobook" | "book" | "book_work"
+                        )
+                    }),
                 )
                 .await
             };
@@ -5011,27 +5296,65 @@ pub async fn search_item_metadata(
         return Err(Status::ServiceUnavailable);
     }
 
-    for result in &mut results {
-        let mut score = metadata_search_score(
-            &search_title,
-            year.filter(|_| item.item_type != "artist"),
-            result,
-        );
-        if item.item_type == "album" {
-            // Count is supporting evidence; incomplete albums can still be linked manually.
-            score *= album_track_count_score(item.child_count, result.track_count);
-        }
-        result.score = Some(score);
-    }
-    results.sort_by(|left, right| {
-        right
-            .score
-            .partial_cmp(&left.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.title.cmp(&right.title))
-    });
+    rank_metadata_search_results(&item, &search_title, year, &mut results);
 
     Ok(Json(results))
+}
+
+/// List specific narrations so an administrator can confirm the local audiobook version.
+#[openapi(tag = "Media")]
+#[get("/api/v1/items/<item_id>/audiobook/recordings")]
+pub async fn get_audiobook_recordings(
+    _admin: AdminGuard,
+    db: DbConn,
+    item_id: i32,
+) -> Result<Json<Vec<crate::media::AudiobookRecording>>, Status> {
+    let (metadata, library_id) = db
+        .run(move |conn| {
+            let item = get_media_item_summary(conn, item_id)?
+                .filter(|item| item.item_type == "audiobook")
+                .ok_or(diesel::result::Error::NotFound)?;
+            let metadata = crate::media::audiobooks::load_local(conn, &[item_id])?
+                .remove(&item_id)
+                .ok_or(diesel::result::Error::NotFound)?;
+            Ok::<_, diesel::result::Error>((metadata, item.library_id))
+        })
+        .await
+        .map_err(|_| Status::NotFound)?;
+    let settings = current_settings();
+    let providers = load_item_library_metadata_providers(&db, library_id).await?;
+    let mut choices = Vec::new();
+    let mut succeeded = false;
+    let mut failed = false;
+    for provider in providers {
+        let result = match provider {
+            MetadataProviderId::LibriVox => {
+                crate::metadata::providers::librivox::recording_choices(&metadata).await
+            }
+            MetadataProviderId::Libex => {
+                crate::metadata::providers::libex::recording_choices(&settings.metadata, &metadata)
+                    .await
+            }
+            MetadataProviderId::AudioSilo => {
+                crate::metadata::providers::audiosilo::recording_choices(&metadata).await
+            }
+            _ => continue,
+        };
+        match result {
+            Ok(items) => {
+                succeeded = true;
+                choices.extend(items);
+            }
+            Err(error) => {
+                failed = true;
+                log::warn!("Audiobook version choices unavailable: {error}");
+            }
+        }
+    }
+    if failed && !succeeded {
+        return Err(Status::BadGateway);
+    }
+    Ok(Json(choices))
 }
 
 /// Link a media item to a provider match and queue the fetched metadata snapshot.
@@ -5082,6 +5405,54 @@ pub async fn link_item_metadata(
         return Err(Status::BadRequest);
     }
 
+    if item.item_type == "audiobook" && request.provider_id == MetadataProviderId::AudioSilo {
+        let (ids, revision, ()) = db
+            .run({
+                let external = request.external_id.clone();
+                move |conn| {
+                    metadata_jobs::replace_book_source(
+                        conn,
+                        item_id,
+                        MetadataProviderId::AudioSilo,
+                        |conn| {
+                            crate::media::audiobooks::select_recording_source(
+                                conn,
+                                item_id,
+                                &MetadataProviderId::AudioSilo,
+                                &external,
+                            )
+                        },
+                    )
+                }
+            })
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+        detach_metadata_refresh_items(&ids).await;
+        let snapshot = crate::metadata::fetch_provider_metadata_snapshot(
+            &settings.metadata,
+            MetadataProviderId::AudioSilo,
+            &request.external_id,
+            &request.media_type,
+        )
+        .await
+        .map_err(|error| {
+            log::warn!("AudioSilo link failed: {error}");
+            Status::BadGateway
+        })?;
+        let summary = revision
+            .scope(persist_snapshot_for_item(
+                &db,
+                item_id,
+                &snapshot,
+                &settings,
+                PersistSnapshotOptions {
+                    cache_person_assets: false,
+                },
+            ))
+            .await?;
+        return Ok(Json(summary));
+    }
+
     if item.item_type == "track" && request.provider_id == MetadataProviderId::MusicBrainz {
         let candidates =
             search_music_track_metadata(&db, item_id, "", Some(&request.external_id)).await?;
@@ -5099,13 +5470,26 @@ pub async fn link_item_metadata(
     );
     let (cleared_ids, revision, pending_summary) = db
         .run({
+            let is_book = matches!(
+                item.item_type.as_str(),
+                "book" | "audiobook" | "book_work" | "comic_series" | "comic_issue"
+            );
             let request = LinkMetadataRequest {
                 provider_id: request.provider_id.clone(),
                 external_id: request.external_id.clone(),
                 media_type: request.media_type.clone(),
             };
             move |conn| {
-                metadata_jobs::reset(conn, item_id, false, |conn| {
+                let provider = request.provider_id.clone();
+                let prepare = |conn: &mut rocket_sync_db_pools::diesel::SqliteConnection| {
+                    if is_book {
+                        crate::media::audiobooks::select_recording_source(
+                            conn,
+                            item_id,
+                            &request.provider_id,
+                            &request.external_id,
+                        )?;
+                    }
                     let mut summary = None;
                     for locale in languages {
                         let pending =
@@ -5124,7 +5508,12 @@ pub async fn link_item_metadata(
                         summary.get_or_insert(pending);
                     }
                     summary.ok_or(diesel::result::Error::NotFound)
-                })
+                };
+                if is_book {
+                    metadata_jobs::replace_book_source(conn, item_id, provider, prepare)
+                } else {
+                    metadata_jobs::reset(conn, item_id, false, prepare)
+                }
             }
         })
         .await

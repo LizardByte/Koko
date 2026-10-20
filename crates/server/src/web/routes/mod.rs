@@ -2,6 +2,7 @@
 
 // modules
 pub mod auth;
+pub mod books;
 pub mod common;
 pub mod dependencies;
 pub mod media;
@@ -22,6 +23,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         auth::jwt_test,
         auth::admin_test,
         auth::user_info,
+        books::document,
+        books::progress,
         dependencies::get_dependencies,
         media::get_server_capabilities,
         media::get_system_activities,
@@ -48,6 +51,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_item_metadata,
         media::get_person,
         media::search_item_metadata,
+        media::get_audiobook_recordings,
         media::link_item_metadata,
         media::unlink_item_metadata,
         media::refresh_item_metadata,
@@ -73,6 +77,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
 pub fn spa_routes() -> Vec<rocket::Route> {
     routes![
         common::index,
+        books::content,
         common::favicon,
         common::provider_logo,
         common::spa_asset,

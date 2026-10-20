@@ -24,10 +24,17 @@ pub(in crate::media) fn album_playback_targets(
         Some((index, _)) => (index + 1, 0, false),
         None => (0, 0, false),
     };
+    let book = album.item_type == "audiobook";
     let primary = tracks.get(index).map(|track| MediaPlaybackTarget {
         item_id: track.item.id,
         start_ms: position,
-        label: if latest.is_some() { "Continue album" } else { "Play album" }.into(),
+        label: match (book, latest.is_some()) {
+            (true, true) => "Continue audiobook",
+            (true, false) => "Listen",
+            (false, true) => "Continue album",
+            (false, false) => "Play album",
+        }
+        .into(),
         display_title: track.item.display_title.clone(),
         season_number: None,
         episode_number: None,
@@ -35,6 +42,17 @@ pub(in crate::media) fn album_playback_targets(
     });
     Ok(ContainerPlaybackTargets {
         primary,
-        restart: None,
+        restart: book
+            .then(|| tracks.first())
+            .flatten()
+            .map(|track| MediaPlaybackTarget {
+                item_id: track.item.id,
+                start_ms: 0,
+                label: "Restart audiobook".into(),
+                display_title: track.item.display_title.clone(),
+                season_number: None,
+                episode_number: None,
+                resume: false,
+            }),
     })
 }

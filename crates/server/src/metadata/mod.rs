@@ -49,7 +49,7 @@ mod artwork;
 pub(crate) mod cache_policy;
 pub(crate) mod http;
 pub mod identities;
-mod providers;
+pub(crate) mod providers;
 #[cfg(test)]
 pub(crate) use providers::lrclib::TEST_LYRICS_URL;
 pub(crate) use providers::lrclib::fetch_lyrics;
@@ -496,6 +496,8 @@ pub struct ProviderEpisodeMetadataSnapshotFetch<'a> {
 /// Provider-normalized metadata fields that are persisted into Koko tables.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderMetadataDetails {
+    /// Typed provider payload retained when a secondary source supplies recording facts.
+    pub provider_payload_json: Option<String>,
     /// Artwork URL contributed by a secondary provider.
     pub artwork_url: Option<String>,
     /// Backdrop URL contributed by a secondary provider.
@@ -522,6 +524,10 @@ pub struct ProviderMetadataDetails {
     pub extras: Vec<ProviderMetadataExtra>,
     /// Collections this metadata item belongs to.
     pub collections: Vec<ProviderMetadataCollection>,
+    /// Keep previous memberships when an optional collection lookup is incomplete.
+    pub collections_incomplete: bool,
+    /// Preserve only these provider collection IDs when individual lookups fail.
+    pub unavailable_collection_ids: Vec<String>,
     /// People credited by the provider.
     pub people: Vec<ProviderMetadataPerson>,
 }
@@ -2193,6 +2199,15 @@ pub fn upsert_item_metadata_link(
                 })
                 .unwrap_or(false);
 
+            if matches!(
+                snapshot.provider_id,
+                MetadataProviderId::AudioSilo
+                    | MetadataProviderId::Libex
+                    | MetadataProviderId::LibriVox
+                    | MetadataProviderId::OpenLibrary
+            ) {
+                crate::media::audiobooks::save_provider(conn, item_id, snapshot)?;
+            }
             if snapshot.provider_id == MetadataProviderId::MusicBrainz {
                 crate::media::music::save_provider_genres(conn, item_id, &details.genres)?;
             }
@@ -2323,7 +2338,8 @@ fn invalidate_item_secondary_metadata(
 }
 
 /// Clear provider metadata for an item and every descendant without changing
-/// catalog files or playback history. Explicit unlinking leaves a hidden marker
+/// catalog files or playback history. Author profiles affect only the author itself.
+/// Explicit unlinking leaves a hidden marker
 /// so automatic matching does not immediately undo the user's choice.
 pub fn clear_item_metadata_tree(
     conn: &mut SqliteConnection,
@@ -2345,10 +2361,11 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
 ) -> Result<Vec<i32>, diesel::result::Error> {
     use crate::db::schema::item_metadata_links::dsl as links;
     use crate::db::schema::media_items::dsl as items;
-    items::media_items
+    let author_profile = items::media_items
         .find(item_id)
-        .select(items::id)
-        .first::<i32>(conn)?;
+        .select(items::item_type)
+        .first::<String>(conn)?
+        == "book_author";
     let marker_provider = links::item_metadata_links
         .filter(links::media_item_id.eq(item_id))
         .filter(links::relation_kind.eq("primary"))
@@ -2359,7 +2376,7 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
     let mut ids = vec![item_id];
     let mut seen = HashSet::from([item_id]);
     let mut cursor = 0;
-    while cursor < ids.len() {
+    while !author_profile && cursor < ids.len() {
         let children = items::media_items
             .filter(items::parent_id.eq(ids[cursor]))
             .select(items::id)
@@ -2373,6 +2390,11 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
     }
     diesel::delete(links::item_metadata_links.filter(links::media_item_id.eq_any(&ids)))
         .execute(conn)?;
+    diesel::delete(
+        crate::db::schema::audiobook_recording_selections::table
+            .filter(crate::db::schema::audiobook_recording_selections::media_item_id.eq_any(&ids)),
+    )
+    .execute(conn)?;
     diesel::delete(
         crate::db::schema::music_lyrics::table
             .filter(crate::db::schema::music_lyrics::media_item_id.eq_any(&ids)),
@@ -2873,7 +2895,9 @@ fn metadata_refresh_target_changed(
         || existing.media_type.as_deref() != media_type
 }
 
-fn provider_metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMetadataDetails {
+pub(crate) fn provider_metadata_details(
+    snapshot: &StoredMetadataSnapshot
+) -> ProviderMetadataDetails {
     let registry = MetadataRegistry::new();
     registry
         .provider(&snapshot.provider_id)
@@ -4391,6 +4415,9 @@ fn root_media_item_id(
 
     loop {
         let item = items_by_id.get(&current_id)?;
+        if item.item_type == "book_work" {
+            return Some(item.id);
+        }
         let Some(parent_id) = item.parent_id else {
             return Some(item.id);
         };
@@ -4416,9 +4443,10 @@ fn sync_item_metadata_collections(
         .filter(collections_dsl::provider_id.eq(&provider_id))
         .filter(collections_dsl::relation_kind.eq("primary"))
         .filter(collections_dsl::locale_key.eq(&snapshot.locale_key))
+        .filter(collections_dsl::external_id.ne_all(&details.unavailable_collection_ids))
         .select(collections_dsl::id)
         .load::<i32>(conn)?;
-    if !existing_collection_ids.is_empty() {
+    if !existing_collection_ids.is_empty() && !details.collections_incomplete {
         diesel::delete(
             collection_items_dsl::metadata_collection_items
                 .filter(collection_items_dsl::media_item_id.eq(media_item_id))

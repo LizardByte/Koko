@@ -95,10 +95,52 @@ pub(super) fn reset<T>(
     unlink: bool,
     prepare: impl FnOnce(&mut SqliteConnection) -> QueryResult<T>,
 ) -> QueryResult<(Vec<i32>, MetadataRevision, T)> {
+    reset_scope(conn, item_id, unlink, None, prepare)
+}
+
+/// Replace one book metadata source without discarding independently selected work/recording
+/// sources.
+pub(super) fn replace_book_source<T>(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    provider: crate::config::MetadataProviderId,
+    prepare: impl FnOnce(&mut SqliteConnection) -> QueryResult<T>,
+) -> QueryResult<(Vec<i32>, MetadataRevision, T)> {
+    reset_scope(conn, item_id, false, Some(provider), prepare)
+}
+
+fn reset_scope<T>(
+    conn: &mut SqliteConnection,
+    item_id: i32,
+    unlink: bool,
+    source: Option<crate::config::MetadataProviderId>,
+    prepare: impl FnOnce(&mut SqliteConnection) -> QueryResult<T>,
+) -> QueryResult<(Vec<i32>, MetadataRevision, T)> {
     crate::db::configure_sqlite_connection(conn)?;
     let mut versions = REVISIONS.lock().unwrap();
     let (ids, result) = conn.transaction(|conn| {
-        let ids = crate::metadata::clear_item_metadata_tree_in_transaction(conn, item_id, unlink)?;
+        let ids = if let Some(source) = &source {
+            use crate::db::schema::item_metadata_links as links;
+            use diesel::prelude::*;
+            diesel::delete(
+                links::table
+                    .filter(links::media_item_id.eq(item_id))
+                    .filter(links::provider_id.eq(source.as_storage_value())),
+            )
+            .execute(conn)?;
+            if *source == crate::config::MetadataProviderId::Libex {
+                diesel::delete(
+                    links::table
+                        .filter(links::media_item_id.eq(item_id))
+                        .filter(links::provider_id.eq("audiosilo"))
+                        .filter(links::external_id.like("audiobook:libex:%")),
+                )
+                .execute(conn)?;
+            }
+            vec![item_id]
+        } else {
+            crate::metadata::clear_item_metadata_tree_in_transaction(conn, item_id, unlink)?
+        };
         Ok::<_, diesel::result::Error>((ids, prepare(conn)?))
     })?;
     for id in &ids {
@@ -115,6 +157,72 @@ pub(super) fn reset<T>(
 mod tests {
     use super::*;
     use diesel::connection::SimpleConnection;
+
+    #[test]
+    fn adding_a_book_source_preserves_other_sources_and_rejects_obsolete_writes() {
+        use crate::config::MetadataProviderId;
+        use crate::db::schema::{
+            item_metadata_links as links,
+            media_items as items,
+            media_libraries as libraries,
+        };
+        use diesel::prelude::*;
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+        const ID: i32 = 191_000_003;
+        diesel::insert_into(libraries::table)
+            .values((
+                libraries::id.eq(ID),
+                libraries::name.eq("Books"),
+                libraries::path.eq("books"),
+                libraries::kind.eq("books"),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+        diesel::insert_into(items::table)
+            .values((
+                items::id.eq(ID),
+                items::library_id.eq(ID),
+                items::identity_key.eq("audiobook"),
+                items::item_type.eq("audiobook"),
+                items::display_title.eq("Book"),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+        for provider in ["libex", "open_library"] {
+            diesel::insert_into(links::table)
+                .values((
+                    links::media_item_id.eq(ID),
+                    links::provider_id.eq(provider),
+                    links::external_id.eq("old"),
+                ))
+                .execute(&mut conn)
+                .unwrap();
+        }
+        let old = MetadataRevision::current(ID);
+        let (_, current, ()) =
+            replace_book_source(&mut conn, ID, MetadataProviderId::OpenLibrary, |_| Ok(()))
+                .unwrap();
+        let remaining = links::table
+            .filter(links::media_item_id.eq(ID))
+            .select(links::provider_id)
+            .load::<String>(&mut conn)
+            .unwrap();
+        assert_eq!(remaining, vec!["libex"]);
+        assert!(!old.is_current());
+        assert!(current.is_current());
+        assert!(
+            replace_book_source(&mut conn, ID, MetadataProviderId::Libex, |_| Err::<(), _>(
+                diesel::result::Error::RollbackTransaction
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            links::table.count().get_result::<i64>(&mut conn).unwrap(),
+            1
+        );
+        assert!(current.is_current());
+    }
 
     #[tokio::test]
     async fn reset_is_atomic_and_rejects_old_root_and_descendant_writes() {

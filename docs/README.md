@@ -39,6 +39,22 @@ Koko uses a YAML configuration file for core server settings.
 Media libraries are stored in the application database instead of the YAML file. The browser settings UI edits
 server settings in YAML and library definitions in the database.
 
+To move a library, edit the paths of the existing library in **Settings → Libraries**, then rescan it.
+The scanner reconnects unambiguous matches using the relative path, file size, media type, and scanner
+fingerprint; unique content matches can also reconnect renamed files. Catalog IDs, linked metadata,
+recording selections, listening/watch progress, and playlist references stay with the surviving items.
+A rescan also reconciles duplicates left by an earlier path change. Progress saved on both entries uses
+each listener's most recent position. Existing metadata fills missing sources; a confirmed audiobook
+recording takes precedence over a book-only match.
+
+Roots that are still configured remain separate sources, so identical files in different locations are
+not automatically collapsed. Overlapping roots that discover the same physical file count it once.
+Ambiguous replacements and changed content are not treated as the old item. Entries under removed roots
+are retired after a complete successful scan; an unavailable replacement keeps the old entries marked
+missing so their history can be recovered when the path becomes accessible. Scanning does not move or
+delete media files on disk. Editing an existing library preserves its identity; deleting it and creating
+a new library creates a separate catalog.
+
 Database schema changes are managed only through Diesel SQL migrations in `crates/server/sql/migrations`.
 Koko has not had a release yet, so the current database starts from one consolidated initial schema migration.
 Migration directories use an opaque hash-like revision prefix, and runtime execution order is defined by
@@ -57,6 +73,7 @@ If the name is omitted, the command prompts for it. The command generates a uniq
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
 For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
+For ebook formats, reader controls, comic libraries, and optional conversion, see [Books and comics](./BOOKS.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.
 
@@ -167,12 +184,14 @@ This list is not all-inclusive, and just meant to be a very high level for the i
   - [ ] Audio
     - [x] Albums/Music
     - [ ] Podcasts
-    - [ ] Audiobooks
+    - [x] [Audiobooks](./AUDIOBOOKS.md)
   - [ ] Images
     - [ ] Photos
   - [ ] Books
-    - [ ] Ebooks
-    - [ ] PDFs
-    - [ ] Comics
+    - [x] Ebooks
+    - [x] PDFs
+    - [x] Comics
   - [ ] Games (Pipe Dream)
     - [ ] Spin up on-demand game servers (containers or VMs)
+
+Audiobook library setup, file naming, chapter behavior, and free test sources are documented in [Audiobooks](./AUDIOBOOKS.md).

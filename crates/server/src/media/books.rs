@@ -390,6 +390,47 @@ pub(crate) fn continue_reading(
     Ok(items)
 }
 
+/// Reconcile progress saved on duplicate catalog entries, retaining each reader's latest state.
+pub(crate) fn merge_progress(
+    conn: &mut SqliteConnection,
+    keep: i32,
+    duplicate: i32,
+) -> QueryResult<()> {
+    let rows = progress::table
+        .filter(progress::media_item_id.eq(duplicate))
+        .select((
+            progress::user_id,
+            progress::payload_json,
+            progress::updated_at,
+        ))
+        .load::<(i32, String, i64)>(conn)?;
+    for (user, raw, updated) in rows {
+        let old = progress::table
+            .find((user, keep))
+            .select(progress::updated_at)
+            .first::<i64>(conn)
+            .optional()?;
+        if old.is_some_and(|old| old >= updated) {
+            continue;
+        }
+        diesel::insert_into(progress::table)
+            .values((
+                progress::user_id.eq(user),
+                progress::media_item_id.eq(keep),
+                progress::payload_json.eq(&raw),
+                progress::updated_at.eq(updated),
+            ))
+            .on_conflict((progress::user_id, progress::media_item_id))
+            .do_update()
+            .set((
+                progress::payload_json.eq(&raw),
+                progress::updated_at.eq(updated),
+            ))
+            .execute(conn)?;
+    }
+    Ok(())
+}
+
 static CONVERSIONS: once_cell::sync::Lazy<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 static CONVERSION_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

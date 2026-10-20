@@ -351,6 +351,54 @@ fn positions_and_bookmarks_are_per_user_and_invalidated_by_content_changes() {
 }
 
 #[test]
+fn duplicate_reconciliation_retains_the_latest_position_for_each_account() {
+    let fixture = Fixture::new();
+    let mut conn = database();
+    let id = fixture.seed(&mut conn);
+    let other = list_media_items(&mut conn, None)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.relative_path.ends_with("book.rtf"))
+        .unwrap()
+        .id;
+    let state = position("same-content".into());
+    save_progress(&mut conn, 1, id, &state).unwrap();
+    save_progress(&mut conn, 1, other, &state).unwrap();
+    save_progress(&mut conn, 2, other, &state).unwrap();
+    diesel::update(progress::table.find((1, other)))
+        .set((
+            progress::updated_at.eq(i64::MAX),
+            progress::payload_json.eq(serde_json::to_string(&ReadingProgress {
+                fraction: 0.8,
+                ..state
+            })
+            .unwrap()),
+        ))
+        .execute(&mut conn)
+        .unwrap();
+    merge_progress(&mut conn, id, other).unwrap();
+    let raw = progress::table
+        .find((1, id))
+        .select(progress::payload_json)
+        .first::<String>(&mut conn)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<ReadingProgress>(&raw)
+            .unwrap()
+            .fraction,
+        0.8
+    );
+    assert_eq!(
+        progress::table
+            .filter(progress::media_item_id.eq(id))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
 fn resetting_reading_state_retains_bookmarks_and_returns_the_action_to_unopened() {
     let fixture = Fixture::new();
     let mut conn = database();

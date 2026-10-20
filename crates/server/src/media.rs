@@ -12,6 +12,7 @@ pub use audiobooks::{
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+mod relocation;
 mod source_files;
 pub use music::MusicMetadata;
 pub(crate) use music::valid_mbid;
@@ -1626,12 +1627,14 @@ fn sync_discovered_media_file(
             &music,
         )?;
     }
-    let membership_values = discovered_file.to_new_media_file_library(
+    let mut membership_values = discovered_file.to_new_media_file_library(
         media_file_id,
         library_row.id,
         display_title,
         metadata_match_attempted_at,
     );
+    // A scan updates availability and file metadata, not the membership's catalog identity.
+    membership_values.media_item_id = existing_file.as_ref().and_then(|file| file.media_item_id);
 
     if let Some(existing_file) = existing_file {
         if existing_file.file_hash != discovered_file.file_hash
@@ -1815,7 +1818,11 @@ fn sync_library_catalog_filtered(
                 library_row.name
             );
         }
-        sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
+        let inventory = conn.immediate_transaction(|conn| {
+            relocation::reconcile(conn, &library_row, &inspection, scan_started_at)?;
+            sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
+            relocation::inventory_counts(conn, library_row.id)
+        })?;
 
         let state_values = NewScanState {
             library_id: library_row.id,
@@ -1823,12 +1830,12 @@ fn sync_library_catalog_filtered(
             last_error: inspection.summary.error.clone(),
             scan_revision: next_scan_revision,
             last_scanned_at,
-            total_files: inspection.summary.total_files as i64,
-            video_files: inspection.summary.video_files as i64,
-            audio_files: inspection.summary.audio_files as i64,
-            image_files: inspection.summary.image_files as i64,
-            book_files: inspection.summary.book_files as i64,
-            other_files: inspection.summary.other_files as i64,
+            total_files: inventory.values().sum(),
+            video_files: inventory.get("video").copied().unwrap_or_default(),
+            audio_files: inventory.get("audio").copied().unwrap_or_default(),
+            image_files: inventory.get("image").copied().unwrap_or_default(),
+            book_files: inventory.get("book").copied().unwrap_or_default(),
+            other_files: inventory.get("other").copied().unwrap_or_default(),
         };
 
         if let Some(existing_state) = existing_state {
@@ -1919,13 +1926,14 @@ fn sync_logical_media_items_for_library(
             .map(|item| item.id)
             .collect::<Vec<_>>(),
     )?;
-    let planned = plan_library_media_items(
+    let mut planned = plan_library_media_items(
         &files,
         library_kind,
         library.id,
         &source_music,
         library.use_embedded_music_tags,
     );
+    relocation::retain_item_identities(&mut planned, &files, &existing_items);
     let planned_keys = planned
         .items
         .iter()

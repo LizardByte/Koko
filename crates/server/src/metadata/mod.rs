@@ -2389,6 +2389,8 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
                 links::media_item_id.eq(item_id),
                 links::provider_id.eq(marker_provider),
                 links::external_id.eq(""),
+                links::relation_kind.eq("primary"),
+                links::locale_key.eq(DEFAULT_METADATA_LOCALE),
                 links::match_state.eq("unlinked"),
                 links::refresh_state.eq("unlinked"),
                 links::refresh_interval_seconds.eq(0),

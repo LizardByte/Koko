@@ -6,7 +6,13 @@ const SEASON: i32 = 195_000_002;
 const EPISODE: i32 = 195_000_003;
 
 #[tokio::test]
-async fn manual_album_link_matches_its_tracks_before_fetching_lyrics() {
+async fn album_link_and_refresh_retry_unmatched_tracks_before_fetching_lyrics() {
+    for rematch in [true, false] {
+        album_tracks_retry_case(rematch).await;
+    }
+}
+
+async fn album_tracks_retry_case(rematch: bool) {
     use crate::db::schema::{
         media_items,
         music_item_metadata,
@@ -22,7 +28,7 @@ async fn manual_album_link_matches_its_tracks_before_fetching_lyrics() {
     const OUTSIDE: i32 = TRACK + 3;
     let (_rocket, db) = super::super::music::tests::lyrics_database(TRACK).await;
     let revision = db
-        .run(|conn| {
+        .run(move |conn| {
             for (id, parent, title, number) in [
                 (AMBIGUOUS, Some(ALBUM), "Ambiguous", 2),
                 (OUTSIDE, None, "Outside", 1),
@@ -54,10 +60,27 @@ async fn manual_album_link_matches_its_tracks_before_fetching_lyrics() {
                 .set(music_item_metadata::track_number.eq(1))
                 .execute(conn)
                 .unwrap();
-            // This is the same atomic reset used before the manual link worker starts.
-            metadata_jobs::reset(conn, ALBUM, false, |_| Ok(()))
-                .unwrap()
-                .1
+            if rematch {
+                // This is the same atomic reset used before the manual link worker starts.
+                metadata_jobs::reset(conn, ALBUM, false, |_| Ok(()))
+                    .unwrap()
+                    .1
+            } else {
+                use crate::db::schema::item_metadata_links;
+                // Refresh leaves the album linked and must retry earlier unsuccessful matches.
+                diesel::delete(
+                    item_metadata_links::table.filter(item_metadata_links::media_item_id.eq(TRACK)),
+                )
+                .execute(conn)
+                .unwrap();
+                diesel::update(
+                    media_items::table.filter(media_items::id.eq_any([TRACK, AMBIGUOUS, OUTSIDE])),
+                )
+                .set(media_items::metadata_match_attempted_at.eq(1_i64))
+                .execute(conn)
+                .unwrap();
+                MetadataRevision::current(ALBUM)
+            }
         })
         .await;
     let release_id = "d817f725-66c3-366d-8dd1-b22d49c8a766";

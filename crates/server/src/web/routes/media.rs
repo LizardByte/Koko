@@ -1741,27 +1741,59 @@ async fn match_linked_album_tracks(
         return;
     }
     let album_id = target.item_id;
-    let track_ids = match db
-        .run(move |conn| list_media_item_children(conn, album_id))
+    let library_id = target.library_id;
+    let candidates = match db
+        .run(move |conn| {
+            metadata_jobs::load(
+                conn,
+                |conn| {
+                    let track_ids = list_media_item_children(conn, album_id)?
+                        .into_iter()
+                        .filter(|item| item.item_type == "track")
+                        .map(|item| item.id)
+                        .collect::<HashSet<_>>();
+                    let mut candidates = list_automatic_metadata_refresh_candidates(
+                        conn,
+                        Some(library_id),
+                        usize::MAX,
+                    )?;
+                    candidates.retain(|candidate| track_ids.contains(&candidate.item_id));
+                    Ok(candidates)
+                },
+                |candidate| candidate.item_id,
+            )
+        })
         .await
     {
-        Ok(children) => children
-            .into_iter()
-            .filter(|item| item.item_type == "track")
-            .map(|item| item.id)
-            .collect::<HashSet<_>>(),
+        Ok(candidates) => candidates,
         Err(error) => {
             log::warn!("Failed to load tracks for linked album {album_id}: {error}");
             return;
         }
     };
-    if !track_ids.is_empty() && target.revision.is_current() {
+    if target.revision.is_current() {
+        let Some(activity) = register_metadata_refresh_activity_for_items(
+            "item",
+            "manual_album_tracks",
+            format!("Match tracks for {}", target.display_title),
+            Some(library_id),
+            Some(album_id),
+            Some(MetadataProviderId::MusicBrainz),
+            candidates
+                .into_iter()
+                .map(|(candidate, revision)| (candidate.item_id, revision))
+                .collect(),
+        )
+        .await
+        else {
+            return;
+        };
         run_automatic_movie_metadata_linking(
             db,
             settings,
             Some(target.library_id),
-            AutomaticMetadataScope::NewItems(track_ids),
-            None,
+            AutomaticMetadataScope::AllUnmatched,
+            Some(activity),
             None,
         )
         .await;
@@ -5285,7 +5317,7 @@ pub async fn refresh_item_metadata(
     tokio::spawn(async move {
         mark_metadata_refresh_activity_running(&activity_id).await;
         for target in queued_targets {
-            let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
+            let failed = execute_manual_metadata_refresh_target(&db, &target, &settings).await;
             record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;

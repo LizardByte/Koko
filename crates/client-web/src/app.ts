@@ -41,6 +41,7 @@ import {
 } from './app/selectors';
 import { syncVisibleSpinners } from './app/spinners';
 import { state } from './app/state';
+import { syncReaderAccount } from './app/bookReader';
 import { configureAudioPlayer, syncAudioPlayer } from './app/audioPlayer';
 import { itemArtwork } from './app/tvItemView';
 import { beginMetadataRequest, invalidateMetadataRequests } from './app/metadataRequests';
@@ -423,6 +424,7 @@ function renderNavigationHint(): string {
 }
 
 function render(preserveScroll = true): void {
+  syncReaderAccount();
   syncAudioPlayer();
   if (!state.isPlayerOpen && !state.activeTrailer) {
     document.body.style.cursor = '';

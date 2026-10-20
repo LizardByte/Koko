@@ -130,7 +130,8 @@ export function renderBrowseFilterDetail(): string {
   }
 
   const allowedIds = new Set(filter.itemIds);
-  const items = topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+  const items = filter.kind === 'collection' ? itemsForCollection({ item_ids: filter.itemIds })
+    : topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
   const artworkStyle = filter.artworkUrl
     ? `style="--home-feature-image: url('${escapeHtml(filter.artworkUrl)}');"`
     : '';
@@ -435,24 +436,32 @@ export function renderMetadataRefreshBadge(item: MediaItemSummary): string {
   return itemIsMetadataPending(item) ? mediaCardDynamicBadges(metadataBadgeMarkup(item), '') : '';
 }
 
+function cardArtworkClass(item: MediaItemSummary, useEpisodeLayout: boolean): string {
+  if (['audiobook', 'audiobook_part'].includes(item.item_type)) return 'audiobook-art';
+  if (item.music) return 'music-art';
+  return useEpisodeLayout ? item.item_type : 'poster-art';
+}
+
+/** Render a browse card with a cover frame suited to the item's media type. */
 export function renderItemCard(item: MediaItemSummary): string {
-  const playing = musicCardPresentation({ itemId: item.id, albumId: item.item_type === 'album' ? item.id : undefined });
+  const playing = musicCardPresentation({ itemId: item.id, albumId: ['album', 'audiobook'].includes(item.item_type) ? item.id : undefined });
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const artworkItemId = item.artwork_item_id ?? item.id;
   const artworkUrl = getArtworkUrl(artworkItemId, 'poster', item.artwork_updated_at);
   const hasAlternateArtwork = typeof item.artwork_item_id === 'number' && item.artwork_item_id !== item.id;
   const useEpisodeLayout = item.item_type === 'episode' && !hasAlternateArtwork;
-  let artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
-  if (item.music) artworkTypeClass = 'music-art';
+  const artworkTypeClass = cardArtworkClass(item, useEpisodeLayout);
   const cardSubtitle = itemCardSubtitle(item);
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
     && item.item_type === 'episode';
   const showLibrary = activeLibraryId() === undefined;
   const secondaryMeta = isSeasonEpisodeCard ? '' : [showLibrary ? library?.name : '', item.release_year].filter(Boolean).join(' · ');
+  const extent = formatChildCount(item);
+  const extentBadge = `<span class="media-card-duration" ${extent ? '' : 'hidden'}>${escapeHtml(extent)}</span>`;
   const metricMarkup = item.missing_since
     ? missingItemBadgeMarkup(item)
-    : `<span class="media-card-duration">${escapeHtml(formatChildCount(item))}</span>`;
+    : extentBadge;
   const dynamicBadges = mediaCardDynamicBadges(metadataBadgeMarkup(item), playbackStatusBadgeMarkup(item));
 
   return `
@@ -515,6 +524,7 @@ function renderItemFeature(item: MediaItemSummary): string {
   const logoUrl = logo ? getArtworkUrl(logo.id, 'logo', logo.artwork_updated_at) : undefined;
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
   const overview = item.overview?.trim();
+  const extent = formatChildCount(item);
 
   return `
     <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
@@ -526,7 +536,7 @@ function renderItemFeature(item: MediaItemSummary): string {
         ${overview ? `<p>${escapeHtml(overview)}</p>` : ''}
         <div class="hero-meta-row">
           ${genreMarkup}
-          <span class="tag">${escapeHtml(formatChildCount(item))}</span>
+          ${extent ? `<span class="tag">${escapeHtml(extent)}</span>` : ''}
         </div>
       </div>
       <button type="button" class="secondary-button home-feature-action" data-item-id="${item.id}">
@@ -546,9 +556,8 @@ function renderItemSearchResultRow(result: ItemSearchResult, compact: boolean): 
   const posterUrl = getArtworkUrl(item.id, 'poster', item.artwork_updated_at);
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const itemResultDetails = [library?.name ?? 'Library', humanizeItemType(item.item_type)];
-  if (!compact) {
-    itemResultDetails.push(formatChildCount(item));
-  }
+  const extent = formatChildCount(item);
+  if (!compact && extent) itemResultDetails.push(extent);
 
   return `
     <button type="button" class="search-result-row" data-item-id="${item.id}" data-preview-item-id="${item.id}">
@@ -870,7 +879,7 @@ function browseSelect(name: string, label: string, value: string, options: Array
 
 export function renderLibraryToolbar(): string {
   const kind=activeLibrary()?.kind;
-  const statusLabels = ({ music: ['Listening status', 'Unlistened', 'Listened'], books: ['Reading status', 'Unread', 'Read'] } as Record<string, string[]>)[kind ?? ''] ?? ['Watch status', 'Unwatched', 'Watched'];
+  const statusLabels = ({ music: ['Listening status', 'Unlistened', 'Listened'], books: ['Progress', 'Not completed', 'Completed'] } as Record<string, string[]>)[kind ?? ''] ?? ['Watch status', 'Unwatched', 'Watched'];
   const allItems = filteredTopLevelLibraryItems();
   const preferences = state.browsePreferences;
   const genres = [...new Set(allItems.flatMap((item) => item.genres))].sort((left, right) => left.localeCompare(right));

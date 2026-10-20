@@ -1,10 +1,11 @@
-/** Renders audio controls and queue/lyrics panels and parses timed lyrics. */
+/** Renders audio controls, chapter/queue/lyrics panels, and timed lyrics. */
 
 import { getArtworkUrl, type MediaItemSummary, type MusicLyrics } from '../api';
 import { escapeHtml } from './format';
 import { renderIcon } from './ui';
 import type { AppIconName } from './types';
 import type { AudioQueue, QueueEntry } from './audioQueue';
+import type { AudioChapterTarget } from './audiobooks';
 
 export interface AudioPlayerViewState {
   queue: AudioQueue;
@@ -14,7 +15,9 @@ export interface AudioPlayerViewState {
   error?: string;
   volume: number;
   muted: boolean;
-  panel?: 'queue' | 'lyrics';
+  panel?: 'queue' | 'lyrics' | 'chapters';
+  chapters?: AudioChapterTarget[];
+  playbackRate?: number;
   lyrics?: MusicLyrics;
   lyricsLoading: boolean;
   lyricsError?: string;
@@ -23,10 +26,12 @@ export interface AudioPlayerViewState {
   lyricsEnabled?: boolean;
   queueName?: string;
 }
+/** Keep long recordings readable while preserving the compact song time format. */
 export function formatAudioTime(seconds: number): string {
   const value = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   const minutes = Math.floor(value / 60),
     remainder = String(value % 60).padStart(2, '0');
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${remainder}`;
   return `${minutes}:${remainder}`;
 }
 function button(
@@ -36,10 +41,10 @@ function button(
   active = false,
   disabled = false,
 ): string {
-  const pressed = ['shuffle', 'repeat', 'queue', 'lyrics'].includes(action)
+  const pressed = ['shuffle', 'repeat', 'queue', 'lyrics', 'chapters'].includes(action)
     ? `aria-pressed="${active}"`
     : '';
-  const expanded = ['queue', 'lyrics'].includes(action)
+  const expanded = ['queue', 'lyrics', 'chapters'].includes(action)
     ? `aria-controls="music-panel" aria-expanded="${active}"`
     : '';
   return `<button type="button" class="player-icon-button music-control ${active ? 'is-active' : ''}" data-music-action="${action}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}" ${pressed} ${expanded} ${disabled ? 'disabled' : ''}>${renderIcon(icon)}</button>`;
@@ -52,35 +57,48 @@ function feedback(view: AudioPlayerViewState): string {
   if (!view.error) return '';
   return `<div class="music-feedback" role="alert">${escapeHtml(view.error)} ${button('retry', 'Retry playback', 'refresh-cw')}</div>`;
 }
+/** Render transport controls appropriate to music or spoken-word recordings. */
 export function renderAudioPlayer(view: AudioPlayerViewState): string {
-  const { queue, item } = view;
+  const { item } = view;
   if (!item) return '';
-  const artist = item.music?.artist ?? item.display_subtitle ?? '';
-  const repeatLabel = {
-    off: 'Repeat off',
-    all: 'Repeat all',
-    one: 'Repeat one',
-  }[queue.repeat];
+  const book = Boolean(item.audiobook);
+  const artist = item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '';
+  const title = item.audiobook?.title || item.display_title;
+  const titleTarget = book ? item.parent_id ?? item.id : item.id;
+
   const panel = view.panel ? renderPanel(view) : '';
-  const inlineLyrics = view.lyricsEnabled
+  const inlineLyrics = !book && view.lyricsEnabled
     ? '<div class="music-inline-lyrics" hidden><button type="button" data-music-action="lyrics" data-current-lyric aria-label="Expand current lyrics"></button></div>'
     : '';
   return `${panel}<section id="music-dock" class="music-dock" aria-label="Audio player" data-nav-section="music-player">
-    <div class="music-now-playing"><button class="music-cover" type="button" data-music-open-item="${item.parent_id ?? item.id}" aria-label="Open album">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
-      <div><button class="music-title" type="button" data-music-open-item="${item.id}">${escapeHtml(item.display_title)}</button><span class="muted">${escapeHtml(artist)}</span></div></div>
-    <div class="music-transport"><div class="music-buttons">
-      ${button('shuffle', 'Shuffle', 'shuffle', queue.shuffle)}${button('previous', 'Previous song', 'skip-back')}${button('back', 'Back 10 seconds', 'rotate-ccw')}
-      ${button('play', view.paused ? 'Play audio' : 'Pause audio', playIcon(view), false, view.loading)}
-      ${button('forward', 'Forward 10 seconds', 'rotate-ccw')}${button('next', 'Next song', 'skip-forward', false, queue.cursor >= queue.order.length - 1 && queue.repeat !== 'all')}
-      ${button('repeat', repeatLabel, queue.repeat === 'one' ? 'repeat-1' : 'repeat', queue.repeat !== 'off')}
+    <div class="music-now-playing"><button class="music-cover" type="button" data-music-open-item="${item.parent_id ?? item.id}" aria-label="${book ? 'Open audiobook' : 'Open album'}">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
+      <div><button class="music-title" type="button" data-music-open-item="${titleTarget}">${escapeHtml(title)}</button><span class="muted">${escapeHtml(artist)}</span></div></div>
+    <div class="music-transport"><div class="music-buttons">${renderTransportButtons(view)}
       </div><div class="music-timeline"><span data-music-elapsed>0:00</span><input class="player-progress" data-music-seek type="range" min="0" max="1000" step="1" value="0" aria-label="Audio position"/><span data-music-duration>${formatAudioTime((item.duration_ms ?? 0) / 1000)}</span></div></div>
-    <div class="music-tools">${button('lyrics', 'Lyrics', 'mic-2', view.panel === 'lyrics')}${button('queue', 'Playing queue', 'list-music', view.panel === 'queue')}
+    <div class="music-tools">${renderAudioTools(view)}
       ${button('mute', view.muted ? 'Unmute audio' : 'Mute audio', view.muted ? 'volume-x' : 'volume-2')}
       <input class="player-volume" data-music-volume type="range" min="0" max="1" step="0.01" value="${view.muted ? 0 : view.volume}" aria-label="Audio volume"/>
       ${button('stop', 'Stop audio', 'x')}</div>
     ${inlineLyrics}${feedback(view)}
   </section>`;
 }
+function renderTransportButtons(view: AudioPlayerViewState): string {
+  const book = Boolean(view.item?.audiobook), queue = view.queue;
+  const shuffle = book ? '' : button('shuffle', 'Shuffle', 'shuffle', queue.shuffle);
+  const repeatLabel = { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[queue.repeat];
+  const repeatIcon = queue.repeat === 'one' ? 'repeat-1' : 'repeat';
+  const repeat = book ? '' : button('repeat', repeatLabel, repeatIcon, queue.repeat !== 'off');
+  return `${shuffle}${button('previous', book ? 'Previous audio file' : 'Previous song', 'skip-back')}${button('back', 'Back 10 seconds', 'rotate-ccw')}
+    ${button('play', view.paused ? 'Play audio' : 'Pause audio', playIcon(view), false, view.loading)}
+    ${button('forward', 'Forward 10 seconds', 'rotate-ccw')}${button('next', book ? 'Next audio file' : 'Next song', 'skip-forward', false, queue.cursor >= queue.order.length - 1 && queue.repeat !== 'all')}${repeat}`;
+}
+
+function renderAudioTools(view: AudioPlayerViewState): string {
+  if (!view.item?.audiobook) return button('lyrics', 'Lyrics', 'mic-2', view.panel === 'lyrics') + button('queue', 'Playing queue', 'list-music', view.panel === 'queue');
+  const rates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((rate) => `<option value="${rate}" ${rate === (view.playbackRate ?? 1) ? 'selected' : ''}>${rate}×</option>`).join('');
+  return `${button('chapters', 'Chapters', 'list-music', view.panel === 'chapters')}<label class="audio-speed"><span class="sr-only">Playback speed</span><select data-audio-speed aria-label="Playback speed">${rates}</select></label>`;
+}
+
 function renderQueueEntry(
   view: AudioPlayerViewState,
   entry: QueueEntry,
@@ -105,6 +123,10 @@ function renderQueue(view: AudioPlayerViewState): string {
     <footer><button type="button" class="secondary-button" data-music-action="clear">Clear upcoming</button><form data-music-save><label>Playlist name<input id="music-playlist-name" name="name" required maxlength="200" autocomplete="off" placeholder="My playlist"/></label><button type="submit" ${view.saving ? 'disabled' : ''}>${view.saving ? 'Saving…' : 'Save as playlist'}</button></form></footer>`;
 }
 function renderPanel(view: AudioPlayerViewState): string {
+  if (view.panel === 'chapters') {
+    const chapters = (view.chapters ?? []).map((chapter, index) => `<button type="button" class="secondary-button" data-audio-chapter="${index}">${escapeHtml(chapter.title)}</button>`).join('');
+    return `<section id="music-panel" class="music-panel" data-nav-section="music-panel" aria-label="Chapters"><header><h3 id="music-panel-title" tabindex="-1">Chapters</h3>${button('close-panel', 'Close audio panel', 'x')}</header><div class="music-queue-list audiobook-chapters">${chapters || '<p>No chapter markers are available for this recording.</p>'}</div></section>`;
+  }
   const title = view.panel === 'queue' ? 'Playing queue' : 'Lyrics';
   const queueName = view.queueName ?? `${view.queue.order.length} songs`;
   const subtitle =

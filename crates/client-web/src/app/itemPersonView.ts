@@ -1,5 +1,8 @@
 /** Renders item detail, metadata search, person detail, and credit trays. */
 
+import { renderAudiobookContents } from './audiobooks';
+import { renderBookActions } from './bookActions';
+import { renderAudiobookAction } from './audiobookActions';
 import { renderActiveAlbumButton, renderAlbumTracks, renderTrackLyrics } from './music';
 import { renderItemWarnings } from './itemWarnings';
 import { itemLineage } from './hierarchy';
@@ -27,7 +30,7 @@ import { renderLoadingDetail } from './loadingView';
 import { renderRating } from './ratingView';
 import { itemArtwork, renderEpisodeNavigation, renderSeasonTabs, renderTvChildren, renderTvEpisodeCard, renderTvTitle, showForItem, tvPlaybackLabel, tvRestartTargets } from './tvItemView';
 import { canManageUsers } from './auth';
-import { providerAttributionLogo, providerDisplayName } from './providers';
+import { providerAttributionLogo, providerDisplayName, renderMetadataSearchProviderAttribution } from './providers';
 import { state } from './state';
 import type { PersonCreditGroup, TrailerOption } from './types';
 import {
@@ -44,6 +47,7 @@ import {
 } from './ui';
 import { missingItemDetailBadgeMarkup, renderItemCard, renderMetadataRefreshBadge, renderPlaybackTargetButton, renderWatchProgress } from './homeView';
 
+/** Render candidate sources with explicit author profiles and recording-specific audiobook matches. */
 export function renderMetadataSearchResults(): string {
   const selectedItem = state.selectedItem;
   if (!selectedItem) {
@@ -54,19 +58,22 @@ export function renderMetadataSearchResults(): string {
     return '<div class="empty-state tight">Search metadata providers to link rich metadata and artwork.</div>';
   }
 
-  return state.metadataSearchResults
+  const isAuthor = selectedItem.item_type === 'book_author';
+  const results = state.metadataSearchResults.filter((result) => !isAuthor || (result.provider_id === 'open_library' && result.media_type === 'author' && /^authors\/OL\d+A$/.test(result.external_id)));
+  if (!results.length) return '<div class="empty-state tight">Search Open Library for author profiles.</div>';
+  const artworkClass = selectedItem.item_type === 'audiobook' ? 'metadata-search-poster audiobook-art' : 'metadata-search-poster';
+  return results
     .map((result) => `
       <article class="metadata-search-card">
-        ${result.artwork_url ? `<img class="metadata-search-poster" src="${escapeHtml(resolveApiUrl(result.artwork_url))}" alt="" loading="lazy" />` : ''}
+        ${result.artwork_url ? `<img class="${artworkClass}" src="${escapeHtml(resolveApiUrl(result.artwork_url))}" alt="" loading="lazy" />` : ''}
         <div>
           <strong>${escapeHtml(result.title)}</strong>
           <p>${escapeHtml(result.overview ?? 'No overview available.')}</p>
           <div class="metadata-match-meta">
             ${renderMetadataSearchProviderAttribution(result.provider_id)}
-            <span>${result.release_year ?? 'Unknown year'}</span>
-            <span>${escapeHtml(result.media_type)}</span>
+            ${isAuthor ? `<span>Author profile</span><a href="https://openlibrary.org/${escapeHtml(result.external_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.external_id.slice('authors/'.length))}</a>` : `<span>${result.release_year ?? 'Unknown year'}</span><span>${escapeHtml(result.media_type)}</span>`}
             ${renderTrackCountMatch(result, selectedItem)}
-            ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
+            ${!isAuthor && typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
           </div>
         </div>
         <button
@@ -74,19 +81,22 @@ export function renderMetadataSearchResults(): string {
           class="secondary-button"
           data-link-metadata="${selectedItem.id}:${escapeHtml(result.provider_id)}:${escapeHtml(result.external_id)}:${escapeHtml(result.media_type)}"
         >
-          ${renderButtonContent('Link', 'link-2')}
+          ${renderButtonContent(['book', 'book_work', 'audiobook'].includes(selectedItem.item_type) ? 'Add source' : 'Link', 'link-2')}
         </button>
       </article>
     `)
     .join('');
 }
 
+/** Include explicitly selectable audiobook enrichment as well as primary book sources. */
 export function selectedItemMetadataProviderOptions(): MetadataProviderStatus[] {
   const itemType = state.selectedItem?.item_type;
   const libraryKind = activeLibrary()?.kind ?? libraryKindForItemType(itemType);
   return (state.selectedItemMetadata?.providers ?? state.metadataProviders)
-    .filter((provider) => provider.role !== 'secondary')
+    .filter((provider) => provider.role !== 'secondary' || (itemType === 'audiobook' && provider.id === 'audiosilo'))
     .filter((provider) => provider.configured && provider.implemented)
+    .filter((provider) => !['book', 'book_work', 'book_author'].includes(itemType ?? '') || provider.id === 'open_library')
+    .filter((provider) => !['comic_series', 'comic_issue'].includes(itemType ?? '') || provider.id === 'comicvine')
     .filter((provider) => !libraryKind || provider.supported_kinds.includes(libraryKind));
 }
 
@@ -95,6 +105,7 @@ function libraryKindForItemType(itemType: string | undefined): string | undefine
     return 'shows';
   }
   if (['artist', 'album', 'track'].includes(itemType ?? '')) return 'music';
+  if (['book', 'book_work', 'book_author', 'audiobook', 'comic_series', 'comic_issue'].includes(itemType ?? '')) return 'books';
   if (itemType === 'movie') {
     return 'movies';
   }
@@ -117,8 +128,10 @@ export function selectedItemDefaultMetadataTitle(): string {
     || '';
 }
 
+/** Prefill the shared credit search with the local audiobook author or music artist. */
 export function selectedItemDefaultMetadataArtist(): string {
   const item = state.selectedItem;
+  if (['audiobook', 'book_work'].includes(item?.item_type ?? '')) return item?.audiobook?.author.trim() ?? '';
   if (item?.item_type !== 'album') return '';
   return itemLineage(item, state.libraryItems).find((ancestor) => ancestor.item_type === 'artist')?.display_title.trim()
     || item.music?.album_artist?.trim()
@@ -145,14 +158,7 @@ export function defaultMetadataSearchLanguage(): string {
     ?? 'en-US';
 }
 
-export function renderMetadataSearchProviderAttribution(providerId: string): string {
-  const label = providerDisplayName(providerId);
-  const logoUrl = providerAttributionLogo(providerId);
-  if (!logoUrl) {
-    return `<span>${escapeHtml(label)}</span>`;
-  }
-  return `<img class="metadata-attribution-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(label)}" title="${escapeHtml(label)}" loading="lazy" />`;
-}
+export { renderMetadataSearchProviderAttribution } from './providers';
 
 export function renderMetadataSearchProviderControls(): string {
   const providers = selectedItemMetadataProviderOptions();
@@ -790,6 +796,7 @@ export function bindPersonCreditTrays(): void {
 }
 
 function selectedItemOverview(item: MediaItemDetail): string {
+  if (item.item_type === 'audiobook' && !item.audiobook?.recording) return item.overview?.trim() || '';
   return item.overview?.trim() || state.selectedItemMetadata?.matches[0]?.overview?.trim() || '';
 }
 
@@ -799,6 +806,8 @@ function selectedItemChildSectionTitle(item: MediaItemDetail): string {
   }
 
   if (item.item_type === 'artist') return 'Albums';
+  if (item.item_type === 'book_author') return 'Books';
+  if (item.item_type === 'comic_series') return 'Issues';
   if (item.item_type === 'album') return 'Tracks';
   return item.item_type === 'season' ? 'Episodes' : 'Contained items';
 }
@@ -890,6 +899,7 @@ interface SelectedItemActionsOptions {
 }
 
 function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTarget?: MediaPlaybackTarget): string {
+  if (item.item_type === 'audiobook' || !item.playable && !playbackTarget) return '';
   const canResume = resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0;
   if (!canResume) return '';
   const restartLabel = item.item_type === 'album' ? 'Restart track' : 'Restart episode';
@@ -900,6 +910,21 @@ function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTa
     <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
       ${restartButton}
     </section>`;
+}
+
+function activeAudioContainerButton(item: MediaItemDetail): string {
+  if (item.item_type === 'album') return renderActiveAlbumButton(item.id, item.item_type);
+  return '';
+}
+
+function audiobookListenButton(item: MediaItemDetail): string {
+  return item.item_type === 'audiobook' && item.children.some((child) => child.playable && !child.missing_since) ? renderAudiobookAction(item) : '';
+}
+
+function selectedPlaybackLabel(item: MediaItemDetail, target?: MediaPlaybackTarget): string {
+  if (!target) return '';
+  if (item.item_type === 'audiobook' && (target.resume || (item.playback_position_ms ?? 0) > 0 && !item.playback_completed)) return 'Resume listening';
+  return tvPlaybackLabel(item, target);
 }
 
 function renderSelectedItemActions(options: SelectedItemActionsOptions): string {
@@ -915,7 +940,9 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
   } = options;
   const tvTargets = tvRestartTargets(item);
   const targetSubtitle = playbackTarget ? [playbackTarget.display_title, selectedItemRemainingTime(item)].filter(Boolean).join(' · ') : undefined;
-  const activeAlbumButton = item.item_type === 'album' ? renderActiveAlbumButton(item.id) : '';
+  const activeAlbumButton = activeAudioContainerButton(item);
+  const listenAgain = audiobookListenButton(item);
+  const playbackLabel = selectedPlaybackLabel(item, playbackTarget);
 
   return `
           <div class="detail-actions" id="item-playback-actions">
@@ -925,8 +952,10 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             </div>
             ${activeAlbumButton || (item.item_type === 'album' && !playbackTarget && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : '')}
             ${renderResumeButton(item, resumeMs)}
+            ${listenAgain}
+            ${renderBookActions(item)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
-            ${playbackTarget && !activeAlbumButton ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
+            ${playbackTarget && !activeAlbumButton ? renderPlaybackTargetButton({ ...playbackTarget, label: playbackLabel }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
             ${activeAlbumButton ? '' : renderResumeOptions(item, resumeMs, playbackTarget)}
             </div>
             ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
@@ -949,10 +978,12 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
 }
 
 function playableTarget(item: MediaItemDetail): MediaPlaybackTarget | undefined {
+  if (['book_author', 'book_work', 'audiobook'].includes(item.item_type)) return undefined;
   return item.playable ? undefined : item.playback_target ?? undefined;
 }
 
 function restartPlayableTarget(item: MediaItemDetail): MediaPlaybackTarget | undefined {
+  if (['book_author', 'book_work'].includes(item.item_type)) return undefined;
   return item.playable ? undefined : item.restart_playback_target ?? undefined;
 }
 
@@ -1025,7 +1056,7 @@ function renderSelectedItemIdentity(
       </aside>
       <header class="item-identity">
           ${renderSelectedItemBreadcrumbs(item)}
-          ${renderTvTitle(item, logoUrl)}
+          ${['book_author', 'book_work', 'audiobook', 'audiobook_part', 'book', 'comic_series', 'comic_issue'].includes(item.item_type) ? `<h2 class="item-title-fallback">${escapeHtml(item.display_title)}</h2>` : renderTvTitle(item, logoUrl)}
           ${item.tagline ? `<p class="hero-tagline">${escapeHtml(item.tagline)}</p>` : ''}
           ${renderSelectedItemHeroMeta(item, genres)}
       </header>
@@ -1043,6 +1074,13 @@ export function renderEpisodeBrowser(item: MediaItemDetail): string {
 
 function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
   if (item.item_type === 'album') return renderAlbumTracks(item);
+  if (['audiobook', 'audiobook_part'].includes(item.item_type)) return renderAudiobookContents(item, canManageUsers(), state.audiobookRecordingChoices);
+  if (item.item_type === 'book_work') {
+    return [['audiobook', 'Audiobook versions'], ['book', 'Ebook files']].map(([type, label]) => {
+      const children = item.children.filter((child) => child.item_type === type);
+      return children.length ? `<section class="panel page-panel item-section" data-nav-section="${type}" data-nav-label="${label}"><h3>${label}</h3><div class="item-grid hierarchy-item-grid">${children.map(renderItemCard).join('')}</div></section>` : '';
+    }).join('');
+  }
   if (['show', 'season', 'episode'].includes(item.item_type)) return renderTvChildren(item);
 
   if (!item.children.length) {
@@ -1079,6 +1117,13 @@ function renderMetadataRefreshButton(
   </div>`;
 }
 
+function renderMetadataCreditInput(): string {
+  const type = state.selectedItem?.item_type ?? '';
+  if (!['album', 'audiobook', 'book', 'book_work'].includes(type)) return '';
+  const label = type === 'album' ? 'Artist / group' : 'Author';
+  return `<label for="metadata-search-artist">${label}</label><input id="metadata-search-artist" name="metadataSearchArtist" type="text" value="${escapeHtml(state.metadataSearchArtist ?? selectedItemDefaultMetadataArtist())}" autocomplete="off" />`;
+}
+
 function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
   if (!supportsManualLinking) {
     return '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
@@ -1090,8 +1135,8 @@ function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
               <form id="metadata-search-form" class="metadata-search-form">
                 ${needsAlbumMatch ? '<p class="muted">Match this track’s album first. Track searches use the album’s linked release.</p>' : ''}
                 <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
-                ${state.selectedItem?.item_type === 'album' ? `<label for="metadata-search-artist">Artist / group</label><input id="metadata-search-artist" name="metadataSearchArtist" type="text" value="${escapeHtml(state.metadataSearchArtist ?? selectedItemDefaultMetadataArtist())}" placeholder="Artist / group" autocomplete="off" />` : ''}
-                ${state.selectedItem?.item_type !== 'artist' ? `<input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />` : ''}
+                ${renderMetadataCreditInput()}
+                ${!['artist', 'book_author'].includes(state.selectedItem?.item_type ?? '') ? `<input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />` : ''}
                 <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
                 ${renderMetadataSearchProviderControls()}
                 <button type="submit" ${needsAlbumMatch ? 'disabled' : ''}>${renderButtonContent('Search metadata', 'search')}</button>
@@ -1166,7 +1211,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''}" data-item-page-id="${item.id}">
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''} ${['audiobook', 'audiobook_part'].includes(item.item_type) ? 'audiobook-detail-page' : ''}" data-item-page-id="${item.id}">
       ${artwork.backdrop ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(artwork.backdrop)}');"></div>` : ''}
       ${renderItemWarnings(item)}
       ${renderSelectedItemIdentity(

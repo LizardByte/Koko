@@ -55,7 +55,7 @@ export function bindItemOpeningLayout(page: HTMLElement, signal: AbortSignal, on
     if (getComputedStyle(page).getPropertyValue('--item-match-cover').trim() === '1') {
       setSize('--item-cover-width', cover.width);
       let coverHeight = cover.height;
-      if (page.classList.contains('music-detail-page')) coverHeight = cover.width;
+      if (page.classList.contains('music-detail-page') || page.classList.contains('audiobook-detail-page')) coverHeight = cover.width;
       else if (page.classList.contains('episode-detail-page')) coverHeight = cover.width * 9 / 16;
       setSize('--item-cover-height', coverHeight);
       setSize('--item-cover-top', titleTop - pageTop);

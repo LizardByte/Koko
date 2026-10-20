@@ -52,8 +52,9 @@ export function persistedLibraryForSettings(library: MediaLibrarySettings): Medi
   });
 }
 
+/** Identify catalog entries that support selecting external metadata sources. */
 export function canManuallyLinkMetadata(item?: MediaItemSummary): boolean {
-  return Boolean(item && ['movie', 'show', 'artist', 'album', 'track'].includes(item.item_type));
+  return Boolean(item && ['movie', 'show', 'artist', 'album', 'track', 'audiobook', 'book', 'book_work', 'book_author', 'comic_series', 'comic_issue'].includes(item.item_type));
 }
 
 export function backNavigationTarget(): { label: string; path: string } {
@@ -184,17 +185,20 @@ export function collectionForRoute(): MediaCollectionSummary | undefined {
   return collectionSummaries().find((entry) => entry.id === route.key);
 }
 
-export function itemsForCollection(collection: MediaCollectionSummary): MediaItemSummary[] {
+/** Collection membership can target a shared Book below its Author in the catalog. */
+export function itemsForCollection(collection: Pick<MediaCollectionSummary, 'item_ids'>): MediaItemSummary[] {
   const allowedIds = new Set(collection.item_ids);
-  return topLevelLibraryItems().filter((item) => allowedIds.has(item.id));
+  return homeVisibleLibraryItems().filter((item) => allowedIds.has(item.id));
 }
 
+/** Reading and listening formats share their Book's collection rails. */
 export function selectedItemRoot(): MediaItemSummary | undefined {
   if (!state.selectedItem) {
     return undefined;
   }
 
-  return state.selectedItem.hierarchy[0] ?? state.selectedItem;
+  return [...state.selectedItem.hierarchy, state.selectedItem].find((item) => item.item_type === 'book_work')
+    ?? state.selectedItem.hierarchy[0] ?? state.selectedItem;
 }
 
 export function selectedItemCollectionRails(): Array<{ collection: MediaCollectionSummary; items: MediaItemSummary[] }> {
@@ -244,6 +248,7 @@ export function filteredTopLevelLibraryItems(): MediaItemSummary[] {
   if (!state.browseFilter) {
     return items;
   }
+  if (state.browseFilter.kind === 'collection') return itemsForCollection({ item_ids: state.browseFilter.itemIds });
 
   const allowedIds = new Set(state.browseFilter.itemIds);
   return items.filter((item) => allowedIds.has(item.id));

@@ -121,6 +121,7 @@ let controllers;
 let frame;
 let backCount;
 let playerOverlay;
+let readerOpen;
 let searchPopover;
 let moreMenu;
 let resumeMenu;
@@ -147,8 +148,10 @@ globalThis.document = {
       '.player-overlay': playerOverlay ? {} : null,
       '.search-popover': searchPopover,
       '#item-more[open]': moreMenu?.open ? moreMenu : null,
-      '#resume-playback-menu:not([hidden])': resumeMenu && !resumeMenu.hidden ? resumeMenu : null,
+      '.resume-playback-menu:not([hidden])': resumeMenu && !resumeMenu.hidden ? resumeMenu : null,
+      'dialog.book-reader[open]': readerOpen ? {} : null,
       '[data-resume-hold]': resumeTrigger,
+      [`[data-resume-hold][aria-controls="${resumeMenu?.id}"]`]: resumeTrigger,
     };
     return targets[selector] ?? null;
   },
@@ -174,7 +177,7 @@ beforeEach(() => {
   document.body.dataset = {};
   controllers = [];
   backCount = 0;
-  playerOverlay = false;
+  playerOverlay = false; readerOpen = false;
   searchPopover = undefined;
   moreMenu = undefined;
   resumeMenu = resumeTrigger = undefined;
@@ -195,6 +198,16 @@ test('initial arrows focus the first content control and edges do not wrap', () 
   assert.equal(document.activeElement.name, 'Browse second');
   key('ArrowRight');
   assert.equal(document.activeElement.name, 'Browse second');
+});
+
+test('an open reader isolates its keyboard and controller input from browsing', () => {
+  const control = sections[1].controls[0]; control.focus(); readerOpen = true;
+  key('ArrowRight'); controllers = [pad([0, 1, 15])]; frame(0);
+  assert.equal(document.activeElement, control);
+  assert.equal(control.clicks, 0); assert.equal(backCount, 0);
+  readerOpen = false; controllers = [pad()]; frame(10);
+  controllers = [pad([15])]; frame(20);
+  assert.equal(document.activeElement, sections[1].controls[1]);
 });
 
 test('vertical section movement starts at the first card and restores previously visited positions', () => {
@@ -291,7 +304,7 @@ test('Escape and controller Back dismiss More before navigating away', () => {
 
 test('Escape and controller Back dismiss held-Resume options and restore their trigger', () => {
   resumeTrigger = sections[1].controls[0];
-  resumeMenu = { hidden: false };
+  resumeMenu = { id: 'resume-playback-menu', hidden: false };
   sections[1].controls[1].focus();
   key('Escape');
   assert.equal(resumeMenu.hidden, true);
@@ -302,6 +315,17 @@ test('Escape and controller Back dismiss held-Resume options and restore their t
   controllers = [pad([1])]; frame(0);
   assert.equal(resumeMenu.hidden, true);
   assert.equal(document.activeElement, resumeTrigger);
+  assert.equal(backCount, 0);
+});
+
+test('reading options return focus to the reading trigger when listening has a separate hold trigger', () => {
+  resumeTrigger = sections[1].controls[1];
+  resumeMenu = { id: 'reader-progress-menu', hidden: false };
+  sections[1].controls[0].focus();
+  key('Escape');
+  assert.equal(resumeMenu.hidden, true);
+  assert.equal(document.activeElement, resumeTrigger);
+  assert.equal(resumeTrigger.events.at(-1), 'resume-options-close');
   assert.equal(backCount, 0);
 });
 

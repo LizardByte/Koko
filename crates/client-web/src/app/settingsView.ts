@@ -608,6 +608,10 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
             <label>ffmpeg path<input name="ffmpeg_path" value="${escapeHtml(settings.ffmpeg.ffmpeg_path)}" /></label>
             <label>ffprobe path<input name="ffprobe_path" value="${escapeHtml(settings.ffmpeg.ffprobe_path)}" /></label>
           </div>
+          <div class="form-row">
+            <label>Calibre ebook-convert path<input name="ebook_converter_path" value="${escapeHtml(settings.reader?.converter_path ?? 'ebook-convert')}" /><small class="muted">Optional. Enables reading additional legacy ebook formats.</small></label>
+            <label>Book conversion timeout (seconds)<input name="ebook_conversion_timeout" type="number" min="1" max="600" value="${settings.reader?.conversion_timeout_seconds ?? 120}" /></label>
+          </div>
         </section>
 
       </form>
@@ -825,6 +829,10 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
     ffmpeg: {
       ffmpeg_path: formDataString(formData.get('ffmpeg_path'), current.ffmpeg.ffmpeg_path),
       ffprobe_path: formDataString(formData.get('ffprobe_path'), current.ffmpeg.ffprobe_path),
+    },
+    reader: {
+      converter_path: formDataString(formData.get('ebook_converter_path'), current.reader?.converter_path ?? 'ebook-convert'),
+      conversion_timeout_seconds: parseBoundedInteger(formData.get('ebook_conversion_timeout'), current.reader?.conversion_timeout_seconds ?? 120, 1, 600),
     },
     scheduled_tasks: parseScheduledTasksSettings(formData, current),
   };

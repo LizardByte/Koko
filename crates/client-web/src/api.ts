@@ -43,6 +43,51 @@ import {
 import { apiErrorMessage } from './apiErrors';
 const REQUEST_TIMEOUT_MS = 15000;
 
+/** A position independent of listening history: EPUB CFI or a fixed-layout page index. */
+export interface ReadingProgress {
+  revision: string;
+  locator: string;
+  fraction: number;
+  completed: boolean;
+  /** Intrinsic page count, never a font-dependent reflowable location count. */
+  page_count?: number | null;
+  bookmarks: Array<{ title: string; locator: string }>;
+}
+
+/** An authorized ebook source and this account's saved reading state. */
+export interface ReaderDocument {
+  item_id: number;
+  title: string;
+  file_name: string;
+  source_format: string;
+  format: 'epub' | 'mobi' | 'fb2' | 'fbz' | 'cbz' | 'archive' | 'pdf' | 'text' | 'html';
+  revision: string;
+  progress?: ReadingProgress | null;
+}
+
+/** Load reader metadata without falling back to mock data on a denied library. */
+export async function getReaderDocument(itemId: number, signal?: AbortSignal): Promise<ReaderDocument> {
+  const response = await fetch(`${getStoredApiBase()}/api/v1/items/${itemId}/reader`, { headers: requestHeaders(), credentials: 'include', signal });
+  if (!response.ok) throw await responseError(response);
+  return response.json() as Promise<ReaderDocument>;
+}
+
+/** Book conversion can outlast ordinary metadata requests; closing the reader aborts this fetch. */
+export async function getReaderFile(book: ReaderDocument, signal?: AbortSignal): Promise<File> {
+  const response = await fetch(`${getStoredApiBase()}/api/v1/items/${book.item_id}/reader/content`, { headers: requestHeaders(), credentials: 'include', signal });
+  if (!response.ok) throw await responseError(response);
+  // Foliate's FB2/FBZ detection is case sensitive; normalize the decoded format, including .FB2.ZIP.
+  const filename = book.format === 'archive' ? book.file_name : `book.${book.format}`;
+  return new File([await response.blob()], filename, { type: response.headers.get('Content-Type') ?? '' });
+}
+
+/** Persist account-scoped reading state; keep small final updates alive during page navigation. */
+export async function saveReadingProgress(itemId: number, progress: ReadingProgress): Promise<void> {
+  const body = JSON.stringify(progress);
+  const response = await fetch(`${getStoredApiBase()}/api/v1/items/${itemId}/reader/progress`, { method: 'PUT', headers: requestHeaders(progress), credentials: 'include', body, keepalive: body.length < 60000 });
+  if (!response.ok) throw await responseError(response);
+}
+
 export interface ServerCapabilities {
   app_name: string;
   version: string;
@@ -141,6 +186,33 @@ export interface MediaLibrary {
   error?: string;
 }
 
+/** A chapter on the source audio timeline, independent of file boundaries. */
+export interface AudiobookChapter { title: string; start_ms: number; end_ms: number; }
+/** A specific narration; its chapters and runtime belong only to this recording. */
+export interface AudiobookRecording {
+  provider_id: string; external_id: string; title: string; narrator: string;
+  language?: string | null; release_year?: number | null; abridged?: boolean | null;
+  runtime_ms?: number | null; asins: string[];
+  /** Cover for this narration, independent of the written work and other recordings. */
+  artwork_url?: string | null;
+}
+/** Available recording choices and request state for one audiobook. */
+export interface AudiobookRecordingChoices {
+  itemId: number; loading: boolean; choices: AudiobookRecording[]; error?: string;
+}
+/** Local or matched recording details; file order is independent of chapter order. */
+export interface AudiobookMetadata {
+  version_label?: string;
+  recording?: AudiobookRecording | null;
+  folder_title?: string; folder_author?: string; asin?: string | null;
+  /** Canonical written work, shared by different recordings of the same book. */
+  openlibrary_work_id?: string | null;
+  title: string; author: string; narrator: string; language?: string | null;
+  series?: string | null; series_position?: string | null;
+  disc_number?: number | null; part_number?: number | null; chapters: AudiobookChapter[];
+  /** Ordered provider section files; matching files use their actual local starts. */
+  chapter_files?: string[];
+}
 export interface MusicMetadata {
   artist: string;
   album_artist: string;
@@ -155,11 +227,14 @@ export interface MusicMetadata {
 }
 
 export interface MediaItemSummary {
+  /** Independent account reading state; a reset may retain the discovered page count. */
+  reading_progress?: { fraction: number; completed: boolean; started?: boolean; page_count?: number | null } | null;
   id: number;
   library_id: number;
   parent_id?: number | null;
   item_type: string;
   music?: MusicMetadata | null;
+  audiobook?: AudiobookMetadata | null;
   display_title: string;
   display_subtitle?: string | null;
   artwork_item_id?: number | null;
@@ -258,6 +333,8 @@ export interface MediaItemSources {
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
+  /** Other local narrations of this work, each with separate progress. */
+  audiobook_versions?: { item_id: number; label: string; duration_ms?: number | null }[];
   lyrics?: MusicLyrics | null;
   file_size?: number;
   container?: string;
@@ -565,6 +642,7 @@ export function getWebClientProfile(): ClientProfile {
   }
   if (supportsAudioType('audio/mp4; codecs="mp4a.40.2"')) {
     supportedContainers.add('m4a');
+    supportedContainers.add('m4b');
     supportedAudioCodecs.add('aac');
   }
   if (supportsAudioType('audio/ogg; codecs="vorbis"')) {
@@ -677,6 +755,7 @@ export interface MediaLibrarySettings {
 }
 
 export interface SettingsSnapshot {
+  reader?: { converter_path: string; conversion_timeout_seconds: number };
   general: {
     data_dir: string;
   };
@@ -1220,6 +1299,11 @@ export async function searchItems(query: string): Promise<MediaSearchResult[]> {
 
 export function getItem(itemId: number): Promise<MediaItemDetail> {
   return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
+}
+
+/** Find narrations of the local work without choosing a version automatically. */
+export function getAudiobookRecordings(itemId: number): Promise<AudiobookRecording[]> {
+  return requestJson('GET', `/api/v1/items/${itemId}/audiobook/recordings`);
 }
 
 export function getItemSourceFiles(itemId: number, offset = 0, limit = 25): Promise<MediaItemSources> {

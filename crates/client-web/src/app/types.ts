@@ -2,6 +2,7 @@
 
 import type {
   ApiMode,
+  AudiobookRecordingChoices,
   AppBootstrapResponse,
   BootstrapUser,
   ItemMetadataResponse,
@@ -134,6 +135,8 @@ export interface AppState {
   itemCredits?: { itemId: number; loading: boolean; credits: MetadataPersonItemCredit[]; error?: string };
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
+  /** Transient choices scoped to one item so late replies cannot populate another page. */
+  audiobookRecordingChoices?: AudiobookRecordingChoices;
   searchQuery: string;
   metadataSearchQuery: string;
   metadataSearchArtist?: string;
@@ -182,6 +185,14 @@ export interface AppState {
 
 /** Lucide icon names intentionally allowed by the web UI renderer. */
 export type AppIconName =
+  | 'a-large-small'
+  | 'bookmark'
+  | 'bookmark-plus'
+  | 'book-open'
+  | 'columns-2'
+  | 'list-tree'
+  | 'minus'
+  | 'minimize'
   | 'locate-fixed'
   | 'arrow-left'
   | 'arrow-right'

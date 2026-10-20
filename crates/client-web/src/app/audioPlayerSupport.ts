@@ -4,7 +4,7 @@ import { getArtworkUrl, type MediaItemSummary } from '../api';
 
 /** Share the same album cover with the dock and OS/browser media controls. */
 export function musicMediaMetadata(item: MediaItemSummary): MediaMetadataInit {
-  return { title:item.display_title, artist:item.music?.artist ?? item.display_subtitle ?? '', album:item.music?.album ?? '',
+  return { title:item.audiobook?.title || item.display_title, artist:item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '', album:item.audiobook?.title ?? item.music?.album ?? '',
     artwork:[{src:new URL(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id,'poster',item.artwork_updated_at),location.origin).href}] };
 }
 

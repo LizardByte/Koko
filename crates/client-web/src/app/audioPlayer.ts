@@ -35,6 +35,7 @@ import {
 import { syncMusicPlaybackCards } from './musicPlaybackCards';
 import { renderButtonContent } from './ui';
 import { AudioQueue } from './audioQueue';
+import { audiobookChapterTargets, orderedAudiobookParts } from './audiobooks';
 import {
   renderAudioPlayer,
   formatAudioTime,
@@ -105,6 +106,7 @@ function ensurePlayer(): void {
   audio = document.createElement('audio');
   audio.id = 'music-audio';
   audio.preload = 'metadata';
+  audio.preservesPitch = true;
   audio.hidden = true;
   controls = document.createElement('div');
   controls.id = 'music-player-controls';
@@ -124,6 +126,8 @@ function ensurePlayer(): void {
     if (action) void act(action).catch(showError);
     if (target.dataset.musicOpenItem)
       callbacks.navigate(`/items/${target.dataset.musicOpenItem}`);
+    if (target.dataset.audioChapter !== undefined)
+      void playChapter(Number(target.dataset.audioChapter)).catch(showError);
     if (
       target.dataset.musicQueueKey &&
       audioQueue.select(Number(target.dataset.musicQueueKey))
@@ -152,6 +156,13 @@ function ensurePlayer(): void {
   });
   host.addEventListener('change', (event) => {
     const target = event.target as HTMLInputElement;
+    if (target.matches('[data-audio-speed]')) {
+      const rate = Number(target.value);
+      if (rate >= 0.5 && rate <= 3) {
+        audio!.playbackRate = rate;
+        view.playbackRate = rate;
+      }
+    }
     if (target.matches('[data-music-seek]'))
       seek((durationMs() * Number(target.value)) / 1000);
   });
@@ -272,7 +283,7 @@ function ensurePlayer(): void {
   });
   audio.addEventListener('error', () =>
     showError(
-      new Error('This song could not be played. Retry or choose another song.'),
+      new Error('This audio file could not be played. Retry or choose another file.'),
     ),
   );
   audio.addEventListener('volumechange', () => {
@@ -459,7 +470,26 @@ function updateTimeline(): void {
     if (label) label.textContent = formatAudioTime(value / 1000);
   }
   updateLyrics(position);
+  updateChapters(position);
   updateMediaSession(duration, position);
+}
+
+/** Chapter starts can precede the current file when a chapter spans several files. */
+function updateChapters(position: number): void {
+  if (!controls || !current?.audiobook) return;
+  const indices = new Map(audioQueue.ordered.map((entry, index) => [entry.item.id, index]));
+  const currentIndex = indices.get(current.id) ?? -1;
+  let selected = -1;
+  for (const [index, chapter] of (view.chapters ?? []).entries()) {
+    const fileIndex = indices.get(chapter.itemId) ?? Infinity;
+    if (fileIndex < currentIndex || (fileIndex === currentIndex && chapter.startMs <= position)) selected = index;
+  }
+  controls.querySelectorAll<HTMLElement>('[data-audio-chapter]').forEach((button) => {
+    const active = Number(button.dataset.audioChapter) === selected;
+    button.classList.toggle('is-current', active);
+    if (active) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 function updateLyrics(position: number): void {
@@ -600,29 +630,17 @@ function syncAlbumButton(
   playback: ReturnType<typeof activeMusicPlayback>,
 ): void {
   const button = document.querySelector<HTMLButtonElement>(
-    '[data-toggle-music-album]',
+    '[data-toggle-music-album], [data-listen-book]',
   );
-  if (
-    button &&
-    playback &&
-    !playback.ended &&
-    Number(button.dataset.toggleMusicAlbum) === playback.item.parent_id
-  ) {
-    if (button.dataset.playbackState !== String(playback.paused)) {
-      setElementHtml(
-        button,
-        renderButtonContent(
-          playback.paused ? 'Resume album' : 'Pause album',
-          playback.paused ? 'play' : 'pause',
-          'start',
-          playback.item.display_title,
-        ),
-        { preserveDom: true },
-      );
-      button.dataset.playbackState = String(playback.paused);
-      createIcons({ icons, root: button });
-    }
-  }
+  if (!button || !playback || playback.ended) return;
+  if (Number(button.dataset.listenBook ?? button.dataset.toggleMusicAlbum) !== playback.item.parent_id) return;
+  if (button.dataset.playbackState === String(playback.paused)) return;
+  const action = playback.paused ? 'Resume' : 'Pause';
+  const kind = button.dataset.listenBook ? 'listening' : 'album';
+  if (button.dataset.listenBook) button.title = `${action} listening · Hold for listening options`;
+  setElementHtml(button, renderButtonContent(`${action} ${kind}`, playback.paused ? 'play' : 'pause', 'start', playback.item.display_title), { preserveDom: true });
+  button.dataset.playbackState = String(playback.paused);
+  createIcons({ icons, root: button });
 }
 
 async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
@@ -649,7 +667,7 @@ async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
   const item = await getItem(entry.item.id);
   if (token !== generation) return;
   if (!item.playable || item.missing_since || item.media_kind !== 'audio')
-    throw new Error('This song is no longer available.');
+    throw new Error('This audio file is no longer available.');
   const created = await createPlaybackSession({
     item_id: item.id,
     client_profile: getWebClientProfile(),
@@ -672,21 +690,24 @@ async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
   bindMediaSession();
   paint();
   callbacks.changed();
-  if (view.lyricsEnabled) void loadLyrics();
+  audio!.playbackRate = item.audiobook ? (view.playbackRate ?? 1) : 1;
+  if (view.lyricsEnabled && !item.audiobook) void loadLyrics();
   try {
     await audio!.play();
   } catch {
     view.paused = true;
     view.loading = false;
-    view.error = 'Playback is paused. Press Play to start this song.';
+    view.error = 'Playback is paused. Press Play to start audio.';
     paint();
   }
 }
 
+/** Replace the audio queue, optionally retaining audiobook chapter navigation. */
 export async function playMusicItems(
   items: MediaItemSummary[],
   start = 0,
   startMs = 0,
+  book?: MediaItemDetail,
 ): Promise<void> {
   if (state.bootstrap?.current_user?.id === undefined)
     throw new Error('Sign in to play music.');
@@ -695,6 +716,12 @@ export async function playMusicItems(
   radioQueueId = undefined;
   radioContext = false;
   view.queueName = undefined;
+  view.chapters = book ? audiobookChapterTargets(book) : undefined;
+  view.panel = undefined;
+  if (book) {
+    audioQueue.shuffle = false;
+    audioQueue.repeat = 'off';
+  }
   owner = state.bootstrap?.current_user?.id;
   audioQueue.replace(
     items.filter(
@@ -705,6 +732,38 @@ export async function playMusicItems(
   );
   if (!audioQueue.current) throw new Error('No available songs to play.');
   await playCurrent(startMs, false);
+}
+
+/** Resume an audiobook in file order; chapter seeking preserves the existing transport. */
+export async function playAudiobookItem(item: MediaItemDetail, startMs = 0): Promise<void> {
+  const user = state.bootstrap?.current_user?.id;
+  if (user === undefined) throw new Error('Sign in to listen to audiobooks.');
+  if (owner === user && current?.id === item.id && audio && !audio.ended) {
+    seek(startMs);
+    await audio.play();
+    return;
+  }
+  const token = ++generation;
+  let book = item.item_type === 'audiobook' ? item : undefined;
+  if (!book && item.parent_id) book = await getItem(item.parent_id);
+  if (token !== generation || user !== state.bootstrap?.current_user?.id) return;
+  if (book?.item_type !== 'audiobook') throw new Error('This audiobook is unavailable.');
+  const parts = orderedAudiobookParts(book.children).filter((part) => part.playable && !part.missing_since);
+  const start = item.item_type === 'audiobook_part' ? parts.findIndex((part) => part.id === item.id) : 0;
+  if (start < 0) throw new Error('This audio file is unavailable.');
+  await playMusicItems(parts, start, startMs, book);
+}
+
+async function playChapter(index: number): Promise<void> {
+  const chapter = view.chapters?.[index];
+  if (!chapter || !audio) return;
+  if (chapter.itemId === current?.id) {
+    seek(chapter.startMs);
+    await audio.play();
+    return;
+  }
+  const entry = audioQueue.entries.find((entry) => entry.item.id === chapter.itemId);
+  if (entry && audioQueue.select(entry.key)) await playCurrent(chapter.startMs);
 }
 export async function playMusicItem(
   item: MediaItemDetail,
@@ -739,7 +798,7 @@ export async function queueMusicItem(id: number, next = false): Promise<void> {
     (track) =>
       track.playable && !track.missing_since && track.media_kind === 'audio',
   );
-  if (!musicIsActive()) {
+  if (!musicIsActive() || current?.audiobook || audioQueue.current?.item.audiobook) {
     await playMusicItems(available);
     return;
   }
@@ -760,6 +819,8 @@ export function stopMusic(): void {
   view.item = undefined;
   view.panel = undefined;
   view.notice = undefined;
+  view.chapters = undefined;
+  view.playbackRate = undefined;
   radioQueueId = undefined;
   radioContext = false;
   playingKey = undefined;
@@ -855,7 +916,7 @@ export async function playMusicPlaylist(
     selectedIndex !== undefined &&
     (!Number.isInteger(selectedIndex) || selectedIndex < 0)
   )
-    throw new Error('This song is no longer available.');
+    throw new Error('This audio file is no longer available.');
   const active = activeMusicPlayback();
   if (await selectActivePlaylist(id, selectedIndex, user)) return;
   const token = ++generation;
@@ -875,7 +936,7 @@ export async function playMusicPlaylist(
     selectedIndex !== undefined &&
     (!detail.items[requested] || !available(detail.items[requested]))
   )
-    throw new Error('This song is no longer available.');
+    throw new Error('This audio file is no longer available.');
   const items = detail.items.filter(available);
   if (!items.length) throw new Error('No available songs in this playlist.');
   const start = detail.items.slice(0, requested).filter(available).length;
@@ -898,6 +959,8 @@ export async function playMusicPlaylist(
   audioQueue.shuffle = detail.playlist.shuffle ?? false;
   audioQueue.repeat = detail.playlist.repeat_mode ?? 'off';
   view.queueName = detail.playlist.name;
+  view.chapters = undefined;
+  if (view.panel === 'chapters') view.panel = undefined;
   await playCurrent(startMs, false);
   void callbacks.saved();
 }
@@ -919,7 +982,7 @@ async function loadLyrics(): Promise<void> {
     if (token === generation) {
       view.lyricsError =
         error instanceof ApiError && error.status === 404
-          ? 'This song is no longer available.'
+          ? 'This audio file is no longer available.'
           : 'Saved lyrics could not be loaded.';
     }
   } finally {
@@ -941,7 +1004,7 @@ function seek(position: number): void {
   } else audio.currentTime = target / 1000;
   updateTimeline();
 }
-function togglePanel(panel: 'queue' | 'lyrics'): void {
+function togglePanel(panel: 'queue' | 'lyrics' | 'chapters'): void {
   if (view.panel === panel) {
     closePanel();
     return;
@@ -994,6 +1057,7 @@ async function act(action: string): Promise<void> {
     },
     queue: () => togglePanel('queue'),
     lyrics: () => togglePanel('lyrics'),
+    chapters: () => togglePanel('chapters'),
     'follow-lyrics': () => {
       followLyrics = true;
       lastLyric = undefined;
@@ -1072,7 +1136,7 @@ async function selectActivePlaylist(
     return true;
   }
   const entry = audioQueue.ordered[selectedIndex];
-  if (!entry) throw new Error('This song is no longer available.');
+  if (!entry) throw new Error('This audio file is no longer available.');
   if (entry.key === playingKey) {
     await toggleCurrentMusic();
     return true;

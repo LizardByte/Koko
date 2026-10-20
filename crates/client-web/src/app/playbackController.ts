@@ -1,6 +1,6 @@
 /** Controls trailer, theme-song, and browser playback UI state. */
 
-import { playMusicItem, musicIsActive, stopMusic } from './audioPlayer';
+import { playAudiobookItem, playMusicItem, musicIsActive, stopMusic } from './audioPlayer';
 import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
 import type { MediaAudioTrack, MediaItemDetail, PlaybackSession } from '../api';
@@ -18,6 +18,7 @@ import { YOUTUBE_PLAYER_STATE, YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID } from './cons
 import { escapeHtml, formatDuration, formatMediaTime } from './format';
 import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
+import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
 import { renderButtonContent, renderIcon, subtitleLanguage } from './ui';
 import { buildYouTubeWatchUrl, extractYouTubeVideoId, loadYouTubeIframeApi } from './youtube';
 
@@ -649,6 +650,11 @@ export async function startMusicPlayback(item: MediaItemDetail, startMs = 0): Pr
 
 /** Start a track with its remaining album queue, or another playable media item. */
 export async function startPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
+  if (['audiobook', 'audiobook_part'].includes(item.item_type)) {
+    if (state.isPlayerOpen) closeActivePlaybackSession();
+    await playAudiobookItem(item, startMs);
+    return;
+  }
   if (item.item_type === 'track' || item.item_type === 'album') {
     await startMusicPlayback(item, startMs);
     return;
@@ -657,14 +663,30 @@ export async function startPlayback(item: MediaItemDetail, startMs: number): Pro
   await startMediaPlayback(item, startMs);
 }
 
-/** Loads an item by id and starts a browser playback session for it. */
-export async function startPlaybackForItemId(itemId: number, startMs: number): Promise<void> {
+/** Load an item and play it; omitting an audiobook offset resumes the account's saved file and position. */
+export async function startPlaybackForItemId(itemId: number, startMs?: number): Promise<void> {
   const request = ++playbackRequest;
+  const account = state.bootstrap?.current_user?.id;
   const item = state.selectedItem?.id === itemId
     ? state.selectedItem
     : await getItem(itemId);
-  if (request !== playbackRequest) return;
-  await startPlayback(item, startMs);
+  if (request !== playbackRequest || account !== state.bootstrap?.current_user?.id) return;
+  if (item.item_type === 'audiobook' && startMs === undefined && item.playback_target) {
+    const target = await getItem(item.playback_target.item_id);
+    if (request !== playbackRequest || account !== state.bootstrap?.current_user?.id) return;
+    await startPlayback(target, item.playback_target.start_ms);
+  } else await startPlayback(item, startMs ?? 0);
+}
+
+/** Start the current file or the entire narration over using the same queue and history rules as music. */
+export async function restartAudiobook(itemId: number, scope: AudiobookRestartScope): Promise<void> {
+  const request = ++playbackRequest, account = state.bootstrap?.current_user?.id;
+  const book = await getItem(itemId);
+  if (request !== playbackRequest || account !== state.bootstrap?.current_user?.id) return;
+  if (book.item_type !== 'audiobook') throw new Error('This audiobook is unavailable.');
+  const target = audiobookRestartTarget(book, scope);
+  if (!target) throw new Error('No audio files are available for this audiobook.');
+  await startPlaybackForItemId(target.id, 0);
 }
 
 function ensureTrailerYouTubePlayer(videoId: string): Promise<YouTubePlayer> {

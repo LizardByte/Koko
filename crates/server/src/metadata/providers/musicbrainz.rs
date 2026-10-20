@@ -4,6 +4,7 @@ mod artist;
 mod client;
 mod external_ids;
 mod members;
+mod recordings;
 
 #[cfg(test)]
 use std::time::Duration;
@@ -41,6 +42,7 @@ struct Entity {
     genres: Vec<Genre>,
     cover_art_archive: Option<CoverArt>,
     release_group: Option<ReleaseGroup>,
+    releases: Vec<recordings::Release>,
     #[serde(flatten)]
     artist_details: artist::ArtistDetails,
     relations: Vec<external_ids::Relation>,
@@ -201,16 +203,18 @@ fn choose_match(
     artist: Option<&str>,
     artist_id: Option<&str>,
 ) -> Option<MetadataSearchResult> {
+    let title = matching_name(title);
+    let artist = artist.map(matching_name);
     let matches = entities
         .iter()
         .filter(|candidate| {
-            candidate.title().trim().to_lowercase() == title.trim().to_lowercase()
+            matching_name(candidate.title()) == title
                 && candidate.score.unwrap_or_default() >= 95
                 && artist_id.map_or_else(
                     || {
-                        artist.is_none_or(|artist| {
-                            candidate.artist().trim().to_lowercase() == artist.trim().to_lowercase()
-                        })
+                        artist
+                            .as_ref()
+                            .is_none_or(|artist| matching_name(&candidate.artist()) == *artist)
                     },
                     |id| {
                         candidate
@@ -223,6 +227,14 @@ fn choose_match(
         .collect::<Vec<_>>();
     // A title alone cannot distinguish artists with the same name or album editions.
     if matches.len() == 1 { matches[0].search_result(entity) } else { None }
+}
+
+fn matching_name(value: &str) -> String {
+    // File names commonly use ASCII apostrophes where MusicBrainz uses typography.
+    value
+        .trim()
+        .to_lowercase()
+        .replace(['‘', '’', 'ʼ', '＇'], "'")
 }
 
 fn music_query(
@@ -353,7 +365,10 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
                 };
                 let mut entities = search_entities(&query, "recording").await?;
                 narrow_recordings_by_duration(&mut entities, context.duration_ms);
-                return Ok(choose_match(&entities, "recording", title, None, None));
+                if let Some(result) = choose_match(&entities, "recording", title, None, None) {
+                    return Ok(Some(result));
+                }
+                return recordings::match_by_position(title, music, context).await;
             }
             let id = match entity {
                 "artist" => music.musicbrainz_artist_id.as_deref(),
@@ -499,21 +514,27 @@ fn album_recording_query(
     recording_id: Option<&str>,
     context: &MusicMatchContext,
 ) -> Option<String> {
-    let album = if let Some(id) = context.release_id.as_deref().filter(|id| valid_mbid(id)) {
-        format!("reid:{id}")
-    } else {
-        let id = context
-            .release_group_id
-            .as_deref()
-            .filter(|id| valid_mbid(id))?;
-        format!("rgid:{id}")
-    };
+    let album = album_query(context)?;
     let recording = if let Some(id) = recording_id.filter(|id| valid_mbid(id)) {
         format!("rid:{id}")
     } else {
         format!("recording:{}", quoted(title.trim()))
     };
     Some(format!("{recording} AND {album}"))
+}
+
+fn album_query(context: &MusicMatchContext) -> Option<String> {
+    Some(
+        if let Some(id) = context.release_id.as_deref().filter(|id| valid_mbid(id)) {
+            format!("reid:{id}")
+        } else {
+            let id = context
+                .release_group_id
+                .as_deref()
+                .filter(|id| valid_mbid(id))?;
+            format!("rgid:{id}")
+        },
+    )
 }
 
 fn manual_search_query(
@@ -557,6 +578,42 @@ fn narrow_recordings_by_duration(
 #[cfg(test)]
 mod recording_duration_tests {
     use super::*;
+
+    #[test]
+    fn typographic_apostrophes_do_not_reject_the_album_recording() {
+        let recording = serde_json::json!({
+            "id": "7ca705fd-b07b-4434-8176-5878cc6900dc",
+            "title": "Don’t Ya", "score": 100, "length": 181560,
+            "artist-credit": [{"artist": {"name": "Brett Eldredge"}}]
+        });
+        let mut entities: Vec<Entity> =
+            serde_json::from_value(serde_json::json!([recording])).unwrap();
+        narrow_recordings_by_duration(&mut entities, Some(182233));
+        assert_eq!(
+            choose_match(&entities, "recording", "Don't Ya", None, None)
+                .unwrap()
+                .external_id,
+            "7ca705fd-b07b-4434-8176-5878cc6900dc"
+        );
+        for title in [
+            "Dont Ya",
+            "Don't Ya (live)",
+            "Don't Ya!",
+        ] {
+            assert!(choose_match(&entities, "recording", title, None, None).is_none());
+        }
+        entities[0].score = Some(94);
+        assert!(choose_match(&entities, "recording", "Don't Ya", None, None).is_none());
+        entities[0].score = Some(100);
+        let mut duplicate = recording;
+        duplicate["id"] = serde_json::json!("24cc8311-98fd-423a-bed1-97728f5eabc5");
+        duplicate["title"] = serde_json::json!("Don't Ya");
+        entities.push(serde_json::from_value(duplicate).unwrap());
+        assert!(choose_match(&entities, "recording", "Don't Ya", None, None).is_none());
+        narrow_recordings_by_duration(&mut entities, Some(220000));
+        assert!(entities.is_empty());
+    }
+
     #[test]
     fn studio_recordings_are_distinguished_from_remixes_without_guessing_ties() {
         let rows = serde_json::json!([

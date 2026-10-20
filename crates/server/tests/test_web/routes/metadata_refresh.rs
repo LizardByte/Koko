@@ -60,6 +60,10 @@ async fn album_tracks_retry_case(rematch: bool) {
                 .set(music_item_metadata::track_number.eq(1))
                 .execute(conn)
                 .unwrap();
+            diesel::update(media_items::table.find(TRACK))
+                .set(media_items::display_title.eq("Track 01"))
+                .execute(conn)
+                .unwrap();
             if rematch {
                 // This is the same atomic reset used before the manual link worker starts.
                 metadata_jobs::reset(conn, ALBUM, false, |_| Ok(()))
@@ -86,10 +90,14 @@ async fn album_tracks_retry_case(rematch: bool) {
     let release_id = "d817f725-66c3-366d-8dd1-b22d49c8a766";
     let recording_id = "24cc8311-98fd-423a-bed1-97728f5eabc5";
     let recording = serde_json::json!({"id":recording_id,"title":"Song","length":180000,"score":100,
-        "artist-credit":[{"artist":{"name":"Artist"}}]});
+        "artist-credit":[{"artist":{"name":"Artist"}}],
+        "releases":[{"id":release_id,"media":[{"position":1,"track-offset":0,
+            "track":[{"number":"1","title":"Song","length":180000}]}]}]});
     let ambiguous = serde_json::json!({
         "id":"1f9e42d1-97dd-4226-a44b-4ec30b197c07", "title":"Ambiguous",
-        "length":180000, "score":100
+        "length":180000, "score":100,
+        "releases":[{"id":release_id,"media":[{"position":1,"track-offset":1,
+            "track":[{"number":"2","title":"Ambiguous","length":180000}]}]}]
     });
     let mut duplicate = ambiguous.clone();
     duplicate["id"] = serde_json::json!("cd83ca98-3d2e-4a83-abd0-92b117cbc080");
@@ -103,14 +111,24 @@ async fn album_tracks_retry_case(rematch: bool) {
         ),
         (
             "/ws/2/recording".into(),
-            Some(format!("recording:\"Song\" AND reid:{release_id}")),
-            serde_json::json!({"recordings":[recording.clone()]}),
+            Some(format!("recording:\"Track 01\" AND reid:{release_id}")),
+            serde_json::json!({"recordings":[]}),
+        ),
+        (
+            "/ws/2/recording".into(),
+            Some(format!("tnum:1 AND reid:{release_id}")),
+            serde_json::json!({"count":1,"recordings":[recording.clone()]}),
         ),
         (format!("/ws/2/recording/{recording_id}"), None, recording),
         (
             "/ws/2/recording".into(),
             Some(format!("recording:\"Ambiguous\" AND reid:{release_id}")),
-            serde_json::json!({"recordings":[ambiguous,duplicate]}),
+            serde_json::json!({"recordings":[ambiguous.clone(),duplicate.clone()]}),
+        ),
+        (
+            "/ws/2/recording".into(),
+            Some(format!("tnum:2 AND reid:{release_id}")),
+            serde_json::json!({"count":3,"recordings":[ambiguous,duplicate]}),
         ),
     ];
     let (root, worker) = album_match_responses(responses);

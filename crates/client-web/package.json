@@ -14,7 +14,7 @@
     "validate": "run-s lint check test build"
   },
   "dependencies": {
-    "lucide": "1.52.0"
+    "lucide": "1.59.0"
   },
   "overrides": {
     "eslint-plugin-sonarjs": {

@@ -1,5 +1,8 @@
-import { clearBrowseSessions } from './browseSession';
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
+
+import { clearBrowseSessions } from './browseSession';
+import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
+import { bindSongMenus } from './audioPlayerSupport';
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';
@@ -11,6 +14,7 @@ import { bindHoverPreview } from './hoverPreview';
 import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
 import { bindResumeHold } from './resumeHold';
 import { bindSettingsActions } from './settingsActions';
+import { bindProviderOrdering, syncProviderDependencyOptions } from './providerOrdering';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMetadataLanguageInput, parsePathsInput } from './formUtils';
 import { mediaExtraToTrailerOption } from './mediaExtras';
@@ -24,6 +28,7 @@ import {
   openVideoOverlay,
   playYouTubeThemeSong,
   startPlayback,
+  startMusicPlayback,
   startPlaybackForItemId,
 } from './playbackController';
 import { parseRoute } from './routes';
@@ -43,7 +48,7 @@ import { syncVisibleSpinners } from './spinners';
 import { state } from './state';
 import { mutateMetadata } from './metadataRequests';
 import type { HomeBrowseTab } from './types';
-import { browseDetailPath, homeBrowsePath, renderHomeFeature, renderItemCard, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
+import { browseDetailPath, homeBrowsePath, homeShelfEntries, renderHomeShelfEntry, renderHomeFeature, LIBRARY_PAGE_SIZE, visibleLibraryItems } from './homeView';
 import {
   bindPersonCreditTrays,
   defaultMetadataSearchLanguage,
@@ -63,6 +68,7 @@ import {
   deleteMissingItems,
   getLogs,
   getUsers,
+  deletePlaylist,
   linkItemMetadata,
   unlinkItemMetadata,
   loginUser,
@@ -383,15 +389,16 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   }
 
   const renderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
-  if (!Number.isFinite(renderedCount) || renderedCount >= shelf.items.length) {
+  const entries = homeShelfEntries(shelf);
+  if (!Number.isFinite(renderedCount) || renderedCount >= entries.length) {
     row.dataset.lazyComplete = 'true';
     return false;
   }
 
-  const nextCount = Math.min(shelf.items.length, renderedCount + HOME_SHELF_CHUNK_SIZE);
-  row.insertAdjacentHTML('beforeend', shelf.items.slice(renderedCount, nextCount).map(renderItemCard).join(''));
+  const nextCount = Math.min(entries.length, renderedCount + HOME_SHELF_CHUNK_SIZE);
+  row.insertAdjacentHTML('beforeend', entries.slice(renderedCount, nextCount).map(renderHomeShelfEntry).join(''));
   row.dataset.lazyRenderedCount = String(nextCount);
-  row.dataset.lazyComplete = nextCount >= shelf.items.length ? 'true' : 'false';
+  row.dataset.lazyComplete = nextCount >= entries.length ? 'true' : 'false';
   bindMediaCardInteractions(row);
   createIcons({ icons });
   syncVisibleSpinners();
@@ -666,6 +673,10 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
     state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
+    if (state.itemManagementOpen) void loadItemSources(render);
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-item-sources-page]').forEach((button) => {
+    button.addEventListener('click', () => { void loadItemSources(render, Number(button.dataset.itemSourcesPage)); });
   });
   document.querySelector<HTMLFormElement>('#welcome-user-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -715,6 +726,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
 
   document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
+    stopMusic();
     try {
       await logoutUser();
     } catch (error) {
@@ -771,33 +783,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>('[data-provider-move]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const option = button.closest<HTMLElement>('.metadata-provider-option');
-      const list = option?.closest<HTMLElement>('.metadata-provider-list');
-      if (!option || !list) {
-        return;
-      }
-      const primaryOptions = visiblePrimaryProviderOptions(list);
-      const index = primaryOptions.indexOf(option);
-      if (button.dataset.providerMove === 'up' && index > 0) {
-        list.insertBefore(option, primaryOptions[index - 1]);
-      }
-      if (button.dataset.providerMove === 'down' && index >= 0 && index < primaryOptions.length - 1) {
-        list.insertBefore(option, primaryOptions[index + 1].nextSibling);
-      }
-      syncProviderDependencyOptions(list);
-    });
-  });
-
-  document.querySelectorAll<HTMLInputElement>('.metadata-provider-list input[type="checkbox"]').forEach((input) => {
-    input.addEventListener('change', () => {
-      const list = input.closest<HTMLElement>('.metadata-provider-list');
-      if (list) {
-        syncProviderDependencyOptions(list);
-      }
-    });
-  });
+  bindProviderOrdering();
 
   document.querySelector<HTMLFormElement>('#search-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -975,6 +961,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     navigateTo(backNavigationTarget().path);
   });
 
+  document.querySelector<HTMLInputElement>('#metadata-search-artist')?.addEventListener('input', (event) => {
+    state.metadataSearchArtist = (event.target as HTMLInputElement).value;
+  });
   document.querySelector<HTMLFormElement>('#metadata-search-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!state.selectedItem) {
@@ -983,9 +972,11 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
     const input = document.querySelector<HTMLInputElement>('#metadata-search-input');
     const yearInput = document.querySelector<HTMLInputElement>('#metadata-search-year');
+    const artistInput = document.querySelector<HTMLInputElement>('#metadata-search-artist');
     const languageInput = document.querySelector<HTMLInputElement>('#metadata-search-language');
     state.metadataSearchQuery = input?.value.trim() || selectedItemDefaultMetadataTitle();
-    state.metadataSearchYear = yearInput?.value.trim() || selectedItemDefaultMetadataYear();
+    state.metadataSearchYear = yearInput ? yearInput.value.trim() || selectedItemDefaultMetadataYear() : '';
+    state.metadataSearchArtist = artistInput?.value.trim();
     state.metadataSearchLanguage = languageInput?.value.trim() || defaultMetadataSearchLanguage();
     state.metadataSearchProviders = Array.from(
       document.querySelectorAll<HTMLInputElement>('input[name="metadataSearchProvider"]:checked'),
@@ -995,6 +986,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       setButtonBusy(submitButton, true);
       state.metadataSearchResults = await searchItemMetadata(state.selectedItem.id, {
         query: state.metadataSearchQuery,
+        artist: state.metadataSearchArtist,
         providers: state.metadataSearchProviders,
         year: state.metadataSearchYear,
         language: state.metadataSearchLanguage,
@@ -1191,6 +1183,41 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       playYouTubeThemeSong(target.videoId);
     }
   });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-play-music-album-id], [data-play-music-track-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        if (button.dataset.playMusicAlbumId && state.selectedItem) await startMusicPlayback(state.selectedItem);
+        else if (!await toggleCurrentMusic(Number(button.dataset.playMusicTrackId))) await startPlaybackForItemId(Number(button.dataset.playMusicTrackId), 0);
+      } catch (error) {
+        state.error = error instanceof Error ? error.message : 'Failed to start music playback.';
+        render();
+      }
+    });
+  });
+  document.querySelector<HTMLButtonElement>('[data-toggle-music-album]')?.addEventListener('click', () => {
+    void toggleCurrentMusic().catch((error) => { state.error = error instanceof Error ? error.message : 'Unable to change playback.'; render(); });
+  });
+  // Delegate radio resumes so cards appended by shelf pagination work too.
+  document.addEventListener('click', (event) => {
+    const button = (event.target as Element).closest<HTMLElement>('[data-resume-radio]');
+    if (button) void resumeMusicQueue(Number(button.dataset.resumeRadio), browseDetailPath('playlist', button.dataset.resumeRadio!)).catch((error) => {
+      state.error = error instanceof Error ? error.message : 'Unable to resume radio.'; render();
+    });
+  }, { signal });
+  document.querySelectorAll<HTMLButtonElement>('[data-music-enqueue], [data-music-radio], [data-play-playlist], [data-play-playlist-track], [data-delete-playlist]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      button.closest<HTMLElement>('[popover]')?.hidePopover();
+      try {
+        if (button.dataset.musicEnqueue) await queueMusicItem(Number(button.dataset.musicEnqueue), button.dataset.musicNext === 'true');
+        else if (button.dataset.musicRadio) await startMusicRadio(Number(button.dataset.musicRadio));
+        else if (button.dataset.playPlaylist) await playMusicPlaylist(Number(button.dataset.playPlaylist));
+        else if (button.dataset.playPlaylistTrack) await playMusicPlaylist(Number(button.dataset.playPlaylistTrack), Number(button.dataset.playlistIndex));
+        else if (button.dataset.deletePlaylist) { await deletePlaylist(Number(button.dataset.deletePlaylist)); state.homeTab = 'playlists'; navigateTo(homeBrowsePath()); }
+      } catch (error) { state.error = error instanceof Error ? error.message : 'Music operation failed.'; render(); }
+    });
+  });
+  bindSongMenus(signal);
 
   document.querySelectorAll<HTMLButtonElement>('[data-play-selected-item-start-ms]').forEach((button) => {
     const playFrom = async (startMs: number): Promise<void> => {
@@ -1551,7 +1578,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       path: paths[0] ?? '',
       paths,
       recursive: formData.get('library_recursive') === 'on',
+      exclude_from_home: formData.get('library_exclude_from_home') === 'on',
       kind: formDataString(formData.get('library_kind'), 'movies'),
+      use_embedded_music_tags: formData.get('library_use_embedded_music_tags') === 'on',
       scanner: formDataString(formData.get('library_scanner'), 'auto'),
       metadata_providers: formDataStrings(formData.getAll('library_metadata_provider')),
       metadata_language_mode: formDataString(formData.get('library_metadata_language_mode'), 'auto') === 'manual' ? 'manual' : 'auto',
@@ -1618,6 +1647,9 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   const addLibraryKindSelect = document.querySelector<HTMLSelectElement>('#add-library-form select[name="library_kind"]');
   addLibraryKindSelect?.addEventListener('change', () => syncAddLibraryProviderOptions());
   syncAddLibraryProviderOptions();
+  document.querySelectorAll<HTMLSelectElement>('select[name^="existing_library_kind_"]').forEach((select) => {
+    select.addEventListener('change', () => select.closest('.settings-library-card')?.querySelectorAll<HTMLElement>('[data-music-tag-option]').forEach((option) => { option.hidden = select.value !== 'music'; }));
+  });
   document.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 
   bindPlayerProgress();
@@ -1667,59 +1699,6 @@ function bindApiKeyPickers(): void {
   });
 }
 
-/** Return only primary providers offered for the current library type, in display order. */
-function visiblePrimaryProviderOptions(list: HTMLElement): HTMLElement[] {
-  return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option[data-provider-role="primary"]:not(.is-hidden)'));
-}
-
-function syncProviderDependencyOptions(list: HTMLElement): void {
-  const primaryOptions = visiblePrimaryProviderOptions(list);
-  primaryOptions.forEach((option, index) => {
-    const up = option.querySelector<HTMLButtonElement>('[data-provider-move="up"]');
-    const down = option.querySelector<HTMLButtonElement>('[data-provider-move="down"]');
-    if (up) up.disabled = index === 0;
-    if (down) down.disabled = index === primaryOptions.length - 1;
-  });
-  const selectedPrimaryIds = new Set(
-    Array.from(list.querySelectorAll<HTMLInputElement>('.metadata-provider-option[data-provider-role="primary"] input[type="checkbox"]:checked'))
-      .map((input) => input.value),
-  );
-  let priority = 0;
-  list.querySelectorAll<HTMLElement>('.metadata-provider-option').forEach((option) => {
-    const input = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    const label = option.querySelector<HTMLElement>('.provider-option-main .muted');
-    const role = option.dataset.providerRole ?? 'primary';
-    if (role === 'primary' && !option.classList.contains('is-hidden')) {
-      priority += 1;
-      if (label) {
-        label.textContent = `Priority ${priority}`;
-      }
-      return;
-    }
-    if (role === 'primary') {
-      return;
-    }
-
-    const extendsProviderIds = (option.dataset.extendsProviderIds ?? '')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const available = extendsProviderIds.some((providerId) => selectedPrimaryIds.has(providerId));
-    if (input) {
-      input.disabled = !available;
-      if (!available) {
-        input.checked = false;
-      }
-    }
-    option.classList.toggle('is-disabled', !available);
-    if (label) {
-      label.textContent = available ? 'Secondary' : 'Requires primary provider';
-    }
-  });
-}
-
-
-
 function syncAddLibraryProviderOptions(): void {
   const form = document.querySelector<HTMLFormElement>('#add-library-form');
   const kind = form?.querySelector<HTMLSelectElement>('select[name="library_kind"]')?.value;
@@ -1727,6 +1706,7 @@ function syncAddLibraryProviderOptions(): void {
     return;
   }
 
+  form.querySelectorAll<HTMLElement>('[data-music-tag-option]').forEach((option) => { option.hidden = kind !== 'music'; });
   form.querySelectorAll<HTMLInputElement>('input[name="library_metadata_provider"]').forEach((input) => {
     const supportedKinds = input.dataset.providerKinds?.split(',') ?? [];
     const supported = supportedKinds.includes(kind);
@@ -1749,3 +1729,4 @@ function syncAddLibraryProviderOptions(): void {
   }
   form.querySelectorAll<HTMLElement>('.metadata-provider-list').forEach(syncProviderDependencyOptions);
 }
+import { loadItemSources } from './itemSources';

@@ -1,3 +1,5 @@
+/** Defines browser routes, application state, and shared view contracts. */
+
 import type {
   ApiMode,
   AppBootstrapResponse,
@@ -5,11 +7,14 @@ import type {
   ItemMetadataResponse,
   LogEntriesResponse,
   MediaHome,
+  MusicPlaylistDetail,
   MediaItemDetail,
+  MediaItemSources,
   MediaItemSummary,
   MediaLibrary,
   MediaSearchResult,
   MetadataPersonResponse,
+  MetadataPersonItemCredit,
   MetadataProviderStatus,
   MetadataSearchResult,
   PlaybackDecision,
@@ -106,6 +111,8 @@ export interface AppState {
   capabilities?: ServerCapabilities;
   libraries: MediaLibrary[];
   home?: MediaHome;
+  playlists?: MusicPlaylistDetail[];
+  selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];
   libraryItemsLoading: boolean;
   searchResults: MediaSearchResult[];
@@ -124,10 +131,12 @@ export interface AppState {
   selectedItemMetadata?: ItemMetadataResponse;
   itemMetadataLoading: boolean;
   selectedPerson?: MetadataPersonResponse;
+  itemCredits?: { itemId: number; loading: boolean; credits: MetadataPersonItemCredit[]; error?: string };
   selectedPlayback?: PlaybackDecision;
   metadataSearchResults: MetadataSearchResult[];
   searchQuery: string;
   metadataSearchQuery: string;
+  metadataSearchArtist?: string;
   metadataSearchYear: string;
   metadataSearchLanguage: string;
   metadataSearchProviders: string[];
@@ -137,6 +146,7 @@ export interface AppState {
   browseFiltersOpen: boolean;
   libraryPage: number;
   itemManagementOpen: boolean;
+  itemSources?: { itemId: number; userId?: number; loading: boolean; data?: MediaItemSources; error?: string };
   itemMoreOpen: boolean;
   resumeOptionsOpen: boolean;
   expandedCreditId?: number;
@@ -172,6 +182,7 @@ export interface AppState {
 
 /** Lucide icon names intentionally allowed by the web UI renderer. */
 export type AppIconName =
+  | 'locate-fixed'
   | 'arrow-left'
   | 'arrow-right'
   | 'book'
@@ -202,6 +213,12 @@ export type AppIconName =
   | 'play'
   | 'plus'
   | 'refresh-cw'
+  | 'repeat'
+  | 'repeat-1'
+  | 'shuffle'
+  | 'list-music'
+  | 'mic-2'
+  | 'radio'
   | 'rotate-ccw'
   | 'save'
   | 'search'

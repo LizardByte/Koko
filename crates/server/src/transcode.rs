@@ -45,6 +45,8 @@ impl TranscodeProcess {
 pub struct TranscodeSpec {
     /// The path to the source media file.
     pub source_path: PathBuf,
+    /// Exclude video streams, including embedded album artwork, for audio playback.
+    pub audio_only: bool,
     /// The output path where the transcoded media will be written.
     pub output_path: PathBuf,
     /// The container format to use.
@@ -100,8 +102,12 @@ impl TranscodeSpec {
         args.push(self.source_path.to_string_lossy().into_owned());
 
         // Copy all streams by default if we don't map explicitly, but for transcode we usually map
-        args.push("-map".into());
-        args.push("0:v:0?".into()); // First video
+        if !self.audio_only {
+            args.push("-map".into());
+            args.push("0:v:0?".into());
+        } else {
+            args.push("-vn".into());
+        }
         args.push("-map".into());
         args.push(format!("0:a:{}?", self.audio_stream_index.unwrap_or(0)));
 

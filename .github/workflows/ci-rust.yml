@@ -9,6 +9,11 @@ on:
         default: ''
         required: false
         type: string
+    secrets:
+      FANART_PROJECT_API_KEY:
+        required: false
+      LRCLIB_APPLICATION_ID:
+        required: false
 
 env:
   MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -206,9 +211,7 @@ jobs:
         working-directory: crates/client-web
         run: |
           npm ci --ignore-scripts
-          npm run check
-          npm test
-          npm run build
+          npm run validate
 
       - name: Test
         id: test
@@ -236,7 +239,15 @@ jobs:
             --verbose \
             -- -Z unstable-options --format=json --report-time \
             > results.json || test_status=$?
-          cargo bin cargo2junit < results.json > junit.xml
+          report_status=0
+          cargo bin cargo2junit < results.json > junit.xml || report_status=$?
+          if [[ "${test_status}" != "0" || "${report_status}" != "0" ]]; then
+            # Preserve libtest diagnostics when a test process stops before its suite-end event.
+            tail -n 100 results.json
+          fi
+          if [[ "${test_status}" == "0" ]]; then
+            test_status="${report_status}"
+          fi
           exit "${test_status}"
 
       - name: Upload coverage artifact
@@ -251,9 +262,13 @@ jobs:
           path: |
             cobertura.xml
             junit.xml
+            results.json
 
       - name: Build
         if: matrix.run == 'build'
+        env:
+          KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
+          KOKO_LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
         run: |
           cargo build --locked ${{ matrix.cargo_features }} --target ${{ matrix.target }} --release \
             --message-format=json | tee "${RUNNER_TEMP}/cargo-build.json"

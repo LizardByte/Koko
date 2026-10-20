@@ -144,16 +144,14 @@ function metadataProviderRoleOrder(provider: MetadataProviderStatus): number {
 
 function compareMetadataProviderOptions(selectedProviders: string[]): (left: MetadataProviderStatus, right: MetadataProviderStatus) => number {
   return (left, right) => {
-    return metadataProviderRoleOrder(left) - metadataProviderRoleOrder(right)
-      || metadataProviderSortIndex(selectedProviders, left.id) - metadataProviderSortIndex(selectedProviders, right.id)
+    return metadataProviderSortIndex(selectedProviders, left.id) - metadataProviderSortIndex(selectedProviders, right.id)
+      || metadataProviderRoleOrder(left) - metadataProviderRoleOrder(right)
       || left.display_name.localeCompare(right.display_name);
   };
 }
 
-function renderPrimaryProviderMoveButtons(label: string, isSecondary: boolean): string {
-  return isSecondary
-    ? ''
-    : `
+function renderProviderMoveButtons(label: string): string {
+  return `
             <button type="button" class="secondary-button icon-only" data-provider-move="up" title="Move up" aria-label="Move ${escapeHtml(label)} up">${renderIcon('chevron-up')}</button>
             <button type="button" class="secondary-button icon-only" data-provider-move="down" title="Move down" aria-label="Move ${escapeHtml(label)} down">${renderIcon('chevron-down')}</button>
           `;
@@ -163,16 +161,16 @@ function renderMetadataProviderOption(
   prefix: string,
   provider: MetadataProviderStatus,
   selected: Set<string>,
-  primaryPriority: number,
+  priority: number,
 ): string {
   const providerId = provider.id;
   const label = provider.display_name;
   const isSecondary = provider.role === 'secondary';
   const secondaryAvailable = isSecondary
-    ? provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
+    ? !provider.extends_provider_ids.length || provider.extends_provider_ids.some((primaryProviderId) => selected.has(primaryProviderId))
     : true;
   const checked = selected.has(providerId) && secondaryAvailable;
-  const providerPriorityLabel = isSecondary ? 'Secondary' : `Priority ${primaryPriority}`;
+  const providerPriorityLabel = `Priority ${priority}${isSecondary ? ' · Secondary' : ''}`;
 
   return `
       <div class="metadata-provider-option" data-provider-option="${providerId}" data-provider-role="${provider.role}" data-extends-provider-ids="${provider.extends_provider_ids.join(',')}">
@@ -186,12 +184,13 @@ function renderMetadataProviderOption(
               ${checked ? 'checked' : ''}
               ${secondaryAvailable ? '' : 'disabled'}
             />
+            ${renderProviderSettingsLogo(providerId, true)}
             ${escapeHtml(label)}
           </label>
           <span class="muted">${providerPriorityLabel}</span>
         </div>
         <div class="provider-option-actions">
-          ${renderPrimaryProviderMoveButtons(label, isSecondary)}
+          ${renderProviderMoveButtons(label)}
           <button type="button" class="secondary-button" data-provider-settings="${providerId}">${renderButtonContent('Settings', 'settings')}</button>
         </div>
       </div>
@@ -202,14 +201,10 @@ export function metadataProviderCheckboxes(prefix: string, selectedProviders: st
   const providers = libraryProviderOptions(libraryKind)
     .sort(compareMetadataProviderOptions(selectedProviders));
   const selected = new Set(selectedProviders);
-  let primaryPriority = 0;
 
   return `
     <div class="metadata-provider-list" data-provider-list="${prefix}">
-      ${providers.map((provider) => {
-        primaryPriority += provider.role === 'primary' ? 1 : 0;
-        return renderMetadataProviderOption(prefix, provider, selected, primaryPriority);
-      }).join('')}
+      ${providers.map((provider, index) => renderMetadataProviderOption(prefix, provider, selected, index + 1)).join('')}
     </div>
     `;
 }
@@ -296,7 +291,10 @@ function renderExistingLibrarySettingsCard(library: MediaLibrarySettings, index:
         </label>
         <div class="form-row">
           <label class="checkbox-inline"><input name="existing_library_recursive_${index}" type="checkbox" ${library.recursive ? 'checked' : ''} /> Recursive scan</label>
+          <label class="checkbox-inline"><input name="existing_library_exclude_from_home_${index}" type="checkbox" ${library.exclude_from_home ? 'checked' : ''} /> Exclude from Home</label>
         </div>
+        <small class="muted">Hide this library's content from Home. Its library page remains available.</small>
+        <label class="checkbox-inline" data-music-tag-option ${library.kind === 'music' ? '' : 'hidden'}><input name="existing_library_use_embedded_music_tags_${index}" type="checkbox" ${library.use_embedded_music_tags ? 'checked' : ''} /> Use embedded music tags</label>
         <div class="form-row">
           <label>Provider language mode
             ${metadataLanguageModeSelect(`existing_library_metadata_language_mode_${index}`, library.metadata_language_mode)}
@@ -499,16 +497,21 @@ export function libraryScannerOptions(selectedScanner: string): string {
     .join('');
 }
 
-export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
-  const label = providerDisplayName(provider.id);
-  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
-  const logoUrl = providerAttributionLogo(provider.id);
-  const showApiKey = Boolean(status?.requires_api_key);
-  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
-  const logoMarkup = logoUrl ? `<span class="provider-settings-logo" aria-hidden="true">
+function renderProviderSettingsLogo(providerId: string, compact = false): string {
+  const logoUrl = providerAttributionLogo(providerId);
+  const compactClass = compact ? ' provider-source-logo' : '';
+  return logoUrl ? `<span class="provider-settings-logo${compactClass}" aria-hidden="true">
     ${renderIcon('link-2', 'provider-logo-fallback')}
     <img data-provider-logo src="${escapeHtml(logoUrl)}" alt="" />
   </span>` : '';
+}
+
+export function renderProviderSettingsCard(provider: MetadataProviderSettings): string {
+  const label = providerDisplayName(provider.id);
+  const status = state.metadataProviders.find((entry) => entry.id === provider.id);
+  const showApiKey = Boolean(status?.requires_api_key);
+  const apiKeyConfigured = Boolean(provider.api_key_configured || provider.api_key_secret_ref || provider.api_key);
+  const logoMarkup = renderProviderSettingsLogo(provider.id);
   const providerRoleLabel = status?.role === 'secondary' ? 'Secondary' : 'Primary';
   const providerRoleTag = status?.role ? `<span class="tag">${escapeHtml(providerRoleLabel)}</span>` : '';
   const providerDescription = status?.description ? `<p class="muted">${escapeHtml(status.description)}</p>` : '';
@@ -516,15 +519,20 @@ export function renderProviderSettingsCard(provider: MetadataProviderSettings): 
   const apiKeyId = `${provider.id}-api-key`;
   const apiKeyPlaceholder = apiKeyConfigured ? 'Saved' : '';
   const apiKeyDisabled = apiKeyConfigured ? '' : 'disabled';
+  const apiKeyLabel = provider.id === 'fanart' ? 'Personal API key (optional with bundled project key)' : 'API key';
+  const apiKeyHelp = provider.id === 'fanart'
+    ? '<small class="muted">Use your own <a href="https://fanart.tv/get-an-api-key/" target="_blank" rel="noreferrer">Fanart.tv personal key</a> for your account’s access tier. Official builds include a project key; other builds may require a personal key.</small>'
+    : '';
   const apiKeyField = showApiKey
     ? `<div class="api-key-field">
-        <label for="${apiKeyId}">API key</label>
+        <label for="${apiKeyId}">${escapeHtml(apiKeyLabel)}</label>
         <div class="input-group api-key-picker" role="group" aria-label="${escapeHtml(label)} API key" data-api-key-configured="${apiKeyConfigured}">
           <input id="${apiKeyId}" class="input-group-field" name="${provider.id}_api_key" type="password" value="" placeholder="${apiKeyPlaceholder}" autocomplete="new-password" data-api-key-draft />
           <input name="${provider.id}_clear_api_key" type="checkbox" data-api-key-removal hidden />
           <button type="button" class="secondary-button icon-only" data-clear-api-key title="Clear API key on save" aria-label="Clear ${escapeHtml(label)} API key" aria-pressed="false" ${apiKeyDisabled}>${renderIcon('x')}</button>
         </div>
         <small class="muted" data-api-key-status aria-live="polite" hidden>Saved API key will be cleared on save.</small>
+        ${apiKeyHelp}
       </div>`
     : '';
   const providerSettingsFields = showApiKey
@@ -646,7 +654,10 @@ function renderAddLibraryForm(): string {
               </select>
             </label>
             <label class="checkbox-inline"><input name="library_recursive" type="checkbox" checked /> Recursive scan</label>
+            <label class="checkbox-inline"><input name="library_exclude_from_home" type="checkbox" /> Exclude from Home</label>
           </div>
+          <label class="checkbox-inline" data-music-tag-option hidden><input name="library_use_embedded_music_tags" type="checkbox" /> Use embedded music tags</label>
+          <small class="muted" data-music-tag-option hidden>Off by default. Use folder and file names when matching music metadata.</small>
           <div class="form-row">
             <label>Provider language mode
               ${metadataLanguageModeSelect('library_metadata_language_mode', 'auto')}
@@ -759,6 +770,8 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
           path: paths[0] ?? library.path,
           paths,
           recursive: formData.get(`existing_library_recursive_${index}`) === 'on',
+          exclude_from_home: formData.get(`existing_library_exclude_from_home_${index}`) === 'on',
+          use_embedded_music_tags: formData.get(`existing_library_use_embedded_music_tags_${index}`) === 'on',
           kind: formDataString(formData.get(`existing_library_kind_${index}`), library.kind),
           scanner: formDataString(formData.get(`existing_library_scanner_${index}`), library.scanner ?? 'auto'),
           metadata_providers: formDataStrings(formData.getAll(providerField)),

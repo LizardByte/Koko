@@ -134,8 +134,24 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { ge
 globalThis.history = { back: () => { backCount += 1; } };
 globalThis.document = {
   activeElement: null, hidden: false, body: { dataset: {} },
-  querySelectorAll: (selector) => selector === '[data-nav-section]' ? sections : selector === '.home-navbar [data-home-tab]' ? sections.flatMap((section) => section.controls).filter((control) => control.dataset.homeTab) : sections.filter((section) => section.classes.has('nav-section-active')),
-  querySelector: (selector) => selector === '.browse-workspace' ? {} : selector === '.player-overlay' && playerOverlay ? {} : selector === '.search-popover' ? searchPopover : selector === '#item-more[open]' && moreMenu?.open ? moreMenu : selector === '#resume-playback-menu:not([hidden])' && resumeMenu && !resumeMenu.hidden ? resumeMenu : selector === '[data-resume-hold]' ? resumeTrigger : null,
+  querySelectorAll: (selector) => {
+    if (selector === '[data-nav-section]') return sections;
+    if (selector === '.home-navbar [data-home-tab]') {
+      return sections.flatMap((section) => section.controls).filter((control) => control.dataset.homeTab);
+    }
+    return sections.filter((section) => section.classes.has('nav-section-active'));
+  },
+  querySelector: (selector) => {
+    const targets = {
+      '.browse-workspace': {},
+      '.player-overlay': playerOverlay ? {} : null,
+      '.search-popover': searchPopover,
+      '#item-more[open]': moreMenu?.open ? moreMenu : null,
+      '#resume-playback-menu:not([hidden])': resumeMenu && !resumeMenu.hidden ? resumeMenu : null,
+      '[data-resume-hold]': resumeTrigger,
+    };
+    return targets[selector] ?? null;
+  },
 };
 bindGlobalInputHandlers(appState);
 const key = (value, extra = {}) => {

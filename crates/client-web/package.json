@@ -8,13 +8,25 @@
     "dev:mock": "set VITE_USE_MOCK_API=true&& vite",
     "build": "vite build",
     "preview": "vite preview",
+    "lint": "eslint . --max-warnings 0",
     "check": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "validate": "run-s lint check test build"
   },
   "dependencies": {
     "lucide": "1.52.0"
   },
+  "overrides": {
+    "eslint-plugin-sonarjs": {
+      "typescript": "6.0.3"
+    }
+  },
   "devDependencies": {
+    "@babel/core": "8.0.7",
+    "@babel/eslint-parser": "8.0.7",
+    "eslint": "10.13.0",
+    "eslint-plugin-sonarjs": "4.2.2",
+    "npm-run-all2": "8.0.4",
     "typescript": "7.0.2",
     "vite": "8.3.4"
   }

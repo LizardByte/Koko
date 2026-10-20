@@ -48,10 +48,17 @@ use strsim::normalized_levenshtein;
 mod artwork;
 pub(crate) mod cache_policy;
 pub(crate) mod http;
+pub mod identities;
 mod providers;
+#[cfg(test)]
+pub(crate) use providers::lrclib::TEST_LYRICS_URL;
+pub(crate) use providers::lrclib::fetch_lyrics;
+#[cfg(test)]
+pub(crate) use providers::musicbrainz::TEST_API_ROOT as TEST_MUSICBRAINZ_API_ROOT;
 pub use providers::{
     MetadataProvider,
     MetadataRegistry,
+    MusicMatchContext,
 };
 
 // local imports
@@ -126,7 +133,7 @@ pub struct MetadataProviderDescriptor {
 pub enum MetadataProviderRole {
     /// Provider can be the primary source of item metadata.
     Primary,
-    /// Provider enriches metadata from one or more primary providers.
+    /// Provider enriches item metadata, optionally requiring a primary provider.
     Secondary,
 }
 
@@ -347,6 +354,8 @@ pub struct MetadataSearchResult {
     pub release_year: Option<i32>,
     /// Match score from 0.0 to 1.0, when Koko can compute one.
     pub score: Option<f64>,
+    /// Total tracks across all media in this candidate release, when known.
+    pub track_count: Option<u32>,
 }
 
 /// Collection summary aggregated across linked metadata rows.
@@ -487,6 +496,10 @@ pub struct ProviderEpisodeMetadataSnapshotFetch<'a> {
 /// Provider-normalized metadata fields that are persisted into Koko tables.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderMetadataDetails {
+    /// Artwork URL contributed by a secondary provider.
+    pub artwork_url: Option<String>,
+    /// Backdrop URL contributed by a secondary provider.
+    pub backdrop_url: Option<String>,
     /// External identifiers normalized into Koko's database.
     pub external_ids: Vec<ProviderExternalId>,
     /// Tagline or short promotional line.
@@ -947,11 +960,14 @@ pub fn list_provider_statuses(settings: &MetadataSettings) -> Vec<MetadataProvid
                 .as_ref()
                 .map(|provider| provider.language.clone())
                 .unwrap_or_else(|| "en-US".into());
+            let bundled_key = descriptor.id == MetadataProviderId::Fanart
+                && providers::fanart::project_api_key().is_some();
             let configured = if descriptor.requires_api_key {
                 setting
                     .as_ref()
                     .map(metadata_provider_api_key_configured)
                     .unwrap_or(false)
+                    || bundled_key
             } else {
                 true
             };
@@ -1375,6 +1391,17 @@ pub async fn search_provider(
     query: &str,
     media_type: Option<&str>,
 ) -> Result<Vec<MetadataSearchResult>, String> {
+    search_provider_with_artist(settings, provider_id, query, media_type, None).await
+}
+
+/// Search candidates with an editable artist credit for album matching.
+pub async fn search_provider_with_artist(
+    settings: &MetadataSettings,
+    provider_id: MetadataProviderId,
+    query: &str,
+    media_type: Option<&str>,
+    artist: Option<&str>,
+) -> Result<Vec<MetadataSearchResult>, String> {
     let registry = MetadataRegistry::new();
     let provider = registry.provider(&provider_id).ok_or_else(|| {
         format!(
@@ -1382,7 +1409,9 @@ pub async fn search_provider(
             provider_display_name(&provider_id)
         )
     })?;
-    provider.search(settings, query, media_type).await
+    provider
+        .search_with_artist(settings, query, media_type, artist)
+        .await
 }
 
 /// Fetch and normalize one provider metadata snapshot.
@@ -1449,7 +1478,13 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
 
     let mut last_error = None;
     let mut best_snapshot = None;
-    for fetch_locale in locale_fallback_chain(&locale_key) {
+    let registry = MetadataRegistry::new();
+    let localized = registry
+        .provider(&provider_id)
+        .is_some_and(|provider| provider.uses_localized_metadata());
+    let fetch_locales =
+        if localized { locale_fallback_chain(&locale_key) } else { vec![locale_key.clone()] };
+    for fetch_locale in fetch_locales {
         let (localized_settings, provider_locale) =
             localized_provider_settings(settings, provider_id.clone(), &fetch_locale);
 
@@ -1997,6 +2032,7 @@ pub async fn load_provider_show_descendant_targets(
 
 /// Resolve item-level metadata fields contributed by a secondary provider.
 pub async fn fetch_provider_secondary_metadata(
+    settings: &MetadataSettings,
     provider_id: MetadataProviderId,
     item_type: &str,
     database_id: &str,
@@ -2011,7 +2047,7 @@ pub async fn fetch_provider_secondary_metadata(
         )
     })?;
     provider
-        .fetch_secondary_metadata(item_type, database_id, external_id, locale_key)
+        .fetch_secondary_metadata(settings, item_type, database_id, external_id, locale_key)
         .await
 }
 
@@ -2157,6 +2193,9 @@ pub fn upsert_item_metadata_link(
                 })
                 .unwrap_or(false);
 
+            if snapshot.provider_id == MetadataProviderId::MusicBrainz {
+                crate::media::music::save_provider_genres(conn, item_id, &details.genres)?;
+            }
             let payload = NewItemMetadataLink {
                 media_item_id: item_id,
                 provider_id: snapshot.provider_id.as_storage_value().to_string(),
@@ -2178,7 +2217,14 @@ pub fn upsert_item_metadata_link(
                 } else {
                     None
                 },
-                genres_json: serde_json::to_string(&details.genres).ok(),
+                genres_json: if matches!(
+                    snapshot.provider_id,
+                    MetadataProviderId::MusicBrainz | MetadataProviderId::Fanart
+                ) {
+                    None
+                } else {
+                    serde_json::to_string(&details.genres).ok()
+                },
                 rating: details.rating,
                 content_rating: details.content_rating.clone(),
                 locale_key: snapshot.locale_key.clone(),
@@ -2327,12 +2373,24 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
     }
     diesel::delete(links::item_metadata_links.filter(links::media_item_id.eq_any(&ids)))
         .execute(conn)?;
+    diesel::delete(
+        crate::db::schema::music_lyrics::table
+            .filter(crate::db::schema::music_lyrics::media_item_id.eq_any(&ids)),
+    )
+    .execute(conn)?;
+    if !prevent_automatic_match {
+        diesel::update(items::media_items.filter(items::id.eq_any(&ids)))
+            .set(items::metadata_match_attempted_at.eq(None::<i64>))
+            .execute(conn)?;
+    }
     if prevent_automatic_match {
         diesel::insert_into(links::item_metadata_links)
             .values((
                 links::media_item_id.eq(item_id),
                 links::provider_id.eq(marker_provider),
                 links::external_id.eq(""),
+                links::relation_kind.eq("primary"),
+                links::locale_key.eq(DEFAULT_METADATA_LOCALE),
                 links::match_state.eq("unlinked"),
                 links::refresh_state.eq("unlinked"),
                 links::refresh_interval_seconds.eq(0),
@@ -3565,8 +3623,16 @@ pub(crate) fn metadata_response_cache_key(
     parts: &[&str],
 ) -> String {
     let mut hasher = Sha256::new();
+    #[cfg(test)]
+    if let Ok(root) = TEST_MUSICBRAINZ_API_ROOT.try_with(Clone::clone) {
+        hasher.update(root.as_bytes());
+    }
     // Invalidate response snapshots written before endpoint-specific decoding.
     hasher.update(b"metadata-response-v2\0");
+    if *provider_id == MetadataProviderId::MusicBrainz {
+        // Older artist lookups did not request the external URL relationships.
+        hasher.update(b"artist-members-and-url-relations-v2\0");
+    }
     hasher.update(provider_id.as_storage_value().as_bytes());
     hasher.update([0]);
     hasher.update(kind.as_bytes());
@@ -3582,11 +3648,19 @@ pub(crate) fn metadata_response_cache_key(
 }
 
 fn metadata_response_cache_path(cache_key: &str) -> PathBuf {
+    #[cfg(not(test))]
     let data_dir = crate::config::current_settings().general.data_dir;
     let (shard, file_stem) = cache_key.split_at(1);
-    metadata_response_cache_dir(&data_dir)
-        .join(shard)
-        .join(format!("{file_stem}.json"))
+    #[cfg(not(test))]
+    let root = metadata_response_cache_dir(&data_dir);
+    #[cfg(test)]
+    let root = {
+        static ROOT: Lazy<PathBuf> = Lazy::new(|| {
+            std::env::temp_dir().join(format!("koko-metadata-tests-{}", rand::random::<u128>()))
+        });
+        ROOT.clone()
+    };
+    root.join(shard).join(format!("{file_stem}.json"))
 }
 
 fn read_metadata_snapshot_cache(cache_key: &str) -> Option<StoredMetadataSnapshot> {
@@ -3842,7 +3916,9 @@ fn provider_settings(
         .map(str::trim)
         .unwrap_or_default()
         .is_empty();
-    if requires_api_key && api_key_missing {
+    let bundled_key =
+        provider_id == MetadataProviderId::Fanart && providers::fanart::project_api_key().is_some();
+    if requires_api_key && api_key_missing && !bundled_key {
         return Err("requires an API key but none is configured.".into());
     }
 
@@ -3966,7 +4042,11 @@ fn to_item_metadata_summary_with_people(
         .collect();
     let extras_by_link_id = metadata_extras_by_link_id(conn, &[link.id])?;
     let link_id = link.id;
+    let item_id = link.media_item_id;
     let mut summary = to_item_metadata_summary(link);
+    if summary.provider_id == MetadataProviderId::MusicBrainz {
+        summary.genres = crate::media::music::provider_genres(conn, item_id)?;
+    }
     summary.people = people;
     if let Some(extras) = extras_by_link_id.get(&link_id) {
         if let Some((title, url)) = preferred_metadata_extra(extras, METADATA_EXTRA_TYPE_TRAILER) {
@@ -5165,6 +5245,7 @@ mod tests {
             backdrop_url: None,
             release_year: Some(1999),
             score: None,
+            track_count: None,
         };
         let wrong_year = MetadataSearchResult {
             release_year: Some(2003),

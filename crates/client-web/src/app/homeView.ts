@@ -1,13 +1,18 @@
 /** Renders home, browse, shelf, and media-card markup. */
-import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf } from '../api';
+import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf, MusicPlaylistDetail } from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
 import { activeBrowseFilterCount, browseItems } from './browsePreferences';
 import { renderLoadingCards, renderLoadingDetail } from './loadingView';
 import { currentThemeSongYouTubeTarget } from './mediaTargets';
-import { playbackProgressPercent } from './playbackProgress';
+import { playbackProgressPercent, playbackAction } from './playbackProgress';
 import { state } from './state';
+import { heroPresentation } from './hierarchy';
+import { musicCardPresentation } from './musicPlaybackCards';
+import { playlistPlaybackButtonContent, renderPlaylistTracks } from './music';
+import { musicPlaybackPlaylist } from './musicPlaybackState';
+import { itemWarnings } from './itemWarnings';
 import { canManageServer } from './auth';
 import type { BrowseFilter, HomeBrowseTab } from './types';
 import {
@@ -19,6 +24,7 @@ import {
   collectionSummaries,
   filteredTopLevelLibraryItems,
   homeFeaturePreview,
+  homePreviewItemsById,
   itemsForCollection,
   pageBackdropUrlForCollection,
   pageBackdropUrlForItem,
@@ -248,24 +254,27 @@ export function renderCategoryDetailPage(): string {
 
 export function renderPlaylistDetailPage(): string {
   const route = state.route;
-  const playlistName = route.page === 'browse-detail' && route.kind === 'playlist'
-    ? route.key
-    : 'Playlist';
+  const detail = state.selectedPlaylist ? musicPlaybackPlaylist(state.selectedPlaylist) : undefined;
+  const matches = route.page === 'browse-detail' && route.kind === 'playlist' && String(detail?.playlist.id) === route.key;
+  const playlistName = matches ? detail!.playlist.name : 'Playlist';
+  const items = matches ? detail!.items : [];
+  const artwork = matches && detail!.artwork ? getArtworkUrl(detail!.artwork.item_id, 'poster', detail!.artwork.updated_at ?? undefined) : undefined;
+  const kind = detail?.playlist.temporary ? 'radio' : 'playlist';
 
   return `
     <section class="item-page grouped-page playlist-detail-page">
       <section class="item-hero collection-hero" data-nav-section="overview" data-nav-label="Overview">
-        <div class="detail-art item-poster collection-poster">
-          ${renderIcon('play', 'audio-player-art-icon')}
+        <div class="detail-art item-poster collection-poster" ${artwork ? `style="background-image:url('${escapeHtml(artwork)}');background-size:cover;background-position:center;"` : ''}>
+          ${artwork ? '' : renderIcon('play', 'audio-player-art-icon')}
         </div>
         <div class="detail-summary item-summary">
-          <p class="eyebrow">Playlist</p>
+          <p class="eyebrow">${kind === 'radio' ? 'Radio' : 'Playlist'}</p>
           <h2 class="item-title-fallback">${escapeHtml(playlistName)}</h2>
           <div class="hero-meta-row">
-            <span class="tag">0 titles</span>
+            <span class="tag">${items.length} songs</span>
           </div>
-          <p>No playlist items are available yet.</p>
           <div class="detail-actions">
+            ${matches ? `<button type="button" data-play-playlist="${detail!.playlist.id}" ${playlistDisabled(items)}>${playlistPlaybackButtonContent(detail!)}</button><button type="button" class="secondary-button" data-delete-playlist="${detail!.playlist.id}">${renderButtonContent('Delete ' + kind, 'trash-2')}</button>` : ''}
             <button type="button" class="secondary-button" id="clear-browse-filter">${renderButtonContent('Back', 'arrow-left')}</button>
           </div>
         </div>
@@ -273,10 +282,10 @@ export function renderPlaylistDetailPage(): string {
 
       <section class="panel page-panel item-section" data-nav-section="items" data-nav-label="Items">
         <div class="section-heading section-heading-actions">
-          <h3>Items</h3>
-          <span class="muted">0 items</span>
+          <h3>Tracks</h3>
+          <span class="muted">${items.length} songs</span>
         </div>
-        <div class="empty-state tight">Playlist creation is planned. Items will appear here when playlists are available.</div>
+        ${items.length && detail ? renderPlaylistTracks(detail) : '<div class="empty-state tight">No available songs in this playlist.</div>'}
       </section>
     </section>
   `;
@@ -301,12 +310,13 @@ export function renderBrowseDetailPage(): string {
 
 export function metadataBadgeMarkup(item: MediaItemSummary): string {
   const pending = itemIsMetadataPending(item);
-  const unmatched = !item.has_metadata;
+  const warning = itemWarnings(item).find(entry => entry.kind === 'metadata');
+  const unmatched = Boolean(warning);
   if (!pending && !unmatched) {
     return '';
   }
 
-  let statusLabel = 'Metadata is not linked yet';
+  let statusLabel = warning?.message ?? 'Metadata is not linked yet';
   if (pending) {
     statusLabel = unmatched ? 'Matching metadata' : 'Refreshing metadata';
   }
@@ -352,15 +362,16 @@ export function playbackStatusBadgeMarkup(item: MediaItemSummary): string {
 
 /** One artwork indicator: current playback progress, otherwise a completed watch. */
 export function renderWatchProgress(item: MediaItemSummary): string {
+  const action=playbackAction(item), capitalized=action[0].toUpperCase()+action.slice(1);
   const progress = playbackProgressPercent(item);
   if (progress !== undefined) {
-    const label = `In progress: ${progress}% watched`;
+    const label = `In progress: ${progress}% ${action}`;
     return `<span class="media-card-progress" style="--watch-progress: ${progress}%" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"></span>`;
   }
   const watchCount = item.watch_count ?? 0;
   if (!item.playback_completed && watchCount <= 0) return '';
-  const label = watchCount > 1 ? `Watched ${watchCount} times` : 'Watched';
-  const title = item.last_watched_at ? `${label} · Last watched ${formatTimestamp(item.last_watched_at)}` : label;
+  const label = watchCount > 1 ? `${capitalized} ${watchCount} times` : capitalized;
+  const title = item.last_watched_at ? `${label} · Last ${action} ${formatTimestamp(item.last_watched_at)}` : label;
   return `<span class="media-card-progress is-watched" style="--watch-progress: 100%" title="${escapeHtml(title)}" aria-label="${escapeHtml(label)}">${renderIcon('check', 'watch-completed-icon')}</span>`;
 }
 
@@ -425,12 +436,14 @@ export function renderMetadataRefreshBadge(item: MediaItemSummary): string {
 }
 
 export function renderItemCard(item: MediaItemSummary): string {
+  const playing = musicCardPresentation({ itemId: item.id, albumId: item.item_type === 'album' ? item.id : undefined });
   const library = state.libraries.find((entry) => entry.id === item.library_id);
   const artworkItemId = item.artwork_item_id ?? item.id;
   const artworkUrl = getArtworkUrl(artworkItemId, 'poster', item.artwork_updated_at);
   const hasAlternateArtwork = typeof item.artwork_item_id === 'number' && item.artwork_item_id !== item.id;
   const useEpisodeLayout = item.item_type === 'episode' && !hasAlternateArtwork;
-  const artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
+  let artworkTypeClass = useEpisodeLayout ? item.item_type : 'poster-art';
+  if (item.music) artworkTypeClass = 'music-art';
   const cardSubtitle = itemCardSubtitle(item);
   const isSeasonEpisodeCard = state.route.page === 'item'
     && state.selectedItem?.item_type === 'season'
@@ -443,13 +456,14 @@ export function renderItemCard(item: MediaItemSummary): string {
   const dynamicBadges = mediaCardDynamicBadges(metadataBadgeMarkup(item), playbackStatusBadgeMarkup(item));
 
   return `
-    <button class="media-card ${useEpisodeLayout ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}">
+    <button class="media-card ${useEpisodeLayout ? 'episode-card' : ''} ${item.missing_since ? 'is-missing' : ''}${playing.className}" type="button" data-item-id="${item.id}" data-preview-item-id="${item.id}" ${playing.attributes}>
       <span class="media-card-art ${escapeHtml(item.media_kind)} ${escapeHtml(artworkTypeClass)}" style="background-image: url('${escapeHtml(artworkUrl)}');">
         <span class="media-card-kind-row">
           ${showLibrary ? `<span class="media-card-kind" title="${escapeHtml(humanizeItemType(item.item_type))}">${renderIcon(selectedLibraryIcon(library?.kind), 'card-icon')}</span>` : ''}
           ${metricMarkup}
         </span>
         ${dynamicBadges}
+        ${playing.badge}
       </span>
       <span class="media-card-title">${escapeHtml(item.display_title)}</span>
       ${cardSubtitle ? `<span class="media-card-subtitle">${escapeHtml(cardSubtitle)}</span>` : ''}
@@ -496,19 +510,20 @@ function renderCollectionFeature(collection: MediaCollectionSummary): string {
 }
 
 function renderItemFeature(item: MediaItemSummary): string {
+  const { identity, logo } = heroPresentation(item, [...homePreviewItemsById().values()]);
   const backdropUrl = pageBackdropUrlForItem(item);
-  const logoUrl = item.logo_url ? getArtworkUrl(item.id, 'logo', item.artwork_updated_at) : undefined;
-  const library = state.libraries.find((entry) => entry.id === item.library_id);
+  const logoUrl = logo ? getArtworkUrl(logo.id, 'logo', logo.artwork_updated_at) : undefined;
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
-  const overview = item.overview ?? `${humanizeItemType(item.item_type)} from ${library?.name ?? 'your library'}.`;
+  const overview = item.overview?.trim();
 
   return `
     <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
       <div class="home-feature-copy">
         ${logoUrl
-          ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(item.display_title)}" />`
-          : `<h2>${escapeHtml(item.display_title)}</h2>`}
-        <p>${escapeHtml(overview)}</p>
+          ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(identity.display_title)}" />`
+          : `<h2>${escapeHtml(identity.display_title)}</h2>`}
+        ${identity.id !== item.id ? `<p class="home-feature-context">${escapeHtml(item.display_title)}</p>` : ''}
+        ${overview ? `<p>${escapeHtml(overview)}</p>` : ''}
         <div class="hero-meta-row">
           ${genreMarkup}
           <span class="tag">${escapeHtml(formatChildCount(item))}</span>
@@ -628,19 +643,71 @@ export function visibleShelfItems(shelf: MediaShelf): MediaItemSummary[] {
   return shelf.items.slice(0, HOME_SHELF_CHUNK_SIZE);
 }
 
+type ShelfEntry = { item: MediaItemSummary; radio?: never } | { radio: MusicPlaylistDetail; item?: never };
+
+/** Merge temporary queues and media by playback time, including lazy-loaded cards. */
+export function homeShelfEntries(shelf: MediaShelf): ShelfEntry[] {
+  const entries: ShelfEntry[] = shelf.items.map((item) => ({ item }));
+  if (shelf.id !== 'continue_watching') return entries;
+  entries.push(...(state.home?.listening_queues ?? []).filter((radio) => radio.items.length).map((radio) => ({ radio })));
+  return entries.sort((left, right) => {
+    const timestamp = (entry: ShelfEntry): number => entry.radio?.playlist.updated_at ?? entry.item?.last_played_at ?? 0;
+    return timestamp(right) - timestamp(left);
+  });
+}
+
+export function renderHomeShelfEntry(entry: ShelfEntry): string {
+  return entry.radio ? renderRadioCard(entry.radio) : renderItemCard(entry.item);
+}
+
+/** Radio resumes alongside albums, keeping a live reference to its original artwork. */
+function renderRadioCard({ playlist, items, artwork: source }: MusicPlaylistDetail): string {
+  const playing = musicCardPresentation({ queueId: playlist.id });
+  const current = items[playlist.current_index ?? 0] ?? items[0];
+  const artwork = source
+    ? getArtworkUrl(source.item_id, 'poster', source.updated_at ?? undefined)
+    : undefined;
+  const completedDuration = items.slice(0, playlist.current_index ?? 0)
+    .reduce((total, item) => total + (item.duration_ms ?? 0), 0);
+  const duration = items.reduce((total, item) => total + (item.duration_ms ?? 0), 0);
+  const progress = duration > 0
+    ? Math.min(99, Math.max(0, Math.round((completedDuration + (playlist.position_ms ?? 0)) / duration * 100)))
+    : 0;
+  return `<button type="button" class="media-card radio-card${playing.className}" data-resume-radio="${playlist.id}" ${playing.attributes} aria-label="${playing.className ? 'Open' : 'Continue'} ${escapeHtml(playlist.name)}">
+    <span class="media-card-art music-art" ${artwork ? `style="background-image:url('${escapeHtml(artwork)}');"` : ''}>
+      <span class="media-card-kind-row"><span class="media-card-kind" title="Radio">${renderIcon('radio', 'card-icon')}</span><span class="media-card-duration">${items.length} song${items.length === 1 ? '' : 's'}</span></span>
+      ${progress ? mediaCardDynamicBadges('', `<span class="media-card-progress" style="--watch-progress:${progress}%" title="Radio in progress: ${progress}% listened" aria-label="Radio in progress: ${progress}% listened"></span>`) : ''}
+      ${playing.badge}
+    </span><span class="media-card-title">${escapeHtml(playlist.name)}</span>
+    ${current ? `<span class="media-card-subtitle">${escapeHtml(current.display_title)}</span>` : ''}
+    <span class="media-card-meta">Continue radio</span></button>`;
+}
+
 export function renderShelfStack(): string {
-  const shelves = (state.home?.shelves ?? []).filter((shelf) => shelf.items.length);
+  const radios = (state.home?.listening_queues ?? []).filter((entry) => entry.items.length);
+  const sourceShelves = [...(state.home?.shelves ?? [])];
+  if (radios.length && !sourceShelves.some((shelf) => shelf.id === 'continue_watching')) {
+    sourceShelves.unshift({ id: 'continue_watching', title: state.home?.library_id == null ? 'Continue playing' : 'Continue listening', items: [] });
+  }
+  const shelves = sourceShelves.filter((shelf) => shelf.items.length || (shelf.id === 'continue_watching' && radios.length));
   if (!shelves.length) {
     if (state.isLoading) return renderLoadingCards('Loading your media');
     return '<section class="shelf"><div class="empty-state">No shelves are available yet. Add a library to get started.</div></section>';
   }
 
   return shelves
-    .map((shelf) => `
-      <section class="shelf" data-nav-section="shelf:${escapeHtml(shelf.id)}" data-nav-label="${escapeHtml(shelf.title)}" aria-label="${escapeHtml(shelf.title)}">
+    .map((shelf) => {
+      const shelfRadios = shelf.id === 'continue_watching' ? radios : [];
+      const title = shelf.id === 'continue_watching' && state.home?.library_id == null
+        ? 'Continue playing'
+        : shelf.title;
+      const count = shelf.items.length + shelfRadios.length;
+      const entries = homeShelfEntries(shelf);
+      return `
+      <section class="shelf" data-nav-section="shelf:${escapeHtml(shelf.id)}" data-nav-label="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
         <div class="shelf-header">
-          <h3>${escapeHtml(shelf.title)}</h3>
-          <span>${shelf.items.length} items</span>
+          <h3>${escapeHtml(title)}</h3>
+          <span>${count} item${count === 1 ? '' : 's'}</span>
         </div>
         <div class="shelf-row-shell">
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
@@ -648,12 +715,13 @@ export function renderShelfStack(): string {
                 class="shelf-row"
                 data-shelf-row="${escapeHtml(shelf.id)}"
                 data-lazy-shelf-id="${escapeHtml(shelf.id)}"
-                data-lazy-rendered-count="${Math.min(HOME_SHELF_CHUNK_SIZE, shelf.items.length)}"
-              >${visibleShelfItems(shelf).map(renderItemCard).join('')}</div>
+                data-lazy-rendered-count="${Math.min(HOME_SHELF_CHUNK_SIZE, entries.length)}"
+              >${entries.slice(0, HOME_SHELF_CHUNK_SIZE).map(renderHomeShelfEntry).join('')}</div>
               <button type="button" class="shelf-scroll-button" data-shelf-scroll="${escapeHtml(shelf.id)}:1" title="Scroll right">${renderIcon('chevron-right')}</button>
             </div>
       </section>
-    `)
+    `;
+    })
     .join('');
 }
 
@@ -801,6 +869,8 @@ function browseSelect(name: string, label: string, value: string, options: Array
 }
 
 export function renderLibraryToolbar(): string {
+  const kind=activeLibrary()?.kind;
+  const statusLabels = ({ music: ['Listening status', 'Unlistened', 'Listened'], books: ['Reading status', 'Unread', 'Read'] } as Record<string, string[]>)[kind ?? ''] ?? ['Watch status', 'Unwatched', 'Watched'];
   const allItems = filteredTopLevelLibraryItems();
   const preferences = state.browsePreferences;
   const genres = [...new Set(allItems.flatMap((item) => item.genres))].sort((left, right) => left.localeCompare(right));
@@ -810,7 +880,7 @@ export function renderLibraryToolbar(): string {
   if (preferences.year && !years.includes(preferences.year)) years.push(preferences.year);
   return `<form id="library-browse-form" class="browse-toolbar" data-nav-section="library-filters" data-nav-label="Sort and filter" ${state.browseFiltersOpen ? '' : 'hidden'}>
     ${browseSelect('sort', 'Sort', preferences.sort, [['title', 'Title A–Z'], ['recent', 'Last modified'], ['year', 'Release year']])}
-    ${browseSelect('watched', 'Watch status', preferences.watched, [['all', 'All titles'], ['unwatched', 'Unwatched'], ['in-progress', 'In progress'], ['watched', 'Watched']])}
+    ${browseSelect('watched', statusLabels[0], preferences.watched, [['all', 'All titles'], ['unwatched', statusLabels[1]], ['in-progress', 'In progress'], ['watched', statusLabels[2]]])}
     ${browseSelect('genre', 'Genre', preferences.genre, [['', 'All genres'], ...genres.map((genre): [string, string] => [genre, genre])])}
     ${browseSelect('year', 'Year', preferences.year, [['', 'All years'], ...years.map((year): [string, string] => [year, year])])}
     ${browseSelect('density', 'Card size', preferences.density, [['comfortable', 'Medium'], ['compact', 'Small'], ['spacious', 'Large']])}
@@ -934,19 +1004,11 @@ export function renderCollectionsTab(): string {
 }
 
 export function renderPlaylistsTab(): string {
+  const playlists = state.playlists ?? [];
   return `
     <section class="category-grid" data-nav-section="playlists" data-nav-label="Playlists" aria-label="Playlists">
-      <button
-        type="button"
-        class="category-card panel filter-card-button"
-        data-playlist-filter="Playlists"
-      >
-        <div class="category-card-header">
-          <strong>Playlists</strong>
-          <span class="tag">0 titles</span>
-        </div>
-        <p class="muted">Playlist creation is planned. Items will appear here when playlists are available.</p>
-      </button>
+      ${playlists.map((entry) => `<button type="button" class="category-card panel filter-card-button" data-playlist-filter="${entry.playlist.id}"><div class="category-card-header"><strong>${escapeHtml(entry.playlist.name)}</strong><span class="tag">${entry.items.length} songs</span></div></button>`).join('')}
+      ${playlists.length ? '' : '<p class="empty-state">Save the playing queue as a playlist from the music player.</p>'}
     </section>
   `;
 }
@@ -1085,3 +1147,5 @@ export function renderHomeNavbar(): string {
     </header>
   `;
 }
+
+function playlistDisabled(items: MediaItemSummary[]): string { return items.some((item) => item.playable && !item.missing_since) ? '' : 'disabled'; }

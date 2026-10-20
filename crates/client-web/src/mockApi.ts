@@ -1,3 +1,5 @@
+/** Provides in-memory API fixtures and mutations for development and browser tests. */
+
 import kokoLogoUrl from '../../../assets/Koko.png';
 import type {
   AppBootstrapResponse,
@@ -11,7 +13,11 @@ import type {
   MediaCollectionSummary,
   MediaHome,
   MediaItemDetail,
+  MediaItemSources,
   MediaItemSummary,
+  MediaPlaybackTarget,
+  MusicPlaylistDetail,
+  MusicQueueState,
   MediaLibrary,
   MediaLibrarySettings,
   MediaSearchResult,
@@ -35,6 +41,31 @@ import type {
 } from './api';
 
 let nextLibraryId = 4;
+let nextPlaylistId = 1;
+const mockPlaylists = new Map<number, { owner: number; detail: MusicPlaylistDetail }>();
+export function getMockPlaylists(libraryId?: number): MusicPlaylistDetail[] {
+  return [...mockPlaylists.values()].filter((entry) => entry.owner === activeMockUserId() && !entry.detail.playlist.temporary).map(({ detail }) => ({ ...detail, items: detail.items.filter((item) => libraryId === undefined || item.library_id === libraryId) })).filter((entry) => libraryId === undefined || entry.items.length > 0);
+}
+export function getMockPlaylist(id: number): MusicPlaylistDetail {
+  const entry = mockPlaylists.get(id); if (!entry || entry.owner !== activeMockUserId()) throw new Error('Playlist not found');
+  const source = entry.detail.playlist.artwork_item_id ? getMockItem(entry.detail.playlist.artwork_item_id) : undefined;
+  entry.detail.artwork = source ? { item_id: source.id, library_id: source.library_id, updated_at: source.artwork_updated_at } : undefined;
+  return entry.detail;
+}
+export function saveMockPlaylist(name: string, ids: number[],temporary=false,seedItemId?:number): MusicPlaylistDetail {
+  const owner = activeMockUserId(); if (owner === undefined) throw new Error('Sign in first');
+  const seed = temporary ? getMockItem(seedItemId ?? ids[0]) : undefined;
+  const source = seed?.item_type === 'track' && seed.parent_id ? getMockItem(seed.parent_id) : seed;
+  const detail = { playlist: { id: nextPlaylistId++, name, temporary, artwork_item_id: source?.id, created_at: Date.now() / 1000, updated_at: Date.now() / 1000 }, items: ids.map((id) => getMockItem(id)!).filter(Boolean) };
+  mockPlaylists.set(detail.playlist.id, { owner, detail }); return getMockPlaylist(detail.playlist.id);
+}
+export function deleteMockPlaylist(id: number): void { getMockPlaylist(id); mockPlaylists.delete(id); }
+export function updateMockQueue(id:number,kind:string,body:MusicQueueState & {name:string}):MusicPlaylistDetail|undefined {
+  const detail=getMockPlaylist(id);
+  if(kind==='name') { detail.playlist.name=body.name; detail.playlist.temporary=false; return detail; }
+  Object.assign(detail.playlist,body);
+  detail.items=body.item_ids.map((id)=>getMockItem(id)!).filter(Boolean);
+}
 let nextUserId = 2;
 const AUTH_TOKEN_STORAGE_KEY = 'koko-client-web-auth-token';
 
@@ -106,7 +137,7 @@ const libraries: MediaLibrary[] = [
     recursive: true,
     kind: 'music',
     scanner: 'music',
-    metadata_providers: [],
+    metadata_providers: ['musicbrainz'],
     metadata_language_mode: 'auto',
     metadata_languages: ['en-US'],
     status: 'available',
@@ -446,6 +477,19 @@ const items: MediaItemDetail[] = [
   },
 ];
 
+const musicTags = { artist: 'Mock Artist', album_artist: 'Mock Artist', album: 'Mock Album', disc_number: 1, genres: ['Rock'] };
+const artist: MediaItemDetail = { ...items.find((item) => item.id === 103)!, id: 301, item_type: 'artist', display_title: 'Mock Artist', relative_path: '', playable: false, child_count: 1, duration_ms: 413_000, music: { ...musicTags, album: '' }, children: [], hierarchy: [] };
+const album: MediaItemDetail = { ...artist, id: 302, parent_id: artist.id, item_type: 'album', display_title: 'Mock Album', child_count: 2, music: musicTags, children: [], hierarchy: [{ ...artist }] };
+const musicTracks = items.filter((item) => item.library_id === 3);
+musicTracks.forEach((track, index) => {
+  track.parent_id = album.id;
+  track.music = { ...musicTags, track_number: index + 1 };
+  track.hierarchy = [{ ...artist }, { ...album }];
+});
+album.children = musicTracks.map((track) => ({ ...track, hierarchy: [] }));
+artist.children = [{ ...album, hierarchy: [] }];
+items.push(artist, album);
+
 type PlannedProviderDetails = Pick<MetadataProviderStatus,
   'id' | 'display_name' | 'description' | 'supported_kinds'
   | 'attribution_text' | 'attribution_url' | 'logo_light_url' | 'logo_dark_url'>;
@@ -498,16 +542,45 @@ const metadataProviders: MetadataProviderStatus[] = [
     logo_light_url: '/assets/providers/tvdb-light.png',
     logo_dark_url: '/assets/providers/tvdb-dark.png',
   },
-  plannedMetadataProvider({
+  {
     id: 'musicbrainz',
     display_name: 'MusicBrainz',
-    description: 'Planned music metadata provider for albums, artists, and tracks.',
+    description: 'Artist, album, and track metadata from MusicBrainz.',
     supported_kinds: ['music'],
     attribution_text: 'MusicBrainz metadata is provided by MusicBrainz.',
     attribution_url: 'https://musicbrainz.org/',
     logo_light_url: '/assets/providers/musicbrainz.svg',
     logo_dark_url: '/assets/providers/musicbrainz.svg',
-  }),
+    requires_api_key: false, implemented: true, role: 'primary', extends_provider_ids: [],
+    enabled: true, configured: true, language: 'en-US',
+  },
+  {
+    id: 'lrclib',
+    display_name: 'LRCLIB',
+    description: 'Plain and synchronized lyrics saved after a track is matched to its album. Playback reads saved lyrics without contacting LRCLIB.',
+    supported_kinds: ['music'],
+    requires_api_key: false, implemented: true, role: 'secondary', extends_provider_ids: ['musicbrainz'],
+    enabled: false, configured: true, language: 'en-US',
+    attribution_text: 'Lyrics provided by LRCLIB.', attribution_url: 'https://lrclib.net/',
+    logo_light_url: '/assets/providers/lrclib.png', logo_dark_url: '/assets/providers/lrclib.png',
+  },
+  {
+    id: 'fanart',
+    logo_light_url: '/assets/providers/fanart.png',
+    logo_dark_url: '/assets/providers/fanart.png',
+    display_name: 'Fanart.tv',
+    description: 'Artist portraits, backgrounds, logos, and album covers for MusicBrainz music libraries.',
+    supported_kinds: ['music'],
+    requires_api_key: true,
+    implemented: true,
+    role: 'secondary',
+    extends_provider_ids: ['musicbrainz'],
+    enabled: false,
+    configured: true,
+    language: 'en-US',
+    attribution_text: 'Music artwork provided by Fanart.tv.',
+    attribution_url: 'https://fanart.tv/',
+  },
   {
     id: 'themerr',
     display_name: 'ThemerrDB',
@@ -754,7 +827,11 @@ function metadataMatchesWithSecondaries(
 interface MockPlaybackProgress extends PlaybackProgressRequest {
   watch_count: number;
   last_watched_at?: number;
+  revision?: number;
+  last_played_at?: number;
 }
+
+let mockPlaybackRevision = 0;
 
 const playbackProgress = new Map<string, MockPlaybackProgress>();
 playbackProgress.set('1:101', { position_ms: 1_260_000, duration_ms: 5_400_000, completed: false, watch_count: 0 });
@@ -774,6 +851,7 @@ function applyMockPlaybackProgress<T extends { id: number }>(item: T): T {
     playback_completed: progress.completed,
     watch_count: progress.watch_count,
     last_watched_at: progress.last_watched_at,
+    last_played_at: progress.last_played_at,
   };
 }
 
@@ -830,7 +908,7 @@ let settings: SettingsSnapshot = {
         recursive: true,
         kind: 'music',
         scanner: 'auto',
-        metadata_providers: [],
+        metadata_providers: ['musicbrainz'],
         metadata_language_mode: 'auto',
         metadata_languages: ['en-US'],
         allowed_user_ids: [],
@@ -856,6 +934,20 @@ let settings: SettingsSnapshot = {
       {
         id: 'themerr',
         enabled: true,
+        api_key: null,
+        api_key_configured: false,
+        language: 'en-US',
+      },
+      {
+        id: 'fanart',
+        enabled: false,
+        api_key: null,
+        api_key_configured: false,
+        language: 'en-US',
+      },
+      {
+        id: 'lrclib',
+        enabled: false,
         api_key: null,
         api_key_configured: false,
         language: 'en-US',
@@ -1135,25 +1227,62 @@ export function getMockLogs(
   };
 }
 
+export function getMockItemSources(itemId: number, offset = 0, limit = 25): MediaItemSources | undefined {
+  const root = items.find((item) => item.id === itemId);
+  if (!root) return undefined;
+  const descendants = new Set([itemId]);
+  for (const id of descendants) {
+    for (const child of items.filter((item) => item.parent_id === id && item.library_id === root.library_id)) descendants.add(child.id);
+  }
+  const sourceRoot = libraries.find((library) => library.id === root.library_id)?.paths[0] ?? '';
+  const files = items.filter((item) => descendants.has(item.id) && item.playable && item.relative_path).map((item) => ({
+    ...item, id: item.id, item_id: item.id, source_root_path: sourceRoot,
+    path: `${sourceRoot}/${item.relative_path}`, file_size: item.file_size ?? 0, missing_since: item.missing_since ?? undefined,
+  }));
+  offset = Math.max(0, offset);
+  limit = Math.max(1, Math.min(100, limit));
+  return { item_id: itemId, catalog_title: root.display_title, offset, limit,
+    total_files: files.length, missing_files: files.filter((file) => file.missing_since).length,
+    total_size: files.reduce((sum, file) => sum + file.file_size, 0), files: files.slice(offset, offset + limit) };
+}
+
 export function getMockItem(itemId: number): MediaItemDetail | undefined {
   const item = items.find((item) => item.id === itemId);
-  return item ? applyMockPlaybackProgress(item) : undefined;
+  if (!item) return undefined;
+  const result = {...applyMockPlaybackProgress(item),children:item.children.map(applyMockPlaybackProgress)};
+  return item.item_type === 'album' ? { ...result, playback_target: mockAlbumPlaybackTarget(item.id) } : result;
+}
+
+function mockAlbumPlaybackTarget(albumId: number): MediaPlaybackTarget | undefined {
+  const tracks = items.filter((item) => item.parent_id === albumId && item.item_type === 'track' && item.playable && !item.missing_since)
+    .sort((left, right) => (left.music?.disc_number ?? 1) - (right.music?.disc_number ?? 1)
+      || (left.music?.track_number ?? Number.MAX_SAFE_INTEGER) - (right.music?.track_number ?? Number.MAX_SAFE_INTEGER) || left.id - right.id);
+  const userId = activeMockUserId();
+  const latest = tracks.map((track, index) => ({ index, progress: playbackProgress.get(`${userId}:${track.id}`) }))
+    .filter((entry) => entry.progress && (entry.progress.position_ms > 0 || entry.progress.completed))
+    .sort((left, right) => (right.progress?.revision ?? 0) - (left.progress?.revision ?? 0))[0];
+  const nextIndex = latest ? latest.index + Number(Boolean(latest.progress?.completed)) : 0;
+  const target = tracks[nextIndex];
+  return target ? { item_id: target.id, start_ms: latest && !latest.progress?.completed ? latest.progress?.position_ms ?? 0 : 0,
+    label: latest ? 'Continue album' : 'Play album', display_title: target.display_title, resume: Boolean(latest && !latest.progress?.completed) } : undefined;
 }
 
 export function getMockItemMetadata(itemId: number): ItemMetadataResponse | undefined {
-  return itemMetadata[itemId];
+  if (itemMetadata[itemId]) return itemMetadata[itemId];
+  const item = getMockItem(itemId);
+  if (!item) return undefined;
+  const kind = libraries.find((library) => library.id === item.library_id)?.kind;
+  return { item_id: itemId, providers: metadataProviders.filter((provider) => kind && provider.supported_kinds.includes(kind)), matches: [] };
 }
 
-export function searchMockItemMetadata(itemId: number, query?: string): MetadataSearchResult[] {
+export function searchMockItemMetadata(itemId: number, query?: string, artist?: string): MetadataSearchResult[] {
   const results = metadataSearchResults[itemId] ?? [];
   const normalized = query?.trim().toLowerCase();
-  if (!normalized) {
-    return [...results];
-  }
+  const artistQuery = getMockItem(itemId)?.item_type === 'album' ? artist?.trim().toLowerCase() : undefined;
 
   return results.filter((result) => {
-    return result.title.toLowerCase().includes(normalized)
-      || result.overview?.toLowerCase().includes(normalized);
+    return (!normalized || result.title.toLowerCase().includes(normalized) || result.overview?.toLowerCase().includes(normalized))
+      && (!artistQuery || result.overview?.toLowerCase().includes(artistQuery));
   });
 }
 
@@ -1192,19 +1321,34 @@ export function getMockPlayback(itemId: number): PlaybackDecision {
 }
 
 export function getMockHome(libraryId?: number): MediaHome {
-  const filteredItems = getMockItems(libraryId);
-  const continueWatching = filteredItems.filter((item) => {
+  const excluded = new Set(libraryId === undefined ? libraries.filter((library) => library.exclude_from_home).map((library) => library.id) : []);
+  const filteredItems = getMockItems(libraryId).filter((item) => !excluded.has(item.library_id));
+  const kind = libraries.find((library) => library.id === libraryId)?.kind;
+  let continueTitle = libraryId === undefined ? 'Continue playing' : 'Continue watching';
+  if (kind === 'music') continueTitle = 'Continue listening';
+  else if (kind === 'books') continueTitle = 'Continue reading';
+  const continueItems = filteredItems.filter((item) => {
     const userId = activeMockUserId();
     const progress = userId === undefined ? undefined : playbackProgress.get(`${userId}:${item.id}`);
-    return Boolean(progress && !progress.completed && progress.position_ms > 0);
+    return Boolean(progress && !progress.completed && progress.position_ms > 0 && !progress.radio);
   });
+  const continueWatching = [...new Map(continueItems.flatMap((item) => {
+    if (item.item_type !== 'track') return [[item.id, item] as const];
+    const album = filteredItems.find((entry) => entry.id === item.parent_id && entry.item_type === 'album');
+    return album && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album' ? [[album.id, album] as const] : [];
+  })).values()];
+  for (const album of filteredItems.filter((entry) => entry.item_type === 'album')) {
+    const hasAlbumListening=items.some(track=>track.parent_id===album.id && Boolean(playbackProgress.get(`${activeMockUserId()}:${track.id}`)) && !playbackProgress.get(`${activeMockUserId()}:${track.id}`)?.radio);
+    if (hasAlbumListening && !continueWatching.some((item) => item.id === album.id) && mockAlbumPlaybackTarget(album.id)?.label === 'Continue album') continueWatching.push(album);
+  }
   const recentlyAdded = [...filteredItems].sort((left, right) => (right.modified_at ?? 0) - (left.modified_at ?? 0));
   const recommended = filteredItems.filter((item) => !continueWatching.some((candidate) => candidate.id === item.id));
 
   return {
     library_id: libraryId ?? null,
+    listening_queues:[...mockPlaylists.values()].filter(entry=>entry.owner===activeMockUserId() && entry.detail.playlist.temporary && !entry.detail.playlist.completed && entry.detail.items.some(item=>libraryId===undefined || item.library_id===libraryId)).map(entry=>getMockPlaylist(entry.detail.playlist.id)).filter(queue=>!excluded.has(queue.items[queue.playlist.current_index ?? 0]?.library_id) && (!queue.artwork || !excluded.has(queue.artwork.library_id))),
     shelves: [
-      { id: 'continue_watching', title: 'Continue watching', items: continueWatching },
+      { id: 'continue_watching', title: continueTitle, items: continueWatching },
       { id: 'recently_added', title: 'Recently added', items: recentlyAdded },
       { id: 'recommended', title: 'Recommended', items: recommended },
     ],
@@ -1277,6 +1421,7 @@ export function getMockSettings(): SettingsResponse {
 /** Apply credential edits without returning saved keys or transient removal flags. */
 export function updateMockSettings(nextSettings: SettingsSnapshot): SettingsResponse {
   settings = structuredClone(nextSettings);
+  libraries.forEach((library, index) => { library.exclude_from_home = Boolean(settings.media.libraries[index]?.exclude_from_home); });
   for (const provider of settings.metadata.providers) {
     if (provider.clear_api_key) {
       provider.api_key_configured = false;
@@ -1323,6 +1468,7 @@ export function addMockLibrary(request: { library: MediaLibrarySettings }): Sett
   normalizedLibrary.allowed_user_ids = normalizedLibrary.allowed_user_ids ?? [];
   settings.media.libraries.push(normalizedLibrary);
   libraries.push({
+    exclude_from_home: Boolean(normalizedLibrary.exclude_from_home),
     id: nextLibraryId,
     name: normalizedLibrary.name,
     path: normalizedLibrary.path,
@@ -1406,6 +1552,8 @@ export function updateMockPlaybackProgress(itemId: number, payload: PlaybackProg
     const completedTransition = payload.completed && !existing?.completed;
     playbackProgress.set(key, {
       ...payload,
+      revision: ++mockPlaybackRevision,
+      last_played_at: Date.now() / 1000,
       watch_count: (existing?.watch_count ?? 0) + (completedTransition ? 1 : 0),
       last_watched_at: completedTransition
         ? Math.floor(Date.now() / 1000)
@@ -1578,7 +1726,13 @@ export function getMockPerson(personId: number): MetadataPersonResponse {
       image_url: personCredit.image_url,
     },
     credits,
+    artists: personId === 1 ? [artist] : [],
+    albums: personId === 1 ? items.filter((item) => item.item_type === 'album' && item.parent_id === artist.id) : [],
   };
+}
+
+export function getMockItemCredits(itemId: number): MetadataPersonResponse['credits'] {
+  return itemId === artist.id ? getMockPerson(1).credits : [];
 }
 
 export function refreshMockItemMetadata(itemId: number): ItemMetadataMatch {

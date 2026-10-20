@@ -18,7 +18,7 @@ await new Promise((resolve) => assetServer.listen(0, '127.0.0.1', resolve));
 after(() => new Promise((resolve) => assetServer.close(resolve)));
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderLogResults, renderLogViewer } = await server.ssrLoadModule('/src/app/logView.ts');
-const { renderSettingsPage, buildSettingsFromForm } = await server.ssrLoadModule('/src/app/settingsView.ts');
+const { renderSettingsPage, buildSettingsFromForm, metadataProviderCheckboxes } = await server.ssrLoadModule('/src/app/settingsView.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { getMockSettings, getMockMetadataProviders, updateMockSettings } = await server.ssrLoadModule('/src/mockApi.ts');
 const { providerAttributionLogo } = await server.ssrLoadModule('/src/app/providers.ts');
@@ -31,6 +31,7 @@ beforeEach(() => {
   state.settingsResponse = getMockSettings();
   state.settingsCreation = undefined;
   state.metadataProviders = getMockMetadataProviders();
+  state.selectedItemMetadata = undefined;
   state.bootstrap = { current_user: { id: 1, username: 'admin', admin: true } };
   state.users = [state.bootstrap.current_user];
   state.isLoading = false;
@@ -248,12 +249,12 @@ test('provider artwork comes from API descriptors and resolves against the API s
   }
 });
 
-test('every mock provider has working local logos in the development server', async () => {
+test('all declared mock provider logos work in the development server', async () => {
   const providers = getMockMetadataProviders();
-  assert.equal(providers.length, 7);
+  assert.equal(providers.length, 9);
   const origin = `http://127.0.0.1:${assetServer.address().port}`;
   for (const provider of providers) {
-    for (const url of [provider.logo_light_url, provider.logo_dark_url]) {
+    for (const url of [provider.logo_light_url, provider.logo_dark_url].filter(Boolean)) {
       assert.match(url, /^\/assets\/providers\/[^/]+\.(svg|png)$/);
       const response = await fetch(`${origin}${url}`);
       assert.equal(response.status, 200, url);
@@ -263,6 +264,77 @@ test('every mock provider has working local logos in the development server', as
   }
   assert.equal((await fetch(`${origin}/assets/providers/unknown.svg`)).status, 404);
   assert.equal((await fetch(`${origin}/assets/providers/README.md`)).status, 404);
+});
+
+test('Fanart.tv is selectable per music library only alongside MusicBrainz', () => {
+  const selected = metadataProviderCheckboxes('providers', ['musicbrainz', 'fanart'], 'music');
+  const fanartInput = selected.match(/<input[^>]*value="fanart"[^>]*>/)?.[0];
+  assert.match(fanartInput, /checked/);
+  assert.doesNotMatch(fanartInput, /disabled/);
+  assert.match(selected, /data-provider-role="secondary" data-extends-provider-ids="musicbrainz"/);
+  const noMusicBrainz = metadataProviderCheckboxes('providers', ['fanart'], 'music');
+  assert.match(noMusicBrainz.match(/<input[^>]*value="fanart"[^>]*>/)?.[0], /disabled/);
+  assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="fanart"/);
+});
+
+test('LRCLIB is a keyless library-selectable music agent extending MusicBrainz matches', () => {
+  const html = metadataProviderCheckboxes('providers', ['musicbrainz', 'lrclib'], 'music');
+  const input = html.match(/<input[^>]*value="lrclib"[^>]*>/)?.[0];
+  assert.match(input, /checked/);
+  assert.doesNotMatch(input, /disabled/);
+  assert.match(html, /data-provider-option="lrclib" data-provider-role="secondary" data-extends-provider-ids="musicbrainz"/);
+  assert.match(metadataProviderCheckboxes('providers', ['lrclib'], 'music').match(/<input[^>]*value="lrclib"[^>]*>/)?.[0], /disabled/);
+  assert.match(html, /\/assets\/providers\/lrclib.png/);
+  assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="lrclib"/);
+  const index = state.settingsResponse.settings.media.libraries.findIndex((library) => library.kind === 'music');
+  const form = new FormData();
+  form.set(`existing_library_name_${index}`, 'Music');
+  form.set(`existing_library_paths_${index}`, '/music');
+  form.append(`existing_library_metadata_provider_${index}`, 'lrclib');
+  form.append(`existing_library_metadata_provider_${index}`, 'musicbrainz');
+  assert.deepEqual(buildSettingsFromForm(form).media.libraries[index].metadata_providers, ['lrclib', 'musicbrainz']);
+  state.route = { page: 'settings', section: 'providers' };
+  const settingsHtml = renderSettingsPage();
+  assert.match(settingsHtml, /LRCLIB/);
+  assert.match(settingsHtml, /Playback reads saved lyrics/);
+  assert.doesNotMatch(settingsHtml, /name="lrclib_api_key"/);
+});
+
+test('secondary providers retain their saved priority ahead of primary providers', () => {
+  const html = metadataProviderCheckboxes('providers', ['fanart', 'musicbrainz'], 'music');
+  assert.ok(html.indexOf('data-provider-option="fanart"') < html.indexOf('data-provider-option="musicbrainz"'));
+  const fanart = html.split('data-provider-option="fanart"')[1].split('data-provider-option=')[0];
+  assert.match(fanart, /Priority 1 · Secondary/);
+  assert.match(fanart, /aria-label="Move Fanart.tv up"/);
+  assert.match(fanart, /aria-label="Move Fanart.tv down"/);
+  state.route = { page: 'settings', section: 'libraries' };
+  const libraries = state.settingsResponse.settings.media.libraries;
+  const index = libraries.findIndex((library) => library.kind === 'music');
+  const form = new FormData();
+  form.set(`existing_library_name_${index}`, libraries[index].name);
+  form.set(`existing_library_paths_${index}`, libraries[index].path);
+  form.append(`existing_library_metadata_provider_${index}`, 'fanart');
+  form.append(`existing_library_metadata_provider_${index}`, 'musicbrainz');
+  const saved = buildSettingsFromForm(form).media.libraries[index].metadata_providers;
+  assert.deepEqual(saved, ['fanart', 'musicbrainz']);
+  const reopened = metadataProviderCheckboxes('providers', saved, 'music');
+  assert.ok(reopened.indexOf('data-provider-option="fanart"') < reopened.indexOf('data-provider-option="musicbrainz"'));
+});
+
+test('Fanart.tv settings accept personal keys without exposing saved credentials', () => {
+  state.route = { page: 'settings', section: 'providers' };
+  const provider = state.settingsResponse.settings.metadata.providers.find((entry) => entry.id === 'fanart');
+  provider.api_key = 'saved-personal-secret';
+  let html = renderSettingsPage();
+  assert.match(html, /Personal API key/);
+  assert.match(html, /https:\/\/fanart.tv\/get-an-api-key\//);
+  assert.doesNotMatch(html, /saved-personal-secret/);
+  assert.doesNotMatch(html, /name="fanart_project/);
+  const form = new FormData();
+  form.set('fanart_api_key', 'new-personal-secret');
+  assert.equal(buildSettingsFromForm(form).metadata.providers.find((entry) => entry.id === 'fanart').api_key, 'new-personal-secret');
+  form.set('fanart_clear_api_key', 'on');
+  assert.equal(buildSettingsFromForm(form).metadata.providers.find((entry) => entry.id === 'fanart').clear_api_key, true);
 });
 
 test('mock credential saves clear or replace saved keys without exposing plaintext', () => {
@@ -303,6 +375,24 @@ test('provider ordering uses vertical arrows and logos include a fallback', () =
   state.metadataProviders[0].logo_dark_url = 'https://example.test/unavailable.svg';
   assert.match(renderSettingsPage(), /provider-logo-fallback/);
   assert.match(renderSettingsPage(), /data-provider-logo/);
+});
+
+test('library metadata sources show descriptor logos for existing and new libraries after viewing another media type', () => {
+  state.route = { page: 'settings', section: 'libraries' };
+  state.settingsCreation = 'libraries';
+  // Item-specific descriptors need not include the providers used by other libraries.
+  state.selectedItemMetadata = { item_id: 301, matches: [], providers: state.metadataProviders.filter((provider) => provider.id === 'musicbrainz') };
+  const html = renderSettingsPage();
+  for (const prefix of ['library_metadata_provider', 'existing_library_metadata_provider_0']) {
+    const label = [...html.matchAll(/<label class="checkbox-inline">([^]*?)<\/label>/g)]
+      .find((match) => match[1].includes(`name="${prefix}"`) && match[1].includes('value="tmdb"'))?.[1];
+    assert.ok(label, `Missing ${prefix} provider checkbox`);
+    assert.match(label, /provider-settings-logo provider-source-logo/);
+    assert.match(label, /data-provider-logo src="http:\/\/localhost\/assets\/providers\/tmdb.svg" alt=""/);
+    assert.match(label, /aria-hidden="true"/);
+  }
+  const music = metadataProviderCheckboxes('music', ['musicbrainz', 'fanart'], 'music');
+  for (const file of ['musicbrainz.svg', 'fanart.png']) assert.ok(music.includes(`/assets/providers/${file}`));
 });
 
 test('collapsed library cards retain the controls for every configured library', () => {

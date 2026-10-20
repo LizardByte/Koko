@@ -1,3 +1,10 @@
+pub(super) mod musicbrainz;
+use musicbrainz::MusicBrainzMetadataProvider;
+pub(crate) mod fanart;
+use fanart::FanartMetadataProvider;
+pub(crate) mod lrclib;
+use lrclib::LrclibMetadataProvider;
+
 pub(crate) mod themerr;
 pub(crate) mod tmdb;
 pub(crate) mod trailerdb;
@@ -27,6 +34,34 @@ use crate::metadata::{
 /// Boxed async result returned by metadata provider operations.
 pub type MetadataProviderFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
+
+/// Provider identifiers already matched on a music item's parents.
+#[derive(Debug, Default)]
+pub struct MusicMatchContext {
+    /// Local recording duration, used to distinguish studio, live, and remix recordings.
+    pub duration_ms: Option<i64>,
+    /// Number of active local track items in an album, across every disc.
+    pub track_count: Option<u32>,
+    /// Matched MusicBrainz album artist identifier.
+    pub artist_id: Option<String>,
+    /// Matched MusicBrainz edition identifier, when known.
+    pub release_id: Option<String>,
+    /// Matched MusicBrainz album identifier across editions.
+    pub release_group_id: Option<String>,
+}
+
+impl MusicMatchContext {
+    /// Whether an album has a valid matched release or release-group identifier.
+    pub fn has_album(&self) -> bool {
+        self.release_id
+            .as_deref()
+            .is_some_and(crate::media::valid_mbid)
+            || self
+                .release_group_id
+                .as_deref()
+                .is_some_and(crate::media::valid_mbid)
+    }
+}
 
 /// Provider contract for metadata implementations.
 pub trait MetadataProvider {
@@ -62,6 +97,17 @@ pub trait MetadataProvider {
         _media_type: Option<&'a str>,
     ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
         unsupported_provider_operation(self.descriptor().display_name, "search")
+    }
+
+    /// Search with an optional artist credit when the provider supports it.
+    fn search_with_artist<'a>(
+        &'a self,
+        settings: &'a MetadataSettings,
+        query: &'a str,
+        media_type: Option<&'a str>,
+        _artist: Option<&'a str>,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        self.search(settings, query, media_type)
     }
 
     /// Fetch one provider metadata snapshot.
@@ -129,6 +175,28 @@ pub trait MetadataProvider {
         Box::pin(async { Ok(None) })
     }
 
+    /// Match a music item using local tags and embedded MusicBrainz identifiers.
+    fn guess_music_match<'a>(
+        &'a self,
+        _settings: &'a MetadataSettings,
+        _item_type: &'a str,
+        _title: &'a str,
+        _music: &'a crate::media::MusicMetadata,
+        _context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Option<MetadataSearchResult>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Search recordings only within the item's matched album, optionally by recording ID.
+    fn search_album_recordings<'a>(
+        &'a self,
+        _title: &'a str,
+        _recording_id: Option<&'a str>,
+        _context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     /// Load provider-side descendant ids for a linked show.
     fn load_show_descendant_targets<'a>(
         &'a self,
@@ -179,6 +247,7 @@ pub trait MetadataProvider {
     /// Resolve item-level metadata fields contributed by a secondary provider.
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         _item_type: &'a str,
         _database_id: &'a str,
         _external_id: &'a str,
@@ -210,7 +279,6 @@ struct TmdbMetadataProvider;
 struct TvdbMetadataProvider;
 struct ThemerrMetadataProvider;
 struct TrailerDbMetadataProvider;
-struct MusicBrainzMetadataProvider;
 struct OpenLibraryMetadataProvider;
 struct LocalNfoMetadataProvider;
 
@@ -531,6 +599,7 @@ impl MetadataProvider for ThemerrMetadataProvider {
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
@@ -585,6 +654,7 @@ impl MetadataProvider for TrailerDbMetadataProvider {
 
     fn fetch_secondary_metadata<'a>(
         &'a self,
+        _settings: &'a MetadataSettings,
         item_type: &'a str,
         database_id: &'a str,
         external_id: &'a str,
@@ -596,25 +666,6 @@ impl MetadataProvider for TrailerDbMetadataProvider {
             external_id,
             locale_key,
         ))
-    }
-}
-
-impl MetadataProvider for MusicBrainzMetadataProvider {
-    fn descriptor(&self) -> MetadataProviderDescriptor {
-        MetadataProviderDescriptor {
-            id: MetadataProviderId::MusicBrainz,
-            display_name: "MusicBrainz".into(),
-            description: "Planned music metadata provider for albums, artists, and tracks.".into(),
-            supported_kinds: vec![MediaLibraryKind::Music],
-            requires_api_key: false,
-            implemented: false,
-            role: MetadataProviderRole::Primary,
-            extends_provider_ids: Vec::new(),
-            attribution_text: "MusicBrainz metadata is provided by MusicBrainz.".into(),
-            attribution_url: "https://musicbrainz.org/".into(),
-            logo_light_url: Some("/assets/providers/musicbrainz.svg".into()),
-            logo_dark_url: Some("/assets/providers/musicbrainz.svg".into()),
-        }
     }
 }
 
@@ -677,6 +728,8 @@ impl MetadataRegistry {
                 Box::new(ThemerrMetadataProvider),
                 Box::new(TrailerDbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
+                Box::new(FanartMetadataProvider),
+                Box::new(LrclibMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),
             ],

@@ -6,6 +6,8 @@ pub mod common;
 pub mod dependencies;
 pub mod media;
 mod metadata_jobs;
+pub mod music;
+pub mod playlists;
 pub mod settings;
 pub mod user;
 
@@ -26,6 +28,14 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_metadata_providers,
         media::get_metadata_locales,
         media::get_home,
+        playlists::list,
+        playlists::get,
+        playlists::create,
+        playlists::delete,
+        playlists::update_queue,
+        playlists::save_radio,
+        music::lyrics,
+        music::radio,
         media::get_libraries,
         media::scan_library,
         media::delete_library_missing_items,
@@ -33,6 +43,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_library_inventory,
         media::get_items,
         media::get_item,
+        media::get_item_files,
+        media::get_item_credits,
         media::get_item_metadata,
         media::get_person,
         media::search_item_metadata,

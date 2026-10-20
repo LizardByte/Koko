@@ -1,3 +1,5 @@
+/** Defines API payloads and sends authenticated requests to the server or mock backend. */
+
 import {
   addMockLibrary,
   createMockUser,
@@ -5,8 +7,14 @@ import {
   getMockCapabilities,
   getMockBootstrap,
   getMockHome,
+  getMockPlaylists,
+  getMockPlaylist,
+  saveMockPlaylist,
+  deleteMockPlaylist,
+  updateMockQueue,
   getMockItems,
   getMockItem,
+  getMockItemSources,
   getMockItemMetadata,
   getMockLibraries,
   getMockMetadataProviders,
@@ -14,6 +22,7 @@ import {
   getMockUsers,
   getMockPlayback,
   getMockPerson,
+  getMockItemCredits,
   getMockSystemActivities,
   refreshMockLibraryMetadata,
   refreshMockItemMetadata,
@@ -31,6 +40,7 @@ import {
   runMockScheduledTask,
 } from './mockApi';
 
+import { apiErrorMessage } from './apiErrors';
 const REQUEST_TIMEOUT_MS = 15000;
 
 export interface ServerCapabilities {
@@ -102,6 +112,7 @@ export interface UpdateUserRequest {
 }
 
 export interface MediaLibrary {
+  exclude_from_home?: boolean;
   id: number;
   name: string;
   path: string;
@@ -130,11 +141,25 @@ export interface MediaLibrary {
   error?: string;
 }
 
+export interface MusicMetadata {
+  artist: string;
+  album_artist: string;
+  album: string;
+  track_number?: number | null;
+  disc_number?: number | null;
+  year?: number | null;
+  genres: string[];
+  musicbrainz_artist_id?: string | null;
+  musicbrainz_release_id?: string | null;
+  musicbrainz_recording_id?: string | null;
+}
+
 export interface MediaItemSummary {
   id: number;
   library_id: number;
   parent_id?: number | null;
   item_type: string;
+  music?: MusicMetadata | null;
   display_title: string;
   display_subtitle?: string | null;
   artwork_item_id?: number | null;
@@ -165,6 +190,7 @@ export interface MediaItemSummary {
   playback_completed?: boolean;
   watch_count?: number;
   last_watched_at?: number | null;
+  last_played_at?: number | null;
   missing_since?: number | null;
   hierarchy?: MediaItemSummary[];
 }
@@ -179,7 +205,60 @@ export interface MediaPlaybackTarget {
   resume: boolean;
 }
 
+export interface MusicPlaylistDetail {
+  playlist: { id: number; name: string; created_at: number; updated_at: number; temporary?: boolean; current_index?: number; position_ms?: number; completed?: boolean; shuffle?: boolean; repeat_mode?: 'off'|'all'|'one'; artwork_item_id?: number | null };
+  items: MediaItemSummary[];
+  artwork?: { item_id: number; library_id: number; updated_at?: number | null } | null;
+}
+
+export function getPlaylists(libraryId?: number): Promise<MusicPlaylistDetail[]> {
+  return requestJson('GET', '/api/v1/playlists' + (libraryId === undefined ? '' : '?library_id=' + libraryId));
+}
+export function getPlaylist(id: number): Promise<MusicPlaylistDetail> { return requestJson('GET', `/api/v1/playlists/${id}`); }
+export function savePlaylist(name: string, itemIds: number[], temporary = false, seedItemId?: number): Promise<MusicPlaylistDetail> { return requestJson('POST', '/api/v1/playlists', { name, item_ids: itemIds, temporary, seed_item_id: seedItemId }); }
+export interface MusicQueueState { item_ids: number[]; current_index: number; position_ms: number; completed: boolean; shuffle: boolean; repeat_mode: 'off'|'all'|'one' }
+export function updateMusicQueue(id:number, queue:MusicQueueState):Promise<void> { return requestJson('PUT',`/api/v1/playlists/${id}/queue`,queue); }
+export function saveRadioPlaylist(id:number,name:string):Promise<MusicPlaylistDetail> { return requestJson('PUT',`/api/v1/playlists/${id}/name`,{name}); }
+export function deletePlaylist(id: number): Promise<void> { return requestJson('DELETE', `/api/v1/playlists/${id}`); }
+
+export interface MusicLyrics { plain_lyrics?: string; synced_lyrics?: string; instrumental: boolean; source: string; source_url: string }
+export interface MusicRadio { items: MediaItemSummary[]; source: string; message?: string }
+export function getMusicLyrics(id: number): Promise<MusicLyrics> { return requestJson('GET', `/api/v1/items/${id}/lyrics`); }
+export function getMusicRadio(id: number): Promise<MusicRadio> { return requestJson('GET', `/api/v1/items/${id}/radio`); }
+
+export interface MediaItemSourceFile {
+  id: number;
+  item_id: number;
+  item_type: string;
+  display_title: string;
+  path: string;
+  source_root_path: string;
+  relative_path: string;
+  file_size: number;
+  modified_at?: number;
+  missing_since?: number;
+  container?: string;
+  duration_ms?: number;
+  bit_rate?: number;
+  width?: number;
+  height?: number;
+  video_codec?: string;
+  audio_codec?: string;
+}
+
+export interface MediaItemSources {
+  item_id: number;
+  catalog_title: string;
+  offset: number;
+  limit: number;
+  total_files: number;
+  missing_files: number;
+  total_size: number;
+  files: MediaItemSourceFile[];
+}
+
 export interface MediaItemDetail extends MediaItemSummary {
+  lyrics?: MusicLyrics | null;
   file_size?: number;
   container?: string;
   bit_rate?: number;
@@ -334,6 +413,9 @@ export interface MetadataPersonItemCredit {
 export interface MetadataPersonResponse {
   person: MetadataPersonSummary;
   credits: MetadataPersonItemCredit[];
+  artists?: MediaItemSummary[];
+  albums?: MediaItemSummary[];
+  groups?: MetadataPersonItemCredit[];
 }
 
 export interface ItemMetadataResponse {
@@ -381,6 +463,7 @@ export interface MetadataSearchResult {
   backdrop_url?: string;
   release_year?: number;
   score?: number;
+  track_count?: number;
 }
 
 export interface MediaShelf {
@@ -419,6 +502,7 @@ export interface MediaHome {
   library_id?: number | null;
   shelves: MediaShelf[];
   collections: MediaCollectionSummary[];
+  listening_queues?: MusicPlaylistDetail[];
 }
 
 export interface PlaybackDecision {
@@ -578,6 +662,8 @@ export interface LogEntriesResponse {
 }
 
 export interface MediaLibrarySettings {
+  exclude_from_home?: boolean;
+  use_embedded_music_tags?: boolean;
   name: string;
   path: string;
   paths: string[];
@@ -674,6 +760,7 @@ export interface PlaybackProgressRequest {
   position_ms: number;
   duration_ms?: number;
   completed: boolean;
+  radio?: boolean;
 }
 
 export interface LinkMetadataRequest {
@@ -741,6 +828,11 @@ function useMockApi(): void {
 }
 
 function getMockGetResponse<T>(method: string, url: URL): T {
+  if (url.pathname === '/api/v1/playlists') return getMockPlaylists(url.searchParams.has('library_id') ? Number(url.searchParams.get('library_id')) : undefined) as T;
+  const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
+  if (playlist) return getMockPlaylist(Number(playlist[1])) as T;
+  if (url.pathname.endsWith('/lyrics')) return { synced_lyrics: Array.from({length:42},(_,index)=>`[${String(Math.floor(index*5/60)).padStart(2,'0')}:${String(index*5%60).padStart(2,'0')}.00]${index % 7 === 0 ? '' : 'Preview lyric line ' + (index+1)}`).join('\n'), instrumental: false, source: 'LRCLIB', source_url: 'https://lrclib.net' } as T;
+  if (url.pathname.endsWith('/radio')) return { items: getMockItems(3).filter((item) => item.item_type === 'track'), source: 'ListenBrainz' } as T;
   switch (url.pathname) {
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
@@ -787,6 +879,7 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
     return searchMockItemMetadata(
       Number(itemMetadataSearchMatch[1]),
       url.searchParams.get('query') ?? undefined,
+      url.searchParams.get('artist') ?? undefined,
     ) as T;
   }
 
@@ -810,6 +903,15 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
     return getMockPerson(Number(personMatch[1])) as T;
   }
 
+  const creditsMatch = /^\/api\/v1\/items\/(\d+)\/credits$/.exec(url.pathname);
+  if (creditsMatch) return getMockItemCredits(Number(creditsMatch[1])) as T;
+
+  const filesMatch = /^\/api\/v1\/items\/(\d+)\/files$/.exec(url.pathname);
+  if (filesMatch) {
+    const sources = getMockItemSources(Number(filesMatch[1]), Number(url.searchParams.get('offset') ?? 0), Number(url.searchParams.get('limit') ?? 25));
+    if (!sources) throw new ApiError(404, 'Item not found');
+    return sources as T;
+  }
   const itemMatch = /^\/api\/v1\/items\/(\d+)$/.exec(url.pathname);
   if (itemMatch) {
     const item = getMockItem(Number(itemMatch[1]));
@@ -829,6 +931,8 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
 }
 
 function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
+  const queue = /^\/api\/v1\/playlists\/(\d+)\/(queue|name)$/.exec(url.pathname);
+  if (queue) return updateMockQueue(Number(queue[1]),queue[2],body as MusicQueueState & {name:string}) as T;
   if (url.pathname === '/api/v1/settings') {
     return updateMockSettings(body as SettingsSnapshot) as T;
   }
@@ -842,6 +946,7 @@ function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
 }
 
 function getMockPostResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/api/v1/playlists') { const request = body as { name: string; item_ids: number[]; temporary?:boolean; seed_item_id?:number }; return saveMockPlaylist(request.name, request.item_ids,request.temporary,request.seed_item_id) as T; }
   if (url.pathname === '/login') {
     return loginMockUser(body as LoginRequest) as T;
   }
@@ -915,6 +1020,8 @@ function createMockPlaybackSessionResponse<T>(body?: unknown): T {
 }
 
 function getMockDeleteResponse<T>(method: string, url: URL): T {
+  const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
+  if (playlist) { deleteMockPlaylist(Number(playlist[1])); return undefined as T; }
   const unlinkMetadataMatch = /^\/api\/v1\/items\/(\d+)\/metadata$/.exec(url.pathname);
   if (unlinkMetadataMatch) {
     return unlinkMockItemMetadata(Number(unlinkMetadataMatch[1])) as T;
@@ -973,7 +1080,7 @@ function requestHeaders(body?: unknown): Record<string, string> {
 
 async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS);
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),
@@ -993,12 +1100,8 @@ export class ApiError extends Error {
 
 async function responseError(response: Response): Promise<Error> {
   const responseText = (await response.text()).trim();
-  return new ApiError(
-    response.status,
-    responseText
-      ? `${response.status} ${response.statusText}: ${responseText}`
-      : `${response.status} ${response.statusText}`,
-  );
+  console.warn('API request failed',{url:response.url,status:response.status,body:responseText});
+  return new ApiError(response.status,apiErrorMessage(response.status,responseText));
 }
 
 async function handleErrorResponse<T>(method: string, path: string, body: unknown, response: Response): Promise<T> {
@@ -1015,8 +1118,9 @@ async function handleErrorResponse<T>(method: string, path: string, body: unknow
 
 function handleRequestFailure<T>(method: string, path: string, body: unknown, error: unknown): T {
   if (error instanceof DOMException && error.name === 'AbortError') {
-    throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds.`);
+    throw new Error('The request took too long. Check your connection and try again.');
   }
+  if(error instanceof TypeError)throw new Error('Cannot connect to the server. Check your connection and try again.');
   if (import.meta.env.DEV) {
     return getMockJsonFallback<T>(method, path, body);
   }
@@ -1118,6 +1222,10 @@ export function getItem(itemId: number): Promise<MediaItemDetail> {
   return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
 }
 
+export function getItemSourceFiles(itemId: number, offset = 0, limit = 25): Promise<MediaItemSources> {
+  return requestJson<MediaItemSources>('GET', `/api/v1/items/${itemId}/files?offset=${offset}&limit=${limit}`);
+}
+
 export function getMetadataProviders(): Promise<MetadataProviderStatus[]> {
   return requestJson<MetadataProviderStatus[]>('GET', '/api/v1/metadata/providers');
 }
@@ -1130,6 +1238,10 @@ export function getItemMetadata(itemId: number): Promise<ItemMetadataResponse> {
   return requestJson<ItemMetadataResponse>('GET', `/api/v1/items/${itemId}/metadata`);
 }
 
+export function getItemCredits(itemId: number): Promise<MetadataPersonItemCredit[]> {
+  return requestJson<MetadataPersonItemCredit[]>('GET', `/api/v1/items/${itemId}/credits`);
+}
+
 export function getPerson(personId: number): Promise<MetadataPersonResponse> {
   return requestJson<MetadataPersonResponse>('GET', `/api/v1/people/${personId}`);
 }
@@ -1140,6 +1252,7 @@ export function getPersonImageUrl(personId: number): string {
 
 export interface MetadataSearchOptions {
   query?: string;
+  artist?: string;
   providers?: string[];
   year?: string;
   language?: string;
@@ -1151,6 +1264,7 @@ export function searchItemMetadata(itemId: number, options?: string | MetadataSe
   if (normalizedOptions?.query?.trim()) {
     params.set('query', normalizedOptions.query.trim());
   }
+  if (normalizedOptions?.artist !== undefined) params.set('artist', normalizedOptions.artist.trim());
   if (normalizedOptions?.providers?.length) {
     params.set('providers', normalizedOptions.providers.join(','));
   }

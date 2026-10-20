@@ -1,3 +1,5 @@
+/** Initializes shared browser application state from routing and saved preferences. */
+
 import { getApiMode, getStoredApiBase } from '../api';
 import { defaultHomeTab, parseRoute } from './routes';
 import type { AppState } from './types';
@@ -22,6 +24,7 @@ export const state: AppState = {
   metadataSearchResults: [],
   searchQuery: '',
   metadataSearchQuery: '',
+  metadataSearchArtist: undefined,
   metadataSearchYear: '',
   metadataSearchLanguage: 'en',
   metadataSearchProviders: [],

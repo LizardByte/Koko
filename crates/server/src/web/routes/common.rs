@@ -77,6 +77,14 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
             ContentType::SVG,
             include_bytes!("../../../../../assets/providers/musicbrainz.svg"),
         ),
+        "fanart.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/fanart.png"),
+        ),
+        "lrclib.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/lrclib.png"),
+        ),
         "open-library.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/open-library.png"),
@@ -92,6 +100,9 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
 
 #[get("/<path..>", rank = 100)]
 pub async fn spa_asset(path: Segments<'_, UriPath>) -> Option<NamedFile> {
+    if path.clone().next() == Some("api") {
+        return None;
+    }
     let dist_dir = web_client_dist_dir()?;
     let requested_path = path.to_path_buf(false).ok();
 

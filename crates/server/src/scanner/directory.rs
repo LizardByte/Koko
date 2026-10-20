@@ -542,7 +542,10 @@ fn classify_file(path: &Path) -> FileKind {
 
     match extension.as_deref() {
         Some("mkv" | "mp4" | "avi" | "mov" | "wmv" | "m4v" | "webm" | "ts") => FileKind::Video,
-        Some("mp3" | "flac" | "aac" | "wav" | "ogg" | "m4a" | "opus") => FileKind::Audio,
+        Some(
+            "mp3" | "flac" | "aac" | "wav" | "ogg" | "m4a" | "opus" | "aif" | "aiff" | "alac"
+            | "wma" | "ape" | "wv" | "oga",
+        ) => FileKind::Audio,
         Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff") => FileKind::Image,
         Some("pdf" | "epub" | "cbz" | "cbr" | "mobi") => FileKind::Book,
         _ => FileKind::Other,

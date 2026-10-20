@@ -362,6 +362,7 @@ pub(super) fn search_result(
         backdrop_url: None,
         release_year: item.year.and_then(|year| year.parse().ok()),
         score: None,
+        track_count: None,
     })
 }
 

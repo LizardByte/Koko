@@ -40,6 +40,12 @@ const ADMIN_ROUTES: &[(Method, &str)] = &[
 ];
 
 const USER_ROUTES: &[(Method, &str)] = &[
+    (Method::Put, "/api/v1/playlists/1/queue"),
+    (Method::Put, "/api/v1/playlists/1/name"),
+    (Method::Get, "/api/v1/playlists"),
+    (Method::Get, "/api/v1/playlists/1"),
+    (Method::Get, "/api/v1/items/1/lyrics"),
+    (Method::Get, "/api/v1/items/1/radio"),
     (Method::Get, "/api/v1/system/capabilities"),
     (Method::Get, "/api/v1/metadata/providers"),
     (Method::Get, "/api/v1/metadata/locales"),
@@ -48,6 +54,8 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/items"),
     (Method::Get, "/api/v1/search?query=film"),
     (Method::Get, "/api/v1/items/1"),
+    (Method::Get, "/api/v1/items/1/files"),
+    (Method::Get, "/api/v1/items/1/credits"),
     (Method::Get, "/api/v1/items/1/metadata"),
     (Method::Get, "/api/v1/items/1/playback"),
     (Method::Get, "/api/v1/items/1/artwork"),
@@ -62,6 +70,584 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/people/1/image"),
     (Method::Get, "/api/v1/user-profile-images/example.png"),
 ];
+
+#[rocket::async_test]
+async fn radio_queue_resumes_one_mix_preserves_duplicate_positions_and_promotes_on_save() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "INSERT INTO \
+             media_items(id,library_id,parent_id,identity_key,item_type,display_title,playable,\
+             media_kind,duration_ms) VALUES
+        (30,1,NULL,'artist','artist','Artist',0,'audio',NULL),
+        (31,1,30,'album','album','Album',0,'audio',NULL),
+        (32,1,31,'song-a','track','Song A',1,'audio',200000),
+        (33,1,31,'song-b','track','Song B',1,'audio',200000);",
+        )
+        .unwrap()
+    })
+    .await;
+    let saved = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Song A radio","item_ids":[32,33,32],"temporary":true}),
+        Status::Ok,
+    )
+    .await;
+    let saved: Value = serde_json::from_str(&saved).unwrap();
+    let id = saved["playlist"]["id"].as_i64().unwrap();
+    let path = format!("/api/v1/playlists/{id}");
+    let queue = json!({
+        "item_ids":[33,32,32], "current_index":2, "position_ms":55000,
+        "completed":false,"shuffle":true,"repeat_mode":"all"
+    });
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&admin),
+        queue.clone(),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        queue.clone(),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/items/32/progress",
+        Some(&viewer),
+        json!({"position_ms":55000,"duration_ms":200000,"completed":false,"radio":true}),
+        Status::Ok,
+    )
+    .await;
+    let loaded = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let loaded: Value = serde_json::from_str(&loaded).unwrap();
+    assert_eq!(loaded["playlist"]["current_index"], 2);
+    assert_eq!(loaded["playlist"]["position_ms"], 55000);
+    assert_eq!(loaded["items"][2]["id"], 32);
+    let home = response(
+        &client,
+        Method::Get,
+        "/api/v1/home",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let home: Value = serde_json::from_str(&home).unwrap();
+    assert_eq!(home["listening_queues"][0]["playlist"]["id"], id);
+    assert!(
+        !home["shelves"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == 31)
+    );
+    let listed = response(
+        &client,
+        Method::Get,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(listed, "[]");
+    let mut complete = queue.clone();
+    complete["completed"] = json!(true);
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        complete,
+        Status::NoContent,
+    )
+    .await;
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(home["listening_queues"].as_array().unwrap().is_empty());
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        queue,
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/name"),
+        Some(&admin),
+        json!({"name":"Mine"}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/name"),
+        Some(&viewer),
+        json!({"name":"Saved radio"}),
+        Status::Ok,
+    )
+    .await;
+    let listed: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/playlists",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["playlist"]["id"], id);
+    assert_eq!(listed[0]["playlist"]["temporary"], false);
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(home["listening_queues"].as_array().unwrap().is_empty());
+    // Explicit album playback restores album Continue listening semantics.
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/items/32/progress",
+        Some(&viewer),
+        json!({"position_ms":60000,"duration_ms":200000,"completed":false}),
+        Status::Ok,
+    )
+    .await;
+    let home: Value = serde_json::from_str(
+        &response(
+            &client,
+            Method::Get,
+            "/api/v1/home",
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await,
+    )
+    .unwrap();
+    assert!(
+        home["shelves"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == 31)
+    );
+    let invalid = json!({
+        "item_ids":[32],"current_index":1,"position_ms":0,
+        "completed":false,"shuffle":false,"repeat_mode":"off"
+    });
+    response(
+        &client,
+        Method::Put,
+        &format!("{path}/queue"),
+        Some(&viewer),
+        invalid,
+        Status::BadRequest,
+    )
+    .await;
+}
+
+#[rocket::async_test]
+async fn music_playlists_preserve_order_duplicates_ownership_and_revoked_library_access() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "INSERT INTO media_items \
+             (id,library_id,identity_key,item_type,display_title,playable,media_kind) VALUES \
+             (20,1,'song-one','track','Song one',1,'audio'),(21,1,'song-two','track','Song \
+             two',1,'audio'),(22,2,'secret-song','track','Secret song',1,'audio')",
+        )
+        .unwrap()
+    })
+    .await;
+    let text = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"My queue","item_ids":[21,20,21]}),
+        Status::Ok,
+    )
+    .await;
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    let id = saved["playlist"]["id"].as_i64().unwrap();
+    let path = format!("/api/v1/playlists/{id}");
+    assert_eq!(
+        saved["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![21, 20, 21]
+    );
+    // Read it back through another request, proving it is stored rather than only returned on save.
+    let loaded = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&loaded).unwrap()["items"],
+        saved["items"]
+    );
+    response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Delete,
+        &path,
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Secret","item_ids":[20,22]}),
+        Status::NotFound,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Wrong type","item_ids":[1]}),
+        Status::NotFound,
+    )
+    .await;
+    for seed in [22, 1, 999999] {
+        response(
+            &client,
+            Method::Post,
+            "/api/v1/playlists",
+            Some(&viewer),
+            json!({"name":"Invalid source","item_ids":[20],"temporary":true,"seed_item_id":seed}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    let radio = response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":"Song radio","item_ids":[20,21],"temporary":true,"seed_item_id":20}),
+        Status::Ok,
+    )
+    .await;
+    let radio: Value = serde_json::from_str(&radio).unwrap();
+    assert_eq!(radio["artwork"]["item_id"], 20);
+    response(
+        &client,
+        Method::Delete,
+        &format!("/api/v1/playlists/{}", radio["playlist"]["id"]),
+        Some(&viewer),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({"name":" ","item_ids":[20]}),
+        Status::BadRequest,
+    )
+    .await;
+    let listed = response(
+        &client,
+        Method::Get,
+        "/api/v1/playlists",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    db.run(|conn| {
+        conn.batch_execute("UPDATE media_libraries SET allowed_user_ids_json='[3]' WHERE id=1")
+            .unwrap()
+    })
+    .await;
+    let hidden = response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(
+        serde_json::from_str::<Value>(&hidden).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    response(
+        &client,
+        Method::Delete,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::NoContent,
+    )
+    .await;
+    response(
+        &client,
+        Method::Get,
+        &path,
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+}
+
+#[rocket::async_test]
+async fn music_discovery_checks_item_access_before_provider_requests() {
+    let (client, _, viewer) = fixture().await;
+    for endpoint in ["lyrics", "radio"] {
+        response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/items/2/{endpoint}"),
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+        response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/items/999999/{endpoint}"),
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        use crate::test_utils::schema::{
+            media_items,
+            media_libraries,
+            music_item_metadata,
+            music_lyrics,
+        };
+        use diesel::{
+            ExpressionMethods,
+            QueryDsl,
+            RunQueryDsl,
+        };
+        diesel::update(media_libraries::table.filter(media_libraries::id.eq_any([1, 2])))
+            .set((
+                media_libraries::kind.eq("music"),
+                media_libraries::metadata_providers_json.eq("[\"musicbrainz\",\"lrclib\"]"),
+            ))
+            .execute(conn)
+            .unwrap();
+        for (id, library, album, title, text) in [
+            (20, 1, 22, "Visible song", "Public lyrics"),
+            (21, 2, 23, "Secret song", "Private lyrics"),
+        ] {
+            diesel::insert_into(media_items::table)
+                .values((
+                    media_items::id.eq(album),
+                    media_items::library_id.eq(library),
+                    media_items::identity_key.eq(format!("album-{album}")),
+                    media_items::item_type.eq("album"),
+                    media_items::display_title.eq("Album"),
+                ))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(media_items::table)
+                .values((
+                    media_items::id.eq(id),
+                    media_items::library_id.eq(library),
+                    media_items::parent_id.eq(album),
+                    media_items::identity_key.eq(title),
+                    media_items::item_type.eq("track"),
+                    media_items::display_title.eq(title),
+                    media_items::playable.eq(true),
+                    media_items::media_kind.eq("audio"),
+                ))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(music_item_metadata::table)
+                .values((
+                    music_item_metadata::media_item_id.eq(id),
+                    music_item_metadata::artist.eq("Artist"),
+                    music_item_metadata::album_artist.eq("Artist"),
+                    music_item_metadata::album.eq("Album"),
+                ))
+                .execute(conn)
+                .unwrap();
+            for (item_id, media_type, name) in [
+                (album, "release", "Album"),
+                (id, "recording", title),
+            ] {
+                koko::metadata::upsert_item_metadata_snapshot(
+                    conn,
+                    item_id,
+                    &koko::metadata::StoredMetadataSnapshot {
+                        provider_id: koko::config::MetadataProviderId::MusicBrainz,
+                        external_id: format!("test-{item_id}"),
+                        media_type: Some(media_type.into()),
+                        title: Some(name.into()),
+                        overview: None,
+                        artwork_url: None,
+                        backdrop_url: None,
+                        release_year: None,
+                        locale_key: "en-US".into(),
+                        provider_locale_key: None,
+                        provider_payload_json: None,
+                    },
+                )
+                .unwrap();
+            }
+            diesel::insert_into(music_lyrics::table)
+                .values((
+                    music_lyrics::media_item_id.eq(id),
+                    music_lyrics::track_title.eq(title),
+                    music_lyrics::artist_name.eq("Artist"),
+                    music_lyrics::album_name.eq("Album"),
+                    music_lyrics::plain_lyrics.eq(text),
+                    music_lyrics::source.eq("LRCLIB"),
+                    music_lyrics::source_url.eq("https://lrclib.net/"),
+                    music_lyrics::lookup_status.eq("found"),
+                    music_lyrics::checked_at.eq(1),
+                    music_lyrics::next_check_at.eq(1),
+                ))
+                .execute(conn)
+                .unwrap();
+        }
+    })
+    .await;
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/20/radio",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(!text.contains("Secret song"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["items"][0]["id"],
+        20
+    );
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/20/lyrics?refresh=true",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["plain_lyrics"],
+        "Public lyrics"
+    );
+    for path in [
+        "/api/v1/items/21/lyrics",
+        "/api/v1/items/21/lyrics?refresh=true",
+    ] {
+        response(
+            &client,
+            Method::Get,
+            path,
+            Some(&viewer),
+            json!({}),
+            Status::NotFound,
+        )
+        .await;
+    }
+    response(
+        &client,
+        Method::Get,
+        "/api/v1/items/1/lyrics",
+        Some(&viewer),
+        json!({}),
+        Status::BadRequest,
+    )
+    .await;
+}
 
 async fn response(
     client: &Client,
@@ -149,6 +735,157 @@ async fn fixture() -> (Client, String, String) {
         .await
         .unwrap();
     (client, admin, viewer)
+}
+
+#[rocket::async_test]
+async fn artist_and_person_links_aggregate_screen_credits_without_leaking_private_libraries() {
+    let (client, admin, viewer) = fixture().await;
+    let db = DbConn::get_one(client.rocket()).await.unwrap();
+    db.run(|conn| {
+        conn.batch_execute(
+            "
+        INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) VALUES
+            (10,1,'artist','artist','Visible musician'), (11,2,'secret-artist','artist','Secret \
+             musician');
+        INSERT INTO item_metadata_links \
+             (id,media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (10,10,'musicbrainz','artist-mbid','artist','linked'),
+            (11,11,'musicbrainz','artist-mbid','artist','linked'),
+            (3,3,'tvdb','33','movie','linked');
+        INSERT INTO media_items (id,library_id,parent_id,identity_key,item_type,display_title) \
+             VALUES
+            (20,1,10,'visible-album','album','Visible album'),
+            (21,2,11,'secret-album','album','Secret album');
+        INSERT INTO item_metadata_external_ids (metadata_link_id,source,external_id) VALUES \
+             (10,'imdb','nm1');
+        INSERT INTO metadata_people (id,provider_id,external_id,name) VALUES (3,'tvdb','333','Same \
+             musician');
+        INSERT INTO metadata_person_external_ids (person_id,source,external_id) VALUES
+            (1,'imdb','nm1'), (1,'wikidata','Q1'), (3,'wikidata','Q1');
+        INSERT INTO metadata_person_credits (metadata_link_id,person_id,role) VALUES (3,3,'actor');
+        INSERT INTO media_items (id,library_id,identity_key,item_type,display_title) VALUES
+            (12,1,'group','artist','Visible group'), (13,2,'secret-group','artist','Secret group'),
+            (14,1,'solo','artist','Music only artist');
+        INSERT INTO item_metadata_links \
+             (id,media_item_id,provider_id,external_id,media_type,match_state) VALUES
+            (12,12,'musicbrainz','group-mbid','artist','linked'),
+            (13,13,'musicbrainz','group-mbid','artist','linked'),
+            (14,14,'musicbrainz','solo-mbid','artist','linked');
+        INSERT INTO metadata_people (id,provider_id,external_id,name) VALUES
+            (5,'musicbrainz','member-mbid','Band member'),
+            (6,'musicbrainz','artist-mbid','Visible musician'),
+            (7,'musicbrainz','solo-mbid','Music only artist');
+        INSERT INTO metadata_person_external_ids (person_id,source,external_id) VALUES \
+             (5,'imdb','nm1');
+        INSERT INTO metadata_person_credits (metadata_link_id,person_id,role,department) VALUES
+            (12,5,'Member · guitar · 2005–present','Members'),
+            (13,5,'Former member','Members'), (10,6,'Artist','Artists'), (14,7,'Artist','Artists');
+
+    ",
+        )
+        .unwrap()
+    })
+    .await;
+    drop(db);
+
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/10/credits",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let credits: Value = serde_json::from_str(&text).unwrap();
+    let ids = credits
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|credit| credit["item"]["id"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&1) && ids.contains(&3));
+    assert_eq!(ids.len(), 2);
+    assert!(!text.contains("Secret"));
+
+    for person_id in [1, 3, 5, 6] {
+        let text = response(
+            &client,
+            Method::Get,
+            &format!("/api/v1/people/{person_id}"),
+            Some(&viewer),
+            json!({}),
+            Status::Ok,
+        )
+        .await;
+        let person: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(person["artists"].as_array().unwrap().len(), 1);
+        assert_eq!(person["artists"][0]["id"], 10);
+        assert_eq!(person["albums"].as_array().unwrap().len(), 1);
+        assert_eq!(person["albums"][0]["id"], 20);
+        assert_eq!(person["credits"].as_array().unwrap().len(), 2);
+        assert_eq!(person["groups"].as_array().unwrap().len(), 1);
+        assert_eq!(person["groups"][0]["item"]["id"], 12);
+        assert_eq!(
+            person["groups"][0]["credit"]["role"],
+            "Member · guitar · 2005–present"
+        );
+        assert!(!text.contains("Secret"));
+    }
+    let group_credits = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/12/credits",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert!(
+        serde_json::from_str::<Value>(&group_credits)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let solo_person = response(
+        &client,
+        Method::Get,
+        "/api/v1/people/7",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    let solo: Value = serde_json::from_str(&solo_person).unwrap();
+    assert_eq!(solo["artists"][0]["id"], 14);
+    assert!(solo["credits"].as_array().unwrap().is_empty());
+    assert!(solo["groups"].as_array().unwrap().is_empty());
+    let text = response(
+        &client,
+        Method::Get,
+        "/api/v1/people/1",
+        Some(&admin),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["artists"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    response(
+        &client,
+        Method::Get,
+        "/api/v1/items/11/credits",
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
 }
 
 #[rocket::async_test]
@@ -357,6 +1094,7 @@ async fn library_grants_filter_items_collections_people_and_counts() {
     }
     for path in [
         "/api/v1/items/1",
+        "/api/v1/items/1/files",
         "/api/v1/items/3",
         "/api/v1/home?library_id=3",
         "/api/v1/items?library_id=3",
@@ -375,6 +1113,7 @@ async fn library_grants_filter_items_collections_people_and_counts() {
         "/api/v1/home?library_id=2",
         "/api/v1/items?library_id=2",
         "/api/v1/items/2",
+        "/api/v1/items/2/files",
         "/api/v1/items/2/metadata",
         "/api/v1/items/2/playback",
         "/api/v1/items/2/artwork",

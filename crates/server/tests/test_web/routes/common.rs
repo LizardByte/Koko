@@ -15,6 +15,27 @@ use crate::test_utils::{
 };
 
 #[rocket::async_test]
+async fn api_errors_are_readable_json_and_do_not_expose_rocket_html() {
+    let client = create_test_client(Some("readable_api_errors")).await;
+    for (path, status) in [
+        ("/api/v1/does-not-exist", Status::NotFound),
+        ("/api/v1/libraries", Status::Unauthorized),
+    ] {
+        let response = client.get(path).dispatch().await;
+        assert_eq!(response.status(), status);
+        assert_eq!(response.content_type(), Some(ContentType::JSON));
+        assert_eq!(
+            response.headers().get_one("Cache-Control"),
+            Some("private, no-store")
+        );
+        let body = response.into_json::<Value>().await.unwrap();
+        assert_eq!(body["status"], status.code);
+        let message = body["message"].as_str().unwrap();
+        assert!(!message.is_empty() && !message.contains(['<', '>']));
+    }
+}
+
+#[rocket::async_test]
 async fn test_root_route() {
     let client = create_test_client(Some("common_routes")).await;
 
@@ -97,7 +118,7 @@ async fn test_favicon_serves_application_icon_without_authentication() {
 }
 
 #[rocket::async_test]
-async fn test_all_provider_descriptors_serve_local_logo_assets() {
+async fn test_declared_provider_logos_are_served_as_local_image_assets() {
     let (client, token) = create_admin_test_client(Some("provider_logo_assets")).await;
     let providers_response = client
         .get("/api/v1/metadata/providers")
@@ -109,16 +130,14 @@ async fn test_all_provider_descriptors_serve_local_logo_assets() {
         .into_json()
         .await
         .expect("Expected provider descriptors");
-    assert_eq!(providers.len(), 7);
+    assert_eq!(providers.len(), 9);
 
     for provider in providers {
         for field in [
             "logo_light_url",
             "logo_dark_url",
         ] {
-            let url = provider[field]
-                .as_str()
-                .expect("Every provider must supply both logo variants");
+            let url = provider[field].as_str().expect("Expected a provider logo");
             assert!(
                 url.starts_with("/assets/providers/"),
                 "Expected a local logo: {url}"

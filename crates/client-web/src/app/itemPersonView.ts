@@ -1,6 +1,12 @@
 /** Renders item detail, metadata search, person detail, and credit trays. */
+
+import { renderActiveAlbumButton, renderAlbumTracks, renderTrackLyrics } from './music';
+import { renderItemWarnings } from './itemWarnings';
+import { itemLineage } from './hierarchy';
+import { renderItemSources } from './itemSources';
 import type {
   ItemMetadataMatch,
+  MetadataSearchResult,
   ItemMetadataPerson,
   MediaItemDetail,
   MediaItemExtra,
@@ -9,7 +15,7 @@ import type {
   MetadataPersonItemCredit,
   MetadataProviderStatus,
 } from '../api';
-import { getPersonImageUrl, resolveApiUrl } from '../api';
+import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { normalizedMetadataLanguages } from './formUtils';
 import { extractYouTubeVideoId } from './youtube';
@@ -59,6 +65,7 @@ export function renderMetadataSearchResults(): string {
             ${renderMetadataSearchProviderAttribution(result.provider_id)}
             <span>${result.release_year ?? 'Unknown year'}</span>
             <span>${escapeHtml(result.media_type)}</span>
+            ${renderTrackCountMatch(result, selectedItem)}
             ${typeof result.score === 'number' ? `<span>${Math.round(result.score * 100)}% match</span>` : ''}
           </div>
         </div>
@@ -87,6 +94,7 @@ function libraryKindForItemType(itemType: string | undefined): string | undefine
   if (itemType === 'show') {
     return 'shows';
   }
+  if (['artist', 'album', 'track'].includes(itemType ?? '')) return 'music';
   if (itemType === 'movie') {
     return 'movies';
   }
@@ -109,7 +117,17 @@ export function selectedItemDefaultMetadataTitle(): string {
     || '';
 }
 
+export function selectedItemDefaultMetadataArtist(): string {
+  const item = state.selectedItem;
+  if (item?.item_type !== 'album') return '';
+  return itemLineage(item, state.libraryItems).find((ancestor) => ancestor.item_type === 'artist')?.display_title.trim()
+    || item.music?.album_artist?.trim()
+    || item.music?.artist?.trim()
+    || '';
+}
+
 export function selectedItemDefaultMetadataYear(): string {
+  if (state.selectedItem?.item_type === 'artist') return '';
   const year = state.selectedItem?.release_year ?? state.selectedItemMetadata?.matches[0]?.release_year;
   return typeof year === 'number' ? String(year) : '';
 }
@@ -168,7 +186,8 @@ export function renderLinkedMetadataSummary(): string {
   const matches = state.selectedItemMetadata?.matches ?? [];
   const linkedMatch = matches.find((match) => match.relation_kind === 'primary') ?? matches[0];
   if (!linkedMatch) {
-    return '<div class="empty-state tight">No external metadata is linked yet.</div>';
+    const lyricProviders = state.selectedItem?.lyrics ? ['lrclib'] : [];
+    return `<div class="empty-state tight">No external metadata is linked yet.</div>${renderMetadataProviderAttributions(lyricProviders)}`;
   }
 
   const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
@@ -187,12 +206,10 @@ export function renderLinkedMetadataSummary(): string {
   } else if (linkedMatch.refresh_state === 'error') {
     refreshStateClass = 'danger-tag';
   }
-  const providersById = new Map(
-    (state.selectedItemMetadata?.providers ?? state.metadataProviders).map((provider) => [provider.id, provider]),
-  );
   const contributingProviderIds = [
     linkedMatch.provider_id,
     ...matches.map((match) => match.provider_id).filter((providerId) => providerId !== linkedMatch.provider_id),
+    ...(state.selectedItem?.lyrics ? ['lrclib'] : []),
   ].filter((providerId, index, providerIds) => providerIds.indexOf(providerId) === index);
   const providerTags = contributingProviderIds
     .map((providerId) => {
@@ -200,15 +217,7 @@ export function renderLinkedMetadataSummary(): string {
       return `<span class="${className}">${escapeHtml(providerId)}</span>`;
     })
     .join('');
-  const attributions = contributingProviderIds
-    .map((providerId) => providersById.get(providerId))
-    .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
-    .map((provider) => {
-      const logoUrl = providerAttributionLogo(provider.id);
-      const logoMarkup = logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="" loading="lazy" />` : '';
-      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logoMarkup}${escapeHtml(provider.attribution_text)}</a>`;
-    })
-    .join('');
+  const attributions = renderMetadataProviderAttributions(contributingProviderIds);
 
   return `
     <div class="metadata-current-link">
@@ -225,6 +234,17 @@ export function renderLinkedMetadataSummary(): string {
       </span>
     </div>
   `;
+}
+
+function renderMetadataProviderAttributions(providerIds: string[]): string {
+  return providerIds.map(id => state.selectedItemMetadata?.providers.find(provider => provider.id === id)
+    ?? state.metadataProviders.find(provider => provider.id === id))
+    .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
+    .map(provider => {
+      const logoUrl = providerAttributionLogo(provider.id);
+      const logo = logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(provider.display_name)}" loading="lazy" />` : '';
+      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logo}${escapeHtml(provider.attribution_text)}</a>`;
+    }).join('');
 }
 
 export function selectedItemPeople(): ItemMetadataPerson[] {
@@ -267,6 +287,9 @@ export function renderPersonCredit(person: ItemMetadataPerson): string {
     imageUrl = getPersonImageUrl(person.person_id);
   } else if (person.image_url) {
     imageUrl = resolveApiUrl(person.image_url);
+  } else if (person.department === 'Artists' && state.selectedItem?.item_type === 'artist') {
+    // A solo artist's self-credit is the same identity; group members are separate people.
+    imageUrl = getArtworkUrl(state.selectedItem.id, 'poster', state.selectedItem.artwork_updated_at);
   }
   const subtitle = person.character_name || person.role || person.department || '';
   return `
@@ -286,9 +309,13 @@ export function renderPeopleRail(): string {
     return '';
   }
 
-  const cast = people.filter(isCastCredit);
-  const crew = people.filter((person) => !isCastCredit(person));
-  return renderPeopleRow('Cast', cast, 'people') + renderPeopleRow('Crew', crew, 'crew');
+  const members = people.filter((person) => person.department === 'Members');
+  const artists = people.filter((person) => person.department === 'Artists');
+  const screenPeople = people.filter((person) => !['Members', 'Artists'].includes(person.department ?? ''));
+  const cast = screenPeople.filter(isCastCredit);
+  const crew = screenPeople.filter((person) => !isCastCredit(person));
+  return renderPeopleRow('People', artists, 'artists') + renderPeopleRow('Members', members, 'members')
+    + renderPeopleRow('Cast', cast, 'people') + renderPeopleRow('Crew', crew, 'crew');
 }
 
 /** Cast and crew share single rows of complete cards and separate navigation sections. */
@@ -556,18 +583,13 @@ export function renderPersonPage(): string {
 
   return `
     <section class="item-page person-page">
-      <section class="item-hero person-hero" data-nav-section="person-overview" data-nav-label="About ${escapeHtml(response.person.name)}">
+      <section class="item-hero person-hero ${personImageUrl ? '' : 'person-hero-without-photo'}" data-nav-section="person-overview" data-nav-label="About ${escapeHtml(response.person.name)}">
         <div class="detail-art item-poster person-poster ${personImageUrl ? 'has-image' : ''}">
           ${personImageUrl ? `<img src="${escapeHtml(personImageUrl)}" alt="${escapeHtml(response.person.name)}" />` : `<span>${escapeHtml(response.person.name.slice(0, 1).toUpperCase())}</span>`}
         </div>
         <div class="detail-summary item-summary">
           <h2 class="item-title-fallback">${escapeHtml(response.person.name)}</h2>
-          <div class="hero-meta-row">
-            <span class="tag">${escapeHtml(providerDisplayName(response.person.provider_id))}</span>
-            <span class="tag">${credits.length} item${credits.length === 1 ? '' : 's'}</span>
-            ${response.person.birthday ? `<span class="tag">${escapeHtml([formatPersonDate(response.person.birthday), age].filter(Boolean).join(' · '))}</span>` : ''}
-            ${response.person.gender ? `<span class="tag">${escapeHtml(response.person.gender)}</span>` : ''}
-          </div>
+          ${renderPersonTags(response, creditGroups.length, age)}
           ${response.person.birth_place ? `<p class="hero-tagline">${escapeHtml(response.person.birth_place)}</p>` : ''}
           ${response.person.biography ? renderCollapsibleText(response.person.biography, `person-biography:${response.person.id}`) : ''}
           ${knownForMarkup}
@@ -578,22 +600,40 @@ export function renderPersonPage(): string {
         </div>
       </section>
 
-      <section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
+      ${response.albums?.length ? `
+        <section class="panel page-panel item-section" data-nav-section="music-credits" data-nav-label="Albums in your libraries">
+          <div class="section-heading"><h3>Albums in your libraries</h3></div>
+          <div class="item-grid hierarchy-item-grid">${response.albums.map(renderItemCard).join('')}</div>
+        </section>` : ''}
+
+      ${response.groups?.length ? `
+        <section class="panel page-panel item-section" data-nav-section="group-memberships" data-nav-label="Groups in your libraries">
+          <div class="section-heading"><h3>Groups in your libraries</h3></div>
+          <div class="item-grid hierarchy-item-grid">${response.groups.map((entry) => `<article class="music-membership-card">${renderItemCard(entry.item)}<p class="muted">${escapeHtml(entry.credit.role ?? 'Member')}</p></article>`).join('')}</div>
+        </section>` : ''}
+
+      ${credits.length ? `<section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
         <div class="section-heading section-heading-actions">
           <h3>Credits</h3>
-          <span class="muted">${creditGroups.length} title${creditGroups.length === 1 ? '' : 's'}</span>
+          <span class="muted">${escapeHtml(countLabel(creditGroups.length, 'title'))}</span>
         </div>
-        ${credits.length
-          ? `<div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>`
-          : '<div class="empty-state tight">No linked items are stored for this person yet.</div>'}
-      </section>
+        <div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>
+      </section>` : ''}
     </section>
   `;
 }
 
 function personPortraitUrl(person: NonNullable<typeof state.selectedPerson>['person']): string | undefined {
   if (person.cached_image_path) return getPersonImageUrl(person.id);
-  return person.image_url ? resolveApiUrl(person.image_url) : undefined;
+  if (person.image_url) return resolveApiUrl(person.image_url);
+  const artist = state.selectedPerson?.artists?.find((item) => item.artwork_updated_at != null);
+  return artist ? getArtworkUrl(artist.id, 'poster', artist.artwork_updated_at) : undefined;
+}
+
+/** Artwork from an identity-linked artist also belongs on the person's music profile. */
+export function personBackdropUrl(): string | undefined {
+  const artist = state.selectedPerson?.artists?.find((item) => item.backdrop_url);
+  return artist ? getArtworkUrl(artist.id, 'backdrop', artist.artwork_updated_at) : undefined;
 }
 
 export function directGridChildren(grid: HTMLElement, selector: string): HTMLElement[] {
@@ -750,9 +790,7 @@ export function bindPersonCreditTrays(): void {
 }
 
 function selectedItemOverview(item: MediaItemDetail): string {
-  return item.overview
-    ?? state.selectedItemMetadata?.matches[0]?.overview
-    ?? 'No description is stored for this item yet.';
+  return item.overview?.trim() || state.selectedItemMetadata?.matches[0]?.overview?.trim() || '';
 }
 
 function selectedItemChildSectionTitle(item: MediaItemDetail): string {
@@ -760,6 +798,8 @@ function selectedItemChildSectionTitle(item: MediaItemDetail): string {
     return 'Seasons';
   }
 
+  if (item.item_type === 'artist') return 'Albums';
+  if (item.item_type === 'album') return 'Tracks';
   return item.item_type === 'season' ? 'Episodes' : 'Contained items';
 }
 
@@ -852,9 +892,10 @@ interface SelectedItemActionsOptions {
 function renderResumeOptions(item: MediaItemDetail, resumeMs: number, playbackTarget?: MediaPlaybackTarget): string {
   const canResume = resumeMs > 0 || (playbackTarget?.start_ms ?? 0) > 0;
   if (!canResume) return '';
+  const restartLabel = item.item_type === 'album' ? 'Restart track' : 'Restart episode';
   const restartButton = item.playable
     ? renderPrimaryPlayButton(item, resumeMs, 'resume-start-over')
-    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent('Restart episode', 'rotate-ccw')}</button>`;
+    : `<button type="button" id="resume-start-over" class="secondary-button" data-playback-target-item-id="${playbackTarget!.item_id}" data-playback-target-start-ms="0">${renderButtonContent(restartLabel, 'rotate-ccw')}</button>`;
   return `<span class="sr-only" id="resume-hold-hint" aria-live="polite">Hold for playback options</span>
     <section class="resume-playback-menu" id="resume-playback-menu" aria-label="Playback options" data-nav-section="resume-options" data-nav-label="Playback options" ${state.resumeOptionsOpen ? '' : 'hidden'}>
       ${restartButton}
@@ -874,6 +915,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
   } = options;
   const tvTargets = tvRestartTargets(item);
   const targetSubtitle = playbackTarget ? [playbackTarget.display_title, selectedItemRemainingTime(item)].filter(Boolean).join(' · ') : undefined;
+  const activeAlbumButton = item.item_type === 'album' ? renderActiveAlbumButton(item.id) : '';
 
   return `
           <div class="detail-actions" id="item-playback-actions">
@@ -881,15 +923,17 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
             <div class="item-bar-identity" data-sticky-identity hidden>
               ${renderWatchProgress(item)}<strong>${escapeHtml(item.display_title)}</strong>
             </div>
+            ${activeAlbumButton || (item.item_type === 'album' && !playbackTarget && item.children.some((track) => track.playable && !track.missing_since) ? `<button type="button" class="primary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Play album', 'play')}</button>` : '')}
             ${renderResumeButton(item, resumeMs)}
             ${resumeMs > 0 ? '' : renderPrimaryPlayButton(item, resumeMs)}
-            ${playbackTarget ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
-            ${renderResumeOptions(item, resumeMs, playbackTarget)}
+            ${playbackTarget && !activeAlbumButton ? renderPlaybackTargetButton({ ...playbackTarget, label: tvPlaybackLabel(item, playbackTarget) }, false, { holdForOptions: playbackTarget.start_ms > 0, subtitle: targetSubtitle }) : ''}
+            ${activeAlbumButton ? '' : renderResumeOptions(item, resumeMs, playbackTarget)}
             </div>
             ${renderTrailerActionButton(preferredTrailer, trailerButtonTitle)}
             <details class="item-more" id="item-more" ${state.itemMoreOpen ? 'open' : ''}>
               <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
               <div class="item-more-menu">
+                ${renderMusicActions(item, playbackTarget)}
                 ${resumeMs > 0 || item.item_type === 'episode' ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over', true) : ''}
                 ${tvTargets.map((target) => renderPlaybackTargetButton(target, true, { id: target.label === 'Restart show' ? 'restart-show' : 'restart-season' })).join('')}
                 ${!tvTargets.length && restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true, { id: 'item-start-over' }) : ''}
@@ -937,7 +981,7 @@ function selectedItemTechnicalFacts(item: MediaItemDetail): Array<{ label: strin
     { label: 'Duration', value: formatDuration(item.duration_ms) },
     {
       label: 'Format',
-      value: [item.container?.toUpperCase(), item.media_kind.toUpperCase()].filter(Boolean).join(' • ') || 'Unknown',
+      value: item.container?.toUpperCase() || 'Unknown',
     },
     {
       label: 'Codecs',
@@ -949,7 +993,7 @@ function selectedItemTechnicalFacts(item: MediaItemDetail): Array<{ label: strin
     },
     { label: 'Bitrate', value: formatBitRate(item.bit_rate) },
     { label: 'Size', value: formatFileSize(item.file_size) },
-  ];
+  ].filter((fact) => fact.value !== 'Unknown');
 }
 
 function renderSelectedItemFactList(item: MediaItemDetail): string {
@@ -998,6 +1042,7 @@ export function renderEpisodeBrowser(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
+  if (item.item_type === 'album') return renderAlbumTracks(item);
   if (['show', 'season', 'episode'].includes(item.item_type)) return renderTvChildren(item);
 
   if (!item.children.length) {
@@ -1039,13 +1084,17 @@ function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
     return '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
   }
 
+  const needsAlbumMatch = state.selectedItem?.item_type === 'track'
+    && !state.selectedItem.hierarchy.some((parent) => parent.item_type === 'album' && parent.has_metadata);
   return `
               <form id="metadata-search-form" class="metadata-search-form">
+                ${needsAlbumMatch ? '<p class="muted">Match this track’s album first. Track searches use the album’s linked release.</p>' : ''}
                 <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
-                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
+                ${state.selectedItem?.item_type === 'album' ? `<label for="metadata-search-artist">Artist / group</label><input id="metadata-search-artist" name="metadataSearchArtist" type="text" value="${escapeHtml(state.metadataSearchArtist ?? selectedItemDefaultMetadataArtist())}" placeholder="Artist / group" autocomplete="off" />` : ''}
+                ${state.selectedItem?.item_type !== 'artist' ? `<input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />` : ''}
                 <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
                 ${renderMetadataSearchProviderControls()}
-                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
+                <button type="submit" ${needsAlbumMatch ? 'disabled' : ''}>${renderButtonContent('Search metadata', 'search')}</button>
               </form>
               <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
             `;
@@ -1066,29 +1115,7 @@ function renderSelectedItemSupportGrid(
         ${renderSelectedItemFactList(item)}
         ${state.selectedPlayback?.reason ? `<p class="muted playback-detail-reason">${escapeHtml(state.selectedPlayback.reason)}</p>` : ''}
       <div class="item-support-grid">
-        <section class="panel page-panel item-section">
-          <div class="section-heading">
-            <h3>File and library</h3>
-          </div>
-          <div class="item-info-list">
-            <div>
-              <span class="label">Library</span>
-              <strong>${escapeHtml(library?.name ?? 'Unknown')}</strong>
-            </div>
-            <div>
-              <span class="label">Folders</span>
-              <strong>${escapeHtml(String(library?.paths.length ?? 0))}</strong>
-            </div>
-            <div>
-              <span class="label">Source</span>
-              <strong>${escapeHtml(item.relative_path)}</strong>
-            </div>
-            <div>
-              <span class="label">Updated</span>
-              <strong>${escapeHtml(formatTimestamp(item.modified_at))}</strong>
-            </div>
-          </div>
-        </section>
+        ${renderItemSources(item, library?.name ?? 'Unknown')}
 
         ${canManageUsers() ? `<section class="panel page-panel item-section item-link-panel" data-nav-section="metadata" data-nav-label="Metadata">
           <div class="section-heading section-heading-actions">
@@ -1104,8 +1131,19 @@ function renderSelectedItemSupportGrid(
   `;
 }
 
+function renderArtistScreenCredits(item: MediaItemDetail): string {
+  if (item.item_type !== 'artist') return '';
+  const response = state.itemCredits?.itemId === item.id ? state.itemCredits : undefined;
+  const groups = personCreditGroups(response?.credits ?? []);
+  return `<section class="panel page-panel item-section" data-nav-section="screen-credits" data-nav-label="Movies and shows">
+    <div class="section-heading section-heading-actions"><h3>Movies and shows</h3><span class="muted">${groups.length} title${groups.length === 1 ? '' : 's'}</span></div>
+    ${artistCreditContents(response, groups)}
+  </section>`;
+}
+
 function renderSelectedItemPage(item: MediaItemDetail): string {
   const artwork = itemArtwork(item);
+  const overview = selectedItemOverview(item);
   const trailerOptions = currentTrailerOptions();
   const hasMultipleTrailers = trailerOptions.length > 1;
   const supportsManualLinking = canManuallyLinkMetadata(item);
@@ -1128,8 +1166,9 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''}" data-item-page-id="${item.id}">
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''}" data-item-page-id="${item.id}">
       ${artwork.backdrop ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(artwork.backdrop)}');"></div>` : ''}
+      ${renderItemWarnings(item)}
       ${renderSelectedItemIdentity(
         item,
         artwork.poster,
@@ -1141,12 +1180,14 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
         ${actionsMarkup}
         ${renderSeasonTabs(item)}
       </div>
-      <section class="item-description-section" data-nav-section="description" data-nav-label="Description">
-        ${renderCollapsibleText(selectedItemOverview(item), `item-overview:${item.id}`, 'hero-description', true)}
-      </section>
+      ${overview ? `<section class="item-description-section" data-nav-section="description" data-nav-label="Description">
+        ${renderCollapsibleText(overview, `item-overview:${item.id}`, 'hero-description', true)}
+      </section>` : ''}
       <div class="item-support-content" id="item-support-content">
       ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
       ${renderSelectedItemChildrenSection(item)}
+      ${renderTrackLyrics(item)}
+      ${renderArtistScreenCredits(item)}
 
       ${renderItemExtrasRail()}
 
@@ -1173,4 +1214,39 @@ export function renderItemPage(): string {
   }
 
   return renderSelectedItemPage(state.selectedItem);
+}
+
+function renderTrackCountMatch(result: MetadataSearchResult, item: MediaItemDetail): string {
+  if (!result.track_count) return '';
+  let comparison = '';
+  if (item.item_type === 'album' && item.child_count) {
+    const label = result.track_count === item.child_count ? 'matches your' : 'your album has';
+    comparison = ` · ${label} ${item.child_count} tracks`;
+  }
+  return `<span>${result.track_count} tracks${comparison}</span>`;
+}
+
+function renderPersonTags(response: NonNullable<typeof state.selectedPerson>, screenTitles: number, age: string | undefined): string {
+  const person = response.person;
+  const tags = [`<span class="tag">${escapeHtml(providerDisplayName(person.provider_id))}</span>`];
+  if (response.credits.length) tags.push(`<span class="tag">${escapeHtml(countLabel(screenTitles, 'screen title'))}</span>`);
+  if (response.albums?.length) tags.push(`<span class="tag">${escapeHtml(countLabel(response.albums.length, 'album'))}</span>`);
+  if (person.birthday) tags.push(`<span class="tag">${escapeHtml([formatPersonDate(person.birthday), age].filter(Boolean).join(' · '))}</span>`);
+  if (person.gender) tags.push(`<span class="tag">${escapeHtml(person.gender)}</span>`);
+  return `<div class="hero-meta-row">${tags.join('')}</div>`;
+}
+
+function renderMusicActions(item: MediaItemDetail, playbackTarget?: MediaPlaybackTarget): string {
+  return `
+                ${['album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-enqueue="${item.id}" data-music-next="true">${renderButtonContent('Play next', 'skip-forward')}</button><button type="button" class="secondary-button" data-music-enqueue="${item.id}">${renderButtonContent('Add to queue', 'list-music')}</button>` : ''}
+                ${['artist', 'album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-radio="${item.id}">${renderButtonContent('Start radio', 'radio')}</button>` : ''}
+                ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
+  `;
+}
+
+function artistCreditContents(response: typeof state.itemCredits, groups: PersonCreditGroup[]): string {
+  if (!response || response.loading) return '<div class="empty-state tight" role="status">Loading screen credits…</div>';
+  if (response.error) return `<div class="empty-state tight" role="alert">Unable to load screen credits: ${escapeHtml(response.error)}</div>`;
+  if (groups.length) return `<div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>`;
+  return '<div class="empty-state tight">No matching movies or shows are in your libraries.</div>';
 }

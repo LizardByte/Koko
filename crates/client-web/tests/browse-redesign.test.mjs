@@ -34,6 +34,16 @@ beforeEach(() => {
   });
 });
 
+test('featured artists show real metadata and omit generic library filler when it is missing', () => {
+  const artist = item(301, { item_type: 'artist', overview: 'United States · Born 19 November 1973 in Savannah' });
+  state.libraryItems = [artist];
+  assert.match(renderHomeFeature(), /United States · Born 19 November 1973 in Savannah/);
+  artist.overview = '  ';
+  assert.doesNotMatch(renderHomeFeature(), /Artist from|your library|<p>\s*<\/p>/);
+  artist.overview = '<script>artist description</script>';
+  assert.match(renderHomeFeature(), /&lt;script&gt;artist description&lt;\/script&gt;/);
+});
+
 test('sort, genre, year, and watch status compose without mutating source items', () => {
   const items = [item(2, { display_title: 'Beta', release_year: 2001, genres: ['Drama'], playback_completed: true }), item(3, { release_year: 1999, genres: ['Drama'], playback_position_ms: 60_000 }), item(1, { release_year: 1999, genres: ['Drama'] }), item(4, { genres: ['Comedy'] })];
   const defaults = preferences.DEFAULT_BROWSE_PREFERENCES;
@@ -400,7 +410,16 @@ test('returning to browsing restores the tab, page, scroll, and card focus', () 
   globalThis.scrollY = 0;
   globalThis.scrollTo = () => {};
   globalThis.requestAnimationFrame = (callback) => frames.push(callback);
-  globalThis.document = { activeElement: card, body: { dataset: { inputMode: 'keyboard' } }, querySelector: (selector) => selector === '.main-shell' ? main : selector.includes('data-shelf-row') ? row : card, querySelectorAll: () => [row] };
+  globalThis.document = {
+    activeElement: card,
+    body: { dataset: { inputMode: 'keyboard' } },
+    querySelector: (selector) => {
+      if (selector === '.main-shell') return main;
+      if (selector.includes('data-shelf-row')) return row;
+      return card;
+    },
+    querySelectorAll: () => [row],
+  };
   state.homeTab = 'library';
   state.libraryPage = 2;
   session.captureBrowseSession();

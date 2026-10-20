@@ -1,3 +1,5 @@
+/** Derives resume targets and playback button labels from saved media progress. */
+
 import type { MediaItemDetail, MediaItemSummary } from '../api';
 
 /** Returns a saved playback position only when it is useful as a resume target. */
@@ -7,10 +9,11 @@ export function resumablePlaybackPositionMs(item: MediaItemDetail): number {
   }
   const positionMs = item.playback_position_ms ?? 0;
   const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
-  if (positionMs < 30_000) {
+  const minimum=item.media_kind==='audio' ? 1000 : 30000;
+  if (positionMs < minimum) {
     return 0;
   }
-  if (durationMs > 0 && durationMs - positionMs < 30_000) {
+  if (durationMs > 0 && durationMs - positionMs < (item.media_kind==='audio' ? 0 : 30000)) {
     return 0;
   }
 
@@ -24,9 +27,15 @@ export function playbackProgressPercent(item: MediaItemSummary): number | undefi
   }
   const positionMs = item.playback_position_ms ?? 0;
   const durationMs = item.playback_duration_ms ?? item.duration_ms ?? 0;
-  if (positionMs < 30_000 || durationMs <= 0 || durationMs - positionMs < 30_000) {
+  if (positionMs < (item.media_kind==='audio' ? 1000 : 30000) || durationMs <= 0 || durationMs - positionMs < (item.media_kind==='audio' ? 0 : 30000)) {
     return undefined;
   }
 
   return Math.min(99, Math.max(1, Math.round((positionMs / durationMs) * 100)));
+}
+
+export function playbackAction(item:MediaItemSummary):'listened'|'read'|'watched' {
+  if (item.media_kind === 'audio' || ['artist', 'album', 'track'].includes(item.item_type)) return 'listened';
+  if (item.media_kind === 'book' || item.item_type === 'book') return 'read';
+  return 'watched';
 }

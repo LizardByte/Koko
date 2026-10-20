@@ -55,6 +55,8 @@ If the name is omitted, the command prompts for it. The command generates a uniq
 `down.sql`, appends the revision to `SQLITE_MIGRATION_ORDER`, and runs `cargo +nightly fmt`.
 
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
+For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
+For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.
 
@@ -163,7 +165,7 @@ This list is not all-inclusive, and just meant to be a very high level for the i
     - [ ] TV Shows
     - [ ] Videos
   - [ ] Audio
-    - [ ] Albums/Music
+    - [x] Albums/Music
     - [ ] Podcasts
     - [ ] Audiobooks
   - [ ] Images

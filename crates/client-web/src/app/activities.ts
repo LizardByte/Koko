@@ -31,11 +31,11 @@ export function activeMetadataRefreshItemIds(): Set<number> {
 
 /** Returns whether an item is currently marked for metadata refresh. */
 export function itemIsMetadataPending(item: Pick<MediaItemSummary, 'id' | 'metadata_refresh_state'> | undefined): boolean {
-  return item?.metadata_refresh_state === 'pending';
+  return item?.metadata_refresh_state === 'pending' || itemHasActiveMetadataRefresh(item);
 }
 
 export function itemHasActiveMetadataRefresh(item: Pick<MediaItemSummary, 'id' | 'metadata_refresh_state'> | undefined): boolean {
-  return item?.metadata_refresh_state === 'pending' && activeMetadataRefreshItemIds().has(item.id);
+  return item !== undefined && activeMetadataRefreshActivities().some((activity) => activity.item_ids.includes(item.id));
 }
 
 /** Reports progress only while a refresh worker is actually registered. */

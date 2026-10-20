@@ -59,6 +59,44 @@ fn test_metadata_provider_statuses_include_tmdb() {
 }
 
 #[test]
+fn lrclib_is_a_keyless_music_metadata_agent_extending_musicbrainz_matches() {
+    let status = list_provider_statuses(&MetadataSettings::default())
+        .into_iter()
+        .find(|provider| provider.id == MetadataProviderId::Lrclib)
+        .unwrap();
+    assert_eq!(status.display_name, "LRCLIB");
+    assert_eq!(status.role, koko::metadata::MetadataProviderRole::Secondary);
+    assert_eq!(status.supported_kinds, vec![MediaLibraryKind::Music]);
+    assert_eq!(
+        status.extends_provider_ids,
+        vec![MetadataProviderId::MusicBrainz]
+    );
+    assert!(status.implemented && status.configured && !status.requires_api_key);
+    assert_eq!(
+        MetadataProviderId::from_storage_value("lrclib"),
+        Some(MetadataProviderId::Lrclib)
+    );
+    let mut library = MediaLibrarySettings {
+        kind: MediaLibraryKind::Music,
+        metadata_providers: vec![
+            MetadataProviderId::MusicBrainz,
+            MetadataProviderId::Lrclib,
+        ],
+        ..Default::default()
+    };
+    library.normalize();
+    let saved: MediaLibrarySettings =
+        serde_json::from_str(&serde_json::to_string(&library).unwrap()).unwrap();
+    assert_eq!(
+        saved.metadata_providers,
+        vec![
+            MetadataProviderId::MusicBrainz,
+            MetadataProviderId::Lrclib
+        ]
+    );
+}
+
+#[test]
 fn test_metadata_provider_statuses_include_tvdb() {
     let statuses = list_provider_statuses(&MetadataSettings::default());
     let tvdb = statuses
@@ -102,6 +140,43 @@ fn test_metadata_provider_statuses_include_trailerdb() {
     assert_eq!(
         trailerdb.extends_provider_ids,
         vec![MetadataProviderId::Tmdb]
+    );
+}
+
+#[test]
+fn test_fanart_is_a_music_only_secondary_provider_with_optional_personal_credentials() {
+    let mut settings = MetadataSettings::default();
+    let status = list_provider_statuses(&settings)
+        .into_iter()
+        .find(|provider| provider.id == MetadataProviderId::Fanart)
+        .unwrap();
+    assert_eq!(status.display_name, "Fanart.tv");
+    assert_eq!(status.role, koko::metadata::MetadataProviderRole::Secondary);
+    assert_eq!(status.supported_kinds, vec![MediaLibraryKind::Music]);
+    assert_eq!(
+        status.extends_provider_ids,
+        vec![MetadataProviderId::MusicBrainz]
+    );
+    assert!(status.requires_api_key && status.implemented);
+    assert!(!status.enabled);
+    settings
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == MetadataProviderId::Fanart)
+        .unwrap()
+        .api_key = Some("personal-test-key".into());
+    assert!(
+        list_provider_statuses(&settings)
+            .iter()
+            .any(|provider| provider.id == MetadataProviderId::Fanart && provider.configured)
+    );
+    assert_eq!(
+        MetadataProviderId::from_storage_value("fanart"),
+        Some(MetadataProviderId::Fanart)
+    );
+    assert_eq!(
+        serde_json::to_string(&MetadataProviderId::Fanart).unwrap(),
+        "\"fanart\""
     );
 }
 
@@ -166,6 +241,8 @@ fn test_metadata_provider_id_supports_trailerdb() {
 fn test_settings_persistence_clears_library_definitions() {
     let mut settings = Settings::default();
     settings.media.libraries.push(MediaLibrarySettings {
+        exclude_from_home: false,
+        use_embedded_music_tags: false,
         name: "Movies".into(),
         path: "C:/Media/Movies".into(),
         paths: vec!["C:/Media/Movies".into()],

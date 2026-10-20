@@ -79,6 +79,9 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/ci-rust.yml
+    secrets:
+      FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
+      LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
     with:
       release_version: ${{ needs.setup_release.outputs.release_version }}
 
@@ -128,6 +131,9 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/ci-flatpak.yml
+    secrets:
+      FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
+      LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
     with:
       release_commit: ${{ needs.setup_release.outputs.release_commit }}
       release_version: ${{ needs.setup_release.outputs.release_version }}

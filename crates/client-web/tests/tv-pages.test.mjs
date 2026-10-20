@@ -66,6 +66,7 @@ test('linked episode backdrop metadata takes precedence over inherited artwork',
 
 test('season posters can fall back through the backend while season identity stays explicit', () => {
   season.poster_url = undefined;
+  season.overview = 'Season description';
   assert.match(tv.itemArtwork(season).poster, /items\/202\/artwork\?kind=poster/);
   state.selectedItem = season; state.route = { page: 'item', itemId: season.id };
   const html = renderItemPage();
@@ -160,6 +161,7 @@ test('episode cards retain a circular ring, rating attribution, and escaped titl
 });
 
 test('TV items without a show ancestor keep one clear heading', () => {
+  state.libraryItems = [];
   assert.equal(tv.renderTvTitle({ ...season, hierarchy: [] }), '<h2 class="item-title-fallback">Season 1</h2>');
   assert.equal(tv.renderTvTitle({ ...episode, hierarchy: [] }), '<h2 class="item-title-fallback">S01E02 · The middle &lt;episode&gt;</h2>');
 });

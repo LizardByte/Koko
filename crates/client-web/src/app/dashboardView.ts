@@ -6,8 +6,9 @@ import { state } from './state';
 import { formatChildCount, humanizeItemType, renderButtonContent } from './ui';
 
 export function metadataDashboardRefreshState(item: MediaItemSummary): 'pending' | 'stalled' | 'error' | 'fresh' | 'unmatched' {
+  if (itemHasActiveMetadataRefresh(item)) return 'pending';
   if (itemIsMetadataPending(item)) {
-    return itemHasActiveMetadataRefresh(item) ? 'pending' : 'stalled';
+    return 'stalled';
   }
 
   if (item.metadata_refresh_state === 'error') {

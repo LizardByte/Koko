@@ -5,6 +5,7 @@ import { state } from './state';
 import { browseReturnPath } from './browseSession';
 import { browseItems } from './browsePreferences';
 import { humanizeItemType } from './ui';
+import { heroPresentation } from './hierarchy';
 
 export type HomeFeaturePreview =
   | { kind: 'collection'; collection: MediaCollectionSummary }
@@ -52,7 +53,7 @@ export function persistedLibraryForSettings(library: MediaLibrarySettings): Medi
 }
 
 export function canManuallyLinkMetadata(item?: MediaItemSummary): boolean {
-  return item?.item_type === 'movie' || item?.item_type === 'show';
+  return Boolean(item && ['movie', 'show', 'artist', 'album', 'track'].includes(item.item_type));
 }
 
 export function backNavigationTarget(): { label: string; path: string } {
@@ -73,7 +74,13 @@ export function backNavigationTarget(): { label: string; path: string } {
 }
 
 export function topLevelLibraryItems(): MediaItemSummary[] {
-  return state.libraryItems.filter((item) => item.parent_id == null);
+  return homeVisibleLibraryItems().filter((item) => item.parent_id == null);
+}
+
+function homeVisibleLibraryItems(): MediaItemSummary[] {
+  if (state.route.page !== 'home' || activeLibraryId() !== undefined) return state.libraryItems;
+  const excluded = new Set(state.libraries.filter((library) => library.exclude_from_home).map((library) => library.id));
+  return state.libraryItems.filter((item) => !excluded.has(item.library_id));
 }
 
 export function rootItemById(): Map<number, MediaItemSummary> {
@@ -139,7 +146,7 @@ export function categorySummaries(): Array<{ genre: string; count: number; items
   const rootsById = rootItemById();
   const categories = new Map<string, Map<number, MediaItemSummary>>();
 
-  state.libraryItems.forEach((item) => {
+  homeVisibleLibraryItems().forEach((item) => {
     if (!item.genres.length) {
       return;
     }
@@ -337,9 +344,10 @@ export function homePreviewCandidates(): MediaItemSummary[] {
   }
 }
 
-export function pageBackdropUrlForItem(item: Pick<MediaItemSummary, 'id' | 'backdrop_url' | 'artwork_updated_at'> | undefined): string | undefined {
-  return item?.backdrop_url
-    ? getArtworkUrl(item.id, 'backdrop', item.artwork_updated_at)
+export function pageBackdropUrlForItem(item: MediaItemSummary | undefined): string | undefined {
+  const backdrop = item ? heroPresentation(item, [...homePreviewItemsById().values()]).backdrop : undefined;
+  return backdrop
+    ? getArtworkUrl(backdrop.id, 'backdrop', backdrop.artwork_updated_at)
     : undefined;
 }
 

@@ -1,3 +1,5 @@
+/** Provides in-memory API fixtures and mutations for development and browser tests. */
+
 import kokoLogoUrl from '../../../assets/Koko.png';
 import type {
   AppBootstrapResponse,

@@ -1,5 +1,6 @@
-import { playMusicItem, musicIsActive, stopMusic } from './audioPlayer';
 /** Controls trailer, theme-song, and browser playback UI state. */
+
+import { playMusicItem, musicIsActive, stopMusic } from './audioPlayer';
 import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
 import type { MediaAudioTrack, MediaItemDetail, PlaybackSession } from '../api';

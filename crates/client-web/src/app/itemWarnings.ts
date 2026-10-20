@@ -1,3 +1,5 @@
+/** Derives media warnings and renders shared detail banners and track labels. */
+
 import type { MediaItemSummary } from '../api';
 import { itemIsMetadataPending } from './activities';
 import { escapeHtml } from './format';

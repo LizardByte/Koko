@@ -1,7 +1,8 @@
+/** Binds DOM events for each rendered app tree and owns transient UI timers. */
+
 import { clearBrowseSessions } from './browseSession';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
-/** Binds DOM events for each rendered app tree and owns transient UI timers. */
 import { createIcons, icons } from 'lucide';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { currentLogFilterRequest, libraryHasActiveMetadataRefresh } from './activities';

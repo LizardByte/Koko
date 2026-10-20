@@ -1,3 +1,5 @@
+/** Renders active-playback card badges and updates them as transport state changes. */
+
 import { createIcons, icons } from 'lucide';
 import { musicCardStatus, type MusicCardStatus, type MusicCardTarget } from './musicPlaybackState';
 import { renderIcon } from './ui';

@@ -1,3 +1,5 @@
+/** Sizes item covers and shelves and binds responsive detail-page layout behavior. */
+
 export { bindStickyActionBar as bindItemPlaybackBar } from './stickyActionBar';
 
 /** Share the responsive cover width and portrait backdrop reference across item types. */

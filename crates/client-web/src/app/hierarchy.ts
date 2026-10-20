@@ -1,3 +1,5 @@
+/** Resolves media ancestry and inherited hero artwork within library boundaries. */
+
 import type { MediaItemSummary } from '../api';
 
 /** Resolve nearest ancestors without crossing libraries or following malformed cycles. */

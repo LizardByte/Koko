@@ -1,3 +1,5 @@
+/** Maintains playback order, history, repeat, and shuffle using stable queue-entry identities. */
+
 import type { MediaItemSummary } from '../api';
 
 export type RepeatMode = 'off' | 'all' | 'one';

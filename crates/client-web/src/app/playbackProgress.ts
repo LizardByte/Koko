@@ -1,3 +1,5 @@
+/** Derives resume targets and playback button labels from saved media progress. */
+
 import type { MediaItemDetail, MediaItemSummary } from '../api';
 
 /** Returns a saved playback position only when it is useful as a resume target. */

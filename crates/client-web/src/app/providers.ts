@@ -1,3 +1,5 @@
+/** Resolves provider names, attribution assets, and library metadata-source options. */
+
 import type { MetadataProviderStatus } from '../api';
 import { resolveApiUrl } from '../api';
 import { state } from './state';

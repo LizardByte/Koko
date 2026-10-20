@@ -1,3 +1,5 @@
+/** Shares live audio playback and progress overlays with item and playlist views. */
+
 import type { MediaItemSummary, MusicPlaylistDetail } from '../api';
 
 export interface MusicPlaybackState {

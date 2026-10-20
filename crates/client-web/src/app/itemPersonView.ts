@@ -1,8 +1,9 @@
+/** Renders item detail, metadata search, person detail, and credit trays. */
+
 import { renderActiveAlbumButton, renderAlbumTracks, renderTrackLyrics } from './music';
 import { renderItemWarnings } from './itemWarnings';
 import { itemLineage } from './hierarchy';
 import { renderItemSources } from './itemSources';
-/** Renders item detail, metadata search, person detail, and credit trays. */
 import type {
   ItemMetadataMatch,
   MetadataSearchResult,

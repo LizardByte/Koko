@@ -1,3 +1,5 @@
+/** Loads route-specific data while rejecting stale responses after navigation. */
+
 import * as api from '../api';
 import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';

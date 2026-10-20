@@ -1,3 +1,5 @@
+/** Renders shared UI controls, labels, icons, and collapsible text. */
+
 import type { BootstrapUser, MediaItemSummary } from '../api';
 import { resolveApiUrl } from '../api';
 import { COLLAPSIBLE_TEXT_LENGTH, COLLAPSIBLE_TEXT_LINE_COUNT } from './constants';

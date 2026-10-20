@@ -1,3 +1,5 @@
+/** Renders music tracks, saved lyrics, and playback controls for albums and playlists. */
+
 import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MusicPlaylistDetail, type MusicLyrics } from '../api';
 import { escapeHtml, formatDuration } from './format';
 import { renderButtonContent, renderIcon } from './ui';

@@ -1,4 +1,5 @@
 /** Library provider order controls preference; honor each provider's declared dependencies. */
+
 function visibleProviderOptions(list: HTMLElement): HTMLElement[] {
   return Array.from(list.querySelectorAll<HTMLElement>('.metadata-provider-option:not(.is-hidden)'));
 }

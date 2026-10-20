@@ -1,3 +1,5 @@
+/** Defines browser routes, application state, and shared view contracts. */
+
 import type {
   ApiMode,
   AppBootstrapResponse,

@@ -1,3 +1,5 @@
+/** Defines API payloads and sends authenticated requests to the server or mock backend. */
+
 import {
   addMockLibrary,
   createMockUser,

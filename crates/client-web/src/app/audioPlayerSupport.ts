@@ -1,3 +1,5 @@
+/** Positions audio menus, reveals panel entries, and supplies browser media metadata. */
+
 import { getArtworkUrl, type MediaItemSummary } from '../api';
 
 /** Share the same album cover with the dock and OS/browser media controls. */

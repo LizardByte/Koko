@@ -1,3 +1,5 @@
+/** Renders audio controls and queue/lyrics panels and parses timed lyrics. */
+
 import { getArtworkUrl, type MediaItemSummary, type MusicLyrics } from '../api';
 import { escapeHtml } from './format';
 import { renderIcon } from './ui';

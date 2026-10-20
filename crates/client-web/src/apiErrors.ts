@@ -1,3 +1,5 @@
+/** Extracts readable API failures without exposing proxy error pages. */
+
 /** The server owns HTTP error wording; this fallback handles proxies and older servers. */
 export function apiErrorMessage(status: number, body: string): string {
   try {

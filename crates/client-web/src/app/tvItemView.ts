@@ -1,3 +1,5 @@
+/** Renders television seasons, episodes, and their detail-page playback actions. */
+
 import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MediaPlaybackTarget } from '../api';
 import { escapeHtml, formatDuration } from './format';
 import { renderItemCard, renderMetadataRefreshBadge, renderWatchProgress } from './homeView';

@@ -974,7 +974,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     const artistInput = document.querySelector<HTMLInputElement>('#metadata-search-artist');
     const languageInput = document.querySelector<HTMLInputElement>('#metadata-search-language');
     state.metadataSearchQuery = input?.value.trim() || selectedItemDefaultMetadataTitle();
-    state.metadataSearchYear = yearInput?.value.trim() || selectedItemDefaultMetadataYear();
+    state.metadataSearchYear = yearInput ? yearInput.value.trim() || selectedItemDefaultMetadataYear() : '';
     state.metadataSearchArtist = artistInput?.value.trim();
     state.metadataSearchLanguage = languageInput?.value.trim() || defaultMetadataSearchLanguage();
     state.metadataSearchProviders = Array.from(

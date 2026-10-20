@@ -9,7 +9,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { orderedAlbumTracks, albumPlaybackQueue, renderAlbumTracks } = await server.ssrLoadModule('/src/app/music.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
-const { renderItemPage, selectedItemDefaultMetadataArtist } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
+const { renderItemPage, selectedItemDefaultMetadataArtist, selectedItemDefaultMetadataYear } = await server.ssrLoadModule('/src/app/itemPersonView.ts');
 const { searchItemMetadata, getMusicLyrics } = await server.ssrLoadModule('/src/api.ts');
 const { canManuallyLinkMetadata } = await server.ssrLoadModule('/src/app/selectors.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
@@ -74,6 +74,26 @@ test('album matching defaults the editable artist field from the parent and pres
   } finally { Object.assign(state, original); }
 });
 
+test('artist matching omits year even when the item or a previous search has one', () => {
+  const original = { ...state };
+  try {
+    Object.assign(state, {
+      bootstrap: { current_user: { id: 1, admin: true } }, route: { page: 'item', itemId: 301 },
+      selectedItem: { ...mock.getMockItem(301), release_year: 1999 },
+      selectedItemMetadata: { providers: mock.getMockMetadataProviders(), matches: [{ provider_id: 'musicbrainz', external_id: 'artist', title: 'Artist', locale_key: 'en-US', refresh_state: 'linked', release_year: 2001 }] }, metadataSearchYear: '2008',
+      libraries: mock.getMockLibraries(), metadataProviders: mock.getMockMetadataProviders(),
+      libraryItems: [], itemManagementOpen: true,
+    });
+    assert.equal(selectedItemDefaultMetadataYear(), '');
+    assert.doesNotMatch(renderItemPage(), /id="metadata-search-year"/);
+    for (const item_type of ['album', 'track', 'movie', 'show']) {
+      state.selectedItem = { ...state.selectedItem, item_type };
+      assert.equal(selectedItemDefaultMetadataYear(), '1999');
+      assert.match(renderItemPage(), /id="metadata-search-year"/);
+    }
+  } finally { Object.assign(state, original); }
+});
+
 test('album searches send the artist as its own encoded filter and allow clearing it', async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
@@ -89,6 +109,23 @@ test('album searches send the artist as its own encoded filter and allow clearin
     await searchItemMetadata(101, 'Movie');
     assert.equal(requests[2].searchParams.has('artist'), false);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('track matching explains that its album must be matched first', () => {
+  const original = { ...state };
+  try {
+    Object.assign(state, {
+      bootstrap: { current_user: { id: 1, admin: true } }, route: { page: 'item', itemId: 103 },
+      selectedItem: { ...track(103, 1, 1), hierarchy: [{ ...mock.getMockItem(302), has_metadata: false }] },
+      selectedItemMetadata: undefined, libraryItems: [], itemManagementOpen: true,
+    });
+    let form = renderItemPage().match(/<form id="metadata-search-form"[\s\S]*?<\/form>/)?.[0];
+    assert.match(form, /Match this track’s album first/);
+    assert.match(form, /<button type="submit" disabled>/);
+    state.selectedItem.hierarchy[0].has_metadata = true;
+    form = renderItemPage().match(/<form id="metadata-search-form"[\s\S]*?<\/form>/)?.[0];
+    assert.doesNotMatch(form, /album first|disabled/);
+  } finally { Object.assign(state, original); }
 });
 
 test('music tag reading is opt-in for each library and is saved independently', async () => {

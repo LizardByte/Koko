@@ -126,6 +126,7 @@ export function selectedItemDefaultMetadataArtist(): string {
 }
 
 export function selectedItemDefaultMetadataYear(): string {
+  if (state.selectedItem?.item_type === 'artist') return '';
   const year = state.selectedItem?.release_year ?? state.selectedItemMetadata?.matches[0]?.release_year;
   return typeof year === 'number' ? String(year) : '';
 }
@@ -1082,14 +1083,17 @@ function renderMetadataSearchPanel(supportsManualLinking: boolean): string {
     return '<div class="empty-state tight">Season and episode metadata is inherited and refreshed automatically from the linked show.</div>';
   }
 
+  const needsAlbumMatch = state.selectedItem?.item_type === 'track'
+    && !state.selectedItem.hierarchy.some((parent) => parent.item_type === 'album' && parent.has_metadata);
   return `
               <form id="metadata-search-form" class="metadata-search-form">
+                ${needsAlbumMatch ? '<p class="muted">Match this track’s album first. Track searches use the album’s linked release.</p>' : ''}
                 <input id="metadata-search-input" name="metadataSearch" type="search" value="${escapeHtml(state.metadataSearchQuery)}" placeholder="${escapeHtml(selectedItemDefaultMetadataTitle() || 'Title')}" autocomplete="off" />
                 ${state.selectedItem?.item_type === 'album' ? `<label for="metadata-search-artist">Artist / group</label><input id="metadata-search-artist" name="metadataSearchArtist" type="text" value="${escapeHtml(state.metadataSearchArtist ?? selectedItemDefaultMetadataArtist())}" placeholder="Artist / group" autocomplete="off" />` : ''}
-                <input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />
+                ${state.selectedItem?.item_type !== 'artist' ? `<input id="metadata-search-year" name="metadataSearchYear" type="number" min="1800" max="2200" value="${escapeHtml(state.metadataSearchYear)}" placeholder="${escapeHtml(selectedItemDefaultMetadataYear() || 'Year')}" autocomplete="off" />` : ''}
                 <input id="metadata-search-language" name="metadataSearchLanguage" type="text" value="${escapeHtml(state.metadataSearchLanguage)}" placeholder="${escapeHtml(defaultMetadataSearchLanguage())}" autocomplete="off" />
                 ${renderMetadataSearchProviderControls()}
-                <button type="submit">${renderButtonContent('Search metadata', 'search')}</button>
+                <button type="submit" ${needsAlbumMatch ? 'disabled' : ''}>${renderButtonContent('Search metadata', 'search')}</button>
               </form>
               <div class="metadata-search-list">${renderMetadataSearchResults()}</div>
             `;

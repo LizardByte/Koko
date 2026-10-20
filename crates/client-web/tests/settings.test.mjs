@@ -277,12 +277,13 @@ test('Fanart.tv is selectable per music library only alongside MusicBrainz', () 
   assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="fanart"/);
 });
 
-test('LRCLIB is a keyless library-selectable music agent without a MusicBrainz dependency', () => {
-  const html = metadataProviderCheckboxes('providers', ['lrclib'], 'music');
+test('LRCLIB is a keyless library-selectable music agent extending MusicBrainz matches', () => {
+  const html = metadataProviderCheckboxes('providers', ['musicbrainz', 'lrclib'], 'music');
   const input = html.match(/<input[^>]*value="lrclib"[^>]*>/)?.[0];
   assert.match(input, /checked/);
   assert.doesNotMatch(input, /disabled/);
-  assert.match(html, /data-provider-option="lrclib" data-provider-role="secondary" data-extends-provider-ids=""/);
+  assert.match(html, /data-provider-option="lrclib" data-provider-role="secondary" data-extends-provider-ids="musicbrainz"/);
+  assert.match(metadataProviderCheckboxes('providers', ['lrclib'], 'music').match(/<input[^>]*value="lrclib"[^>]*>/)?.[0], /disabled/);
   assert.match(html, /\/assets\/providers\/lrclib.png/);
   assert.doesNotMatch(metadataProviderCheckboxes('providers', [], 'movies'), /value="lrclib"/);
   const index = state.settingsResponse.settings.media.libraries.findIndex((library) => library.kind === 'music');
@@ -290,7 +291,8 @@ test('LRCLIB is a keyless library-selectable music agent without a MusicBrainz d
   form.set(`existing_library_name_${index}`, 'Music');
   form.set(`existing_library_paths_${index}`, '/music');
   form.append(`existing_library_metadata_provider_${index}`, 'lrclib');
-  assert.deepEqual(buildSettingsFromForm(form).media.libraries[index].metadata_providers, ['lrclib']);
+  form.append(`existing_library_metadata_provider_${index}`, 'musicbrainz');
+  assert.deepEqual(buildSettingsFromForm(form).media.libraries[index].metadata_providers, ['lrclib', 'musicbrainz']);
   state.route = { page: 'settings', section: 'providers' };
   const settingsHtml = renderSettingsPage();
   assert.match(settingsHtml, /LRCLIB/);

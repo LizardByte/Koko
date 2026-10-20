@@ -2,7 +2,7 @@
 
 // Compile the shared schema for integration fixtures without exposing database internals.
 #[path = "../src/db/schema.rs"]
-mod schema;
+pub(crate) mod schema;
 
 // standard imports
 use std::sync::atomic::{

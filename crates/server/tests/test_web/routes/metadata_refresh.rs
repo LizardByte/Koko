@@ -5,6 +5,210 @@ const SHOW: i32 = 195_000_001;
 const SEASON: i32 = 195_000_002;
 const EPISODE: i32 = 195_000_003;
 
+#[tokio::test]
+async fn manual_album_link_matches_its_tracks_before_fetching_lyrics() {
+    use crate::db::schema::{
+        media_items,
+        music_item_metadata,
+    };
+    use diesel::{
+        ExpressionMethods,
+        QueryDsl,
+        RunQueryDsl,
+    };
+    const TRACK: i32 = 202_000_001;
+    const ALBUM: i32 = TRACK + 1;
+    const AMBIGUOUS: i32 = TRACK + 2;
+    const OUTSIDE: i32 = TRACK + 3;
+    let (_rocket, db) = super::super::music::tests::lyrics_database(TRACK).await;
+    let revision = db
+        .run(|conn| {
+            for (id, parent, title, number) in [
+                (AMBIGUOUS, Some(ALBUM), "Ambiguous", 2),
+                (OUTSIDE, None, "Outside", 1),
+            ] {
+                diesel::insert_into(media_items::table)
+                    .values((
+                        media_items::id.eq(id),
+                        media_items::library_id.eq(1),
+                        media_items::parent_id.eq(parent),
+                        media_items::identity_key.eq(title),
+                        media_items::item_type.eq("track"),
+                        media_items::display_title.eq(title),
+                        media_items::duration_ms.eq(180000),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+                diesel::insert_into(music_item_metadata::table)
+                    .values((
+                        music_item_metadata::media_item_id.eq(id),
+                        music_item_metadata::artist.eq("Artist"),
+                        music_item_metadata::album_artist.eq("Artist"),
+                        music_item_metadata::album.eq("Album"),
+                        music_item_metadata::track_number.eq(number),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+            }
+            diesel::update(music_item_metadata::table.find(TRACK))
+                .set(music_item_metadata::track_number.eq(1))
+                .execute(conn)
+                .unwrap();
+            // This is the same atomic reset used before the manual link worker starts.
+            metadata_jobs::reset(conn, ALBUM, false, |_| Ok(()))
+                .unwrap()
+                .1
+        })
+        .await;
+    let release_id = "d817f725-66c3-366d-8dd1-b22d49c8a766";
+    let recording_id = "24cc8311-98fd-423a-bed1-97728f5eabc5";
+    let recording = serde_json::json!({"id":recording_id,"title":"Song","length":180000,"score":100,
+        "artist-credit":[{"artist":{"name":"Artist"}}]});
+    let ambiguous = serde_json::json!({
+        "id":"1f9e42d1-97dd-4226-a44b-4ec30b197c07", "title":"Ambiguous",
+        "length":180000, "score":100
+    });
+    let mut duplicate = ambiguous.clone();
+    duplicate["id"] = serde_json::json!("cd83ca98-3d2e-4a83-abd0-92b117cbc080");
+    let responses = vec![
+        (
+            format!("/ws/2/release/{release_id}"),
+            None,
+            serde_json::json!({
+                "id":release_id, "title":"Album", "cover-art-archive":{"front":false}
+            }),
+        ),
+        (
+            "/ws/2/recording".into(),
+            Some(format!("recording:\"Song\" AND reid:{release_id}")),
+            serde_json::json!({"recordings":[recording.clone()]}),
+        ),
+        (format!("/ws/2/recording/{recording_id}"), None, recording),
+        (
+            "/ws/2/recording".into(),
+            Some(format!("recording:\"Ambiguous\" AND reid:{release_id}")),
+            serde_json::json!({"recordings":[ambiguous,duplicate]}),
+        ),
+    ];
+    let (root, worker) = album_match_responses(responses);
+    let (lyrics_url, lyrics_worker) = super::super::music::tests::mock_lyrics(vec![(
+        "200 OK",
+        r#"{"plainLyrics":"Matched song lyrics"}"#,
+    )]);
+    let target = MetadataRefreshTarget {
+        revision,
+        locale_key: None,
+        item_id: ALBUM,
+        library_id: 1,
+        provider_id: MetadataProviderId::MusicBrainz,
+        item_type: "album".into(),
+        display_title: "Album".into(),
+        relative_path: String::new(),
+        external_id: release_id.into(),
+        media_type: "release".into(),
+        fetch_kind: MetadataRefreshFetchKind::Direct,
+    };
+    crate::metadata::TEST_MUSICBRAINZ_API_ROOT
+        .scope(
+            root,
+            super::super::music::TEST_LYRICS_URL.scope(lyrics_url, async {
+                assert!(
+                    !execute_manual_metadata_refresh_target(&db, &target, &Settings::default())
+                        .await
+                );
+            }),
+        )
+        .await;
+    worker.join().unwrap();
+    lyrics_worker.join().unwrap();
+    db.run(move |conn| {
+        assert_eq!(
+            get_primary_item_metadata_link(conn, TRACK)
+                .unwrap()
+                .unwrap()
+                .external_id,
+            recording_id
+        );
+        assert_eq!(
+            crate::media::lyrics::load(conn, TRACK)
+                .unwrap()
+                .unwrap()
+                .plain_lyrics
+                .as_deref(),
+            Some("Matched song lyrics")
+        );
+        for id in [AMBIGUOUS, OUTSIDE] {
+            assert!(get_primary_item_metadata_link(conn, id).unwrap().is_none());
+            assert!(crate::media::lyrics::load(conn, id).unwrap().is_none());
+        }
+        assert!(get_media_item_summary(conn, OUTSIDE).unwrap().is_some());
+    })
+    .await;
+    assert_eq!(
+        search_music_track_metadata(&db, OUTSIDE, "Outside", None)
+            .await
+            .unwrap_err(),
+        Status::BadRequest
+    );
+}
+
+fn album_match_responses(
+    responses: Vec<(String, Option<String>, serde_json::Value)>
+) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{
+        Read,
+        Write,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let root = format!("http://{}/ws/2", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        for (path, query, body) in responses {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10))
+                    }
+                    Err(error) => panic!("Expected album matching request: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = [0; 16384];
+            let size = stream.read(&mut bytes).unwrap();
+            let request = String::from_utf8_lossy(&bytes[..size]);
+            let url = reqwest::Url::parse(&format!(
+                "http://localhost{}",
+                request.split_whitespace().nth(1).unwrap()
+            ))
+            .unwrap();
+            assert_eq!(url.path(), path);
+            if let Some(query) = query {
+                assert!(
+                    url.query_pairs()
+                        .any(|(key, value)| key == "query" && value == query)
+                );
+            }
+            let body = body.to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+                 {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    (root, worker)
+}
+
 async fn wait_for_library_scans_and_metadata(library_ids: &[i32]) {
     tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
@@ -623,6 +827,18 @@ async fn refreshing_tracks_keep_album_and_artist_busy_without_inflating_progress
     })
     .await;
     db.run(|conn| {
+        use crate::db::schema::item_metadata_links::dsl as links;
+        use diesel::{
+            ExpressionMethods,
+            QueryDsl,
+            RunQueryDsl,
+        };
+        diesel::update(
+            links::item_metadata_links.filter(links::media_item_id.eq_any([ARTIST, ALBUM])),
+        )
+        .set(links::last_refreshed_at.eq(Some(1_i64)))
+        .execute(conn)
+        .unwrap();
         let context = music_match_context(conn, TRACK).unwrap();
         assert_eq!(
             context.artist_id.as_deref(),

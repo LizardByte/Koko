@@ -79,14 +79,14 @@ impl MetadataProvider for LrclibMetadataProvider {
         MetadataProviderDescriptor {
             id: MetadataProviderId::Lrclib,
             display_name: "LRCLIB".into(),
-            description: "Plain and synchronized lyrics saved during track metadata refreshes. \
-                          Playback reads saved lyrics without contacting LRCLIB."
+            description: "Plain and synchronized lyrics saved after a track is matched to its \
+                          album. Playback reads saved lyrics without contacting LRCLIB."
                 .into(),
             supported_kinds: vec![MediaLibraryKind::Music],
             requires_api_key: false,
             implemented: true,
             role: MetadataProviderRole::Secondary,
-            extends_provider_ids: Vec::new(),
+            extends_provider_ids: vec![MetadataProviderId::MusicBrainz],
             attribution_text: "Lyrics provided by LRCLIB.".into(),
             attribution_url: "https://lrclib.net/".into(),
             logo_light_url: Some("/assets/providers/lrclib.png".into()),

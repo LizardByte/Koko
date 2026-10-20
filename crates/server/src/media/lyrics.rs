@@ -47,14 +47,22 @@ pub(crate) struct Lookup {
 
 impl Lookup {
     pub(crate) fn from_item(item: &super::MediaItemDetail) -> Option<Self> {
-        if item.item_type != "track" {
+        if item.item_type != "track"
+            || !item.has_metadata
+            || item.linked_media_type.as_deref() != Some("recording")
+            || item.metadata_refresh_state.as_deref() != Some("fresh")
+        {
             return None;
         }
+        let album = item
+            .hierarchy
+            .iter()
+            .find(|parent| parent.item_type == "album" && parent.has_metadata)?;
         let music = item.music.as_ref()?;
         Some(Self {
             title: item.display_title.trim().into(),
             artist: music.artist.trim().into(),
-            album: music.album.trim().into(),
+            album: album.display_title.trim().into(),
             duration_ms: item.duration_ms.filter(|duration| *duration > 0),
         })
     }
@@ -241,15 +249,86 @@ pub(crate) mod tests {
     ) -> Lookup {
         crate::db::run_pending_sqlite_migrations(conn).unwrap();
         crate::db::configure_sqlite_connection(conn).unwrap();
-        conn.batch_execute(&format!(
-            "INSERT INTO media_libraries(id,name,path,kind,metadata_providers_json) \
-             VALUES(1,'Music','/music','music','[\"lrclib\"]');
-            INSERT INTO media_items(id,library_id,identity_key,item_type,display_title,duration_ms)
-            VALUES({id},1,'song','track','Song',180000);
-            INSERT INTO music_item_metadata(media_item_id,artist,album_artist,album)
-            VALUES({id},'Artist','Artist','Album');"
-        ))
-        .unwrap();
+        use crate::db::schema::{
+            media_items,
+            media_libraries,
+            music_item_metadata,
+        };
+        diesel::insert_into(media_libraries::table)
+            .values((
+                media_libraries::id.eq(1),
+                media_libraries::name.eq("Music"),
+                media_libraries::path.eq("/music"),
+                media_libraries::kind.eq("music"),
+                media_libraries::metadata_providers_json.eq("[\"musicbrainz\",\"lrclib\"]"),
+            ))
+            .execute(conn)
+            .unwrap();
+        let album_id = id + 1;
+        diesel::insert_into(media_items::table)
+            .values((
+                media_items::id.eq(album_id),
+                media_items::library_id.eq(1),
+                media_items::identity_key.eq("album"),
+                media_items::item_type.eq("album"),
+                media_items::display_title.eq("Album"),
+            ))
+            .execute(conn)
+            .unwrap();
+        diesel::insert_into(media_items::table)
+            .values((
+                media_items::id.eq(id),
+                media_items::library_id.eq(1),
+                media_items::parent_id.eq(album_id),
+                media_items::identity_key.eq("song"),
+                media_items::item_type.eq("track"),
+                media_items::display_title.eq("Song"),
+                media_items::duration_ms.eq(180000),
+            ))
+            .execute(conn)
+            .unwrap();
+        diesel::insert_into(music_item_metadata::table)
+            .values((
+                music_item_metadata::media_item_id.eq(id),
+                music_item_metadata::artist.eq("Artist"),
+                music_item_metadata::album_artist.eq("Artist"),
+                music_item_metadata::album.eq("Album"),
+            ))
+            .execute(conn)
+            .unwrap();
+        for (item_id, external_id, media_type, title) in [
+            (
+                album_id,
+                "d817f725-66c3-366d-8dd1-b22d49c8a766",
+                "release",
+                "Album",
+            ),
+            (
+                id,
+                "24cc8311-98fd-423a-bed1-97728f5eabc5",
+                "recording",
+                "Song",
+            ),
+        ] {
+            crate::metadata::upsert_item_metadata_snapshot(
+                conn,
+                item_id,
+                &crate::metadata::StoredMetadataSnapshot {
+                    provider_id: crate::config::MetadataProviderId::MusicBrainz,
+                    external_id: external_id.into(),
+                    media_type: Some(media_type.into()),
+                    title: Some(title.into()),
+                    overview: None,
+                    artwork_url: None,
+                    backdrop_url: None,
+                    release_year: None,
+                    locale_key: crate::metadata::DEFAULT_METADATA_LOCALE.into(),
+                    provider_locale_key: None,
+                    provider_payload_json: None,
+                },
+            )
+            .unwrap();
+        }
         Lookup::from_item(&super::super::get_media_item(conn, id, "").unwrap().unwrap()).unwrap()
     }
 

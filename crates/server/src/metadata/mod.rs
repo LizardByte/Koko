@@ -53,6 +53,8 @@ mod providers;
 #[cfg(test)]
 pub(crate) use providers::lrclib::TEST_LYRICS_URL;
 pub(crate) use providers::lrclib::fetch_lyrics;
+#[cfg(test)]
+pub(crate) use providers::musicbrainz::TEST_API_ROOT as TEST_MUSICBRAINZ_API_ROOT;
 pub use providers::{
     MetadataProvider,
     MetadataRegistry,
@@ -3619,6 +3621,10 @@ pub(crate) fn metadata_response_cache_key(
     parts: &[&str],
 ) -> String {
     let mut hasher = Sha256::new();
+    #[cfg(test)]
+    if let Ok(root) = TEST_MUSICBRAINZ_API_ROOT.try_with(Clone::clone) {
+        hasher.update(root.as_bytes());
+    }
     // Invalidate response snapshots written before endpoint-specific decoding.
     hasher.update(b"metadata-response-v2\0");
     if *provider_id == MetadataProviderId::MusicBrainz {
@@ -3640,11 +3646,19 @@ pub(crate) fn metadata_response_cache_key(
 }
 
 fn metadata_response_cache_path(cache_key: &str) -> PathBuf {
+    #[cfg(not(test))]
     let data_dir = crate::config::current_settings().general.data_dir;
     let (shard, file_stem) = cache_key.split_at(1);
-    metadata_response_cache_dir(&data_dir)
-        .join(shard)
-        .join(format!("{file_stem}.json"))
+    #[cfg(not(test))]
+    let root = metadata_response_cache_dir(&data_dir);
+    #[cfg(test)]
+    let root = {
+        static ROOT: Lazy<PathBuf> = Lazy::new(|| {
+            std::env::temp_dir().join(format!("koko-metadata-tests-{}", rand::random::<u128>()))
+        });
+        ROOT.clone()
+    };
+    root.join(shard).join(format!("{file_stem}.json"))
 }
 
 fn read_metadata_snapshot_cache(cache_key: &str) -> Option<StoredMetadataSnapshot> {

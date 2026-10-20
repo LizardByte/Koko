@@ -142,7 +142,7 @@ function renderLyrics(view: AudioPlayerViewState): string {
     !lyrics.synced_lyrics?.trim() &&
     !lyrics.plain_lyrics?.trim()
   )
-    return '<p>No saved lyrics are available. Select LRCLIB in the library’s metadata sources and refresh this track’s metadata to look for lyrics.</p>';
+    return '<p>No saved lyrics are available. Match the album and track, select LRCLIB in the library’s metadata sources, and refresh this track’s metadata to look for lyrics.</p>';
   return `${lyricContents(lyrics)}<p class="muted">Lyrics from <a href="${escapeHtml(lyrics.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(lyrics.source)}</a></p>`;
 }
 /** Empty timestamped lines clear the inline lyric during instrumental gaps. */

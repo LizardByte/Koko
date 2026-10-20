@@ -555,9 +555,9 @@ const metadataProviders: MetadataProviderStatus[] = [
   {
     id: 'lrclib',
     display_name: 'LRCLIB',
-    description: 'Plain and synchronized lyrics saved during track metadata refreshes. Playback reads saved lyrics without contacting LRCLIB.',
+    description: 'Plain and synchronized lyrics saved after a track is matched to its album. Playback reads saved lyrics without contacting LRCLIB.',
     supported_kinds: ['music'],
-    requires_api_key: false, implemented: true, role: 'secondary', extends_provider_ids: [],
+    requires_api_key: false, implemented: true, role: 'secondary', extends_provider_ids: ['musicbrainz'],
     enabled: false, configured: true, language: 'en-US',
     attribution_text: 'Lyrics provided by LRCLIB.', attribution_url: 'https://lrclib.net/',
     logo_light_url: '/assets/providers/lrclib.png', logo_dark_url: '/assets/providers/lrclib.png',

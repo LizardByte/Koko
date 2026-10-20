@@ -1686,7 +1686,10 @@ fn music_match_context(
         }
         current = parent;
         if let Some(link) = get_primary_item_metadata_link(conn, parent)? {
-            if link.provider_id != "musicbrainz" || link.match_state == "unlinked" {
+            if link.provider_id != "musicbrainz"
+                || link.match_state == "unlinked"
+                || link.last_refreshed_at.is_none()
+            {
                 continue;
             }
             match link.media_type.as_deref() {
@@ -1698,6 +1701,83 @@ fn music_match_context(
         }
     }
     Ok(context)
+}
+
+async fn search_music_track_metadata(
+    db: &DbConn,
+    item_id: i32,
+    title: &str,
+    recording_id: Option<&str>,
+) -> Result<Vec<MetadataSearchResult>, Status> {
+    let context = db
+        .run(move |conn| music_match_context(conn, item_id))
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    if !context.has_album() {
+        return Err(Status::BadRequest);
+    }
+    let registry = crate::metadata::MetadataRegistry::new();
+    let provider = registry
+        .provider(&MetadataProviderId::MusicBrainz)
+        .ok_or(Status::BadRequest)?;
+    provider
+        .search_album_recordings(title, recording_id, &context)
+        .await
+        .map_err(|error| {
+            log::warn!("Album-scoped recording search failed for track {item_id}: {error}");
+            Status::ServiceUnavailable
+        })
+}
+
+async fn match_linked_album_tracks(
+    db: &DbConn,
+    settings: &Settings,
+    target: &MetadataRefreshTarget,
+) {
+    if target.item_type != "album"
+        || target.provider_id != MetadataProviderId::MusicBrainz
+        || !target.revision.is_current()
+    {
+        return;
+    }
+    let album_id = target.item_id;
+    let track_ids = match db
+        .run(move |conn| list_media_item_children(conn, album_id))
+        .await
+    {
+        Ok(children) => children
+            .into_iter()
+            .filter(|item| item.item_type == "track")
+            .map(|item| item.id)
+            .collect::<HashSet<_>>(),
+        Err(error) => {
+            log::warn!("Failed to load tracks for linked album {album_id}: {error}");
+            return;
+        }
+    };
+    if !track_ids.is_empty() && target.revision.is_current() {
+        run_automatic_movie_metadata_linking(
+            db,
+            settings,
+            Some(target.library_id),
+            AutomaticMetadataScope::NewItems(track_ids),
+            None,
+            None,
+        )
+        .await;
+    }
+}
+
+async fn execute_manual_metadata_refresh_target(
+    db: &DbConn,
+    target: &MetadataRefreshTarget,
+    settings: &Settings,
+) -> bool {
+    let failed = execute_metadata_refresh_target(db, target, settings).await;
+    if !failed {
+        match_linked_album_tracks(db, settings, target).await;
+    }
+    failed
 }
 
 async fn load_show_descendant_refresh_targets(
@@ -2223,7 +2303,7 @@ async fn execute_metadata_refresh_target(
         .revision
         .scope(async {
             let failed = execute_metadata_refresh_target_inner(db, target, settings).await;
-            if target.item_type == "track" && target.revision.is_current() {
+            if !failed && target.item_type == "track" && target.revision.is_current() {
                 super::music::refresh_metadata_lyrics(db, target.item_id, true).await;
             }
             failed
@@ -4859,15 +4939,20 @@ pub async fn search_item_metadata(
             );
         }
 
-        match search_provider_with_artist(
-            &search_metadata_settings,
-            provider_id.clone(),
-            &effective_query,
-            Some(expected_media_type),
-            artist.as_deref().filter(|_| item.item_type == "album"),
-        )
-        .await
-        {
+        let provider_result =
+            if item.item_type == "track" && provider_id == MetadataProviderId::MusicBrainz {
+                Ok(search_music_track_metadata(&db, item_id, &effective_query, None).await?)
+            } else {
+                search_provider_with_artist(
+                    &search_metadata_settings,
+                    provider_id.clone(),
+                    &effective_query,
+                    Some(expected_media_type),
+                    artist.as_deref().filter(|_| item.item_type == "album"),
+                )
+                .await
+            };
+        match provider_result {
             Ok(provider_results) => {
                 saw_success = true;
                 results.extend(
@@ -4895,7 +4980,11 @@ pub async fn search_item_metadata(
     }
 
     for result in &mut results {
-        let mut score = metadata_search_score(&search_title, year, result);
+        let mut score = metadata_search_score(
+            &search_title,
+            year.filter(|_| item.item_type != "artist"),
+            result,
+        );
         if item.item_type == "album" {
             // Count is supporting evidence; incomplete albums can still be linked manually.
             score *= album_track_count_score(item.child_count, result.track_count);
@@ -4959,6 +5048,17 @@ pub async fn link_item_metadata(
         != provider_search_media_type(request.provider_id.clone(), &item)
     {
         return Err(Status::BadRequest);
+    }
+
+    if item.item_type == "track" && request.provider_id == MetadataProviderId::MusicBrainz {
+        let candidates =
+            search_music_track_metadata(&db, item_id, "", Some(&request.external_id)).await?;
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.external_id == request.external_id)
+        {
+            return Err(Status::BadRequest);
+        }
     }
 
     let languages = metadata_locales_for_provider(
@@ -5070,7 +5170,7 @@ pub async fn link_item_metadata(
         }
 
         for target in targets {
-            let failed = execute_metadata_refresh_target(&db, &target, &settings).await;
+            let failed = execute_manual_metadata_refresh_target(&db, &target, &settings).await;
             record_metadata_refresh_activity_progress(&activity_id, target.item_id, failed).await;
         }
         complete_metadata_refresh_activity(&activity_id).await;
@@ -5727,28 +5827,17 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn music_metadata_matching_populates_lyrics_and_only_explicit_refresh_rechecks_them() {
+    async fn matched_track_lyrics_are_reused_until_explicit_metadata_refresh() {
         const TRACK: i32 = 192000005;
         let (_rocket, db) = super::super::music::tests::lyrics_database(TRACK).await;
         let (url, worker) = super::super::music::tests::mock_lyrics(vec![
             ("200 OK", r#"{"plainLyrics":"Original lyric"}"#),
             ("200 OK", r#"{"plainLyrics":"Updated lyric"}"#),
         ]);
-        let mut settings = Settings::default();
-        // No primary provider is available: optional lyrics still work for unmatched songs.
-        settings.metadata.providers.clear();
         super::super::music::TEST_LYRICS_URL
             .scope(url, async {
                 for _ in 0..2 {
-                    run_automatic_movie_metadata_linking(
-                        &db,
-                        &settings,
-                        Some(1),
-                        AutomaticMetadataScope::NewItems(HashSet::from([TRACK])),
-                        None,
-                        None,
-                    )
-                    .await;
+                    super::super::music::refresh_metadata_lyrics(&db, TRACK, false).await;
                     let saved = db
                         .run(|conn| crate::media::lyrics::load(conn, TRACK))
                         .await
@@ -5756,15 +5845,7 @@ mod tests {
                         .unwrap();
                     assert_eq!(saved.plain_lyrics.as_deref(), Some("Original lyric"));
                 }
-                run_automatic_movie_metadata_linking(
-                    &db,
-                    &settings,
-                    Some(1),
-                    AutomaticMetadataScope::AllUnmatched,
-                    None,
-                    None,
-                )
-                .await;
+                super::super::music::refresh_metadata_lyrics(&db, TRACK, true).await;
                 worker.join().unwrap();
                 let saved = db
                     .run(|conn| crate::media::lyrics::load(conn, TRACK))

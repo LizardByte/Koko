@@ -502,22 +502,99 @@ async fn music_discovery_checks_item_access_before_provider_requests() {
     }
     let db = DbConn::get_one(client.rocket()).await.unwrap();
     db.run(|conn| {
-        conn.batch_execute(
-            "INSERT INTO media_items \
-             (id,library_id,identity_key,item_type,display_title,playable,media_kind) VALUES \
-             (20,1,'song','track','Visible song',1,'audio'),(21,2,'secret-song','track','Secret \
-             song',1,'audio');
-             INSERT INTO music_item_metadata(media_item_id,artist,album_artist,album) VALUES
-             (20,'Artist','Artist','Album'), (21,'Artist','Artist','Album');
-             INSERT INTO music_lyrics
-             (media_item_id,track_title,artist_name,album_name,plain_lyrics,source,source_url,
-              lookup_status,checked_at,next_check_at) VALUES
-             (20,'Visible song','Artist','Album','Public lyrics',
-              'LRCLIB','https://lrclib.net/','found',1,1),
-             (21,'Secret song','Artist','Album','Private lyrics',
-              'LRCLIB','https://lrclib.net/','found',1,1);",
-        )
-        .unwrap()
+        use crate::test_utils::schema::{
+            media_items,
+            media_libraries,
+            music_item_metadata,
+            music_lyrics,
+        };
+        use diesel::{
+            ExpressionMethods,
+            QueryDsl,
+            RunQueryDsl,
+        };
+        diesel::update(media_libraries::table.filter(media_libraries::id.eq_any([1, 2])))
+            .set((
+                media_libraries::kind.eq("music"),
+                media_libraries::metadata_providers_json.eq("[\"musicbrainz\",\"lrclib\"]"),
+            ))
+            .execute(conn)
+            .unwrap();
+        for (id, library, album, title, text) in [
+            (20, 1, 22, "Visible song", "Public lyrics"),
+            (21, 2, 23, "Secret song", "Private lyrics"),
+        ] {
+            diesel::insert_into(media_items::table)
+                .values((
+                    media_items::id.eq(album),
+                    media_items::library_id.eq(library),
+                    media_items::identity_key.eq(format!("album-{album}")),
+                    media_items::item_type.eq("album"),
+                    media_items::display_title.eq("Album"),
+                ))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(media_items::table)
+                .values((
+                    media_items::id.eq(id),
+                    media_items::library_id.eq(library),
+                    media_items::parent_id.eq(album),
+                    media_items::identity_key.eq(title),
+                    media_items::item_type.eq("track"),
+                    media_items::display_title.eq(title),
+                    media_items::playable.eq(true),
+                    media_items::media_kind.eq("audio"),
+                ))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(music_item_metadata::table)
+                .values((
+                    music_item_metadata::media_item_id.eq(id),
+                    music_item_metadata::artist.eq("Artist"),
+                    music_item_metadata::album_artist.eq("Artist"),
+                    music_item_metadata::album.eq("Album"),
+                ))
+                .execute(conn)
+                .unwrap();
+            for (item_id, media_type, name) in [
+                (album, "release", "Album"),
+                (id, "recording", title),
+            ] {
+                koko::metadata::upsert_item_metadata_snapshot(
+                    conn,
+                    item_id,
+                    &koko::metadata::StoredMetadataSnapshot {
+                        provider_id: koko::config::MetadataProviderId::MusicBrainz,
+                        external_id: format!("test-{item_id}"),
+                        media_type: Some(media_type.into()),
+                        title: Some(name.into()),
+                        overview: None,
+                        artwork_url: None,
+                        backdrop_url: None,
+                        release_year: None,
+                        locale_key: "en-US".into(),
+                        provider_locale_key: None,
+                        provider_payload_json: None,
+                    },
+                )
+                .unwrap();
+            }
+            diesel::insert_into(music_lyrics::table)
+                .values((
+                    music_lyrics::media_item_id.eq(id),
+                    music_lyrics::track_title.eq(title),
+                    music_lyrics::artist_name.eq("Artist"),
+                    music_lyrics::album_name.eq("Album"),
+                    music_lyrics::plain_lyrics.eq(text),
+                    music_lyrics::source.eq("LRCLIB"),
+                    music_lyrics::source_url.eq("https://lrclib.net/"),
+                    music_lyrics::lookup_status.eq("found"),
+                    music_lyrics::checked_at.eq(1),
+                    music_lyrics::next_check_at.eq(1),
+                ))
+                .execute(conn)
+                .unwrap();
+        }
     })
     .await;
     let text = response(

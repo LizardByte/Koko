@@ -1,4 +1,4 @@
-mod musicbrainz;
+pub(super) mod musicbrainz;
 use musicbrainz::MusicBrainzMetadataProvider;
 pub(crate) mod fanart;
 use fanart::FanartMetadataProvider;
@@ -48,6 +48,19 @@ pub struct MusicMatchContext {
     pub release_id: Option<String>,
     /// Matched MusicBrainz album identifier across editions.
     pub release_group_id: Option<String>,
+}
+
+impl MusicMatchContext {
+    /// Whether an album has a valid matched release or release-group identifier.
+    pub fn has_album(&self) -> bool {
+        self.release_id
+            .as_deref()
+            .is_some_and(crate::media::valid_mbid)
+            || self
+                .release_group_id
+                .as_deref()
+                .is_some_and(crate::media::valid_mbid)
+    }
 }
 
 /// Provider contract for metadata implementations.
@@ -172,6 +185,16 @@ pub trait MetadataProvider {
         _context: &'a MusicMatchContext,
     ) -> MetadataProviderFuture<'a, Option<MetadataSearchResult>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// Search recordings only within the item's matched album, optionally by recording ID.
+    fn search_album_recordings<'a>(
+        &'a self,
+        _title: &'a str,
+        _recording_id: Option<&'a str>,
+        _context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     /// Load provider-side descendant ids for a linked show.

@@ -151,9 +151,9 @@ async fn read_track_lyrics(
 ) -> Result<MusicLyrics, Status> {
     db.run(move |conn| {
         let item = media::get_media_item(conn, id, "")?.ok_or(diesel::result::Error::NotFound)?;
-        let Some(_lookup) = Lookup::from_item(&item) else {
+        if item.item_type != "track" || item.music.is_none() {
             return Ok::<_, diesel::result::Error>(None);
-        };
+        }
         Ok(Some(item.lyrics.unwrap_or_else(MusicLyrics::empty)))
     })
     .await
@@ -701,6 +701,46 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
+    async fn unmatched_tracks_or_albums_never_request_or_save_lyrics() {
+        use crate::db::schema::item_metadata_links;
+        use diesel::{
+            ExpressionMethods,
+            QueryDsl,
+            RunQueryDsl,
+        };
+        for (track, unmatched) in [
+            (202_000_011, 202_000_011),
+            (202_000_021, 202_000_022),
+        ] {
+            let (_rocket, db) = lyrics_database(track).await;
+            db.run(move |conn| {
+                diesel::delete(
+                    item_metadata_links::table
+                        .filter(item_metadata_links::media_item_id.eq(unmatched)),
+                )
+                .execute(conn)
+                .unwrap();
+            })
+            .await;
+            TEST_LYRICS_URL
+                .scope("http://127.0.0.1:1/must-not-contact".into(), async {
+                    refresh_metadata_lyrics(&db, track, true).await;
+                    assert!(
+                        db.run(move |conn| lyrics_store::load(conn, track))
+                            .await
+                            .unwrap()
+                            .is_none()
+                    );
+                    assert_eq!(
+                        read_track_lyrics(&db, track).await.unwrap(),
+                        MusicLyrics::empty()
+                    );
+                })
+                .await;
+        }
+    }
+
+    #[rocket::async_test]
     async fn lyrics_metadata_agent_selection_is_library_scoped_and_disabling_preserves_saved_text()
     {
         const TRACK: i32 = 192000006;
@@ -723,10 +763,12 @@ pub(crate) mod tests {
                 );
             })
             .await;
-        // No primary metadata provider or MusicBrainz match is necessary.
+        // LRCLIB is optional, alongside the primary matches already stored by the fixture.
         db.run(|conn| {
-            conn.batch_execute("UPDATE media_libraries SET metadata_providers_json='[\"lrclib\"]'")
-                .unwrap()
+            conn.batch_execute(
+                "UPDATE media_libraries SET metadata_providers_json='[\"musicbrainz\",\"lrclib\"]'",
+            )
+            .unwrap()
         })
         .await;
         let (url, worker) = mock_lyrics(vec![(
@@ -891,11 +933,32 @@ pub(crate) mod tests {
 
     #[rocket::async_test]
     async fn an_obsolete_lookup_cannot_restore_lyrics_after_a_same_identity_rematch() {
+        use crate::db::schema::item_metadata_links;
+        use diesel::{
+            ExpressionMethods,
+            RunQueryDsl,
+        };
         let (_rocket, db) = lyrics_database(192000004).await;
         let revision = super::super::metadata_jobs::MetadataRevision::current(192000004);
-        db.run(|conn| super::super::metadata_jobs::reset(conn, 192000004, false, |_| Ok(())))
-            .await
-            .unwrap();
+        db.run(|conn| {
+            super::super::metadata_jobs::reset(conn, 192000004, false, |conn| {
+                diesel::insert_into(item_metadata_links::table)
+                    .values((
+                        item_metadata_links::media_item_id.eq(192000004),
+                        item_metadata_links::provider_id.eq("musicbrainz"),
+                        item_metadata_links::external_id.eq("24cc8311-98fd-423a-bed1-97728f5eabc5"),
+                        item_metadata_links::media_type.eq("recording"),
+                        item_metadata_links::title.eq("Song"),
+                        item_metadata_links::match_state.eq("linked"),
+                        item_metadata_links::refresh_state.eq("fresh"),
+                        item_metadata_links::last_refreshed_at.eq(1_i64),
+                    ))
+                    .execute(conn)?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
         let (url, worker) = mock_lyrics(vec![("200 OK", r#"{"plainLyrics":"Obsolete"}"#)]);
         let result = TEST_LYRICS_URL
             .scope(

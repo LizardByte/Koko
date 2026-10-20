@@ -81,7 +81,7 @@ test('inline lyrics remain empty before the first timed line and during blank in
 test('missing saved lyrics direct users to metadata refresh instead of a playback lookup',()=>{
   const queue=new AudioQueue();queue.replace([{id:1,display_title:'Song',item_type:'track'}]);
   const html=renderAudioPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyrics:{instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'},lyricsLoading:false,saving:false});
-  assert.match(html,/Select LRCLIB in the library’s metadata sources/);
+  assert.match(html,/Match the album and track, select LRCLIB in the library’s metadata sources/);
   assert.match(html,/refresh this track’s metadata/);
   assert.doesNotMatch(html,/Looking up lyrics|Lyrics from|retry-lyrics/);
 });

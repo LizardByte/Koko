@@ -18,7 +18,7 @@ use crate::media::{
 
 #[cfg(test)]
 tokio::task_local! {
-    static TEST_API_ROOT: String;
+    pub(crate) static TEST_API_ROOT: String;
 }
 /// MusicBrainz's read-only provider; public lookups do not need credentials.
 pub(super) struct MusicBrainzMetadataProvider;
@@ -237,36 +237,21 @@ fn music_query(
         "release-group" => "releasegroup",
         _ => "recording",
     };
-    let artist_id =
-        if entity == "artist" || (entity == "recording" && music.artist != music.album_artist) {
-            None
-        } else {
-            context
-                .artist_id
-                .as_ref()
-                .or(music.musicbrainz_artist_id.as_ref())
-                .filter(|id| valid_mbid(id))
-                .cloned()
-        };
+    let artist_id = if entity == "artist" {
+        None
+    } else {
+        context
+            .artist_id
+            .as_ref()
+            .or(music.musicbrainz_artist_id.as_ref())
+            .filter(|id| valid_mbid(id))
+            .cloned()
+    };
     let mut query = format!("{field}:{}", quoted(title));
     if let Some(id) = &artist_id {
         query.push_str(&format!(" AND arid:{id}"));
     } else if entity != "artist" {
-        let artist = if entity == "recording" { &music.artist } else { &music.album_artist };
-        query.push_str(&format!(" AND artist:{}", quoted(artist)));
-    }
-    if entity == "recording" {
-        if let Some(id) = context.release_id.as_ref().filter(|id| valid_mbid(id)) {
-            query.push_str(&format!(" AND reid:{id}"));
-        } else if let Some(id) = context
-            .release_group_id
-            .as_ref()
-            .filter(|id| valid_mbid(id))
-        {
-            query.push_str(&format!(" AND rgid:{id}"));
-        } else if music.album != "Unknown Album" {
-            query.push_str(&format!(" AND release:{}", quoted(&music.album)));
-        }
+        query.push_str(&format!(" AND artist:{}", quoted(&music.album_artist)));
     }
     if entity == "release" {
         if let Some(year) = music.year {
@@ -277,6 +262,24 @@ fn music_query(
 }
 
 impl MetadataProvider for MusicBrainzMetadataProvider {
+    fn search_album_recordings<'a>(
+        &'a self,
+        title: &'a str,
+        recording_id: Option<&'a str>,
+        context: &'a MusicMatchContext,
+    ) -> MetadataProviderFuture<'a, Vec<MetadataSearchResult>> {
+        Box::pin(async move {
+            let Some(query) = album_recording_query(title, recording_id, context) else {
+                return Ok(Vec::new());
+            };
+            Ok(search_entities(&query, "recording")
+                .await?
+                .iter()
+                .filter_map(|candidate| candidate.search_result("recording"))
+                .collect())
+        })
+    }
+
     fn descriptor(&self) -> MetadataProviderDescriptor {
         MetadataProviderDescriptor {
             id: MetadataProviderId::MusicBrainz,
@@ -340,6 +343,18 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
             } else {
                 entity_type(item_type)?
             };
+            if entity == "recording" {
+                let Some(query) = album_recording_query(
+                    title,
+                    music.musicbrainz_recording_id.as_deref(),
+                    context,
+                ) else {
+                    return Ok(None);
+                };
+                let mut entities = search_entities(&query, "recording").await?;
+                narrow_recordings_by_duration(&mut entities, context.duration_ms);
+                return Ok(choose_match(&entities, "recording", title, None, None));
+            }
             let id = match entity {
                 "artist" => music.musicbrainz_artist_id.as_deref(),
                 "release" => music.musicbrainz_release_id.as_deref(),
@@ -385,12 +400,7 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
                     ));
                 }
             }
-            let mut entities = search_entities(&query, entity).await?;
-            // The same song can have studio, live, and remixed recordings in one release group.
-            // Prefer a unique duration agreement; never guess between equally plausible versions.
-            if entity == "recording" {
-                narrow_recordings_by_duration(&mut entities, context.duration_ms);
-            }
+            let entities = search_entities(&query, entity).await?;
             Ok(choose_match(
                 &entities,
                 entity,
@@ -482,6 +492,28 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
             ..ProviderMetadataDetails::default()
         }
     }
+}
+
+fn album_recording_query(
+    title: &str,
+    recording_id: Option<&str>,
+    context: &MusicMatchContext,
+) -> Option<String> {
+    let album = if let Some(id) = context.release_id.as_deref().filter(|id| valid_mbid(id)) {
+        format!("reid:{id}")
+    } else {
+        let id = context
+            .release_group_id
+            .as_deref()
+            .filter(|id| valid_mbid(id))?;
+        format!("rgid:{id}")
+    };
+    let recording = if let Some(id) = recording_id.filter(|id| valid_mbid(id)) {
+        format!("rid:{id}")
+    } else {
+        format!("recording:{}", quoted(title.trim()))
+    };
+    Some(format!("{recording} AND {album}"))
 }
 
 fn manual_search_query(
@@ -662,6 +694,71 @@ fn snapshot_from_payload(
 mod tests {
     use super::*;
     const MBID: &str = "f5093c06-23e3-404f-aeaa-40f72885ee3a";
+
+    #[tokio::test]
+    async fn recording_matches_require_the_linked_album_even_with_embedded_ids() {
+        let music = MusicMetadata {
+            artist: "Artist".into(),
+            album_artist: "Artist".into(),
+            album: "Album".into(),
+            musicbrainz_recording_id: Some(MBID.into()),
+            ..Default::default()
+        };
+        let context = MusicMatchContext::default();
+        assert!(
+            MusicBrainzMetadataProvider
+                .guess_music_match(
+                    &MetadataSettings::default(),
+                    "track",
+                    "Song",
+                    &music,
+                    &context,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            MusicBrainzMetadataProvider
+                .search_album_recordings("Song", None, &context)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let release = "d817f725-66c3-366d-8dd1-b22d49c8a766";
+        let context = MusicMatchContext {
+            release_id: Some(release.into()),
+            release_group_id: Some(MBID.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            album_recording_query("Song", Some(MBID), &context).unwrap(),
+            format!("rid:{MBID} AND reid:{release}")
+        );
+        assert_eq!(
+            album_recording_query("Song", None, &context).unwrap(),
+            format!("recording:\"Song\" AND reid:{release}")
+        );
+        let context = MusicMatchContext {
+            release_group_id: Some(MBID.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            album_recording_query("Song", None, &context).unwrap(),
+            format!("recording:\"Song\" AND rgid:{MBID}")
+        );
+        assert!(
+            album_recording_query(
+                "Song",
+                None,
+                &MusicMatchContext {
+                    release_id: Some("invalid".into()),
+                    ..Default::default()
+                }
+            )
+            .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn manual_album_search_sends_the_edited_artist_as_an_escaped_credit_filter() {
@@ -1031,8 +1128,8 @@ mod tests {
             release_group_id: Some(MBID.into()),
             ..Default::default()
         };
-        let (query, artist_id) = music_query("recording", "Song", &music, &context);
-        assert!(query.contains(&format!("arid:{MBID}")));
+        let query = album_recording_query("Song", None, &context).unwrap();
+        assert!(!query.contains("arid:"));
         assert!(query.contains(&format!("rgid:{MBID}")));
         assert!(!query.contains("artist:\"Local"));
         let entities: Vec<Entity> = serde_json::from_value(serde_json::json!([{
@@ -1040,16 +1137,7 @@ mod tests {
             "artist-credit": [{"artist": {"id": MBID, "name": "Canonical Artist"}}]
         }]))
         .unwrap();
-        assert!(
-            choose_match(
-                &entities,
-                "recording",
-                "Song",
-                Some("Local Artist"),
-                artist_id.as_deref()
-            )
-            .is_some()
-        );
+        assert!(choose_match(&entities, "recording", "Song", None, None).is_some());
         let (query, _) = music_query("release-group", "Album", &music, &context);
         assert!(query.starts_with("releasegroup:"));
     }

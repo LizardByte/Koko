@@ -700,11 +700,15 @@ legend {
 }
 
 .error-panel {
+  position: relative;
+  z-index: 2;
   padding: 1rem 1.2rem;
-  border-color: rgba(255, 132, 132, 0.35);
-  background: rgba(86, 24, 24, 0.38);
+  border-color: rgba(255, 132, 132, 0.65);
+  background: #3d222b;
   color: #ffd7d7;
 }
+
+.error-panel > span { min-width: 0; overflow-wrap: anywhere; }
 
 .main-shell .error-panel {
   display: flex;

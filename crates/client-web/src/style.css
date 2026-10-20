@@ -4497,6 +4497,15 @@ button[type='submit']:not(.secondary-button):hover:not(:disabled),
 .music-track-cover { width: 48px; height: 48px; border-radius: 6px; background: #1d2939 center / cover no-repeat; }
 .playlist-detail-page .collection-poster { aspect-ratio: 1; }
 .music-track-status { display: inline-grid; place-items: center; }
+.music-track-playing-status { display: inline-grid; place-items: center; width: 20px; height: 20px; color: var(--accent-soft); }
+.music-track-playing-status svg { width: 20px; height: 20px; }
+.song-lyrics { max-width: 65ch; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.item-warning-banner { position: relative; display: flex; align-items: start; gap: 12px; padding: 16px 20px; margin-bottom: 20px; border: 1px solid #b8954166; border-radius: var(--radius-card); background: #332b18; color: #f2d295; }
+.item-warning-banner > svg { flex-shrink: 0; width: 22px; height: 22px; }
+.item-warning-banner p { margin: 6px 0; }
+.item-warning-banner > div { display: grid; gap: 10px; }
+.music-track-warning { display: inline-flex; align-items: center; gap: 6px; color: #f2d295; font-size: 0.8rem; }
+.music-track-warning svg { flex-shrink: 0; width: 14px; height: 14px; }
 .music-track-row.is-missing { opacity: 0.55; }
 .music-track-row.is-current { background: #65d1a016; border-radius: 8px; box-shadow: inset 3px 0 var(--accent-soft); }
 .music-track-row.is-current .music-track-title { color: var(--accent-soft); }

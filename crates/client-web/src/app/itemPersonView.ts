@@ -1,4 +1,5 @@
-import { renderActiveAlbumButton, renderAlbumTracks } from './music';
+import { renderActiveAlbumButton, renderAlbumTracks, renderTrackLyrics } from './music';
+import { renderItemWarnings } from './itemWarnings';
 import { itemLineage } from './hierarchy';
 import { renderItemSources } from './itemSources';
 /** Renders item detail, metadata search, person detail, and credit trays. */
@@ -183,7 +184,8 @@ export function renderLinkedMetadataSummary(): string {
   const matches = state.selectedItemMetadata?.matches ?? [];
   const linkedMatch = matches.find((match) => match.relation_kind === 'primary') ?? matches[0];
   if (!linkedMatch) {
-    return '<div class="empty-state tight">No external metadata is linked yet.</div>';
+    const lyricProviders = state.selectedItem?.lyrics ? ['lrclib'] : [];
+    return `<div class="empty-state tight">No external metadata is linked yet.</div>${renderMetadataProviderAttributions(lyricProviders)}`;
   }
 
   const metadataRefreshPending = itemIsMetadataPending(state.selectedItem);
@@ -202,12 +204,10 @@ export function renderLinkedMetadataSummary(): string {
   } else if (linkedMatch.refresh_state === 'error') {
     refreshStateClass = 'danger-tag';
   }
-  const providersById = new Map(
-    (state.selectedItemMetadata?.providers ?? state.metadataProviders).map((provider) => [provider.id, provider]),
-  );
   const contributingProviderIds = [
     linkedMatch.provider_id,
     ...matches.map((match) => match.provider_id).filter((providerId) => providerId !== linkedMatch.provider_id),
+    ...(state.selectedItem?.lyrics ? ['lrclib'] : []),
   ].filter((providerId, index, providerIds) => providerIds.indexOf(providerId) === index);
   const providerTags = contributingProviderIds
     .map((providerId) => {
@@ -215,15 +215,7 @@ export function renderLinkedMetadataSummary(): string {
       return `<span class="${className}">${escapeHtml(providerId)}</span>`;
     })
     .join('');
-  const attributions = contributingProviderIds
-    .map((providerId) => providersById.get(providerId))
-    .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
-    .map((provider) => {
-      const logoUrl = providerAttributionLogo(provider.id);
-      const logoMarkup = logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="" loading="lazy" />` : '';
-      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logoMarkup}${escapeHtml(provider.attribution_text)}</a>`;
-    })
-    .join('');
+  const attributions = renderMetadataProviderAttributions(contributingProviderIds);
 
   return `
     <div class="metadata-current-link">
@@ -240,6 +232,17 @@ export function renderLinkedMetadataSummary(): string {
       </span>
     </div>
   `;
+}
+
+function renderMetadataProviderAttributions(providerIds: string[]): string {
+  return providerIds.map(id => state.selectedItemMetadata?.providers.find(provider => provider.id === id)
+    ?? state.metadataProviders.find(provider => provider.id === id))
+    .filter((provider): provider is MetadataProviderStatus => Boolean(provider?.attribution_text))
+    .map(provider => {
+      const logoUrl = providerAttributionLogo(provider.id);
+      const logo = logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(provider.display_name)}" loading="lazy" />` : '';
+      return `<a class="metadata-attribution" href="${escapeHtml(provider.attribution_url)}" target="_blank" rel="noreferrer">${logo}${escapeHtml(provider.attribution_text)}</a>`;
+    }).join('');
 }
 
 export function selectedItemPeople(): ItemMetadataPerson[] {
@@ -1160,6 +1163,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   return `
     <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''}" data-item-page-id="${item.id}">
       ${artwork.backdrop ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(artwork.backdrop)}');"></div>` : ''}
+      ${renderItemWarnings(item)}
       ${renderSelectedItemIdentity(
         item,
         artwork.poster,
@@ -1177,6 +1181,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
       <div class="item-support-content" id="item-support-content">
       ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
       ${renderSelectedItemChildrenSection(item)}
+      ${renderTrackLyrics(item)}
       ${renderArtistScreenCredits(item)}
 
       ${renderItemExtrasRail()}

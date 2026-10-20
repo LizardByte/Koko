@@ -10,7 +10,9 @@ const {apiErrorMessage}=await server.ssrLoadModule('/src/apiErrors.ts');
 const {boundedMenuPosition,musicMediaMetadata,revealPanelEntry}=await server.ssrLoadModule('/src/app/audioPlayerSupport.ts');
 const {renderWatchProgress,renderShelfStack,homeShelfEntries}=await server.ssrLoadModule('/src/app/homeView.ts');
 const {state}=await server.ssrLoadModule('/src/app/state.ts');
-const {renderAlbumTracks,renderActiveAlbumButton}=await server.ssrLoadModule('/src/app/music.ts');
+const {renderAlbumTracks,renderActiveAlbumButton,renderTrackLyrics,renderTrackListeningStatus}=await server.ssrLoadModule('/src/app/music.ts');
+const {renderLinkedMetadataSummary,renderItemPage}=await server.ssrLoadModule('/src/app/itemPersonView.ts');
+const {itemWarnings,renderItemWarnings}=await server.ssrLoadModule('/src/app/itemWarnings.ts');
 const {setMusicPlayback,clearMusicPlayback,musicPlaybackItem}=await server.ssrLoadModule('/src/app/musicPlaybackState.ts');
 const {renderAudioPlayer,currentLyricText}=await server.ssrLoadModule('/src/app/audioPlayerView.ts');
 const {AudioQueue}=await server.ssrLoadModule('/src/app/audioQueue.ts');
@@ -128,9 +130,11 @@ test('live music overlays saved progress, identifies the current row and changes
     setMusicPlayback({item:track,positionMs:100000,durationMs:200000,paused:false,ended:false});
     let html=renderAlbumTracks({...album,children:[track]});
     assert.match(html,/is-current[^>]*data-music-track-id="103"[^>]*aria-current="true"/);
-    assert.match(html,/50% listened/);assert.match(html,/aria-label="Pause Mock Song"/);
+    assert.match(html,/media-card-levels/);assert.doesNotMatch(html,/50% listened/);assert.match(html,/aria-label="Pause Mock Song"/);
     assert.match(renderActiveAlbumButton(album.id),/Pause album/);
     setMusicPlayback({item:track,positionMs:100000,durationMs:200000,paused:true,ended:false});
+    html=renderAlbumTracks({...album,children:[track]});
+    assert.match(html,/<span class="sr-only">Paused<\/span>/);assert.doesNotMatch(html,/media-card-levels/);
     assert.match(renderActiveAlbumButton(album.id),/Resume album/);
     setMusicPlayback({item:track,positionMs:200000,durationMs:200000,paused:true,ended:true});
     html=renderAlbumTracks({...album,children:[track]});
@@ -140,6 +144,66 @@ test('live music overlays saved progress, identifies the current row and changes
     clearMusicPlayback();
     assert.equal(musicPlaybackItem(track).playback_position_ms,track.playback_position_ms);
   } finally {clearMusicPlayback();}
+});
+
+test('active track levels replace its progress ring while other tracks retain progress',()=>{
+  const track={...mock.getMockItem(103),playback_position_ms:100000,playback_duration_ms:200000,playback_completed:false,watch_count:0};
+  try {
+    setMusicPlayback({item:track,positionMs:100000,durationMs:200000,paused:false,ended:false});
+    assert.match(renderTrackListeningStatus(track,true),/media-card-levels/);
+    assert.match(renderTrackListeningStatus(track,true),/>Playing</);
+    assert.doesNotMatch(renderTrackListeningStatus(track,true),/track-listening-status/);
+    assert.match(renderTrackListeningStatus({...track,id:999}),/50% listened/);
+  } finally {clearMusicPlayback();}
+});
+
+test('song details display saved plain or timed lyrics safely, without empty sections',()=>{
+  const song=mock.getMockItem(103);
+  const lyrics={plain_lyrics:'Line <one>\nNext & final',instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'};
+  assert.match(renderTrackLyrics({...song,lyrics}),/Line &lt;one&gt;\nNext &amp; final/);
+  const synced={...lyrics,plain_lyrics:'',synced_lyrics:'[ar:Artist]\n[00:01.00]First\n[00:02.00]Second'};
+  assert.match(renderTrackLyrics({...song,lyrics:synced}),/First\nSecond/);
+  assert.doesNotMatch(renderTrackLyrics({...song,lyrics:synced}),/00:01|ar:Artist/);
+  assert.equal(renderTrackLyrics({...song,lyrics:{...lyrics,plain_lyrics:'  '}}),'');
+  assert.equal(renderTrackLyrics({...song,lyrics:{...lyrics,instrumental:true}}),'');
+  assert.equal(renderTrackLyrics({...song,lyrics:null}),'');
+  assert.equal(renderTrackLyrics({...mock.getMockItem(302),lyrics}),'');
+});
+
+test('saved lyrics contribute an LRCLIB image alongside metadata provider images, even without a match',()=>{
+  const original={selectedItem:state.selectedItem,selectedItemMetadata:state.selectedItemMetadata,metadataProviders:state.metadataProviders,itemMetadataLoading:state.itemMetadataLoading};
+  try {
+    state.metadataProviders=mock.getMockMetadataProviders();
+    state.itemMetadataLoading=false;
+    state.selectedItem={...mock.getMockItem(103),lyrics:{plain_lyrics:'Saved lyric',instrumental:false,source:'LRCLIB',source_url:'https://lrclib.net/'}};
+    state.selectedItemMetadata={matches:[{provider_id:'musicbrainz',external_id:'recording',relation_kind:'primary',media_type:'recording',title:'Song'}],providers:state.metadataProviders.filter(provider=>provider.id==='musicbrainz')};
+    const markup=renderLinkedMetadataSummary();
+    assert.match(markup,/providers\/musicbrainz/);assert.match(markup,/providers\/lrclib\.png/);
+    assert.doesNotMatch(markup,/providers\/fanart/);
+    assert.match(renderItemPage(),/data-nav-section="lyrics"/);
+    state.selectedItemMetadata.matches=[];
+    assert.match(renderLinkedMetadataSummary(),/providers\/lrclib\.png/);
+    state.selectedItem.lyrics=undefined;
+    assert.doesNotMatch(renderLinkedMetadataSummary(),/providers\/lrclib\.png/);
+  } finally {Object.assign(state,original);}
+});
+
+test('item banners explain unmatched metadata, failed refreshes and missing files across media types',()=>{
+  for(const item_type of ['artist','album','track','movie','show','episode']) {
+    const item={...mock.getMockItem(103),item_type,has_metadata:false,metadata_refresh_state:undefined};
+    assert.match(renderItemWarnings(item),/Metadata not matched/);
+    assert.match(renderItemWarnings(item),/No metadata is linked/);
+    assert.equal(renderItemWarnings({...item,has_metadata:true}),'');
+    assert.match(renderItemWarnings({...item,metadata_refresh_state:'pending'}),/matching has not finished/);
+    const broken={...item,missing_since:100,metadata_refresh_state:'error',metadata_refresh_error:'Provider unavailable'};
+    assert.equal(itemWarnings(broken).length,2);
+    assert.match(renderItemWarnings(broken),/Missing from disk/);
+    assert.match(renderItemWarnings(broken),/Provider unavailable/);
+    assert.doesNotMatch(renderItemWarnings({...broken,metadata_refresh_error:'<html>502 failure</html>'}),/<html>/);
+  }
+  const album=mock.getMockItem(302),track={...mock.getMockItem(103),has_metadata:false,metadata_refresh_state:'error',metadata_refresh_error:'Provider unavailable'};
+  assert.match(renderAlbumTracks({...album,children:[track]}),/class="music-track-warning"[^>]*>.*Metadata refresh failed/);
+  assert.match(renderAlbumTracks({...album,children:[{...track,missing_since:100}]}),/Missing from disk/);
 });
 test('panel scrolling changes only the panel, and lyrics errors have no lookup retry control',()=>{
   const container={scrollTop:0,clientHeight:300,getBoundingClientRect:()=>({top:50})};

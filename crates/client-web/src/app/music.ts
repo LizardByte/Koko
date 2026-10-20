@@ -1,10 +1,32 @@
-import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MusicPlaylistDetail } from '../api';
+import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MusicPlaylistDetail, type MusicLyrics } from '../api';
 import { escapeHtml, formatDuration } from './format';
 import { renderButtonContent, renderIcon } from './ui';
 import { playbackProgressPercent } from './playbackProgress';
 import { activeMusicPlayback, musicPlaybackItem, musicPlaybackPlaylist } from './musicPlaybackState';
+import { renderMusicPlaybackStatus } from './musicPlaybackCards';
+import { parseTimedLyrics } from './audioPlayerView';
+import { renderTrackWarnings } from './itemWarnings';
 
-export function renderTrackListeningStatus(track: MediaItemSummary): string {
+/** Show saved text on song details, including recordings with only timed lyrics. */
+export function renderTrackLyrics(item: MediaItemDetail): string {
+  if (item.item_type !== 'track' || !item.lyrics || item.lyrics.instrumental) return '';
+  const text = savedLyricText(item.lyrics);
+  if (!text) return '';
+  return `<section class="panel page-panel item-section" data-nav-section="lyrics" data-nav-label="Lyrics">
+    <div class="section-heading"><h3>Lyrics</h3></div>
+    <div class="song-lyrics">${escapeHtml(text)}</div>
+  </section>`;
+}
+
+function savedLyricText(lyrics: MusicLyrics): string {
+  return lyrics.plain_lyrics?.trim() || parseTimedLyrics(lyrics.synced_lyrics ?? '').map(line => line.text).join('\n').trim();
+}
+
+export function renderTrackListeningStatus(track: MediaItemSummary, isCurrent = false): string {
+  if (isCurrent) {
+    const status = activeMusicPlayback()?.paused ? 'paused' : 'playing';
+    return `<span class="music-track-playing-status">${renderMusicPlaybackStatus(status)}</span>`;
+  }
   const progress = playbackProgressPercent(track);
   if (track.playback_completed || (track.watch_count ?? 0) > 0 && progress === undefined) {
     return `<span class="track-listening-status is-complete" title="Listened" aria-label="Listened">${renderIcon('check')}</span>`;
@@ -53,9 +75,9 @@ function renderMusicTrackRow(savedTrack: MediaItemSummary, options: { number: st
   const subtitle = [track.music?.artist, options.cover ? track.music?.album : undefined].filter(Boolean).join(' · ');
   return `<div class="music-track-row ${options.cover ? 'music-playlist-track' : ''} ${track.missing_since ? 'is-missing' : ''} ${options.isCurrent ? 'is-current' : ''}" data-music-track-id="${track.id}" ${options.rowAttributes ?? ''} ${options.isCurrent ? 'aria-current="true"' : ''}>
     <span class="music-track-number">${escapeHtml(options.number)}</span>
-    <span class="music-track-status">${renderTrackListeningStatus(track)}</span>
+    <span class="music-track-status">${renderTrackListeningStatus(track, options.isCurrent)}</span>
     ${options.cover ? `<span class="music-track-cover" aria-hidden="true" style="background-image:url('${escapeHtml(artwork)}');"></span>` : ''}
-    <button type="button" class="music-track-title" data-item-id="${track.id}"><strong>${escapeHtml(track.display_title)}</strong><small>${escapeHtml(subtitle)}</small></button>
+    <button type="button" class="music-track-title" data-item-id="${track.id}"><strong>${escapeHtml(track.display_title)}</strong><small>${escapeHtml(subtitle)}</small>${renderTrackWarnings(track)}</button>
     <span class="muted music-track-duration">${escapeHtml(formatDuration(track.duration_ms))}</span>
     <button type="button" class="secondary-button icon-only" ${options.playAttributes} aria-label="${options.isCurrent && !paused ? 'Pause' : 'Play'} ${escapeHtml(track.display_title)}" ${!track.playable || track.missing_since ? 'disabled' : ''}>${renderButtonContent('', options.isCurrent && !paused ? 'pause' : 'play')}</button>
     <div class="music-song-menu"><button type="button" class="secondary-button" popovertarget="song-actions-${options.menuId}" aria-label="Actions for ${escapeHtml(track.display_title)}">${renderButtonContent('', 'ellipsis')}</button><div popover id="song-actions-${options.menuId}">

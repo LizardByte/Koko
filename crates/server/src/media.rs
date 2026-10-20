@@ -1,6 +1,7 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
 pub(crate) mod lyrics;
+pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
 mod source_files;
@@ -366,6 +367,8 @@ pub struct MediaItemDetail {
     pub item_type: String,
     /// Structured local music tags for an artist, album, or track.
     pub music: Option<Box<MusicMetadata>>,
+    /// Saved lyrics for this recording, when they match its current metadata.
+    pub lyrics: Option<MusicLyrics>,
     /// Display title for the item.
     pub display_title: String,
     /// Library-relative file path.
@@ -3255,6 +3258,7 @@ pub fn get_media_item_with_preferred_languages(
         .unwrap_or_default();
 
     music::apply_detail(conn, &mut detail)?;
+    detail.lyrics = lyrics::for_item(conn, &detail)?;
     Ok(Some(detail))
 }
 
@@ -6406,6 +6410,7 @@ fn to_media_item_detail(
         library_id: item.library_id,
         parent_id: item.parent_id,
         music: None,
+        lyrics: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
         relative_path,

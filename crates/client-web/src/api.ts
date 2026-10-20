@@ -256,6 +256,7 @@ export interface MediaItemSources {
 }
 
 export interface MediaItemDetail extends MediaItemSummary {
+  lyrics?: MusicLyrics | null;
   file_size?: number;
   container?: string;
   bit_rate?: number;

@@ -196,6 +196,19 @@ pub(crate) fn load(
         .optional()
 }
 
+/// Read matching saved lyrics without contacting a provider or changing lookup state.
+pub(crate) fn for_item(
+    conn: &mut SqliteConnection,
+    item: &super::MediaItemDetail,
+) -> QueryResult<Option<MusicLyrics>> {
+    let Some(lookup) = Lookup::from_item(item) else {
+        return Ok(None);
+    };
+    Ok(load(conn, item.id)?
+        .filter(|stored| stored.matches(&lookup) && stored.lookup_status == "found")
+        .map(|stored| stored.lyrics()))
+}
+
 /// Recheck identity under the write transaction so a rematch cannot save stale lyrics.
 pub(crate) fn save(
     conn: &mut SqliteConnection,
@@ -248,6 +261,32 @@ pub(crate) mod tests {
             source: "LRCLIB".into(),
             source_url: "https://lrclib.net/".into(),
         }
+    }
+
+    #[test]
+    fn song_details_include_only_matching_saved_lyrics() {
+        use crate::db::schema::music_item_metadata;
+
+        let mut conn = SqliteConnection::establish(":memory:").unwrap();
+        let lookup = seed(&mut conn, 1);
+        let detail = |conn: &mut SqliteConnection| {
+            super::super::get_media_item(conn, 1, "").unwrap().unwrap()
+        };
+        assert!(detail(&mut conn).lyrics.is_none());
+        assert!(
+            save(
+                &mut conn,
+                &lookup,
+                &StoredLyrics::result(1, &lookup, sample(), 100)
+            )
+            .unwrap()
+        );
+        assert_eq!(detail(&mut conn).lyrics, Some(sample()));
+        diesel::update(music_item_metadata::table.find(1))
+            .set(music_item_metadata::artist.eq("Another artist"))
+            .execute(&mut conn)
+            .unwrap();
+        assert!(detail(&mut conn).lyrics.is_none());
     }
 
     #[test]

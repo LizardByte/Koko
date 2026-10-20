@@ -3,7 +3,8 @@ import { musicCardStatus, type MusicCardStatus, type MusicCardTarget } from './m
 import { renderIcon } from './ui';
 import { setElementHtml } from './domPatcher';
 
-function statusContent(status: MusicCardStatus | undefined): string {
+/** Share playing levels and paused semantics between artwork badges and track rows. */
+export function renderMusicPlaybackStatus(status: MusicCardStatus | undefined): string {
   if (!status) return '';
   const symbol = status === 'paused' ? renderIcon('pause') : '<span class="media-card-levels" aria-hidden="true"><span></span><span></span><span></span><span></span></span>';
   return `${symbol}<span class="sr-only">${status === 'paused' ? 'Paused' : 'Playing'}</span>`;
@@ -19,7 +20,7 @@ export function musicCardPresentation(target: MusicCardTarget): { className: str
   return {
     className: status ? ` is-current is-${status}` : '',
     attributes: `${attributes}${status ? ' aria-current="true"' : ''}`,
-    badge: `<span class="media-card-playing-status" data-music-card-status data-playback-status="${status ?? ''}" ${status ? '' : 'hidden'}>${statusContent(status)}</span>`,
+    badge: `<span class="media-card-playing-status" data-music-card-status data-playback-status="${status ?? ''}" ${status ? '' : 'hidden'}>${renderMusicPlaybackStatus(status)}</span>`,
   };
 }
 
@@ -39,7 +40,7 @@ export function syncMusicPlaybackCards(root: ParentNode = document): void {
     if (!badge) return;
     badge.hidden = !status;
     if (badge.dataset.playbackStatus !== (status ?? '')) {
-      setElementHtml(badge, statusContent(status), { preserveDom: true });
+      setElementHtml(badge, renderMusicPlaybackStatus(status), { preserveDom: true });
       badge.dataset.playbackStatus = status ?? '';
       createIcons({ icons, root: badge });
     }

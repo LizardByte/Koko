@@ -540,7 +540,7 @@ function syncVisibleMusicPlayback(): void {
       if (isCurrent) row.setAttribute('aria-current', 'true');
       else row.removeAttribute('aria-current');
       const status = row.querySelector<HTMLElement>('.music-track-status');
-      const markup = renderTrackListeningStatus(item);
+      const markup = renderTrackListeningStatus(item, isCurrent);
       if (status && status.dataset.playbackStatus !== markup) {
         setElementHtml(status, markup, { preserveDom: true });
         status.dataset.playbackStatus = markup;

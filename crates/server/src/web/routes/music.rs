@@ -151,15 +151,10 @@ async fn read_track_lyrics(
 ) -> Result<MusicLyrics, Status> {
     db.run(move |conn| {
         let item = media::get_media_item(conn, id, "")?.ok_or(diesel::result::Error::NotFound)?;
-        let Some(lookup) = Lookup::from_item(&item) else {
+        let Some(_lookup) = Lookup::from_item(&item) else {
             return Ok::<_, diesel::result::Error>(None);
         };
-        Ok(Some(
-            lyrics_store::load(conn, id)?
-                .filter(|stored| stored.matches(&lookup) && stored.lookup_status == "found")
-                .map(|stored| stored.lyrics())
-                .unwrap_or_else(MusicLyrics::empty),
-        ))
+        Ok(Some(item.lyrics.unwrap_or_else(MusicLyrics::empty)))
     })
     .await
     .map_err(|error| match error {

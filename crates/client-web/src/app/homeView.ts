@@ -12,6 +12,7 @@ import { heroPresentation } from './hierarchy';
 import { musicCardPresentation } from './musicPlaybackCards';
 import { playlistPlaybackButtonContent, renderPlaylistTracks } from './music';
 import { musicPlaybackPlaylist } from './musicPlaybackState';
+import { itemWarnings } from './itemWarnings';
 import { canManageServer } from './auth';
 import type { BrowseFilter, HomeBrowseTab } from './types';
 import {
@@ -309,12 +310,13 @@ export function renderBrowseDetailPage(): string {
 
 export function metadataBadgeMarkup(item: MediaItemSummary): string {
   const pending = itemIsMetadataPending(item);
-  const unmatched = !item.has_metadata;
+  const warning = itemWarnings(item).find(entry => entry.kind === 'metadata');
+  const unmatched = Boolean(warning);
   if (!pending && !unmatched) {
     return '';
   }
 
-  let statusLabel = 'Metadata is not linked yet';
+  let statusLabel = warning?.message ?? 'Metadata is not linked yet';
   if (pending) {
     statusLabel = unmatched ? 'Matching metadata' : 'Refreshing metadata';
   }

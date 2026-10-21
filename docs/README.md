@@ -47,15 +47,16 @@ and creating a new one starts a separate catalog.
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
 For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
-For ebook formats, reader controls, comic libraries, and optional conversion, see [Books and comics](./BOOKS.md).
+For book and audiobook folders, supported formats, reading and listening controls, and metadata sources,
+see [Books, audiobooks, and comics](./BOOKS.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.
 
-| OS      | Location                                 |
-|---------|------------------------------------------|
-| Linux   | `$XDG_CONFIG_HOME/Koko`                  |
-| macOS   | `$HOME/Library/Application Support/Koko` |
-| Windows | `%LOCALAPPDATA%\Koko`                    |
+| OS        | Location                                   |
+| --------- | ------------------------------------------ |
+| Linux     | `$XDG_CONFIG_HOME/Koko`                    |
+| macOS     | `$HOME/Library/Application Support/Koko`   |
+| Windows   | `%LOCALAPPDATA%\Koko`                      |
 
 Only the non default values need to be set in the configuration file.
 An example with all the default values is shown below.
@@ -147,7 +148,6 @@ This list is not all-inclusive, and just meant to be a very high level for the i
 - [ ] Plugin system
 - [ ] User Documentation
   - [x] Publish docs to ReadTheDocs
-  - [ ] Create Gurubase and enable readme badge
 - [ ] Media
   - [ ] Live TV
     - [ ] DVR/Tuner
@@ -158,14 +158,12 @@ This list is not all-inclusive, and just meant to be a very high level for the i
   - [ ] Audio
     - [x] Albums/Music
     - [ ] Podcasts
-    - [x] [Audiobooks](./AUDIOBOOKS.md)
+    - [x] [Audiobooks](./BOOKS.md#chapters-and-listening)
   - [ ] Images
     - [ ] Photos
-  - [ ] Books
+  - [x] Books
     - [x] Ebooks
     - [x] PDFs
     - [x] Comics
   - [ ] Games (Pipe Dream)
     - [ ] Spin up on-demand game servers (containers or VMs)
-
-Audiobook library setup, file naming, chapter behavior, and free test sources are documented in [Audiobooks](./AUDIOBOOKS.md).

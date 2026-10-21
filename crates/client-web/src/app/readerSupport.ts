@@ -1,6 +1,20 @@
 /** Defines reader engines and removes executable and network-active content from book documents. */
 import DOMPurify from 'dompurify';
 import type { UponSanitizeElementHook } from 'dompurify';
+import type { ReadingAnnotation } from '../api';
+
+/** A selection captured before focus moves from the book to the annotation editor. */
+export interface ReaderSelection {
+  locator: string;
+  quote: string;
+  rects?: NonNullable<ReadingAnnotation['rects']>;
+}
+
+/** Selection and saved-highlight activation from an engine's book surface. */
+export interface ReaderAnnotationEvents {
+  selection(value?: ReaderSelection): void;
+  activate(locator: string): void;
+}
 
 /** A chapter, page, or bookmark target suitable for the reader navigation panel. */
 export interface ReaderTarget { label: string; locator: string; depth?: number }
@@ -27,6 +41,8 @@ export interface ReaderEngine {
   /** Fixed pages can predict the target; reflowable text supplies its real location after seeking. */
   preview(fraction: number): string | undefined;
   search(query: string): Promise<ReaderTarget[]>;
+  /** Replace this account's visible highlights without changing the book's DOM anchors. */
+  annotations?(values: readonly ReadingAnnotation[]): Promise<void>;
   close(): void;
 }
 

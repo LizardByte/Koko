@@ -1,7 +1,7 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
 pub(crate) mod audiobooks;
-pub(crate) mod books;
+pub(crate) mod ebooks;
 pub(crate) mod lyrics;
 pub use audiobooks::{
     AudiobookChapter,
@@ -269,7 +269,7 @@ pub struct PersistedMediaFileSummary {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemSummary {
     /// Current account's independent reading state, when a book has been opened.
-    pub reading_progress: Option<books::ReadingStatus>,
+    pub reading_progress: Option<ebooks::ReadingStatus>,
     /// Stable database identifier for the item.
     pub id: i32,
     /// Owning media-library identifier.
@@ -371,7 +371,7 @@ pub struct MediaPlaybackTarget {
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemDetail {
     /// Current account's independent reading state, when a book has been opened.
-    pub reading_progress: Option<books::ReadingStatus>,
+    pub reading_progress: Option<ebooks::ReadingStatus>,
     /// Other accessible recordings of the same written work in this library.
     pub audiobook_versions: Vec<AudiobookVersion>,
     /// Stable database identifier for the item.
@@ -3531,7 +3531,7 @@ pub fn get_media_home_with_preferred_languages(
     };
     items.retain(|item| !excluded_libraries.contains(&item.library_id));
     let continue_watching = get_continue_watching_items(conn, user_id, library_id, &items)?;
-    let continue_reading = books::continue_reading(conn, user_id, &items)?;
+    let continue_reading = ebooks::continue_reading(conn, user_id, &items)?;
     let library_kind = if let Some(id) = library_id {
         use crate::db::schema::media_libraries::dsl as libraries;
         libraries::media_libraries
@@ -4461,7 +4461,7 @@ fn apply_user_playback_progress_to_summaries(
     user_id: Option<i32>,
     items: &mut [MediaItemSummary],
 ) -> Result<(), diesel::result::Error> {
-    books::apply_statuses(conn, user_id, items)?;
+    ebooks::apply_statuses(conn, user_id, items)?;
     let item_ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
     let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &item_ids)?;
 
@@ -4490,10 +4490,10 @@ pub fn apply_user_playback_context_to_detail(
     user_id: Option<i32>,
     detail: &mut MediaItemDetail,
 ) -> Result<(), diesel::result::Error> {
-    detail.reading_progress = books::status(conn, detail.id, user_id)?;
+    detail.reading_progress = ebooks::status(conn, detail.id, user_id)?;
     for child in &mut detail.children {
         if matches!(child.item_type.as_str(), "book" | "comic_issue") {
-            child.reading_progress = books::status(conn, child.id, user_id)?;
+            child.reading_progress = ebooks::status(conn, child.id, user_id)?;
         }
     }
     let mut item_ids = vec![detail.id];

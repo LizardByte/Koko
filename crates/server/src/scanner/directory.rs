@@ -547,7 +547,7 @@ fn classify_file(path: &Path) -> FileKind {
             | "wma" | "ape" | "wv" | "oga" | "m4b",
         ) => FileKind::Audio,
         Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff") => FileKind::Image,
-        _ if crate::media::books::is_book(path) => FileKind::Book,
+        _ if crate::media::ebooks::is_book(path) => FileKind::Book,
         _ => FileKind::Other,
     }
 }

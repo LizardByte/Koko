@@ -185,6 +185,10 @@ export interface AppState {
 
 /** Lucide icon names intentionally allowed by the web UI renderer. */
 export type AppIconName =
+  | 'highlighter'
+  | 'notebook-pen'
+  | 'square-pen'
+  | 'pencil'
   | 'a-large-small'
   | 'bookmark'
   | 'bookmark-plus'

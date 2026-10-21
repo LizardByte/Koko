@@ -9,7 +9,7 @@ use super::media::{
 use crate::{
     auth::UserGuard,
     db::DbConn,
-    media::books::{
+    media::ebooks::{
         self,
         ReaderDocument,
         ReadingProgress,
@@ -56,14 +56,14 @@ async fn source(
     db: &DbConn,
     item: i32,
     user: &UserGuard,
-) -> Result<books::BookSource, Status> {
+) -> Result<ebooks::BookSource, Status> {
     require_item_access(db, item, user).await?;
     let user_id = user
         .claims()
         .sub
         .parse::<i32>()
         .map_err(|_| Status::Unauthorized)?;
-    db.run(move |conn| books::source(conn, item, user_id))
+    db.run(move |conn| ebooks::source(conn, item, user_id))
         .await
         .map_err(|_| Status::InternalServerError)?
         .ok_or(Status::NotFound)
@@ -94,7 +94,7 @@ pub async fn content(
             Json(serde_json::json!({"message": status.reason().unwrap_or("Book unavailable")})),
         )
     })?;
-    let path = books::content(source, &crate::config::current_settings())
+    let path = ebooks::content(source, &crate::config::current_settings())
         .await
         .map_err(|error| {
             (
@@ -138,7 +138,7 @@ pub async fn progress(
         .sub
         .parse::<i32>()
         .map_err(|_| Status::Unauthorized)?;
-    db.run(move |conn| books::save_progress(conn, user_id, item_id, &state.into_inner()))
+    db.run(move |conn| ebooks::save_progress(conn, user_id, item_id, &state.into_inner()))
         .await
         .map_err(|_| Status::InternalServerError)?;
     Ok(Status::NoContent)

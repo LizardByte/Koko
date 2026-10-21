@@ -2,3 +2,9 @@
 declare module 'foliate-js/view.js' {
   export function makeBook(file: File): Promise<unknown>;
 }
+
+declare module 'foliate-js/overlayer.js' {
+  export class Overlayer {
+    static highlight(rects: DOMRect[], options: { color: string }): SVGElement;
+  }
+}

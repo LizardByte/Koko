@@ -1,5 +1,8 @@
 /** Adapts Foliate pagination for EPUB, Kindle, FictionBook, and sanitized text documents. */
-import type { ReaderEngine, ReaderLocation, ReaderTarget } from './readerSupport';
+import type { ReaderAnnotationEvents, ReaderEngine, ReaderLocation, ReaderTarget } from './readerSupport';
+import type { ReadingAnnotation } from '../api';
+import { readerHighlightColors, readerSelectedText } from './readerHighlights';
+import { Overlayer } from 'foliate-js/overlayer.js';
 import { readerPageLabel, readerPageSpread, readingFraction, readerTextPosition, sanitizeBookDocument, readerSequence } from './readerSupport';
 import { escapeHtml } from './format';
 import { createReaderPagination, readerColumnPages, readerTextPageLabel, verifiedReaderPages, type ReaderPageMap, type ReaderPaginationLayout } from './readerPagination';
@@ -17,6 +20,9 @@ interface View extends HTMLElement {
   goTo(locator: string | number): Promise<void>;
   goToFraction(fraction: number): Promise<void>;
   next(): Promise<void>; prev(): Promise<void>; close(): void;
+  getCFI(index: number, range: Range): string;
+  addAnnotation(annotation: { value: string; color: string }): Promise<unknown>;
+  deleteAnnotation(annotation: { value: string }): Promise<unknown>;
   search(options: { query: string }): AsyncIterable<{ label?: string; subitems?: Array<{ cfi: string; excerpt?: { pre?: string; match?: string; post?: string } }> }>;
 }
 
@@ -148,7 +154,7 @@ function textBook(file: File, raw: string, format: string): Book {
 }
 
 /** Open a reflowable book while preserving CFIs across font, direction, and spread changes. */
-export async function openTextReader(file: File, format: string, host: HTMLElement, changed: (location: ReaderLocation) => void): Promise<ReaderEngine> {
+export async function openTextReader(file: File, format: string, host: HTMLElement, changed: (location: ReaderLocation) => void, annotationEvents?: ReaderAnnotationEvents): Promise<ReaderEngine> {
   const { makeBook } = await import('foliate-js/view.js');
   const raw = ['text', 'html'].includes(format) ? await file.text() : undefined;
   const createBook = async (): Promise<Book> => raw === undefined ? await makeBook(file) as Book : textBook(file, raw, format);
@@ -157,6 +163,11 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
   const view = document.createElement('foliate-view') as View;
   let size = 100, direction = 'ltr', spread = false, lastStyles = '', position = 0, pageLayout = '';
   let initialized = false, closed = false, pageCount: number | undefined;
+  let annotations: readonly ReadingAnnotation[] = [];
+  const listeners = new AbortController();
+  const paintAnnotations = async (): Promise<void> => {
+    await Promise.all(annotations.filter((mark) => mark.quote).map((mark) => view.addAnnotation({ value: mark.locator, color: mark.color }).catch(() => undefined)));
+  };
   let lastLocation: ReaderLocation | undefined, pageMap: ReaderPageMap | undefined;
   let sectionIndex = 0, screen = 0, columns = 1;
   const sizes = book.sections.map((section) => section.linear !== 'no' && (section.size ?? 0) > 0 ? section.size! : 0);
@@ -186,21 +197,34 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
     if (/^https?:\/\//i.test(href)) window.open(href, '_blank', 'noopener,noreferrer');
   });
   view.addEventListener('relocate', (event) => {
+    annotationEvents?.selection();
     const location = (event as CustomEvent<{ cfi: string; fraction?: number; location?: { current: number; total: number }; tocItem?: Toc }>).detail;
     applyStyles();
     lastLocation = { locator: location.cfi, fraction: readingFraction(location.fraction ?? 0), position, label: pageLabel() ?? location.tocItem?.label ?? 'Calculating pages…', pageCount };
     changed(lastLocation);
   });
   view.addEventListener('load', (event) => {
-    const doc = (event as CustomEvent<{ doc: Document }>).detail.doc;
+    const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail;
+    doc.addEventListener('selectionchange', () => {
+      if (closed) return;
+      const selected = readerSelectedText(doc);
+      if (selected) annotationEvents?.selection({ locator: view.getCFI(index, selected.range), quote: selected.quote });
+      else if (doc.hasFocus()) annotationEvents?.selection();
+    }, { signal: listeners.signal });
     doc.addEventListener('keydown', (event) => {
       if (!['ArrowRight', 'ArrowLeft', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(event.key)) return;
       event.preventDefault();
       window.dispatchEvent(new KeyboardEvent('keydown', { key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, altKey: event.altKey }));
-    });
+    }, { signal: listeners.signal });
   });
+  view.addEventListener('draw-annotation', (event) => {
+    const { draw, annotation } = (event as CustomEvent<{ draw: (drawing: typeof Overlayer.highlight, options: { color: string }) => void; annotation: { color: ReadingAnnotation['color'] } }>).detail;
+    draw(Overlayer.highlight, { color: readerHighlightColors[annotation.color] });
+  });
+  view.addEventListener('create-overlay', () => { if (!closed) void paintAnnotations(); });
+  view.addEventListener('show-annotation', (event) => annotationEvents?.activate((event as CustomEvent<{ value: string }>).detail.value));
   try { await view.open(book); trackPosition(); }
-  catch (error) { view.close(); book.destroy?.(); cleanup(); throw error; }
+  catch (error) { listeners.abort(); view.close(); book.destroy?.(); cleanup(); throw error; }
   pageCount = view.isFixedLayout ? book.sections.length : undefined;
   const pagination = createReaderPagination((layout, signal) => measureReaderTextPages(createBook, host, layout, signal), (pages) => {
     pageMap = pages; pageCount = pages.total;
@@ -235,6 +259,11 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
       paginate();
     },
     preview: () => undefined,
+    async annotations(values) {
+      const previous = annotations; annotations = structuredClone(values);
+      await Promise.all(previous.filter((mark) => mark.quote).map((mark) => view.deleteAnnotation({ value: mark.locator }).catch(() => undefined)));
+      if (!closed) await paintAnnotations();
+    },
     async search(query) {
       const results: ReaderTarget[] = [];
       for await (const group of view.search({ query })) {
@@ -247,7 +276,7 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
     },
     close() {
       if (closed) return;
-      closed = true; pagination.close();
+      closed = true; listeners.abort(); pagination.close();
       try { view.close(); } finally { cleanup(); host.replaceChildren(); book.destroy?.(); }
     },
   };

@@ -13,15 +13,24 @@ function button(attribute: string, label: string, icon: AppIconName, extra = '')
 
 /** Keep the reading surface free of a second toolbar; all controls belong to the bottom player. */
 export function readerMarkup(): string {
-  return `<div class="book-reader-main"><aside id="reader-navigation" class="book-reader-panel" hidden aria-label="Book navigation"><div class="reader-panel-heading"><h3 data-reader-panel-title>Contents</h3>${button('data-reader-panel-close', 'Close navigation', 'x')}</div><form data-reader-search-form hidden><label>Search this book<input name="query" type="search" maxlength="200" /></label>${button('data-reader-search-submit', 'Find in book', 'search')}</form><div data-reader-targets></div></aside><div class="book-reader-viewport" tabindex="0" aria-label="Book pages"><p class="book-reader-loading" role="status">Opening book…</p></div></div>
+  return `<div class="book-reader-main"><aside id="reader-navigation" class="book-reader-panel" hidden aria-label="Book navigation"><div class="reader-panel-heading"><h3 data-reader-panel-title>Contents</h3>${button('data-reader-panel-close', 'Close navigation', 'x')}</div><form data-reader-search-form hidden><label>Search this book<input name="query" type="search" maxlength="200" /></label>${button('data-reader-search-submit', 'Find in book', 'search')}</form><div data-reader-targets></div>
+      <form data-reader-note-editor class="reader-mark-editor" hidden>
+        <blockquote data-reader-mark-quote></blockquote>
+        <label data-reader-mark-name-label>Bookmark name<input data-reader-mark-name maxlength="100" autocomplete="off" /></label>
+        <label data-reader-mark-note-label>Note<textarea data-reader-mark-note maxlength="4000" rows="7" placeholder="Add your thoughts…"></textarea></label>
+        <fieldset data-reader-mark-colors><legend>Highlight color</legend>${(['yellow', 'green', 'blue', 'pink'] as const).map((color) => `<button type="button" class="reader-color" data-reader-mark-color="${color}" aria-label="${color} highlight" aria-pressed="${color === 'yellow'}"></button>`).join('')}</fieldset>
+        <div class="reader-mark-actions">${button('data-reader-mark-cancel', 'Cancel editing', 'x')}<button type="submit" class="player-icon-button" aria-label="Save" title="Save">${renderIcon('check', 'player-control-icon')}</button></div>
+        <p class="reader-private-hint">Only you can see your bookmarks, highlights, and notes.</p>
+      </form></aside><div class="book-reader-viewport" tabindex="0" aria-label="Book pages"><p class="book-reader-loading" role="status">Opening book…</p></div></div>
     <footer class="book-reader-footer" aria-label="Reader controls">
+      <div class="reader-selection" data-reader-selection hidden><span data-reader-selection-quote></span>${button('data-reader-highlight', 'Highlight selection', 'highlighter')}${button('data-reader-add-note', 'Note on selection', 'notebook-pen')}</div>
       <div class="reader-seek"><output id="reader-seek-preview" class="reader-seek-preview" hidden></output><input class="player-progress" data-reader-position aria-label="Reading position" aria-describedby="reader-seek-preview" type="range" min="0" max="1000" step="1" value="0" /></div>
       <div class="reader-control-row"><div class="reader-identity">${button('data-reader-close', 'Close reader', 'arrow-left')}<div><h2 id="book-reader-title">Opening book…</h2><span data-reader-location>Loading…</span></div></div>
         <div class="reader-transport">${button('data-reader-previous', 'Previous page', 'chevron-left')}${button('data-reader-next', 'Next page', 'chevron-right')}</div>
         <div class="reader-tools">${button('data-reader-options', 'Reading options', 'sliders-horizontal', 'aria-expanded="false" aria-controls="reader-options"')}${button('data-reader-fullscreen', 'Fullscreen', 'maximize')}</div></div>
       <span data-reader-status class="sr-only" role="status" aria-live="polite"></span>
       <section id="reader-options" class="reader-options" aria-label="Reading options" hidden>
-        <div class="reader-option-tools">${button('data-reader-panel="contents"', 'Contents', 'list-tree', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-panel="bookmarks"', 'Bookmarks', 'bookmark', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-bookmark', 'Add bookmark', 'bookmark-plus')}${button('data-reader-panel="search"', 'Search this book', 'search', 'aria-controls="reader-navigation" aria-expanded="false"')}</div>
+        <div class="reader-option-tools">${button('data-reader-panel="contents"', 'Contents', 'list-tree', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-panel="bookmarks"', 'Bookmarks', 'bookmark', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-bookmark', 'Add bookmark', 'bookmark-plus')}${button('data-reader-panel="notes"', 'Highlights and notes', 'notebook-pen', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-add-note', 'Add note to page', 'square-pen')}${button('data-reader-panel="search"', 'Search this book', 'search', 'aria-controls="reader-navigation" aria-expanded="false"')}</div>
         <div class="reader-size">${button('data-reader-size-step="-5"', 'Decrease text size or zoom', 'minus')}<label title="Text size or zoom">${renderIcon('a-large-small', 'player-control-icon')}<input data-reader-size class="player-progress" aria-label="Text size or zoom" type="range" min="75" max="220" step="5" value="100" /></label><output data-reader-size-value>100%</output>${button('data-reader-size-step="5"', 'Increase text size or zoom', 'plus')}</div>
         <div class="reader-layout">${button('data-reader-direction="ltr"', 'Right-to-left reading', 'arrow-right', 'aria-pressed="false"')}${button('data-reader-spread', 'Two pages', 'columns-2', 'aria-pressed="false"')}</div>
       </section></footer>`;
@@ -56,10 +65,10 @@ export function restoreReaderAppearance(dialog: HTMLElement, account: number): v
 }
 
 /** Reader-owned operations keep this controller independent of the document format. */
-export interface ReaderChromeActions extends ReaderSeekActions { appearance(): void }
+export interface ReaderControlsActions extends ReaderSeekActions { appearance(): void }
 
 /** Bind icon toggles and seek previews, returning a function to update the saved reading location. */
-export function bindReaderChrome(dialog: HTMLElement, actions: ReaderChromeActions, signal: AbortSignal): (fraction: number, label: string, position?: number) => void {
+export function bindReaderControls(dialog: HTMLElement, actions: ReaderControlsActions, signal: AbortSignal): (fraction: number, label: string, position?: number) => void {
   const get = <T extends HTMLElement = HTMLElement>(selector: string): T => dialog.querySelector<T>(selector)!;
   const options = get('#reader-options'), trigger = get<HTMLButtonElement>('[data-reader-options]');
   const range = get<HTMLInputElement>('[data-reader-position]'), preview = get<HTMLOutputElement>('#reader-seek-preview');

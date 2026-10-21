@@ -3,11 +3,11 @@ import { getReaderDocument, getReaderFile, saveReadingProgress, type ReaderDocum
 import { state } from './state';
 import type { ReaderEngine, ReaderTarget, ReaderLocation } from './readerSupport';
 import { readingFraction } from './readerSupport';
-import { renderIcon } from './ui';
 import { createIcons, icons } from 'lucide';
-import { bindReaderChrome, readerAppearance, readerMarkup, restoreReaderAppearance } from './readerChrome';
+import { bindReaderControls, readerAppearance, readerMarkup, restoreReaderAppearance } from './readerControls';
 import { updateBookReadingState } from './bookActions';
 import { createReaderFullscreen } from './readerFullscreen';
+import { createReaderNotebook } from './readerAnnotations';
 import './bookReader.css';
 
 /** Injectable source keeps browser tests on real files without contacting external metadata services. */
@@ -42,7 +42,7 @@ export async function openBookReader(itemId: number, source: ReaderSource = defa
   const status = (message: string): void => { const notice = get('[data-reader-status]'); notice.textContent = message; notice.classList.toggle('reader-notice', /not saved|failed|unavailable/i.test(message)); };
   let engine: ReaderEngine | undefined, book: ReaderDocument | undefined, progress: ReadingProgress | undefined;
   let closed = false, ready = false, saveTimer: ReturnType<typeof setTimeout> | undefined;
-  let panel: 'contents' | 'bookmarks' | 'search' = 'contents', targets: ReaderTarget[] = [], searchGeneration = 0;
+  let panel: 'contents' | 'bookmarks' | 'notes' | 'search' = 'contents', targets: ReaderTarget[] = [], searchGeneration = 0;
   let saves = Promise.resolve();
   let operations = Promise.resolve();
   let resizeObserver: ResizeObserver | undefined;
@@ -86,28 +86,30 @@ export async function openBookReader(itemId: number, source: ReaderSource = defa
   const renderTargets = (): void => {
     const list = get('[data-reader-targets]');
     list.replaceChildren();
-    const items: ReaderTarget[] = panel === 'bookmarks' ? progress?.bookmarks.map((mark) => ({ label: mark.title, locator: mark.locator })) ?? [] : targets;
-    const empty = { bookmarks: 'No bookmarks yet.', search: 'Enter text to search.', contents: 'No table of contents is available.' };
-    if (!items.length) { list.textContent = empty[panel]; }
-    for (const target of items) {
+    if (notebook.render(list, panel)) return;
+    if (!targets.length) { list.textContent = panel === 'search' ? 'Enter text to search.' : 'No table of contents is available.'; }
+    for (const target of targets) {
       const row = document.createElement('div'); row.className = 'reader-target';
       const button = document.createElement('button'); button.type = 'button'; button.textContent = target.label; button.style.paddingInlineStart = `${12 + (target.depth ?? 0) * 14}px`;
       listen(button, 'click', () => run(() => engine!.goTo(target.locator))); row.append(button);
-      if (panel === 'bookmarks') {
-        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'player-icon-button'; remove.innerHTML = renderIcon('trash-2', 'player-control-icon'); remove.setAttribute('aria-label', `Remove bookmark ${target.label}`);
-        listen(remove, 'click', () => { progress!.bookmarks = progress!.bookmarks.filter((mark) => mark.locator !== target.locator); queueSave(); renderTargets(); }); row.append(remove);
-      }
       list.append(row);
     }
     createIcons({ icons, root: list });
   };
-  const addBookmark = (): void => {
-    if (!progress?.locator || !ready) return;
-    if (progress.bookmarks.some((mark) => mark.locator === progress!.locator)) { status('This location is already bookmarked.'); return; }
-    if (progress.bookmarks.length >= 200) { status('Remove a bookmark before adding more.'); return; }
-    progress.bookmarks.push({ title: get('[data-reader-location]').textContent?.slice(0, 200) || 'Bookmark', locator: progress.locator });
-    queueSave(); if (panel === 'bookmarks') renderTargets();
+  const openPanel = (next: typeof panel): void => {
+    panel = next; get('.book-reader-panel').hidden = false;
+    get('[data-reader-panel-title]').textContent = panel === 'notes' ? 'Highlights and notes' : panel[0].toUpperCase() + panel.slice(1);
+    get<HTMLFormElement>('[data-reader-search-form]').hidden = panel !== 'search';
+    targets = panel === 'contents' ? engine?.toc ?? [] : [];
+    updatePanelButtons(); renderTargets();
   };
+  const notebook = createReaderNotebook(dialog, {
+    progress: () => ready && sameAccount() ? progress : undefined,
+    open: openPanel,
+    navigate: (locator) => { void run(() => engine!.goTo(locator)); },
+    changed: () => { queueSave(); void run(() => engine!.annotations?.(progress?.annotations ?? []) ?? Promise.resolve()); renderTargets(); },
+    status,
+  }, controller.signal);
   const appearance = async (): Promise<void> => {
     const value = readerAppearance(dialog);
     try { localStorage.setItem(`koko-reader-appearance:${account}`, JSON.stringify(value)); } catch { /* Private browsing may disable preference storage. */ }
@@ -118,24 +120,22 @@ export async function openBookReader(itemId: number, source: ReaderSource = defa
   listen(get('[data-reader-fullscreen]'), 'click', () => { void fullscreen.toggle().catch(() => status('Fullscreen is unavailable in this browser.')); });
   listen(get('[data-reader-next]'), 'click', () => run(() => engine!.next()));
   listen(get('[data-reader-previous]'), 'click', () => run(() => engine!.previous()));
-  listen(get('[data-reader-bookmark]'), 'click', addBookmark);
-  const locationChanged = bindReaderChrome(dialog, {
+  listen(get('[data-reader-bookmark]'), 'click', () => notebook.bookmark());
+  const locationChanged = bindReaderControls(dialog, {
     appearance: () => run(appearance),
     seek: (fraction) => run(() => engine!.seek(fraction)),
     preview: (fraction) => engine?.preview(fraction),
   }, controller.signal);
   listen(get('[data-reader-search-submit]'), 'click', () => get<HTMLFormElement>('[data-reader-search-form]').requestSubmit());
-  listen(get('[data-reader-panel-close]'), 'click', () => { get('.book-reader-panel').hidden = true; updatePanelButtons(); });
+  listen(get('[data-reader-panel-close]'), 'click', () => { notebook.dismiss(); get('.book-reader-panel').hidden = true; updatePanelButtons(); });
   const updatePanelButtons = (): void => {
     for (const control of dialog.querySelectorAll<HTMLElement>('[data-reader-panel]')) control.setAttribute('aria-expanded', String(!get('.book-reader-panel').hidden && control.dataset.readerPanel === panel));
   };
   for (const button of dialog.querySelectorAll<HTMLElement>('[data-reader-panel]')) listen(button, 'click', () => {
     const next = button.dataset.readerPanel as typeof panel;
-    const aside = get('.book-reader-panel'); aside.hidden = !aside.hidden && panel === next; panel = next;
-    get('[data-reader-panel-title]').textContent = panel[0].toUpperCase() + panel.slice(1);
-    get<HTMLFormElement>('[data-reader-search-form]').hidden = panel !== 'search';
-    targets = panel === 'contents' ? engine?.toc ?? [] : [];
-    updatePanelButtons(); renderTargets(); if (panel === 'search' && !aside.hidden) { get<HTMLInputElement>('[name="query"]').focus(); }
+    const hide = !get('.book-reader-panel').hidden && panel === next;
+    notebook.dismiss(); openPanel(next); get('.book-reader-panel').hidden = hide; updatePanelButtons();
+    if (panel === 'search' && !hide) get<HTMLInputElement>('[name="query"]').focus();
   });
   listen(get('[data-reader-search-form]'), 'submit', (event) => {
     event.preventDefault(); const query = get<HTMLInputElement>('[name="query"]').value.trim(); if (!query || !engine) return;
@@ -164,15 +164,16 @@ export async function openBookReader(itemId: number, source: ReaderSource = defa
     if (ready) queueSave();
   };
   try {
-    book = await source.document(itemId, controller.signal); if (closed) return;
+    book = await source.document(itemId, controller.signal); if (closed || !sameAccount()) { close(false); return; }
     get('#book-reader-title').textContent = book.title;
     progress = book.progress ? structuredClone(book.progress) : { revision: book.revision, locator: '', fraction: 0, completed: false, bookmarks: [] };
-    const file = await source.file(book, controller.signal); if (closed) return;
+    const file = await source.file(book, controller.signal); if (closed || !sameAccount()) { close(false); return; }
     const loaded = ['pdf', 'cbz', 'archive'].includes(book.format)
-      ? await (await import('./readerPaged')).openPagedReader(file, book.format, host, moved)
-      : await (await import('./readerText')).openTextReader(file, book.format, host, moved);
-    if (closed) { loaded.close(); return; }
+      ? await (await import('./readerPaged')).openPagedReader(file, book.format, host, moved, notebook.events)
+      : await (await import('./readerText')).openTextReader(file, book.format, host, moved, notebook.events);
+    if (closed || !sameAccount()) { loaded.close(); close(false); return; }
     engine = loaded;
+    await engine.annotations?.(progress.annotations ?? []);
     progress.page_count = engine.pageCount ?? progress.page_count;
     restoreReaderAppearance(dialog, account);
     const saved = progress.locator, fraction = progress.fraction;

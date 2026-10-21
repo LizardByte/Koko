@@ -43,15 +43,27 @@ import {
 import { apiErrorMessage } from './apiErrors';
 const REQUEST_TIMEOUT_MS = 15000;
 
+/** Private highlight or note anchored to text or a fixed page in one ebook revision. */
+export interface ReadingAnnotation {
+  id: string;
+  locator: string;
+  quote: string;
+  note: string;
+  color: 'yellow' | 'green' | 'blue' | 'pink';
+  /** PDF rectangles normalized to page dimensions so marks follow zoom and spread changes. */
+  rects?: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
 /** A position independent of listening history: EPUB CFI or a fixed-layout page index. */
 export interface ReadingProgress {
   revision: string;
   locator: string;
   fraction: number;
   completed: boolean;
-  /** Intrinsic page count, never a font-dependent reflowable location count. */
+  /** Fixed page count or completed pagination of the current text layout. */
   page_count?: number | null;
   bookmarks: Array<{ title: string; locator: string }>;
+  annotations?: ReadingAnnotation[];
 }
 
 /** An authorized ebook source and this account's saved reading state. */

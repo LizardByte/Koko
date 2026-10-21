@@ -424,7 +424,7 @@ fn merge_item_state(
         return Err(diesel::result::Error::RollbackTransaction);
     }
     merge_progress(conn, keep, duplicate)?;
-    books::merge_progress(conn, keep, duplicate)?;
+    ebooks::merge_progress(conn, keep, duplicate)?;
     let recording = preferred_recording(conn, keep, duplicate)?;
     let moved = merge_metadata_links(
         conn,

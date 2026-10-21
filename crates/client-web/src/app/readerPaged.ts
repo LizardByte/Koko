@@ -1,5 +1,7 @@
 /** Renders fixed PDF and comic pages with lazy extraction, zoom, spreads, and persistent page indices. */
-import type { ReaderEngine, ReaderLocation, ReaderTarget } from './readerSupport';
+import type { ReaderAnnotationEvents, ReaderEngine, ReaderLocation, ReaderTarget } from './readerSupport';
+import type { ReadingAnnotation } from '../api';
+import { drawReaderPdfHighlights, readerPdfSelection } from './readerHighlights';
 import { compareReaderPaths, isComicPage, readerPageIndex, readerPageSpread, readerPageLabel, readerSequence } from './readerSupport';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -56,6 +58,8 @@ async function pdfSource(file: File): Promise<PageSource> {
       canvas.style.width = `${viewport.width}px`; canvas.style.height = `${viewport.height}px`;
       target.style.width = `${viewport.width}px`; target.style.height = `${viewport.height}px`;
       target.style.setProperty('--scale-factor', String(ratio));
+      target.style.setProperty('--total-scale-factor', String(viewport.scale * viewport.userUnit));
+      target.style.setProperty('--scale-round-x', '1px'); target.style.setProperty('--scale-round-y', '1px');
       target.append(canvas);
       const render = page.render({ canvas, viewport, transform: [pixelRatio, 0, 0, pixelRatio, 0, 0] });
       running.add(render);
@@ -124,11 +128,19 @@ async function comicSource(file: File): Promise<PageSource> {
 }
 
 /** Open a PDF or comic using a page-based engine; the caller owns cleanup and error display. */
-export async function openPagedReader(file: File, format: string, host: HTMLElement, changed: (location: ReaderLocation) => void): Promise<ReaderEngine> {
+export async function openPagedReader(file: File, format: string, host: HTMLElement, changed: (location: ReaderLocation) => void, annotationEvents?: ReaderAnnotationEvents): Promise<ReaderEngine> {
   const source = format === 'pdf' ? await pdfSource(file) : await comicSource(file);
   let index = 0, size = 1, spread = false, direction = 'ltr', generation = 0, closed = false;
+  let annotations: readonly ReadingAnnotation[] = [];
+  const selection = (): void => {
+    const selected = readerPdfSelection(host);
+    if (selected) annotationEvents?.selection(selected);
+    else if (host.contains(host.ownerDocument.activeElement)) annotationEvents?.selection();
+  };
+  if (format === 'pdf') host.ownerDocument.addEventListener('selectionchange', selection);
   const draw = async (): Promise<void> => {
     const token = ++generation;
+    annotationEvents?.selection();
     const pair = document.createElement('div'); pair.className = 'reader-page-pair'; pair.dir = direction;
     host.replaceChildren(pair);
     const pages = readerPageSpread(index, source.count, spread);
@@ -139,9 +151,11 @@ export async function openPagedReader(file: File, format: string, host: HTMLElem
       if (closed || token !== generation) return;
       const page = document.createElement('div'); page.className = 'reader-fixed-page'; pair.append(page);
       if (pageIndex === null) { page.className = 'reader-blank-page'; page.setAttribute('aria-hidden', 'true'); return; }
+      if (format === 'pdf') page.dataset.readerPdfPage = String(pageIndex);
       await source.render(pageIndex, page, width, size);
     }));
     if (closed || token !== generation) return;
+    drawReaderPdfHighlights(host, annotations, annotationEvents?.activate);
     host.scrollTop = 0;
     const visible = pages.filter((page): page is number => page !== null);
     changed({ locator: String(index), fraction: (visible[visible.length - 1] + 1) / source.count, position: source.count > 1 ? index / (source.count - 1) : 0, label: readerPageLabel(pages, source.count) });
@@ -169,6 +183,7 @@ export async function openPagedReader(file: File, format: string, host: HTMLElem
     async appearance(zoom, readingDirection, twoPages) { size = zoom / 100; direction = readingDirection; spread = twoPages; await goTo(String(index)); },
     preview: (fraction) => readerPageLabel(readerPageSpread(readerPageIndex(fraction, source.count), source.count, spread), source.count),
     search: (query) => source.search(query),
-    close() { if (closed) { return; } closed = true; generation++; host.removeEventListener('touchstart', begin); host.removeEventListener('touchend', end); source.close(); host.replaceChildren(); },
+    annotations(values) { annotations = structuredClone(values); drawReaderPdfHighlights(host, annotations, annotationEvents?.activate); return Promise.resolve(); },
+    close() { if (closed) { return; } closed = true; generation++; host.ownerDocument.removeEventListener('selectionchange', selection); host.removeEventListener('touchstart', begin); host.removeEventListener('touchend', end); source.close(); host.replaceChildren(); },
   };
 }

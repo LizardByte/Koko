@@ -75,7 +75,7 @@ export async function resetBookReadingProgress(itemId: number): Promise<void> {
   if (account == null) throw new Error('Sign in to reset reading progress.');
   const document = await getReaderDocument(itemId);
   if (state.bootstrap?.current_user?.id !== account) return;
-  const progress: ReadingProgress = { revision: document.revision, locator: '', fraction: 0, completed: false, page_count: document.progress?.page_count, bookmarks: document.progress?.bookmarks ?? [] };
+  const progress: ReadingProgress = { revision: document.revision, locator: '', fraction: 0, completed: false, page_count: document.progress?.page_count, bookmarks: document.progress?.bookmarks ?? [], annotations: document.progress?.annotations ?? [] };
   await saveReadingProgress(itemId, progress);
   if (state.bootstrap?.current_user?.id === account) updateBookReadingState(itemId, progress);
 }

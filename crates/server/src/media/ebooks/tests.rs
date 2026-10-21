@@ -216,7 +216,60 @@ fn position(revision: String) -> ReadingProgress {
             title: "Chapter one".into(),
             locator: "epubcfi(/6/2)".into(),
         }],
+        annotations: vec![ReadingAnnotation {
+            id: "private-highlight".into(),
+            locator: "epubcfi(/6/2!/4/2,:0,:12)".into(),
+            quote: "Selected passage".into(),
+            note: "My private thoughts".into(),
+            color: "yellow".into(),
+            rects: vec![],
+        }],
     }
+}
+
+#[test]
+fn reading_annotations_accept_legacy_state_and_bound_private_payloads() {
+    let legacy = serde_json::json!({"revision":"v1", "locator":"2", "fraction":0.2, "completed":false, "bookmarks":[]});
+    let legacy: ReadingProgress = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.valid());
+    assert!(legacy.annotations.is_empty());
+    let original = position("v1".into());
+    let mut state = original.clone();
+    state.annotations[0].quote.clear();
+    assert!(state.valid(), "a page note needs no selected text");
+    state.annotations[0].note.clear();
+    assert!(!state.valid());
+    state = original.clone();
+    state.annotations.push(state.annotations[0].clone());
+    assert!(
+        !state.valid(),
+        "annotation IDs must be unique within the account's book"
+    );
+    for (field, value) in [
+        ("color", "url(javascript:bad)".into()),
+        ("note", "x".repeat(16_001)),
+        ("locator", String::new()),
+    ] {
+        let mut payload = serde_json::to_value(&original).unwrap();
+        payload["annotations"][0][field] = serde_json::json!(value);
+        assert!(
+            !serde_json::from_value::<ReadingProgress>(payload)
+                .unwrap()
+                .valid()
+        );
+    }
+    state = original;
+    state.annotations[0].rects = vec![AnnotationRect {
+        x: 0.1,
+        y: 0.2,
+        width: 0.3,
+        height: 0.1,
+    }];
+    assert!(state.valid());
+    state.annotations[0].rects[0].width = 1.0;
+    assert!(!state.valid());
+    state.annotations[0].rects[0].width = f64::NAN;
+    assert!(!state.valid());
 }
 
 #[test]
@@ -295,6 +348,7 @@ fn positions_and_bookmarks_are_per_user_and_invalidated_by_content_changes() {
         .progress
         .unwrap();
     assert_eq!(saved.bookmarks[0].title, "Chapter one");
+    assert_eq!(saved.annotations[0].note, "My private thoughts");
     assert_eq!(saved.locator, state.locator);
     assert!(
         source(&mut conn, id, 2)
@@ -411,6 +465,17 @@ fn resetting_reading_state_retains_bookmarks_and_returns_the_action_to_unopened(
     state.completed = false;
     save_progress(&mut conn, 1, id, &state).unwrap();
     assert!(status(&mut conn, id, Some(1)).unwrap().is_none());
+    assert_eq!(
+        source(&mut conn, id, 1)
+            .unwrap()
+            .unwrap()
+            .document
+            .progress
+            .unwrap()
+            .annotations[0]
+            .note,
+        "My private thoughts"
+    );
     assert_eq!(
         source(&mut conn, id, 1)
             .unwrap()
@@ -575,9 +640,9 @@ async fn reader_routes_enforce_auth_library_access_range_and_revision() {
     .mount(
         "/",
         rocket::routes![
-            crate::web::routes::books::document,
-            crate::web::routes::books::content,
-            crate::web::routes::books::progress,
+            crate::web::routes::ebooks::document,
+            crate::web::routes::ebooks::content,
+            crate::web::routes::ebooks::progress,
             crate::web::routes::media::stream_item
         ],
     );
@@ -625,6 +690,47 @@ async fn reader_routes_enforce_auth_library_access_range_and_revision() {
             .status(),
         Status::NoContent
     );
+    let second_token = crate::auth::create_token("2", crate::auth::get_jwt_secret()).unwrap();
+    let second_auth = || Header::new("Authorization", format!("Bearer {second_token}"));
+    let other_document = client
+        .get(&url)
+        .header(second_auth())
+        .dispatch()
+        .await
+        .into_json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert!(other_document["progress"].is_null());
+    let mut other_state = serde_json::to_value(&state).unwrap();
+    // A caller cannot select the owner by adding an account field to the payload.
+    other_state["user_id"] = serde_json::json!(1);
+    other_state["annotations"][0]["note"] = serde_json::json!("Second user's private note");
+    other_state["bookmarks"][0]["title"] = serde_json::json!("Second user's name");
+    assert_eq!(
+        client
+            .put(&save)
+            .header(second_auth())
+            .header(ContentType::JSON)
+            .json(&other_state)
+            .dispatch()
+            .await
+            .status(),
+        Status::NoContent
+    );
+    for (header, expected) in [
+        (auth(), "My private thoughts"),
+        (second_auth(), "Second user's private note"),
+    ] {
+        let saved = client
+            .get(&url)
+            .header(header)
+            .dispatch()
+            .await
+            .into_json::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(saved["progress"]["annotations"][0]["note"], expected);
+    }
     state.revision = "stale".into();
     assert_eq!(
         client

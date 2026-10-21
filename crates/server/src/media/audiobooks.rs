@@ -514,7 +514,7 @@ pub(super) fn plan_ebook(
     leaf.media_kind = Some("book".into());
     leaf.playable = false;
     leaf.audiobook = None;
-    if super::books::is_comic(&file.path) {
+    if super::ebooks::is_comic(&file.path) {
         let mut issue = plans.pop().unwrap();
         let mut series = plans.pop().unwrap();
         series.identity_key = format!("comic-series:{}", series.identity_key);

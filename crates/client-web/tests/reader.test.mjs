@@ -12,7 +12,7 @@ const api = await server.ssrLoadModule('/src/api.ts');
 const { renderBookActions } = await server.ssrLoadModule('/src/app/bookReader.ts');
 const { compareReaderPaths, isComicPage, readingFraction, readerPageIndex, readerTextPosition, readerPageSpread, readerPageLabel, publisherPageCount } = await server.ssrLoadModule('/src/app/readerSupport.ts');
 const { SectionProgress } = await server.ssrLoadModule('/node_modules/foliate-js/progress.js');
-const { readerMarkup } = await server.ssrLoadModule('/src/app/readerChrome.ts');
+const { readerMarkup } = await server.ssrLoadModule('/src/app/readerControls.ts');
 const { formatChildCount } = await server.ssrLoadModule('/src/app/ui.ts');
 const { resetBookReadingProgress, updateBookReadingState } = await server.ssrLoadModule('/src/app/bookActions.ts');
 const { state: appState } = await server.ssrLoadModule('/src/app/state.ts');
@@ -201,7 +201,7 @@ test('reader API sends credentials and propagates denials instead of returning m
 
 test('reset preserves bookmarks and page counts and cannot copy state across an account change', async () => {
   const original = { fetch: globalThis.fetch, document: globalThis.document, bootstrap: appState.bootstrap, selectedItem: appState.selectedItem };
-  const progress = { revision: 'fixture', locator: '2', fraction: 0.35, completed: false, page_count: 123, bookmarks: [{ title: 'Private bookmark', locator: '1' }] };
+  const progress = { revision: 'fixture', locator: '2', fraction: 0.35, completed: false, page_count: 123, bookmarks: [{ title: 'Private bookmark', locator: '1' }], annotations: [{ id: 'note', locator: '1', quote: 'Passage', note: 'Private note', color: 'yellow' }] };
   const requests = [];
   try {
     appState.bootstrap = { current_user: { id: 1 } }; appState.selectedItem = book(17, 'book.pdf');
@@ -214,6 +214,7 @@ test('reset preserves bookmarks and page counts and cannot copy state across an 
     const saved = JSON.parse(requests.at(-1)[1].body);
     assert.equal(saved.locator, ''); assert.equal(saved.fraction, 0); assert.equal(saved.completed, false);
     assert.deepEqual(saved.bookmarks, progress.bookmarks); assert.equal(saved.page_count, 123);
+    assert.deepEqual(saved.annotations, progress.annotations);
     assert.equal(appState.selectedItem.reading_progress.started, false);
     requests.length = 0;
     globalThis.fetch = async (url, options) => { requests.push([url, options]); appState.bootstrap = { current_user: { id: 2 } }; return Response.json({ revision: 'fixture', progress }); };

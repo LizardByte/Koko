@@ -137,6 +137,55 @@ pub(crate) struct Bookmark {
     pub locator: String,
 }
 
+/// A normalized PDF selection rectangle, independent of display scale.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct AnnotationRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// An account-private text highlight or note anchored to this file revision.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ReadingAnnotation {
+    pub id: String,
+    pub locator: String,
+    pub quote: String,
+    pub note: String,
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rects: Vec<AnnotationRect>,
+}
+
+impl ReadingAnnotation {
+    fn valid(&self) -> bool {
+        !self.id.is_empty()
+            && self.id.len() <= 64
+            && !self.locator.is_empty()
+            && self.locator.len() <= 4096
+            && self.quote.len() <= 16_000
+            && self.note.len() <= 16_000
+            && (!self.quote.trim().is_empty() || !self.note.trim().is_empty())
+            && matches!(self.color.as_str(), "yellow" | "green" | "blue" | "pink")
+            && self.rects.len() <= 200
+            && self.rects.iter().all(|rect| {
+                [
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                ]
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                    && rect.width > 0.0
+                    && rect.height > 0.0
+                    && rect.x + rect.width <= 1.001
+                    && rect.y + rect.height <= 1.001
+            })
+    }
+}
+
 /// Reading state is separate from audio/video playback, and isolated per account.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct ReadingProgress {
@@ -148,6 +197,8 @@ pub(crate) struct ReadingProgress {
     pub page_count: Option<u32>,
     #[serde(default)]
     pub bookmarks: Vec<Bookmark>,
+    #[serde(default)]
+    pub annotations: Vec<ReadingAnnotation>,
 }
 
 impl ReadingProgress {
@@ -165,6 +216,15 @@ impl ReadingProgress {
                 .bookmarks
                 .iter()
                 .all(|mark| mark.title.len() <= 400 && mark.locator.len() <= 4096)
+            && self.annotations.len() <= 500
+            && self.annotations.iter().all(ReadingAnnotation::valid)
+            && self
+                .annotations
+                .iter()
+                .map(|mark| &mark.id)
+                .collect::<HashSet<_>>()
+                .len()
+                == self.annotations.len()
     }
 }
 

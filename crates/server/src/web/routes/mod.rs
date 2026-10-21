@@ -2,9 +2,9 @@
 
 // modules
 pub mod auth;
-pub mod books;
 pub mod common;
 pub mod dependencies;
+pub mod ebooks;
 pub mod media;
 mod metadata_jobs;
 pub mod music;
@@ -23,8 +23,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         auth::jwt_test,
         auth::admin_test,
         auth::user_info,
-        books::document,
-        books::progress,
+        ebooks::document,
+        ebooks::progress,
         dependencies::get_dependencies,
         media::get_server_capabilities,
         media::get_system_activities,
@@ -77,7 +77,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
 pub fn spa_routes() -> Vec<rocket::Route> {
     routes![
         common::index,
-        books::content,
+        ebooks::content,
         common::favicon,
         common::provider_logo,
         common::spa_asset,

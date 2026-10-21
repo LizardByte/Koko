@@ -22,9 +22,9 @@ Declare supported library kinds in the descriptor with `supported_kinds`. Second
 Return community averages in `ProviderMetadataDetails.rating` on the provider's
 original scale. The provider's `rating_maximum()` defaults to 10; override it with
 a provider constant for another scale, such as Open Library's maximum of 5.
-Koko centrally validates and converts ratings to a finite 0–10 value before saving
+Koko centrally validates and rounds ratings to an integer from 0–100 before saving
 them in the shared metadata rating column. Invalid values are omitted, not clamped.
-Keep stored precision; the shared web badge displays one decimal place.
+Public API ratings stay on the 0–10 scale, and the shared web badge displays one decimal place.
 Search-match confidence and popularity are not community ratings.
 
 ## Primary Provider Skeleton

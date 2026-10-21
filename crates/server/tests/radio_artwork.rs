@@ -126,7 +126,8 @@ fn combined_music_migration_applies_and_reverts_as_one_revision() {
         [
             "a54d52c8da5e",
             "c18f43d2a9b7",
-            "d7e92a604b31"
+            "d7e92a604b31",
+            "834267a910bb"
         ]
     );
     assert!(
@@ -138,12 +139,12 @@ fn combined_music_migration_applies_and_reverts_as_one_revision() {
         koko::db::revert_all_sqlite_migrations(&mut conn)
             .unwrap()
             .len(),
-        3
+        4
     );
     assert_eq!(
         koko::db::run_pending_sqlite_migrations(&mut conn)
             .unwrap()
             .len(),
-        3
+        4
     );
 }

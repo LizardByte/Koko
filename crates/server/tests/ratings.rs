@@ -4,6 +4,9 @@
 #[path = "../src/db/schema.rs"]
 mod schema;
 
+#[path = "ratings/migration.rs"]
+mod migration;
+
 use diesel::prelude::*;
 use koko::config::MetadataProviderId;
 use koko::metadata::{
@@ -68,10 +71,10 @@ fn snapshot(
 #[test]
 fn open_library_averages_use_shared_rating_storage_and_api_attribution() {
     let mut conn = connection();
-    for (average, expected) in [
-        (json!(4.125), Some(8.25)),
-        (json!(5), Some(10.0)),
-        (json!(null), None),
+    for (average, stored, expected) in [
+        (json!(4.125), Some(83), Some(8.3)),
+        (json!(5), Some(100), Some(10.0)),
+        (json!(null), None, None),
     ] {
         let source = snapshot(
             MetadataProviderId::OpenLibrary,
@@ -83,7 +86,7 @@ fn open_library_averages_use_shared_rating_storage_and_api_attribution() {
         let row = get_primary_item_metadata_link(&mut conn, 1)
             .unwrap()
             .unwrap();
-        assert_eq!(row.rating, expected);
+        assert_eq!(row.rating, stored);
         assert_eq!(saved.rating, expected);
         assert_eq!(
             get_item_metadata_summaries(&mut conn, 1).unwrap()[0].rating,
@@ -108,17 +111,17 @@ fn open_library_averages_use_shared_rating_storage_and_api_attribution() {
 }
 
 #[test]
-fn providers_default_to_ten_and_keep_stored_precision() {
+fn providers_default_to_ten_and_round_to_display_precision() {
     let mut conn = connection();
     let source = snapshot(MetadataProviderId::Tmdb, json!({"vote_average":8.25}));
     let saved = upsert_item_metadata_snapshot(&mut conn, 1, &source).unwrap();
-    assert_eq!(saved.rating, Some(8.25));
+    assert_eq!(saved.rating, Some(8.3));
     assert_eq!(
         get_primary_item_metadata_link(&mut conn, 1)
             .unwrap()
             .unwrap()
             .rating,
-        Some(8.25)
+        Some(83)
     );
 }
 
@@ -141,9 +144,9 @@ fn every_metadata_link_validates_against_its_provider_scale_before_saving() {
                 f64::NEG_INFINITY,
             ] {
                 let expected = if value == 0.0 {
-                    Some(0.0)
+                    Some(0)
                 } else if value == maximum {
-                    Some(10.0)
+                    Some(100)
                 } else {
                     None
                 };
@@ -154,41 +157,50 @@ fn every_metadata_link_validates_against_its_provider_scale_before_saving() {
                 let saved =
                     upsert_item_metadata_link(&mut conn, 1, &source, &details, relation, None)
                         .unwrap();
-                let stored: Option<f32> = item_metadata_links::table
+                let stored: Option<i16> = item_metadata_links::table
                     .find(saved.id)
                     .select(item_metadata_links::rating)
                     .first(&mut conn)
                     .unwrap();
                 assert_eq!(stored, expected, "{provider:?} {relation} {value}");
-                assert_eq!(saved.rating, expected);
+                assert_eq!(saved.rating, expected.map(|value| f32::from(value) / 10.0));
             }
         }
     }
 }
 
 #[test]
-fn legacy_out_of_range_ratings_do_not_escape_through_api_responses() {
+fn database_rejects_out_of_range_scores_without_changing_saved_ratings() {
     let mut conn = connection();
-    let source = snapshot(MetadataProviderId::Tmdb, json!({"vote_average":8.25}));
+    let source = snapshot(
+        MetadataProviderId::OpenLibrary,
+        json!({
+            "key":"/works/OL1W", "title":"Book", "koko_rating_average":4.125,
+        }),
+    );
     let saved = upsert_item_metadata_snapshot(&mut conn, 1, &source).unwrap();
-    diesel::update(item_metadata_links::table.find(saved.id))
-        .set(item_metadata_links::rating.eq(99.0_f32))
-        .execute(&mut conn)
-        .unwrap();
+    for value in [-1_i16, 101] {
+        assert!(
+            diesel::update(item_metadata_links::table.find(saved.id))
+                .set(item_metadata_links::rating.eq(value))
+                .execute(&mut conn)
+                .is_err()
+        );
+    }
     assert_eq!(
         get_item_metadata_summaries(&mut conn, 1).unwrap()[0].rating,
-        None
+        Some(8.3)
     );
     let detail = koko::media::get_media_item(&mut conn, 1, ".")
         .unwrap()
         .unwrap();
-    assert_eq!(detail.rating, None);
-    assert_eq!(detail.rating_provider_id, None);
+    assert_eq!(detail.rating, Some(8.3));
+    assert_eq!(detail.rating_provider_id.as_deref(), Some("open_library"));
     let summary = koko::media::get_media_item_summary(&mut conn, 1)
         .unwrap()
         .unwrap();
-    assert_eq!(summary.rating, None);
-    assert_eq!(summary.rating_provider_id, None);
+    assert_eq!(summary.rating, Some(8.3));
+    assert_eq!(summary.rating_provider_id.as_deref(), Some("open_library"));
 }
 
 #[test]

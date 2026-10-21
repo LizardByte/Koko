@@ -78,9 +78,9 @@ pub trait MetadataProvider {
     /// Return the provider descriptor.
     fn descriptor(&self) -> MetadataProviderDescriptor;
 
-    /// Maximum of this provider's community-rating scale; Koko converts scores to 0–10.
+    /// Maximum of this provider's community-rating scale, defaulting to ten.
     fn rating_maximum(&self) -> f64 {
-        crate::metadata::ratings::MAXIMUM
+        crate::metadata::ratings::DEFAULT_PROVIDER_MAXIMUM
     }
 
     /// Map a provider-specific media type to Koko's provider-neutral item kind.

@@ -125,7 +125,7 @@ struct SecondaryMetadataReferenceCandidate {
 struct SummaryMetadataLink {
     media_item_id: i32,
     provider_id: String,
-    rating: Option<f32>,
+    rating: Option<i16>,
     title: Option<String>,
     overview: Option<String>,
     genres_json: Option<String>,
@@ -6161,7 +6161,7 @@ fn apply_primary_metadata_link(
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default();
     summary.overview = link.overview.clone();
-    summary.rating = link.rating.and_then(crate::metadata::ratings::validate);
+    summary.rating = link.rating.and_then(crate::metadata::ratings::display);
     summary.rating_provider_id = summary.rating.map(|_| link.provider_id.clone());
     summary.release_year = link.release_year;
     if link.cached_backdrop_path.is_some() || link.backdrop_url.is_some() {
@@ -6235,7 +6235,7 @@ fn preferred_metadata_links_by_item_id(
             Option<i64>,
             String,
             String,
-            Option<f32>,
+            Option<i16>,
         )>(conn)?
         .into_iter()
         .map(
@@ -7117,7 +7117,7 @@ mod tests {
         let link = SummaryMetadataLink {
             media_item_id: 1,
             provider_id: "tmdb".into(),
-            rating: Some(8.2),
+            rating: Some(82),
             title: None,
             overview: None,
             genres_json: None,

@@ -3364,7 +3364,7 @@ fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadataPre
         .unwrap_or_default();
     let release_year = link.release_year;
     let logo_url = link.logo_url.clone();
-    let rating = link.rating.and_then(ratings::validate);
+    let rating = link.rating.and_then(ratings::display);
     let content_rating = link.content_rating.clone();
 
     LinkedMetadataPresentation {
@@ -4057,7 +4057,7 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .unwrap_or_default(),
         people: Vec::new(),
-        rating: link.rating.and_then(ratings::validate),
+        rating: link.rating.and_then(ratings::display),
         content_rating: link.content_rating,
         trailer_title: None,
         trailer_url: None,

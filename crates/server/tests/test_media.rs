@@ -1939,7 +1939,7 @@ fn test_item_detail_includes_linked_metadata_presentation() {
         stored_link.logo_url.as_deref(),
         Some("https://image.tmdb.org/t/p/w500/matrix-logo.png")
     );
-    assert_eq!(stored_link.rating, Some(8.2));
+    assert_eq!(stored_link.rating, Some(82));
     assert_eq!(stored_link.content_rating.as_deref(), Some("R"));
     assert_eq!(
         stored_summary.trailer_title.as_deref(),

@@ -316,6 +316,48 @@ fn scanning_recognizes_extended_formats_and_separates_comic_series_from_authors(
 }
 
 #[test]
+fn reader_identity_uses_the_catalog_author_and_leaves_unattributed_comics_empty() {
+    let fixture = Fixture::new();
+    let mut conn = database();
+    let id = fixture.seed(&mut conn);
+    assert_eq!(
+        source(&mut conn, id, 1)
+            .unwrap()
+            .unwrap()
+            .document
+            .author
+            .as_deref(),
+        Some("Author")
+    );
+    diesel::update(media_items::table.filter(media_items::item_type.eq("book_author")))
+        .set(media_items::display_title.eq("Updated Author"))
+        .execute(&mut conn)
+        .unwrap();
+    assert_eq!(
+        source(&mut conn, id, 1)
+            .unwrap()
+            .unwrap()
+            .document
+            .author
+            .as_deref(),
+        Some("Updated Author")
+    );
+    let comic = list_media_items(&mut conn, None)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.relative_path.ends_with("Issue 2.cbz"))
+        .unwrap();
+    assert!(
+        source(&mut conn, comic.id, 1)
+            .unwrap()
+            .unwrap()
+            .document
+            .author
+            .is_none()
+    );
+}
+
+#[test]
 fn positions_and_bookmarks_are_per_user_and_invalidated_by_content_changes() {
     let fixture = Fixture::new();
     let mut conn = database();

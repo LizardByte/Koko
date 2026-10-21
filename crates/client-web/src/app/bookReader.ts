@@ -4,7 +4,7 @@ import { state } from './state';
 import type { ReaderEngine, ReaderTarget, ReaderLocation } from './readerSupport';
 import { readingFraction } from './readerSupport';
 import { createIcons, icons } from 'lucide';
-import { bindReaderControls, readerAppearance, readerMarkup, restoreReaderAppearance } from './readerControls';
+import { bindReaderControls, readerAppearance, readerMarkup, restoreReaderAppearance, showReaderBook } from './readerControls';
 import { updateBookReadingState } from './bookActions';
 import { createReaderFullscreen } from './readerFullscreen';
 import { createReaderNotebook } from './readerAnnotations';
@@ -165,7 +165,7 @@ export async function openBookReader(itemId: number, source: ReaderSource = defa
   };
   try {
     book = await source.document(itemId, controller.signal); if (closed || !sameAccount()) { close(false); return; }
-    get('#book-reader-title').textContent = book.title;
+    showReaderBook(dialog, book);
     progress = book.progress ? structuredClone(book.progress) : { revision: book.revision, locator: '', fraction: 0, completed: false, bookmarks: [] };
     const file = await source.file(book, controller.signal); if (closed || !sameAccount()) { close(false); return; }
     const loaded = ['pdf', 'cbz', 'archive'].includes(book.format)

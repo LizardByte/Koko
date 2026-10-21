@@ -12,7 +12,7 @@ globalThis.localStorage = dom.window.localStorage;
 globalThis.location = dom.window.location;
 for (const key of ['window', 'document', 'Node', 'NodeFilter', 'Range', 'Element', 'HTMLElement', 'DOMParser', 'AbortController', 'Event']) globalThis[key] = dom.window[key];
 after(async () => { await server.close(); dom.window.close(); });
-const { readerMarkup, bindReaderControls } = await server.ssrLoadModule('/src/app/readerControls.ts');
+const { readerMarkup, bindReaderControls, showReaderBook } = await server.ssrLoadModule('/src/app/readerControls.ts');
 const { createReaderNotebook } = await server.ssrLoadModule('/src/app/readerAnnotations.ts');
 const { readerSelectedText, readerPdfSelection, drawReaderPdfHighlights } = await server.ssrLoadModule('/src/app/readerHighlights.ts');
 const { applyReaderTextTheme } = await server.ssrLoadModule('/src/app/readerTheme.ts');
@@ -46,15 +46,36 @@ test('the shared player dock keeps page labels, seeking, and reading options con
   const view = notebook(); let appearances = 0;
   const update = bindReaderControls(view.dialog, { appearance: () => { appearances++; }, seek: () => Promise.resolve(), preview: () => undefined }, view.controller.signal);
   update(0.35, 'Page 14 of 40', 0.333);
-  assert.equal(view.query('[data-reader-current]').textContent, '14');
-  assert.equal(view.query('[data-reader-total]').textContent, '40');
   assert.equal(view.query('[data-reader-position]').value, '333');
   assert.equal(view.query('[data-reader-location]').textContent, 'Page 14 of 40 · 35%');
-  update(0.5, 'Pages 20–21 of 40'); assert.equal(view.query('[data-reader-current]').textContent, '20–21');
-  update(0.1, 'Opening chapter'); assert.equal(view.query('[data-reader-current]').textContent, '10%'); assert.equal(view.query('[data-reader-total]').textContent, '');
+  assert.ok(view.query('[data-reader-location]').closest('.reader-seek'));
+  assert.ok(view.query('[data-reader-position]').compareDocumentPosition(view.query('[data-reader-location]')) & Node.DOCUMENT_POSITION_FOLLOWING);
+  update(0.5, 'Pages 20–21 of 40'); assert.equal(view.query('[data-reader-location]').textContent, 'Pages 20–21 of 40 · 50%');
+  update(0.1, 'Opening chapter'); assert.equal(view.query('[data-reader-location]').textContent, 'Opening chapter · 10%');
   view.query('[data-reader-options]').click(); assert.equal(view.query('[data-reader-options]').getAttribute('aria-expanded'), 'true');
   view.query('[data-reader-direction]').click(); assert.equal(view.query('[data-reader-direction]').getAttribute('aria-pressed'), 'true');
   assert.equal(appearances, 1); view.controller.abort();
+});
+
+test('the reader dock shows the book cover and author, with a right-hand close control and a missing-cover fallback', () => {
+  const view = notebook();
+  bindReaderControls(view.dialog, { appearance: () => {}, seek: () => Promise.resolve(), preview: () => undefined }, view.controller.signal);
+  showReaderBook(view.dialog, { item_id: 17, title: 'Book <one>', author: 'Author & <name>' });
+  assert.equal(view.query('#book-reader-title').textContent, 'Book <one>');
+  assert.equal(view.query('[data-reader-author]').textContent, 'Author & <name>');
+  assert.equal(view.query('[data-reader-author]').hidden, false);
+  assert.equal(view.query('.reader-identity name'), null);
+  const cover = view.query('[data-reader-cover]');
+  assert.match(cover.src, /\/items\/17\/artwork\?kind=poster$/); assert.equal(cover.hidden, false);
+  cover.dispatchEvent(new Event('error')); assert.equal(cover.hidden, true);
+  assert.ok(view.query('.reader-cover svg'));
+  const close = view.query('[data-reader-close]');
+  assert.equal(close.closest('.reader-tools').lastElementChild, close);
+  assert.equal(close.getAttribute('aria-label'), 'Close reader');
+  assert.ok(close.querySelector('svg.lucide-x'));
+  showReaderBook(view.dialog, { item_id: 18, title: 'Another book', author: null });
+  assert.equal(view.query('[data-reader-author]').textContent, ''); assert.equal(view.query('[data-reader-author]').hidden, true);
+  view.controller.abort();
 });
 
 test('reading options dismiss on book-frame presses without consuming selection or later section clicks', () => {

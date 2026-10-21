@@ -167,7 +167,7 @@ test('one bottom controller uses named icons and pressed toggles without a theme
   for (const control of ['close', 'previous', 'next', 'options', 'fullscreen', 'bookmark', 'size', 'direction', 'spread']) assert.match(footer, new RegExp(`data-reader-${control}`));
   for (const name of ['Contents', 'Bookmarks', 'Add bookmark', 'Search this book', 'Two pages']) assert.ok(html.includes(`aria-label="${name}"`));
   assert.match(html, /data-reader-spread[^>]*aria-pressed="false"/);
-  assert.match(html, /aria-describedby="reader-seek-preview"/);
+  assert.match(html, /aria-describedby="reader-seek-preview reader-location"/);
   assert.doesNotMatch(html, /<header|type="checkbox"|data-reader-theme|>Theme</);
 });
 

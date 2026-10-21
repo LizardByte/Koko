@@ -233,6 +233,7 @@ impl ReadingProgress {
 pub(crate) struct ReaderDocument {
     pub item_id: i32,
     pub title: String,
+    pub author: Option<String>,
     pub file_name: String,
     pub source_format: String,
     pub format: String,
@@ -365,11 +366,17 @@ pub(crate) fn source(
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+    let author = load_media_item_hierarchy(conn, &item, &[])?
+        .into_iter()
+        .rev()
+        .find(|ancestor| ancestor.item_type == "book_author")
+        .map(|author| author.display_title);
     Ok(Some(BookSource {
         path,
         document: ReaderDocument {
             item_id,
             title: item.display_title,
+            author,
             file_name: name,
             source_format: extension,
             format: format.into(),

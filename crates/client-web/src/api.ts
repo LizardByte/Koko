@@ -70,6 +70,8 @@ export interface ReadingProgress {
 export interface ReaderDocument {
   item_id: number;
   title: string;
+  /** Author profile name, when the book belongs to a cataloged author. */
+  author?: string | null;
   file_name: string;
   source_format: string;
   format: 'epub' | 'mobi' | 'fb2' | 'fbz' | 'cbz' | 'archive' | 'pdf' | 'text' | 'html';

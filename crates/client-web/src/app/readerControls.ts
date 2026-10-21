@@ -8,7 +8,7 @@ import { bindReaderSeek, type ReaderSeekActions } from './readerSeek';
 export interface ReaderAppearance { size: number; direction: string; spread: boolean }
 
 function button(attribute: string, label: string, icon: AppIconName, extra = ''): string {
-  return `<button type="button" class="player-icon-button" ${attribute} aria-label="${label}" title="${label}" ${extra}>${renderIcon(icon, 'player-control-icon')}</button>`;
+  return `<button type="button" class="player-icon-button player-dock-control" ${attribute} aria-label="${label}" title="${label}" ${extra}>${renderIcon(icon, 'player-control-icon')}</button>`;
 }
 
 /** Keep the reading surface free of a second toolbar; all controls belong to the bottom player. */
@@ -19,15 +19,15 @@ export function readerMarkup(): string {
         <label data-reader-mark-name-label>Bookmark name<input data-reader-mark-name maxlength="100" autocomplete="off" /></label>
         <label data-reader-mark-note-label>Note<textarea data-reader-mark-note maxlength="4000" rows="7" placeholder="Add your thoughts…"></textarea></label>
         <fieldset data-reader-mark-colors><legend>Highlight color</legend>${(['yellow', 'green', 'blue', 'pink'] as const).map((color) => `<button type="button" class="reader-color" data-reader-mark-color="${color}" aria-label="${color} highlight" aria-pressed="${color === 'yellow'}"></button>`).join('')}</fieldset>
-        <div class="reader-mark-actions">${button('data-reader-mark-cancel', 'Cancel editing', 'x')}<button type="submit" class="player-icon-button" aria-label="Save" title="Save">${renderIcon('check', 'player-control-icon')}</button></div>
+        <div class="reader-mark-actions">${button('data-reader-mark-cancel', 'Cancel editing', 'x')}<button type="submit" class="player-icon-button player-dock-control" aria-label="Save" title="Save">${renderIcon('check', 'player-control-icon')}</button></div>
         <p class="reader-private-hint">Only you can see your bookmarks, highlights, and notes.</p>
       </form></aside><div class="book-reader-viewport" tabindex="0" aria-label="Book pages"><p class="book-reader-loading" role="status">Opening book…</p></div></div>
-    <footer class="book-reader-footer" aria-label="Reader controls">
+    <footer class="book-reader-footer player-dock" aria-label="Reader controls">
       <div class="reader-selection" data-reader-selection hidden><span data-reader-selection-quote></span>${button('data-reader-highlight', 'Highlight selection', 'highlighter')}${button('data-reader-add-note', 'Note on selection', 'notebook-pen')}</div>
-      <div class="reader-seek"><output id="reader-seek-preview" class="reader-seek-preview" hidden></output><input class="player-progress" data-reader-position aria-label="Reading position" aria-describedby="reader-seek-preview" type="range" min="0" max="1000" step="1" value="0" /></div>
-      <div class="reader-control-row"><div class="reader-identity">${button('data-reader-close', 'Close reader', 'arrow-left')}<div><h2 id="book-reader-title">Opening book…</h2><span data-reader-location>Loading…</span></div></div>
-        <div class="reader-transport">${button('data-reader-previous', 'Previous page', 'chevron-left')}${button('data-reader-next', 'Next page', 'chevron-right')}</div>
-        <div class="reader-tools">${button('data-reader-options', 'Reading options', 'sliders-horizontal', 'aria-expanded="false" aria-controls="reader-options"')}${button('data-reader-fullscreen', 'Fullscreen', 'maximize')}</div></div>
+      <div class="reader-identity player-dock-identity">${button('data-reader-close', 'Close reader', 'arrow-left')}<div><h2 id="book-reader-title">Opening book…</h2><span data-reader-location>Loading…</span></div></div>
+      <div class="reader-transport player-dock-transport"><div class="player-dock-buttons">${button('data-reader-previous', 'Previous page', 'chevron-left')}${button('data-reader-next', 'Next page', 'chevron-right')}</div>
+        <div class="reader-seek player-dock-timeline"><span data-reader-current>0%</span><output id="reader-seek-preview" class="reader-seek-preview" hidden></output><input class="player-progress" data-reader-position aria-label="Reading position" aria-describedby="reader-seek-preview" type="range" min="0" max="1000" step="1" value="0" /><span data-reader-total></span></div></div>
+      <div class="reader-tools player-dock-tools">${button('data-reader-options', 'Reading options', 'sliders-horizontal', 'aria-expanded="false" aria-controls="reader-options"')}${button('data-reader-fullscreen', 'Fullscreen', 'maximize')}</div>
       <span data-reader-status class="sr-only" role="status" aria-live="polite"></span>
       <section id="reader-options" class="reader-options" aria-label="Reading options" hidden>
         <div class="reader-option-tools">${button('data-reader-panel="contents"', 'Contents', 'list-tree', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-panel="bookmarks"', 'Bookmarks', 'bookmark', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-bookmark', 'Add bookmark', 'bookmark-plus')}${button('data-reader-panel="notes"', 'Highlights and notes', 'notebook-pen', 'aria-controls="reader-navigation" aria-expanded="false"')}${button('data-reader-add-note', 'Add note to page', 'square-pen')}${button('data-reader-panel="search"', 'Search this book', 'search', 'aria-controls="reader-navigation" aria-expanded="false"')}</div>
@@ -93,6 +93,9 @@ export function bindReaderControls(dialog: HTMLElement, actions: ReaderControlsA
   createIcons({ icons, root: dialog });
   return (fraction, label, position) => {
     get('[data-reader-location]').textContent = `${label} · ${Math.round(fraction * 100)}%`;
+    const pages = /^Pages? (\d+(?:–\d+)?) of (\d+)$/.exec(label);
+    get('[data-reader-current]').textContent = pages?.[1] ?? `${Math.round(fraction * 100)}%`;
+    get('[data-reader-total]').textContent = pages?.[2] ?? '';
     updatePosition(fraction, label, position);
   };
 }

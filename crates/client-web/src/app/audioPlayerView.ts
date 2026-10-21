@@ -47,7 +47,7 @@ function button(
   const expanded = ['queue', 'lyrics', 'chapters'].includes(action)
     ? `aria-controls="music-panel" aria-expanded="${active}"`
     : '';
-  return `<button type="button" class="player-icon-button music-control ${active ? 'is-active' : ''}" data-music-action="${action}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}" ${pressed} ${expanded} ${disabled ? 'disabled' : ''}>${renderIcon(icon)}</button>`;
+  return `<button type="button" class="player-icon-button music-control player-dock-control ${active ? 'is-active' : ''}" data-music-action="${action}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}" ${pressed} ${expanded} ${disabled ? 'disabled' : ''}>${renderIcon(icon)}</button>`;
 }
 function playIcon(view: AudioPlayerViewState): AppIconName {
   if (view.loading) return 'refresh-cw';
@@ -70,12 +70,12 @@ export function renderAudioPlayer(view: AudioPlayerViewState): string {
   const inlineLyrics = !book && view.lyricsEnabled
     ? '<div class="music-inline-lyrics" hidden><button type="button" data-music-action="lyrics" data-current-lyric aria-label="Expand current lyrics"></button></div>'
     : '';
-  return `${panel}<section id="music-dock" class="music-dock" aria-label="Audio player" data-nav-section="music-player">
-    <div class="music-now-playing"><button class="music-cover" type="button" data-music-open-item="${item.parent_id ?? item.id}" aria-label="${book ? 'Open audiobook' : 'Open album'}">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
+  return `${panel}<section id="music-dock" class="music-dock player-dock" aria-label="Audio player" data-nav-section="music-player">
+    <div class="music-now-playing player-dock-identity"><button class="music-cover" type="button" data-music-open-item="${item.parent_id ?? item.id}" aria-label="${book ? 'Open audiobook' : 'Open album'}">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
       <div><button class="music-title" type="button" data-music-open-item="${titleTarget}">${escapeHtml(title)}</button><span class="muted">${escapeHtml(artist)}</span></div></div>
-    <div class="music-transport"><div class="music-buttons">${renderTransportButtons(view)}
-      </div><div class="music-timeline"><span data-music-elapsed>0:00</span><input class="player-progress" data-music-seek type="range" min="0" max="1000" step="1" value="0" aria-label="Audio position"/><span data-music-duration>${formatAudioTime((item.duration_ms ?? 0) / 1000)}</span></div></div>
-    <div class="music-tools">${renderAudioTools(view)}
+    <div class="music-transport player-dock-transport"><div class="music-buttons player-dock-buttons">${renderTransportButtons(view)}
+      </div><div class="music-timeline player-dock-timeline"><span data-music-elapsed>0:00</span><input class="player-progress" data-music-seek type="range" min="0" max="1000" step="1" value="0" aria-label="Audio position"/><span data-music-duration>${formatAudioTime((item.duration_ms ?? 0) / 1000)}</span></div></div>
+    <div class="music-tools player-dock-tools">${renderAudioTools(view)}
       ${button('mute', view.muted ? 'Unmute audio' : 'Mute audio', view.muted ? 'volume-x' : 'volume-2')}
       <input class="player-volume" data-music-volume type="range" min="0" max="1" step="0.01" value="${view.muted ? 0 : view.volume}" aria-label="Audio volume"/>
       ${button('stop', 'Stop audio', 'x')}</div>
@@ -107,11 +107,11 @@ function renderQueueEntry(
   const current = entry.key === view.queue.current?.key;
   const move =
     index > view.queue.cursor
-      ? `<button type="button" class="music-control" data-music-move="${entry.key}:-1" aria-label="Move song up">${renderIcon('chevron-up')}</button><button type="button" class="music-control" data-music-move="${entry.key}:1" aria-label="Move song down">${renderIcon('chevron-down')}</button>`
+      ? `<button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:-1" aria-label="Move song up">${renderIcon('chevron-up')}</button><button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:1" aria-label="Move song down">${renderIcon('chevron-down')}</button>`
       : '';
   const remove = current
     ? ''
-    : `<button type="button" class="music-control" data-music-remove="${entry.key}" aria-label="Remove ${escapeHtml(entry.item.display_title)}">${renderIcon('x')}</button>`;
+    : `<button type="button" class="music-control player-dock-control" data-music-remove="${entry.key}" aria-label="Remove ${escapeHtml(entry.item.display_title)}">${renderIcon('x')}</button>`;
   return `<div class="music-queue-entry ${current ? 'is-current' : ''}">
     <button type="button" data-music-queue-key="${entry.key}" ${current ? 'aria-current="true"' : ''}><span>${index + 1}</span><span><strong>${escapeHtml(entry.item.display_title)}</strong><small>${escapeHtml(entry.item.music?.artist ?? '')}</small></span></button>${move}${remove}</div>`;
 }

@@ -1,4 +1,4 @@
-/** Exercises private reading marks through real DOM controls, PDF geometry, and stable text anchors. */
+/** Exercises private reading marks, dark text appearance, PDF geometry, and stable text anchors. */
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +12,10 @@ globalThis.localStorage = dom.window.localStorage;
 globalThis.location = dom.window.location;
 for (const key of ['window', 'document', 'Node', 'NodeFilter', 'Range', 'Element', 'HTMLElement', 'DOMParser', 'AbortController']) globalThis[key] = dom.window[key];
 after(async () => { await server.close(); dom.window.close(); });
-const { readerMarkup } = await server.ssrLoadModule('/src/app/readerControls.ts');
+const { readerMarkup, bindReaderControls } = await server.ssrLoadModule('/src/app/readerControls.ts');
 const { createReaderNotebook } = await server.ssrLoadModule('/src/app/readerAnnotations.ts');
 const { readerSelectedText, readerPdfSelection, drawReaderPdfHighlights } = await server.ssrLoadModule('/src/app/readerHighlights.ts');
+const { applyReaderTextTheme } = await server.ssrLoadModule('/src/app/readerTheme.ts');
 
 function notebook() {
   const dialog = document.createElement('div'); dialog.innerHTML = readerMarkup(); document.body.replaceChildren(dialog);
@@ -39,6 +40,21 @@ function notebook() {
     refresh() { render(activePanel); },
   };
 }
+
+test('the shared player dock keeps page labels, seeking, and reading options connected after moving the timeline', () => {
+  const view = notebook(); let appearances = 0;
+  const update = bindReaderControls(view.dialog, { appearance: () => { appearances++; }, seek: () => Promise.resolve(), preview: () => undefined }, view.controller.signal);
+  update(0.35, 'Page 14 of 40', 0.333);
+  assert.equal(view.query('[data-reader-current]').textContent, '14');
+  assert.equal(view.query('[data-reader-total]').textContent, '40');
+  assert.equal(view.query('[data-reader-position]').value, '333');
+  assert.equal(view.query('[data-reader-location]').textContent, 'Page 14 of 40 · 35%');
+  update(0.5, 'Pages 20–21 of 40'); assert.equal(view.query('[data-reader-current]').textContent, '20–21');
+  update(0.1, 'Opening chapter'); assert.equal(view.query('[data-reader-current]').textContent, '10%'); assert.equal(view.query('[data-reader-total]').textContent, '');
+  view.query('[data-reader-options]').click(); assert.equal(view.query('[data-reader-options]').getAttribute('aria-expanded'), 'true');
+  view.query('[data-reader-direction]').click(); assert.equal(view.query('[data-reader-direction]').getAttribute('aria-pressed'), 'true');
+  assert.equal(appearances, 1); view.controller.abort();
+});
 
 test('bookmarks can be named, renamed, revisited, and removed without changing reading position', () => {
   const view = notebook(); view.book.bookmark();
@@ -98,6 +114,28 @@ test('CFI highlights restore the same passage after reflow and selection capture
   selection.collapseToEnd(); assert.equal(readerSelectedText(document), undefined);
   text.textContent = 'x'.repeat(4001); range.selectNodeContents(document.querySelector('p')); selection.removeAllRanges(); selection.addRange(range);
   assert.equal(readerSelectedText(document), undefined); selection.removeAllRanges();
+});
+
+test('dark reading overrides publisher black text and white boxes without changing text anchors or illustrations', () => {
+  const chapter = new JSDOM(`<html><head><style>body,#passage { color:black!important; background-color:white!important; } p span { color:#111!important; }</style></head>
+    <body style="color:black!important;background-color:white!important;font-family:serif"><h2>Book title</h2><p id="passage" style="color:black!important;font-size:24px">A <span style="-webkit-text-fill-color:black!important">selected passage</span>.</p>
+      <svg xmlns="http://www.w3.org/2000/svg"><rect fill="black" style="color:black;background-color:white" /></svg><img src="cover.png" /></body></html>`);
+  const doc = chapter.window.document, text = doc.querySelector('span').firstChild;
+  const range = doc.createRange(); range.selectNodeContents(text);
+  const anchor = CFI.fromRange(range), originalText = doc.body.textContent;
+  applyReaderTextTheme(doc);
+  for (const element of doc.querySelectorAll('body,h2,p,span')) {
+    assert.equal(chapter.window.getComputedStyle(element).color, 'rgb(244, 247, 251)');
+    assert.equal(chapter.window.getComputedStyle(element).backgroundColor, 'rgba(0, 0, 0, 0)');
+  }
+  assert.equal(chapter.window.getComputedStyle(doc.documentElement).backgroundColor, 'rgb(12, 17, 29)');
+  assert.equal(doc.querySelector('span').style.getPropertyValue('-webkit-text-fill-color').toLowerCase(), 'currentcolor');
+  assert.equal(doc.querySelector('p').style.fontSize, '24px'); assert.equal(doc.body.style.fontFamily, 'serif');
+  assert.equal(doc.querySelector('rect').getAttribute('fill'), 'black'); assert.equal(doc.querySelector('rect').style.color, 'black');
+  assert.equal(doc.querySelector('img').getAttribute('src'), 'cover.png');
+  assert.equal(doc.body.textContent, originalText); assert.equal(CFI.toRange(doc, CFI.parse(anchor)).toString(), 'selected passage');
+  applyReaderTextTheme(doc); assert.equal(CFI.fromRange(range), anchor);
+  chapter.window.close();
 });
 
 test('PDF highlights follow normalized line geometry and activate the right mark on a shared page', () => {

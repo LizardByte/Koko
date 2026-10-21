@@ -1,0 +1,70 @@
+/* One player controller reserves the rest of the screen for the book. */
+.book-reader { --reader-bg:var(--surface-base,#0c111d); --reader-fg:#f4f7fb; --reader-border:#ffffff12; width:100%; height:100dvh; max-width:none; max-height:none; padding:0; margin:0; border:0; color:var(--reader-fg); background:var(--reader-bg); overflow:hidden; }
+.book-reader[open] { display:block; }
+.book-reader-surface { display:grid; grid-template-rows:minmax(0,1fr) auto; width:100%; height:100%; min-height:0; background:var(--reader-bg); color:var(--reader-fg); }
+.book-reader::backdrop { background:#05080ef5; }
+.book-reader button { cursor:pointer; }
+.book-reader button:focus-visible,.book-reader input:focus-visible,.book-reader textarea:focus-visible { outline:2px solid var(--accent-soft); outline-offset:3px; }
+.book-reader-main { display:flex; position:relative; min-height:0; overflow:hidden; }
+.book-reader-panel { width:300px; flex-shrink:0; padding:20px 14px; overflow:auto; border-inline-end:1px solid var(--reader-border); background:var(--reader-bg); }
+.book-reader .book-reader-surface [hidden] { display:none; }
+.reader-panel-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; padding-inline-start:10px; }
+.reader-panel-heading h3 { margin:0; font-size:.95rem; }
+.book-reader-panel form { display:flex; align-items:end; gap:8px; padding:0 8px 12px; }
+.book-reader-panel label { display:grid; gap:6px; min-width:0; flex:1; font-size:.8rem; color:var(--text-muted); }
+.book-reader-panel input { padding:10px 12px; }
+.reader-target { display:flex; gap:5px; margin:4px 0; }
+.reader-target button:first-child { flex:1; text-align:start; overflow-wrap:anywhere; border:0; padding:12px; border-radius:10px; color:var(--text-muted); background:transparent; font-size:.85rem; }
+.reader-target button:first-child:hover { color:var(--reader-fg); background:#ffffff08; }
+.reader-target .player-icon-button { align-self:start; width:32px; height:36px; }
+.reader-target .player-icon-button svg { width:16px; height:16px; }
+.book-reader-viewport { flex:1; min-width:0; min-height:0; overflow:auto; position:relative; overscroll-behavior:contain; outline:none; }
+.reader-text-view { display:block; width:100%; height:100%; }
+.reader-page-pair { display:grid; justify-content:center; align-items:start; gap:12px; padding:20px; min-width:100%; min-height:100%; width:max-content; box-sizing:border-box; }
+.reader-fixed-page { position:relative; background:white; justify-self:center; max-width:100%; }
+.reader-fixed-page img,.reader-fixed-page canvas { display:block; max-width:none; }
+.reader-blank-page { min-height:1px; }
+.book-reader-footer { position:relative; z-index:3; padding-bottom:max(10px,env(safe-area-inset-bottom)); }
+.reader-seek { position:relative; min-height:18px; }
+.book-reader .reader-seek { grid-template-columns:minmax(0,1fr); gap:8px; padding-top:6px; }
+.book-reader .reader-seek [data-reader-location] { color:var(--text-muted); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.reader-seek-preview { position:absolute; z-index:5; bottom:calc(100% - 22px); left:var(--reader-preview-position,50%); transform:translateX(-50%); max-width:min(300px,80vw); white-space:nowrap; padding:4px 10px; border:1px solid #ffffff14; border-radius:8px; box-shadow:0 8px 24px #0006; background:#222b3d; font-size:.75rem; font-variant-numeric:tabular-nums; pointer-events:none; }
+.reader-identity h2 { margin:0; font-size:1rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.reader-identity [data-reader-author] { display:block; font-size:.85rem; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.reader-cover { position:relative; display:grid; place-items:center; flex:0 0 40px; width:40px; height:60px; overflow:hidden; border-radius:5px; background:var(--surface-raised); color:var(--accent-soft); }
+.reader-cover img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+.reader-options { position:absolute; right:24px; bottom:calc(100% + 12px); width:320px; max-width:calc(100vw - 24px); padding:12px; border:1px solid #ffffff16; border-radius:16px; background:#172131f5; backdrop-filter:blur(20px); box-shadow:0 16px 64px #0008; }
+.reader-option-tools,.reader-layout { display:flex; align-items:center; justify-content:space-around; gap:6px; flex-wrap:wrap; }
+.reader-size { display:flex; align-items:center; gap:10px; padding:12px 0; margin:10px 0; border-block:1px solid var(--reader-border); }
+.reader-size label { display:flex; align-items:center; gap:10px; min-width:0; flex:1; }
+.reader-size output { font-size:.7rem; min-width:34px; text-align:center; font-variant-numeric:tabular-nums; color:var(--text-muted); }
+.reader-size input { min-width:0; }
+.reader-notice { position:static; display:block; grid-column:1/-1; width:auto; height:auto; margin:8px 0 0; padding:0; clip:auto; overflow:visible; color:#f3c98d; font-size:.75rem; }
+.book-reader-loading,.book-reader-error { max-width:650px; padding:48px 24px; margin:auto; text-align:center; color:var(--text-muted); }
+.reader-action { position:relative; display:inline-flex; }
+.reader-progress-menu { z-index:5; width:max-content; max-width:80vw; }
+.reader-format-label { display:flex; gap:8px; align-items:center; font-size:.85rem; }
+.reader-format-label select { max-width:250px; }
+.reader-mark-editor { display:flex; flex-direction:column; gap:16px; padding:8px; }
+.book-reader-panel .reader-mark-editor { align-items:stretch; }
+.reader-mark-editor label { display:grid; gap:8px; font-size:.85rem; color:var(--text-muted); }
+.reader-mark-editor input,.reader-mark-editor textarea { width:100%; box-sizing:border-box; padding:12px; border:1px solid var(--reader-border); border-radius:10px; color:var(--reader-fg); background:#ffffff06; font:inherit; resize:vertical; }
+.reader-mark-editor blockquote { margin:0; padding:12px 14px; border-inline-start:3px solid var(--accent-soft); color:var(--text-muted); background:#ffffff04; border-radius:0 8px 8px 0; font-size:.8rem; max-height:150px; overflow:auto; white-space:pre-wrap; }
+.reader-mark-editor fieldset { display:flex; gap:14px; padding:0; margin:0; border:0; }
+.reader-mark-editor legend { margin-bottom:12px; color:var(--text-muted); font-size:.75rem; }
+.reader-color { --mark-color:#f6d365; width:26px; height:26px; padding:0; border:3px solid var(--reader-bg); border-radius:50%; background:var(--mark-color); outline:1px solid #ffffff20; }
+.reader-color[data-reader-mark-color="green"],.reader-personal-mark[data-mark-color="green"] { --mark-color:#76d68a; }
+.reader-color[data-reader-mark-color="blue"],.reader-personal-mark[data-mark-color="blue"] { --mark-color:#80b9fa; }
+.reader-color[data-reader-mark-color="pink"],.reader-personal-mark[data-mark-color="pink"] { --mark-color:#f49dc4; }
+.reader-color[aria-pressed="true"] { outline:2px solid var(--mark-color); }
+.reader-mark-actions { display:flex; justify-content:flex-end; gap:8px; }
+.reader-mark-actions button[type="submit"] { color:var(--accent-soft); background:#76d68a16; }
+.reader-private-hint { margin:0; color:var(--text-muted); font-size:.7rem; line-height:1.5; }
+.reader-personal-mark { --mark-color:#f6d365; border-inline-start:2px solid var(--mark-color); padding-inline-start:4px; }
+.reader-selection { position:absolute; bottom:calc(100% + 12px); left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; width:calc(100% - 32px); max-width:600px; padding:4px 10px 4px 18px; border:1px solid var(--reader-border); border-radius:14px; background:#172131f5; box-shadow:0 12px 40px #0005; backdrop-filter:blur(20px); }
+.reader-selection > [data-reader-selection-quote] { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); font-size:.8rem; }
+.reader-pdf-highlights { position:absolute; inset:0; pointer-events:none; }
+.book-reader .reader-pdf-highlight { position:absolute; padding:0; border:0; border-radius:2px; opacity:.35; pointer-events:auto; mix-blend-mode:multiply; }
+.book-reader .reader-pdf-highlight:hover,.book-reader .reader-pdf-highlight:focus-visible { opacity:.55; }
+@media(max-width:900px) { .reader-cover { flex-basis:32px; width:32px; height:48px; } }
+@media(max-width:700px) { .reader-identity h2 { font-size:.85rem; } .reader-identity [data-reader-author] { font-size:.75rem; } .book-reader-panel { width:85%; max-width:320px; position:absolute; z-index:2; top:0; bottom:0; box-shadow:12px 0 40px #0005; } .reader-options { right:12px; } }

@@ -58,7 +58,7 @@ test('combined capabilities stay unique while audio accepts possible support', (
     ['audio/mp4; codecs="mp4a.40.2"', 'maybe'],
     ['audio/ogg; codecs="opus"', 'probably'],
   ]));
-  assert.deepEqual(profile.supported_containers, ['mp4', 'm4v', 'webm', 'm4a', 'ogg']);
+  assert.deepEqual(profile.supported_containers, ['mp4', 'm4v', 'webm', 'm4a', 'm4b', 'ogg']);
   assert.deepEqual(profile.supported_video_codecs, ['h264', 'hevc', 'vp9']);
   assert.deepEqual(profile.supported_audio_codecs, ['aac', 'opus']);
 });

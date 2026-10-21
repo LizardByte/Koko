@@ -1,6 +1,7 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
+import { bindBookActions } from './bookActions';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
 import { createIcons, icons } from 'lucide';
@@ -13,6 +14,7 @@ import { DEFAULT_BROWSE_PREFERENCES, normalizeBrowsePreferences, saveBrowsePrefe
 import { bindHoverPreview } from './hoverPreview';
 import { bindItemOpeningLayout, bindItemPlaybackBar } from './itemLayout';
 import { bindResumeHold } from './resumeHold';
+import { bindAudiobookActions } from './audiobookActions';
 import { bindSettingsActions } from './settingsActions';
 import { bindProviderOrdering, syncProviderDependencyOptions } from './providerOrdering';
 import { escapeHtml } from './format';
@@ -68,6 +70,7 @@ import {
   deleteMissingItems,
   getLogs,
   getUsers,
+  getAudiobookRecordings,
   deletePlaylist,
   linkItemMetadata,
   unlinkItemMetadata,
@@ -577,7 +580,7 @@ function bindItemDetailLayout(signal: AbortSignal): () => void {
 
 /** Open a distinct playback-options section without starting playback or rebuilding the page. */
 function bindResumeOptions(signal: AbortSignal): () => void {
-  const trigger = document.querySelector<HTMLButtonElement>('[data-resume-hold]');
+  const trigger = document.querySelector<HTMLButtonElement>('[data-resume-hold][aria-controls="resume-playback-menu"]');
   const menu = document.querySelector<HTMLElement>('#resume-playback-menu');
   const close = (): void => {
     state.resumeOptionsOpen = false;
@@ -613,6 +616,12 @@ function bindResumeOptions(signal: AbortSignal): () => void {
 }
 
 function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal): void {
+  bindBookActions(signal, (error: unknown) => {
+      state.error = error instanceof Error ? error.message : 'The reader could not start.'; context.render();
+  });
+  bindAudiobookActions(signal, (error: unknown) => {
+    state.error = error instanceof Error ? error.message : 'The audiobook could not start.'; context.render();
+  });
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
   bindProfileImagePickers();
   bindProviderLogos();
@@ -998,6 +1007,20 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     }
   });
 
+  document.querySelector<HTMLButtonElement>('[data-audiobook-versions]')?.addEventListener('click', async () => {
+    const itemId = state.selectedItem?.id;
+    if (itemId === undefined) return;
+    state.audiobookRecordingChoices = { itemId, loading: true, choices: [] };
+    render();
+    try {
+      const choices = await getAudiobookRecordings(itemId);
+      if (state.selectedItem?.id === itemId) state.audiobookRecordingChoices = { itemId, loading: false, choices };
+    } catch (error) {
+      if (state.selectedItem?.id === itemId) state.audiobookRecordingChoices = { itemId, loading: false, choices: [], error: error instanceof Error ? error.message : 'Could not load versions.' };
+    }
+    render();
+  });
+
   document.querySelectorAll<HTMLElement>('[data-link-metadata]').forEach((button) => {
     button.addEventListener('click', async () => {
       const encoded = button.dataset.linkMetadata;
@@ -1014,6 +1037,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
         }));
         clearBrowseSessions();
         state.metadataSearchResults = [];
+        state.audiobookRecordingChoices = undefined;
         await refreshPendingMetadataData();
         state.hasDeferredAutoRefreshRender = false;
         render();

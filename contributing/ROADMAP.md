@@ -188,10 +188,15 @@ These run across multiple stages:
 - [ ] Add AcoustID audio fingerprint matching using Chromaprint, configurable application credentials, and MusicBrainz recording IDs; retain searches and manual matching for ambiguous album editions.
 - MusicBrainz provides artist, album, and track metadata for music libraries, using embedded identifiers when available and conservative searches otherwise. Release covers come from the Cover Art Archive.
 - Music uses a persistent bottom player with editable queues, shuffle/repeat, private server playlists, on-demand LRCLIB lyrics, and ListenBrainz radio mixes limited to accessible local songs.
-- Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO and book providers remain planned.
-- [ ] Add audiobook scanning, chapter navigation, narration details, playback speed controls, and per-user listening progress.
-- [ ] Evaluate [AudioSilo Meta](https://meta.audiosilo.app/) and its [public API](https://meta.audiosilo.app/docs/api) as an audiobook metadata provider for works, recordings, authors, narrators, series, identifiers, covers, and chapters. Its factual core is CC0; community descriptions, characters, and recaps are CC BY-SA 4.0 and require appropriate attribution.
-- [ ] Browse ebooks and audiobooks together in a books library, grouping formats of the same work on one detail page while retaining edition, language, narrator, and recording distinctions. Offer **Read** and **Listen** when both formats are available, with independent reading and listening progress; allow either format on its own and manual linking or separation of editions.
+- Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO remains planned.
+- [x] Add audiobook scanning, chapter navigation, narration details, playback speed controls, and per-user listening progress. See [Audiobooks](../docs/BOOKS.md#chapters-and-listening).
+- [x] Enable Comic Vine, Open Library, LibexDB, LibriVox, and AudioSilo by default for new Books libraries, in that priority order.
+- [x] Integrate Open Library written-work matching for books and audiobooks, while retaining separate recording identities and progress.
+- [x] Integrate [AudioSilo Meta](https://meta.audiosilo.app/) and its [public API](https://meta.audiosilo.app/docs/api) as a secondary audiobook enrichment provider with independently searchable work and recording choices for works, recording selection, author/narrator details, series, covers, and recording-specific chapters. The integration imports factual CC0 data; community descriptions, characters, and recaps remain excluded because they use CC BY-SA 4.0.
+- [x] Browse Author → Book → Audiobook version → Audio files, with ebook files alongside audiobook versions and separate recording choices and listening progress.
+- [x] Add ebook and comic readers with **Read** and **Listen** actions on the shared book page, private reading progress, named bookmarks, highlights and notes, PDF text selection, comic page navigation, and optional Calibre conversion. See [Books, audiobooks, and comics](../docs/BOOKS.md).
+- [x] Add optional Comic Vine issue and series metadata matching.
+- [ ] Add manual grouping or separation of works and editions, and local ComicInfo.xml import.
 - Provider responses use endpoint-specific models, and refresh jobs bypass response caches while keeping the normal cache expiry and manual cache-clear controls.
 - Unlinking a movie or show immediately clears its provider metadata and any show descendants, and leaves it unlinked until an explicit rematch. Rematching clears the old metadata before fetching replacement data in the background.
 

@@ -38,6 +38,9 @@ test('media metadata includes an absolute album image and descriptive music fiel
   const meta=musicMediaMetadata(song);
   assert.equal(meta.title,'My song');assert.equal(meta.artist,'A musician');assert.equal(meta.album,'An album');
   assert.match(meta.artwork[0].src,/^http:\/\/localhost\/api\/v1\/items\/302\/artwork\?/);
+  song.audiobook = { title: 'The Book', author: 'The Author' };
+  const audio = musicMediaMetadata(song);
+  assert.equal(audio.title, 'The Book'); assert.equal(audio.artist, 'The Author');
 });
 test('music progress says listened and individual songs show progress or completion',()=>{
   const album=mock.getMockItem(302),track={...mock.getMockItem(103),duration_ms:200000,playback_duration_ms:200000,playback_position_ms:100000,playback_completed:false,watch_count:0};

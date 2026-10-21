@@ -1,4 +1,4 @@
-/** Renders music tracks, saved lyrics, and playback controls for albums and playlists. */
+/** Renders shared audio track rows, saved lyrics, and playback controls for albums and playlists. */
 
 import { getArtworkUrl, type MediaItemDetail, type MediaItemSummary, type MusicPlaylistDetail, type MusicLyrics } from '../api';
 import { escapeHtml, formatDuration } from './format';
@@ -38,10 +38,12 @@ export function renderTrackListeningStatus(track: MediaItemSummary, isCurrent = 
     : '';
 }
 
-export function renderActiveAlbumButton(albumId: number): string {
+/** Control the current album or audiobook without seeking back to saved progress. */
+export function renderActiveAlbumButton(albumId: number, kind: 'album' | 'audiobook' = 'album'): string {
   const playback = activeMusicPlayback();
   if (!playback || playback.ended || playback.item.parent_id !== albumId) return '';
-  return `<button type="button" data-toggle-music-album="${albumId}">${renderButtonContent(playback.paused ? 'Resume album' : 'Pause album', playback.paused ? 'play' : 'pause', 'start', playback.item.display_title)}</button>`;
+  const label = `${playback.paused ? 'Resume' : 'Pause'} ${kind}`;
+  return `<button type="button" data-toggle-music-album="${albumId}">${renderButtonContent(label, playback.paused ? 'play' : 'pause', 'start', playback.item.display_title)}</button>`;
 }
 
 /** A playlist transport controls the existing queue rather than restarting its first song. */
@@ -62,7 +64,7 @@ export function renderPlaylistTracks(saved: MusicPlaylistDetail): string {
   const playback = activeMusicPlayback();
   return `<div class="music-track-list">${detail.items.map((track, index) => {
     const isCurrent = playback?.queueId === detail.playlist.id && !playback.ended && (playback.queueIndex ?? detail.playlist.current_index ?? 0) === index;
-    return renderMusicTrackRow(track, {
+    return renderAudioTrackRow(track, {
       number: String(index + 1), menuId: `playlist-${detail.playlist.id}-${index}`, isCurrent, cover: true,
       rowAttributes: `data-music-playlist-id="${detail.playlist.id}" data-music-playlist-index="${index}"`,
       playAttributes: `data-play-playlist-track="${detail.playlist.id}" data-playlist-index="${index}"`,
@@ -70,22 +72,28 @@ export function renderPlaylistTracks(saved: MusicPlaylistDetail): string {
   }).join('')}</div>`;
 }
 
-function renderMusicTrackRow(savedTrack: MediaItemSummary, options: { number: string; menuId: string; isCurrent: boolean; cover?: boolean; rowAttributes?: string; playAttributes: string }): string {
+/** Presentation shared by music and audiobook file rows; action menus remain appropriate to each medium. */
+export interface AudioTrackRowOptions { number: string; menuId: string; isCurrent: boolean; cover?: boolean; rowAttributes?: string; playAttributes: string; title?: string; subtitle?: string; actions?: string; warnings?: string }
+
+/** Keep numbering, listening state, duration, playback, and detail actions consistent across audio libraries. */
+export function renderAudioTrackRow(savedTrack: MediaItemSummary, options: AudioTrackRowOptions): string {
   const track = musicPlaybackItem(savedTrack);
   const paused = activeMusicPlayback()?.paused ?? true;
   const artwork = getArtworkUrl(track.artwork_item_id ?? track.id, 'poster', track.artwork_updated_at);
-  const subtitle = [track.music?.artist, options.cover ? track.music?.album : undefined].filter(Boolean).join(' · ');
+  const subtitle = options.subtitle ?? [track.music?.artist, options.cover ? track.music?.album : undefined].filter(Boolean).join(' · ');
+  const title = options.title ?? track.display_title;
+  const actions = options.actions ?? `<button type="button" data-music-enqueue="${track.id}" data-music-next="true">Play next</button>
+      <button type="button" data-music-enqueue="${track.id}">Add to queue</button>
+      <button type="button" data-music-radio="${track.id}">Start radio</button>`;
   return `<div class="music-track-row ${options.cover ? 'music-playlist-track' : ''} ${track.missing_since ? 'is-missing' : ''} ${options.isCurrent ? 'is-current' : ''}" data-music-track-id="${track.id}" ${options.rowAttributes ?? ''} ${options.isCurrent ? 'aria-current="true"' : ''}>
     <span class="music-track-number">${escapeHtml(options.number)}</span>
     <span class="music-track-status">${renderTrackListeningStatus(track, options.isCurrent)}</span>
     ${options.cover ? `<span class="music-track-cover" aria-hidden="true" style="background-image:url('${escapeHtml(artwork)}');"></span>` : ''}
-    <button type="button" class="music-track-title" data-item-id="${track.id}"><strong>${escapeHtml(track.display_title)}</strong><small>${escapeHtml(subtitle)}</small>${renderTrackWarnings(track)}</button>
+    <button type="button" class="music-track-title" data-item-id="${track.id}"><strong>${escapeHtml(title)}</strong>${subtitle ? `<small>${escapeHtml(subtitle)}</small>` : ''}${options.warnings ?? renderTrackWarnings(track)}</button>
     <span class="muted music-track-duration">${escapeHtml(formatDuration(track.duration_ms))}</span>
-    <button type="button" class="secondary-button icon-only" ${options.playAttributes} aria-label="${options.isCurrent && !paused ? 'Pause' : 'Play'} ${escapeHtml(track.display_title)}" ${!track.playable || track.missing_since ? 'disabled' : ''}>${renderButtonContent('', options.isCurrent && !paused ? 'pause' : 'play')}</button>
+    <button type="button" class="secondary-button icon-only" ${options.playAttributes} aria-label="${options.isCurrent && !paused ? 'Pause' : 'Play'} ${escapeHtml(title)}" ${!track.playable || track.missing_since ? 'disabled' : ''}>${renderButtonContent('', options.isCurrent && !paused ? 'pause' : 'play')}</button>
     <div class="music-song-menu"><button type="button" class="secondary-button" popovertarget="song-actions-${options.menuId}" aria-label="Actions for ${escapeHtml(track.display_title)}">${renderButtonContent('', 'ellipsis')}</button><div popover id="song-actions-${options.menuId}">
-      <button type="button" data-music-enqueue="${track.id}" data-music-next="true">Play next</button>
-      <button type="button" data-music-enqueue="${track.id}">Add to queue</button>
-      <button type="button" data-music-radio="${track.id}">Start radio</button>
+      ${actions}
     </div></div>
   </div>`;
 }
@@ -118,7 +126,7 @@ export function renderAlbumTracks(album: MediaItemDetail): string {
       const playback = activeMusicPlayback();
       const isCurrent = playback?.item.id === track.id && !playback.ended;
       const number = [multipleDiscs ? track.music?.disc_number ?? 1 : undefined, track.music?.track_number ?? '–'].filter((value) => value !== undefined).join('.');
-      return renderMusicTrackRow(track, { number, menuId: `${album.id}-${track.id}`, isCurrent, playAttributes: `data-play-music-track-id="${track.id}"` });
+      return renderAudioTrackRow(track, { number, menuId: `${album.id}-${track.id}`, isCurrent, playAttributes: `data-play-music-track-id="${track.id}"` });
     }).join('')}</div>
   </section>`;
 }

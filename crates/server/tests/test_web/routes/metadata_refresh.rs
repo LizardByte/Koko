@@ -5,6 +5,169 @@ const SHOW: i32 = 195_000_001;
 const SEASON: i32 = 195_000_002;
 const EPISODE: i32 = 195_000_003;
 
+#[test]
+fn audiobook_work_matches_do_not_stop_other_sources_identifying_the_recording() {
+    assert!(!is_recording_match(
+        &MetadataProviderId::Libex,
+        "us/B000000001"
+    ));
+    assert!(is_recording_match(
+        &MetadataProviderId::Libex,
+        "us/B000000001/recording"
+    ));
+    assert!(!is_recording_match(&MetadataProviderId::LibriVox, "6112"));
+    assert!(is_recording_match(
+        &MetadataProviderId::LibriVox,
+        "6112/recording"
+    ));
+    assert!(!is_recording_match(&MetadataProviderId::AudioSilo, "book"));
+    assert!(is_recording_match(
+        &MetadataProviderId::AudioSilo,
+        "book/reader"
+    ));
+}
+
+#[tokio::test]
+async fn books_library_refresh_includes_author_work_and_nested_recording_metadata() {
+    use crate::db::schema::{
+        media_items as items,
+        media_libraries as libraries,
+    };
+    use diesel::prelude::*;
+    const AUTHOR: i32 = 216_040_001;
+    const WORK: i32 = 216_040_002;
+    const RECORDING: i32 = 216_040_003;
+    let rocket = rocket::custom(rocket::Config::figment().merge((
+        "databases.sqlite_db",
+        serde_json::json!({"url": ":memory:", "pool_size": 1}),
+    )))
+    .attach(DbConn::fairing())
+    .ignite()
+    .await
+    .unwrap();
+    let db = DbConn::get_one(&rocket).await.unwrap();
+    db.run(|conn| {
+        crate::db::run_pending_sqlite_migrations(conn).unwrap();
+        diesel::insert_into(libraries::table)
+            .values((
+                libraries::id.eq(AUTHOR),
+                libraries::name.eq("Books"),
+                libraries::path.eq("books"),
+                libraries::kind.eq("books"),
+            ))
+            .execute(conn)
+            .unwrap();
+        for (id, parent, kind, provider, external, media_type) in [
+            (
+                AUTHOR,
+                None,
+                "book_author",
+                MetadataProviderId::OpenLibrary,
+                "authors/OL1A",
+                "author",
+            ),
+            (
+                WORK,
+                Some(AUTHOR),
+                "book_work",
+                MetadataProviderId::OpenLibrary,
+                "works/OL1W",
+                "book",
+            ),
+            (
+                RECORDING,
+                Some(WORK),
+                "audiobook",
+                MetadataProviderId::Libex,
+                "us/B002V1CDCO",
+                "audiobook",
+            ),
+        ] {
+            diesel::insert_into(items::table)
+                .values((
+                    items::id.eq(id),
+                    items::library_id.eq(AUTHOR),
+                    items::parent_id.eq(parent),
+                    items::identity_key.eq(format!("book-refresh-{id}")),
+                    items::item_type.eq(kind),
+                    items::display_title.eq(kind),
+                ))
+                .execute(conn)
+                .unwrap();
+            crate::metadata::upsert_item_metadata_snapshot(
+                conn,
+                id,
+                &StoredMetadataSnapshot {
+                    provider_id: provider,
+                    external_id: external.into(),
+                    media_type: Some(media_type.into()),
+                    title: Some(kind.into()),
+                    overview: None,
+                    artwork_url: None,
+                    backdrop_url: None,
+                    release_year: None,
+                    locale_key: String::new(),
+                    provider_locale_key: None,
+                    provider_payload_json: None,
+                },
+            )
+            .unwrap();
+        }
+    })
+    .await;
+    let author = db
+        .run(|conn| get_media_item_summary(conn, AUTHOR))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(supports_manual_metadata_linking(&author));
+    assert_eq!(
+        provider_search_media_type(MetadataProviderId::OpenLibrary, &author),
+        Some("author")
+    );
+    assert!(provider_search_media_type(MetadataProviderId::Libex, &author).is_none());
+    assert!(provider_search_media_type(MetadataProviderId::AudioSilo, &author).is_none());
+    assert!(provider_search_media_type(MetadataProviderId::LibriVox, &author).is_none());
+    let recording = db
+        .run(|conn| get_media_item_summary(conn, RECORDING))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        provider_search_media_type(MetadataProviderId::LibriVox, &recording),
+        Some("audiobook")
+    );
+    let mut namesakes = [
+        ("authors/OL31439A", "Thomas Paine"),
+        ("authors/OL12520743A", "THOMAS PAINE"),
+    ]
+    .into_iter()
+    .map(|(id, title)| MetadataSearchResult {
+        provider_id: MetadataProviderId::OpenLibrary,
+        external_id: id.into(),
+        media_type: "author".into(),
+        title: title.into(),
+        overview: None,
+        artwork_url: None,
+        backdrop_url: None,
+        release_year: None,
+        score: Some(1.0),
+        track_count: None,
+    })
+    .collect::<Vec<_>>();
+    rank_metadata_search_results(&author, "Thomas Paine", Some(1900), &mut namesakes);
+    assert_eq!(namesakes[0].external_id, "authors/OL31439A");
+    assert!(namesakes.iter().all(|result| result.score.is_none()));
+    let mut ids = load_library_refresh_targets(&db, AUTHOR)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|target| target.item_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, [AUTHOR, WORK, RECORDING]);
+}
+
 #[tokio::test]
 async fn album_link_and_refresh_retry_unmatched_tracks_before_fetching_lyrics() {
     for rematch in [true, false] {
@@ -621,7 +784,7 @@ async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
             let home = crate::media::get_media_home(conn, Some(1), Some(id)).unwrap();
             let continue_title = match kind {
                 "music" => "Continue listening",
-                "books" => "Continue reading",
+                "books" => "Continue listening",
                 _ => "Continue watching",
             };
             assert_eq!(home.shelves[0].title, continue_title);
@@ -949,7 +1112,7 @@ fn library_selected_musicbrainz_is_available_with_legacy_global_flag_off() {
     let available = available_automatic_metadata_providers(&settings);
     assert!(available.contains(&MetadataProviderId::MusicBrainz));
     assert!(!available.contains(&MetadataProviderId::Tmdb));
-    assert!(!available.contains(&MetadataProviderId::OpenLibrary));
+    assert!(available.contains(&MetadataProviderId::OpenLibrary));
     assert!(!available.contains(&MetadataProviderId::Fanart));
 }
 

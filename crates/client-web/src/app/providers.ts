@@ -3,6 +3,16 @@
 import type { MetadataProviderStatus } from '../api';
 import { resolveApiUrl } from '../api';
 import { state } from './state';
+import { escapeHtml } from './format';
+
+/** Render the provider's supplied attribution image, falling back to its accessible name. */
+export function renderMetadataSearchProviderAttribution(providerId: string): string {
+  const label = providerDisplayName(providerId);
+  const logoUrl = providerAttributionLogo(providerId);
+  return logoUrl
+    ? `<img class="metadata-attribution-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(label)}" title="${escapeHtml(label)}" loading="lazy" />`
+    : `<span>${escapeHtml(label)}</span>`;
+}
 
 /** Resolve the backend-provided attribution logo against the configured API server. */
 export function providerAttributionLogo(providerId: string): string | undefined {

@@ -29,6 +29,7 @@ export function renderItemWarnings(item: MediaItemSummary): string {
   return `<section class="item-warning-banner" role="status" aria-label="Item warnings">${renderIcon('triangle-alert')}<div>${contents}</div></section>`;
 }
 
-export function renderTrackWarnings(item: MediaItemSummary): string {
-  return itemWarnings(item).map(warning => `<span class="music-track-warning" title="${escapeHtml(warning.message)}">${renderIcon('triangle-alert')}${escapeHtml(warning.title)}</span>`).join('');
+/** Audio files can omit metadata warnings when identity is matched on their parent recording. */
+export function renderTrackWarnings(item: MediaItemSummary, includeMetadata = true): string {
+  return itemWarnings(item).filter(warning => includeMetadata || warning.kind === 'missing').map(warning => `<span class="music-track-warning" title="${escapeHtml(warning.message)}">${renderIcon('triangle-alert')}${escapeHtml(warning.title)}</span>`).join('');
 }

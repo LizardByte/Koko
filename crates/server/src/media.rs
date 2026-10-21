@@ -1,9 +1,18 @@
 //! Media-library inspection, persistence, and transcoding capability utilities.
 
+pub(crate) mod audiobooks;
+pub(crate) mod ebooks;
 pub(crate) mod lyrics;
+pub use audiobooks::{
+    AudiobookChapter,
+    AudiobookMetadata,
+    AudiobookRecording,
+    AudiobookVersion,
+};
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+mod relocation;
 mod source_files;
 pub use music::MusicMetadata;
 pub(crate) use music::valid_mbid;
@@ -259,6 +268,8 @@ pub struct PersistedMediaFileSummary {
 /// Summary of a browser-visible media item.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemSummary {
+    /// Current account's independent reading state, when a book has been opened.
+    pub reading_progress: Option<ebooks::ReadingStatus>,
     /// Stable database identifier for the item.
     pub id: i32,
     /// Owning media-library identifier.
@@ -269,6 +280,8 @@ pub struct MediaItemSummary {
     pub item_type: String,
     /// Structured local music tags for an artist, album, or track.
     pub music: Option<Box<MusicMetadata>>,
+    /// Local audiobook recording and chapter metadata.
+    pub audiobook: Option<Box<AudiobookMetadata>>,
     /// Display title for the item.
     pub display_title: String,
     /// Optional card subtitle override for shelf-specific presentation.
@@ -357,6 +370,10 @@ pub struct MediaPlaybackTarget {
 /// Detailed browser-facing media item response.
 #[derive(Debug, Clone, Serialize, JsonSchema, PartialEq)]
 pub struct MediaItemDetail {
+    /// Current account's independent reading state, when a book has been opened.
+    pub reading_progress: Option<ebooks::ReadingStatus>,
+    /// Other accessible recordings of the same written work in this library.
+    pub audiobook_versions: Vec<AudiobookVersion>,
     /// Stable database identifier for the item.
     pub id: i32,
     /// Owning media-library identifier.
@@ -367,6 +384,8 @@ pub struct MediaItemDetail {
     pub item_type: String,
     /// Structured local music tags for an artist, album, or track.
     pub music: Option<Box<MusicMetadata>>,
+    /// Local audiobook recording and chapter metadata.
+    pub audiobook: Option<Box<AudiobookMetadata>>,
     /// Saved lyrics for this recording, when they match its current metadata.
     pub lyrics: Option<MusicLyrics>,
     /// Display title for the item.
@@ -708,6 +727,8 @@ pub struct AutomaticMetadataCandidate {
     pub item_type: String,
     /// Local tags and embedded provider identifiers for music.
     pub music: Option<MusicMetadata>,
+    /// Local audiobook matching hints.
+    pub audiobook: Option<Box<AudiobookMetadata>>,
 }
 
 #[derive(Debug, Clone, diesel::Queryable, diesel::Selectable)]
@@ -796,6 +817,7 @@ struct PlannedMediaItem {
     available_leaf_count: i32,
     missing_leaf_count: i32,
     music: Option<MusicMetadata>,
+    audiobook: Option<AudiobookMetadata>,
 }
 
 #[derive(Debug, Clone)]
@@ -1509,7 +1531,21 @@ fn sync_discovered_media_file(
         false
     };
     let probe_music = read_music_tags && !has_music;
-    let mut metadata = if should_refresh_metadata || probe_music {
+    let cached_metadata = existing_physical_file
+        .as_ref()
+        .and_then(|file| file.metadata_json.as_deref())
+        .or_else(|| {
+            existing_file
+                .as_ref()
+                .and_then(|file| file.metadata_json.as_deref())
+        });
+    let probe_audiobook = library_row.kind == "books"
+        && discovered_file.media_kind == "audio"
+        && probe_context.enabled
+        && !cached_metadata
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .is_some_and(|raw| raw.get("chapters").is_some());
+    let mut metadata = if should_refresh_metadata || probe_music || probe_audiobook {
         extract_metadata(discovered_file, probe_context)
     } else {
         existing_physical_file
@@ -1543,6 +1579,7 @@ fn sync_discovered_media_file(
         if media_file_row_needs_update(existing_physical_file, discovered_file, &physical_path)
             || (is_music && existing_physical_file.metadata_json.is_some())
             || probe_music
+            || probe_audiobook
         {
             diesel::update(
                 media_files_dsl::media_files
@@ -1560,6 +1597,7 @@ fn sync_discovered_media_file(
         if catalog_file_needs_update(existing_file, discovered_file, &physical_path)
             || (is_music && existing_file.metadata_json.is_some())
             || probe_music
+            || probe_audiobook
         {
             diesel::update(
                 media_files_dsl::media_files.filter(media_files_dsl::id.eq(existing_file.id)),
@@ -1589,12 +1627,14 @@ fn sync_discovered_media_file(
             &music,
         )?;
     }
-    let membership_values = discovered_file.to_new_media_file_library(
+    let mut membership_values = discovered_file.to_new_media_file_library(
         media_file_id,
         library_row.id,
         display_title,
         metadata_match_attempted_at,
     );
+    // A scan updates availability and file metadata, not the membership's catalog identity.
+    membership_values.media_item_id = existing_file.as_ref().and_then(|file| file.media_item_id);
 
     if let Some(existing_file) = existing_file {
         if existing_file.file_hash != discovered_file.file_hash
@@ -1778,7 +1818,11 @@ fn sync_library_catalog_filtered(
                 library_row.name
             );
         }
-        sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
+        let inventory = conn.immediate_transaction(|conn| {
+            relocation::reconcile(conn, &library_row, &inspection, scan_started_at)?;
+            sync_logical_media_items_for_library(conn, &library_row, &inspection.summary.kind)?;
+            relocation::inventory_counts(conn, library_row.id)
+        })?;
 
         let state_values = NewScanState {
             library_id: library_row.id,
@@ -1786,12 +1830,12 @@ fn sync_library_catalog_filtered(
             last_error: inspection.summary.error.clone(),
             scan_revision: next_scan_revision,
             last_scanned_at,
-            total_files: inspection.summary.total_files as i64,
-            video_files: inspection.summary.video_files as i64,
-            audio_files: inspection.summary.audio_files as i64,
-            image_files: inspection.summary.image_files as i64,
-            book_files: inspection.summary.book_files as i64,
-            other_files: inspection.summary.other_files as i64,
+            total_files: inventory.values().sum(),
+            video_files: inventory.get("video").copied().unwrap_or_default(),
+            audio_files: inventory.get("audio").copied().unwrap_or_default(),
+            image_files: inventory.get("image").copied().unwrap_or_default(),
+            book_files: inventory.get("book").copied().unwrap_or_default(),
+            other_files: inventory.get("other").copied().unwrap_or_default(),
         };
 
         if let Some(existing_state) = existing_state {
@@ -1869,13 +1913,27 @@ fn sync_logical_media_items_for_library(
             .map(|item| item.id)
             .collect::<Vec<_>>(),
     )?;
-    let planned = plan_library_media_items(
+    let existing_audiobooks = audiobooks::load_local(
+        conn,
+        &existing_items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.item_type.as_str(),
+                    "audiobook" | "audiobook_part" | "book_work"
+                )
+            })
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+    )?;
+    let mut planned = plan_library_media_items(
         &files,
         library_kind,
         library.id,
         &source_music,
         library.use_embedded_music_tags,
     );
+    relocation::retain_item_identities(&mut planned, &files, &existing_items);
     let planned_keys = planned
         .items
         .iter()
@@ -1907,6 +1965,7 @@ fn sync_logical_media_items_for_library(
             &ExistingItemData {
                 items: &existing_by_id,
                 music: &existing_music,
+                audiobooks: &existing_audiobooks,
             },
             &mut item_ids_by_key,
         )?;
@@ -1931,6 +1990,7 @@ fn sync_logical_media_items_for_library(
             &ExistingItemData {
                 items: &existing_by_id,
                 music: &existing_music,
+                audiobooks: &existing_audiobooks,
             },
             &mut item_ids_by_key,
         )?;
@@ -2402,6 +2462,7 @@ fn refresh_media_item_child_counts(
 struct ExistingItemData<'a> {
     items: &'a HashMap<i32, MediaItem>,
     music: &'a HashMap<i32, (MusicMetadata, String)>,
+    audiobooks: &'a HashMap<i32, AudiobookMetadata>,
 }
 
 fn upsert_planned_media_item(
@@ -2415,7 +2476,7 @@ fn upsert_planned_media_item(
 ) -> Result<(), diesel::result::Error> {
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
-    let values = NewMediaItem {
+    let mut values = NewMediaItem {
         library_id,
         parent_id,
         identity_key: plan.identity_key.clone(),
@@ -2447,11 +2508,13 @@ fn upsert_planned_media_item(
         .or_else(|| take_matching_metadata_placeholder(existing_by_key, parent_id, plan));
 
     let item_id = if let Some(existing_item) = target {
+        values.created_at = existing_item.created_at;
         if existing
             .music
             .get(&existing_item.id)
             .map(|(music, _)| music)
             != plan.music.as_ref()
+            || existing.audiobooks.get(&existing_item.id) != plan.audiobook.as_ref()
         {
             diesel::update(
                 media_items_dsl::media_items.filter(media_items_dsl::id.eq(existing_item.id)),
@@ -2504,6 +2567,9 @@ fn upsert_planned_media_item(
     {
         music::save_item(conn, item_id, music)?;
     }
+    if let Some(metadata) = &plan.audiobook {
+        audiobooks::save(conn, item_id, metadata)?;
+    }
     item_ids_by_key.insert(plan.identity_key.clone(), item_id);
     Ok(())
 }
@@ -2554,6 +2620,28 @@ fn plan_library_media_items(
     let mut leaf_identity_by_file_id = HashMap::new();
 
     for file in files {
+        if *library_kind == MediaLibraryKind::Books && file.media_kind == "book" {
+            let plans = audiobooks::plan_ebook(file, library_id);
+            leaf_identity_by_file_id.insert(
+                file.library_file_id,
+                plans.last().unwrap().identity_key.clone(),
+            );
+            for plan in plans {
+                upsert_planned_item(&mut items_by_key, plan);
+            }
+            continue;
+        }
+        if *library_kind == MediaLibraryKind::Books && file.media_kind == "audio" {
+            let plans = audiobooks::plan_file(file, library_id);
+            leaf_identity_by_file_id.insert(
+                file.library_file_id,
+                plans.last().unwrap().identity_key.clone(),
+            );
+            for plan in plans {
+                upsert_planned_item(&mut items_by_key, plan);
+            }
+            continue;
+        }
         if *library_kind == MediaLibraryKind::Music && file.media_kind == "audio" {
             let plans = music::plan_music_file(
                 file,
@@ -2599,6 +2687,7 @@ fn plan_library_media_items(
                     explicit_id: None,
                     missing_since: file.missing_since,
                     music: None,
+                    audiobook: None,
                     available_leaf_count,
                     missing_leaf_count,
                 },
@@ -2622,6 +2711,7 @@ fn plan_library_media_items(
                     explicit_id: None,
                     missing_since: file.missing_since,
                     music: None,
+                    audiobook: None,
                     available_leaf_count,
                     missing_leaf_count,
                 },
@@ -2645,6 +2735,7 @@ fn plan_library_media_items(
                     explicit_id: Some(file.library_file_id),
                     missing_since: file.missing_since,
                     music: None,
+                    audiobook: None,
                     available_leaf_count,
                     missing_leaf_count,
                 },
@@ -2682,6 +2773,7 @@ fn plan_library_media_items(
                 explicit_id: Some(file.library_file_id),
                 missing_since: file.missing_since,
                 music: None,
+                audiobook: None,
                 available_leaf_count,
                 missing_leaf_count,
             },
@@ -2872,6 +2964,7 @@ pub fn list_media_items_with_preferred_languages(
         items.push(summary);
     }
     music::apply_summaries(conn, &mut items)?;
+    audiobooks::apply_summaries(conn, &mut items)?;
     apply_available_season_counts_from_summaries(&mut items);
 
     Ok(items)
@@ -2973,6 +3066,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_id: media_item_id,
             item_type: "movie".into(),
             music: None,
+            audiobook: None,
             library_id: library.id,
             relative_path: row.relative_path.clone(),
             display_title: row
@@ -2986,7 +3080,15 @@ fn list_automatic_metadata_candidates_with_options(
 
     let hierarchy_rows = media_items_dsl::media_items
         .filter(media_items_dsl::item_type.eq_any([
-            "show", "artist", "album", "track",
+            "show",
+            "artist",
+            "album",
+            "track",
+            "audiobook",
+            "book_work",
+            "book_author",
+            "comic_series",
+            "comic_issue",
         ]))
         .filter(media_items_dsl::deleted_at.is_null())
         .filter(media_items_dsl::missing_since.is_null())
@@ -2996,13 +3098,28 @@ fn list_automatic_metadata_candidates_with_options(
         conn,
         &hierarchy_rows.iter().map(|row| row.id).collect::<Vec<_>>(),
     )?;
+    let audiobook_items = audiobooks::load(
+        conn,
+        &hierarchy_rows
+            .iter()
+            .filter(|row| matches!(row.item_type.as_str(), "audiobook" | "book_work"))
+            .map(|row| row.id)
+            .collect::<Vec<_>>(),
+    )?;
     let parents = hierarchy_rows
         .iter()
-        .map(|row| (row.id, row.parent_id))
+        .map(|row| (row.id, (row.parent_id, row.item_type == "book_author")))
         .collect::<HashMap<_, _>>();
     let unlinked = item_metadata_links_dsl::item_metadata_links
         .filter(item_metadata_links_dsl::match_state.eq("unlinked"))
         .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+        .select(item_metadata_links_dsl::media_item_id)
+        .load::<i32>(conn)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let librivox_linked = item_metadata_links_dsl::item_metadata_links
+        .filter(item_metadata_links_dsl::provider_id.eq("librivox"))
+        .filter(item_metadata_links_dsl::match_state.eq("linked"))
         .select(item_metadata_links_dsl::media_item_id)
         .load::<i32>(conn)?
         .into_iter()
@@ -3012,16 +3129,27 @@ fn list_automatic_metadata_candidates_with_options(
         let mut seen = HashSet::new();
         let mut blocked = false;
         while let Some(id) = ancestor {
+            // Author profiles are independent of metadata for their works and recordings.
+            if parents.get(&id).is_some_and(|(_, author)| *author) {
+                break;
+            }
             if !seen.insert(id) || unlinked.contains(&id) {
                 blocked = true;
                 break;
             }
-            ancestor = parents.get(&id).copied().flatten();
+            ancestor = parents.get(&id).and_then(|(parent, _)| *parent);
         }
         if blocked {
             continue;
         }
-        if linked_item_ids.contains(&row.id) {
+        let unconfirmed_recording = include_previously_attempted
+            && row.item_type == "audiobook"
+            && !unlinked.contains(&row.id)
+            && !librivox_linked.contains(&row.id)
+            && audiobook_items
+                .get(&row.id)
+                .is_some_and(|metadata| metadata.recording.is_none());
+        if linked_item_ids.contains(&row.id) && !unconfirmed_recording {
             continue;
         }
 
@@ -3031,12 +3159,21 @@ fn list_automatic_metadata_candidates_with_options(
         if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
             continue;
         }
-        let library_settings = media_library_settings_from_row(library.clone());
+        let mut library_settings = media_library_settings_from_row(library.clone());
+        if linked_item_ids.contains(&row.id) {
+            // Adding LibriVox can identify an existing work-only match without retrying
+            // another commercial work match first or replacing a confirmed narration.
+            library_settings
+                .metadata_providers
+                .retain(|provider| *provider == MetadataProviderId::LibriVox);
+        }
         if !matches!(
             library_settings.kind,
-            MediaLibraryKind::Shows | MediaLibraryKind::Music
-        ) || (library_settings.kind == MediaLibraryKind::Music
-            && !include_previously_attempted
+            MediaLibraryKind::Shows | MediaLibraryKind::Music | MediaLibraryKind::Books
+        ) || (matches!(
+            library_settings.kind,
+            MediaLibraryKind::Music | MediaLibraryKind::Books
+        ) && !include_previously_attempted
             && row.metadata_match_attempted_at.is_some())
         {
             continue;
@@ -3049,6 +3186,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_id: row.id,
             item_type: row.item_type.clone(),
             music: music_items.get(&row.id).map(|(music, _)| music.clone()),
+            audiobook: audiobook_items.get(&row.id).cloned().map(Box::new),
             library_id: library.id,
             relative_path: row.relative_path.unwrap_or_default(),
             display_title: row.display_title,
@@ -3258,6 +3396,7 @@ pub fn get_media_item_with_preferred_languages(
         .unwrap_or_default();
 
     music::apply_detail(conn, &mut detail)?;
+    audiobooks::apply_detail(conn, &mut detail)?;
     detail.lyrics = lyrics::for_item(conn, &detail)?;
     Ok(Some(detail))
 }
@@ -3392,6 +3531,7 @@ pub fn get_media_home_with_preferred_languages(
     };
     items.retain(|item| !excluded_libraries.contains(&item.library_id));
     let continue_watching = get_continue_watching_items(conn, user_id, library_id, &items)?;
+    let continue_reading = ebooks::continue_reading(conn, user_id, &items)?;
     let library_kind = if let Some(id) = library_id {
         use crate::db::schema::media_libraries::dsl as libraries;
         libraries::media_libraries
@@ -3404,6 +3544,9 @@ pub fn get_media_home_with_preferred_languages(
     };
     let continue_title = match library_kind.as_deref() {
         Some("music") => "Continue listening",
+        Some("books") if items.iter().any(|item| item.item_type == "audiobook") => {
+            "Continue listening"
+        }
         Some("books") => "Continue reading",
         None => "Continue playing",
         _ => "Continue watching",
@@ -3453,6 +3596,11 @@ pub fn get_media_home_with_preferred_languages(
                 items: continue_watching,
             },
             MediaShelf {
+                id: "continue_reading".into(),
+                title: "Continue reading".into(),
+                items: continue_reading,
+            },
+            MediaShelf {
                 id: "recently_added".into(),
                 title: "Recently added".into(),
                 items: recently_added,
@@ -3462,7 +3610,10 @@ pub fn get_media_home_with_preferred_languages(
                 title: "Recommended".into(),
                 items: recommended,
             },
-        ],
+        ]
+        .into_iter()
+        .filter(|shelf| shelf.id != "continue_reading" || !shelf.items.is_empty())
+        .collect(),
         collections,
     })
 }
@@ -4122,7 +4273,10 @@ fn resolve_item_asset_source_path(
     let Some(item) = load_media_item_row(conn, item_id)? else {
         return Ok(None);
     };
-    if !matches!(item.item_type.as_str(), "artist" | "album") {
+    if !matches!(
+        item.item_type.as_str(),
+        "artist" | "album" | "audiobook" | "book_work"
+    ) {
         return Ok(None);
     }
     let children = list_media_item_children(conn, item_id)?;
@@ -4131,7 +4285,11 @@ fn resolve_item_asset_source_path(
         .filter(|child| child.missing_since.is_none())
     {
         if let Some(path) = resolve_item_asset_source_path(conn, child.id)? {
-            return Ok(Some(path));
+            return Ok(Some(if item.item_type == "audiobook" {
+                audiobooks::asset_source_path(path)
+            } else {
+                path
+            }));
         }
     }
     Ok(None)
@@ -4303,6 +4461,7 @@ fn apply_user_playback_progress_to_summaries(
     user_id: Option<i32>,
     items: &mut [MediaItemSummary],
 ) -> Result<(), diesel::result::Error> {
+    ebooks::apply_statuses(conn, user_id, items)?;
     let item_ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
     let progress_by_item_id = playback_progress_by_item_id(conn, user_id, &item_ids)?;
 
@@ -4331,6 +4490,12 @@ pub fn apply_user_playback_context_to_detail(
     user_id: Option<i32>,
     detail: &mut MediaItemDetail,
 ) -> Result<(), diesel::result::Error> {
+    detail.reading_progress = ebooks::status(conn, detail.id, user_id)?;
+    for child in &mut detail.children {
+        if matches!(child.item_type.as_str(), "book" | "comic_issue") {
+            child.reading_progress = ebooks::status(conn, child.id, user_id)?;
+        }
+    }
     let mut item_ids = vec![detail.id];
     item_ids.extend(detail.hierarchy.iter().map(|item| item.id));
     item_ids.extend(detail.children.iter().map(|item| item.id));
@@ -4398,7 +4563,10 @@ fn container_playback_progress(
     let Some(item) = load_media_item_row(conn, item_id)? else {
         return Ok(None);
     };
-    if !matches!(item.item_type.as_str(), "show" | "season" | "album") {
+    if !matches!(
+        item.item_type.as_str(),
+        "show" | "season" | "album" | "audiobook"
+    ) {
         return Ok(None);
     }
 
@@ -4499,7 +4667,7 @@ fn container_playback_targets(
     user_id: Option<i32>,
     item: &MediaItem,
 ) -> Result<ContainerPlaybackTargets, diesel::result::Error> {
-    if item.item_type == "album" {
+    if matches!(item.item_type.as_str(), "album" | "audiobook") {
         return music::album_playback_targets(conn, user_id, item);
     }
     if !matches!(item.item_type.as_str(), "show" | "season") {
@@ -4657,6 +4825,7 @@ fn playable_container_targets(
     use crate::db::schema::media_items::dsl as media_items_dsl;
 
     let mut targets = match item.item_type.as_str() {
+        "audiobook" => return audiobooks::playable_parts(conn, item),
         "album" => {
             let mut tracks = media_items_dsl::media_items
                 .filter(media_items_dsl::parent_id.eq(item.id))
@@ -4795,14 +4964,17 @@ fn get_continue_watching_items(
             continue;
         };
 
-        if row.item_type == "track" {
+        if matches!(row.item_type.as_str(), "track" | "audiobook_part") {
             if radio_items.contains(&row.id) {
                 continue;
             }
             let Some(album) = row
                 .parent_id
                 .and_then(|id| visible_items_by_id.get(&id))
-                .filter(|album| album.item_type == "album" && album.missing_since.is_none())
+                .filter(|album| {
+                    matches!(album.item_type.as_str(), "album" | "audiobook")
+                        && album.missing_since.is_none()
+                })
             else {
                 continue;
             };
@@ -4933,9 +5105,9 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
     leaf_items.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
 
     for item in leaf_items {
-        if item.item_type == "track" {
+        if matches!(item.item_type.as_str(), "track" | "audiobook_part") {
             if let Some(album) = item.parent_id.and_then(|id| items_by_id.get(&id)) {
-                if album.item_type == "album" {
+                if matches!(album.item_type.as_str(), "album" | "audiobook") {
                     let modified_at = album_groups.entry(album.id).or_default();
                     *modified_at = (*modified_at).max(item.modified_at);
                     continue;
@@ -5069,6 +5241,9 @@ fn recommended_representative_item(
     item: &MediaItemSummary,
     items_by_id: &HashMap<i32, MediaItemSummary>,
 ) -> Option<MediaItemSummary> {
+    if item.item_type == "audiobook_part" {
+        return item.parent_id.and_then(|id| items_by_id.get(&id)).cloned();
+    }
     if matches!(item.item_type.as_str(), "season" | "episode") {
         if let Some(show_id) = root_show_item_id(item, items_by_id) {
             if let Some(show) = items_by_id.get(&show_id) {
@@ -5251,7 +5426,7 @@ fn detect_mime_type(file: &CatalogMediaFile) -> Option<String> {
         Some("mp4" | "m4v") => Some("video/mp4".into()),
         Some("webm") => Some("video/webm".into()),
         Some("mp3") => Some("audio/mpeg".into()),
-        Some("m4a") => Some("audio/mp4".into()),
+        Some("m4a" | "m4b") => Some("audio/mp4".into()),
         Some("ogg" | "opus" | "oga") => Some("audio/ogg".into()),
         Some("aac") => Some("audio/aac".into()),
         Some("aif" | "aiff") => Some("audio/aiff".into()),
@@ -5517,6 +5692,7 @@ fn extract_metadata(
             "json",
             "-show_format",
             "-show_streams",
+            "-show_chapters",
         ])
         .arg(&file.full_path)
         .output();
@@ -5746,14 +5922,20 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
     let relative_path = item.relative_path.unwrap_or_default();
 
     MediaItemSummary {
+        reading_progress: None,
         id: item.id,
         library_id: item.library_id,
         parent_id: item.parent_id,
         music: None,
+        audiobook: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
         display_subtitle: None,
-        artwork_item_id: if item.item_type == "track" { item.parent_id } else { None },
+        artwork_item_id: if matches!(item.item_type.as_str(), "track" | "audiobook_part") {
+            item.parent_id
+        } else {
+            None
+        },
         relative_path,
         media_kind: item
             .media_kind
@@ -5902,6 +6084,7 @@ fn get_media_item_summary_without_metadata(
 
     let mut summary = to_media_item_summary(row);
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     apply_available_season_count(conn, &mut summary)?;
     Ok(Some(summary))
 }
@@ -5926,6 +6109,7 @@ fn media_item_summary_with_preferred_languages(
     let link = link.as_ref().map(summary_metadata_link_from_full_link);
     apply_primary_metadata_link(&mut summary, link.as_ref());
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
 
     Ok(summary)
 }
@@ -6371,15 +6555,34 @@ pub fn get_preferred_item_artwork_metadata_link_for_languages(
         let Some(item) = get_media_item_summary_without_metadata(conn, current_id)? else {
             return Ok(None);
         };
-        if let Some(link) = prioritized_metadata_links_for_item(
+        // An author's portrait must never become the cover of an unmatched book or narration.
+        if current_id != item_id && item.item_type == "book_author" {
+            return Ok(None);
+        }
+        let recording = if item.item_type == "audiobook" {
+            audiobooks::load(conn, &[current_id])?
+                .remove(&current_id)
+                .and_then(|metadata| metadata.recording)
+        } else {
+            None
+        };
+        let mut links = prioritized_metadata_links_for_item(
             conn,
             current_id,
             item.library_id,
             preferred_languages,
-        )?
-        .into_iter()
-        .find(|link| metadata_link_has_artwork(link, artwork_kind))
-        {
+        )?;
+        if let Some(recording) = &recording {
+            links.sort_by_key(|link| link.provider_id != recording.provider_id.as_storage_value());
+        }
+        if let Some(link) = links.into_iter().find(|link| {
+            metadata_link_has_artwork(link, artwork_kind)
+                && (item.item_type != "audiobook"
+                    || link.provider_id == "open_library"
+                    || recording.as_ref().is_some_and(|recording| {
+                        recording.provider_id.as_storage_value() == link.provider_id
+                    }))
+        }) {
             return Ok(Some(link));
         }
         current_item_id = item.parent_id;
@@ -6406,10 +6609,13 @@ fn to_media_item_detail(
     let relative_path = item.relative_path.unwrap_or_default();
 
     MediaItemDetail {
+        reading_progress: None,
+        audiobook_versions: Vec::new(),
         id: item.id,
         library_id: item.library_id,
         parent_id: item.parent_id,
         music: None,
+        audiobook: None,
         lyrics: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
@@ -6471,7 +6677,7 @@ fn to_media_item_detail(
 
 fn default_media_kind_for_item_type(item_type: &str) -> &'static str {
     match item_type {
-        "artist" | "album" | "track" => "audio",
+        "artist" | "album" | "track" | "audiobook" | "audiobook_part" => "audio",
         "photo" => "image",
         "book" => "book",
         _ => "video",
@@ -6560,6 +6766,7 @@ pub fn list_media_item_children_with_preferred_languages(
     }
 
     music::apply_summaries(conn, &mut items)?;
+    audiobooks::apply_summaries(conn, &mut items)?;
     items.sort_by_key(|item| {
         (
             item.music
@@ -6857,7 +7064,9 @@ mod tests {
         modified_at: Option<i64>,
     ) -> MediaItemSummary {
         MediaItemSummary {
+            reading_progress: None,
             music: None,
+            audiobook: None,
             id,
             library_id: 1,
             parent_id,

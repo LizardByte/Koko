@@ -365,9 +365,13 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             clear_api_key: false,
             language: default_metadata_language(),
         },
-        MetadataProviderId::OpenLibrary => MetadataProviderSettings {
-            id: MetadataProviderId::OpenLibrary,
-            enabled: false,
+        MetadataProviderId::OpenLibrary
+        | MetadataProviderId::Libex
+        | MetadataProviderId::LibriVox
+        | MetadataProviderId::AudioSilo
+        | MetadataProviderId::ComicVine => MetadataProviderSettings {
+            id,
+            enabled: true,
             api_key: None,
             api_key_secret_ref: None,
             api_key_configured: false,
@@ -517,6 +521,17 @@ impl MediaLibrarySettings {
                 || self.metadata_providers == [MetadataProviderId::Tmdb])
         {
             self.metadata_providers = vec![MetadataProviderId::MusicBrainz];
+        } else if self.kind == MediaLibraryKind::Books
+            && (self.metadata_providers.is_empty()
+                || self.metadata_providers == [MetadataProviderId::Tmdb])
+        {
+            self.metadata_providers = vec![
+                MetadataProviderId::ComicVine,
+                MetadataProviderId::OpenLibrary,
+                MetadataProviderId::Libex,
+                MetadataProviderId::LibriVox,
+                MetadataProviderId::AudioSilo,
+            ];
         } else if self.metadata_providers.is_empty() {
             self.metadata_providers = default_library_metadata_providers();
         }
@@ -557,12 +572,23 @@ pub enum MetadataProviderId {
     /// MusicBrainz for music-oriented metadata.
     #[serde(rename = "musicbrainz")]
     MusicBrainz,
+    /// AudioSilo Meta for audiobook works and recordings.
+    #[serde(rename = "audiosilo")]
+    AudioSilo,
+    /// LibexDB for Audible book and recording metadata.
+    Libex,
+    /// LibriVox public-domain recording projects and section timings.
+    #[serde(rename = "librivox")]
+    LibriVox,
     /// Fanart.tv artwork extension for MusicBrainz music metadata.
     Fanart,
     /// LRCLIB plain and synchronized lyrics for local music tracks.
     Lrclib,
     /// Open Library for book metadata.
     OpenLibrary,
+    /// Comic Vine issue and volume metadata (requires a personal API key).
+    #[serde(rename = "comicvine")]
+    ComicVine,
     /// Local NFO files and sidecar metadata.
     LocalNfo,
     /// ThemerrDB theme-song metadata extension provider.
@@ -579,9 +605,13 @@ impl MetadataProviderId {
             MetadataProviderId::Tmdb => "tmdb",
             MetadataProviderId::Tvdb => "tvdb",
             MetadataProviderId::MusicBrainz => "musicbrainz",
+            MetadataProviderId::AudioSilo => "audiosilo",
+            MetadataProviderId::Libex => "libex",
+            MetadataProviderId::LibriVox => "librivox",
             MetadataProviderId::Fanart => "fanart",
             MetadataProviderId::Lrclib => "lrclib",
             MetadataProviderId::OpenLibrary => "open_library",
+            MetadataProviderId::ComicVine => "comicvine",
             MetadataProviderId::LocalNfo => "local_nfo",
             MetadataProviderId::Themerr => "themerr",
             MetadataProviderId::TrailerDb => "trailerdb",
@@ -594,9 +624,13 @@ impl MetadataProviderId {
             "tmdb" => Some(MetadataProviderId::Tmdb),
             "tvdb" => Some(MetadataProviderId::Tvdb),
             "musicbrainz" => Some(MetadataProviderId::MusicBrainz),
+            "audiosilo" => Some(MetadataProviderId::AudioSilo),
+            "libex" => Some(MetadataProviderId::Libex),
+            "librivox" => Some(MetadataProviderId::LibriVox),
             "fanart" => Some(MetadataProviderId::Fanart),
             "lrclib" => Some(MetadataProviderId::Lrclib),
             "open_library" => Some(MetadataProviderId::OpenLibrary),
+            "comicvine" => Some(MetadataProviderId::ComicVine),
             "local_nfo" => Some(MetadataProviderId::LocalNfo),
             "themerr" => Some(MetadataProviderId::Themerr),
             "trailerdb" => Some(MetadataProviderId::TrailerDb),
@@ -804,9 +838,31 @@ pub struct Settings {
     /// FFmpeg tooling settings.
     #[serde(default)]
     pub ffmpeg: FfmpegSettings,
+    /// Ebook conversion tooling for formats without a browser decoder.
+    #[serde(default)]
+    pub reader: ReaderSettings,
     /// Scheduled task settings.
     #[serde(default)]
     pub scheduled_tasks: ScheduledTasksSettings,
+}
+
+/// Optional server-side ebook conversion settings. Originals are always read-only.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct ReaderSettings {
+    /// Path to Calibre's ebook-convert executable, or a name resolved through PATH.
+    pub converter_path: String,
+    /// Maximum time allowed for one conversion, in seconds.
+    pub conversion_timeout_seconds: u64,
+}
+
+impl Default for ReaderSettings {
+    fn default() -> Self {
+        Self {
+            converter_path: "ebook-convert".into(),
+            conversion_timeout_seconds: 120,
+        }
+    }
 }
 
 impl Default for GeneralSettings {
@@ -866,9 +922,13 @@ impl Default for MetadataSettings {
                 default_metadata_provider_settings(MetadataProviderId::Tmdb),
                 default_metadata_provider_settings(MetadataProviderId::Tvdb),
                 default_metadata_provider_settings(MetadataProviderId::MusicBrainz),
+                default_metadata_provider_settings(MetadataProviderId::Libex),
+                default_metadata_provider_settings(MetadataProviderId::LibriVox),
+                default_metadata_provider_settings(MetadataProviderId::AudioSilo),
                 default_metadata_provider_settings(MetadataProviderId::Fanart),
                 default_metadata_provider_settings(MetadataProviderId::Lrclib),
                 default_metadata_provider_settings(MetadataProviderId::OpenLibrary),
+                default_metadata_provider_settings(MetadataProviderId::ComicVine),
                 default_metadata_provider_settings(MetadataProviderId::LocalNfo),
                 default_metadata_provider_settings(MetadataProviderId::Themerr),
                 default_metadata_provider_settings(MetadataProviderId::TrailerDb),
@@ -1019,10 +1079,14 @@ pub fn normalize_settings(settings: &mut Settings) {
         MetadataProviderId::Tmdb,
         MetadataProviderId::Tvdb,
         MetadataProviderId::MusicBrainz,
+        MetadataProviderId::Libex,
+        MetadataProviderId::LibriVox,
+        MetadataProviderId::AudioSilo,
         MetadataProviderId::Fanart,
         MetadataProviderId::Lrclib,
         MetadataProviderId::OpenLibrary,
         MetadataProviderId::LocalNfo,
+        MetadataProviderId::ComicVine,
         MetadataProviderId::Themerr,
         MetadataProviderId::TrailerDb,
     ] {

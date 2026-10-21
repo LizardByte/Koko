@@ -1,3 +1,4 @@
+/** Coordinates keyboard and gamepad navigation, including held actions and modal reader isolation. */
 import type { AppState } from './types';
 import { createGamepadNavigationReader, type GamepadNavigationAction } from './gamepadNavigation';
 import { findSpatialTarget, type NavigationDirection } from './spatialNavigation';
@@ -101,10 +102,10 @@ function closeItemActions(): boolean {
 
 /** Close held-Resume options and return to their trigger before leaving the page. */
 function closeResumeOptions(): boolean {
-  const menu = document.querySelector<HTMLElement>('#resume-playback-menu:not([hidden])');
+  const menu = document.querySelector<HTMLElement>('.resume-playback-menu:not([hidden])');
   if (!menu) return false;
   menu.hidden = true;
-  const trigger = document.querySelector<HTMLElement>('[data-resume-hold]');
+  const trigger = document.querySelector<HTMLElement>(`[data-resume-hold][aria-controls="${menu.id}"]`);
   trigger?.dispatchEvent(new Event('resume-options-close'));
   trigger?.focus({ preventScroll: true });
   return true;
@@ -301,13 +302,14 @@ function handleNavigationKey(event: KeyboardEvent): void {
 
 /** Bind section-aware navigation for browsing pages, leaving settings and players to their own controls. */
 export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 'isPlayerOpen' | 'route'>): void {
-  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden;
+  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden || Boolean(document.querySelector('dialog.book-reader[open]'));
   globalThis.addEventListener('pointermove', (event) => {
     if (event.movementX || event.movementY) setInputMode('pointer');
   }, { passive: true });
   globalThis.addEventListener('pointerdown', () => setInputMode('pointer'), { passive: true });
   globalThis.addEventListener('focusin', syncNavigationState);
   globalThis.addEventListener('keydown', (event) => {
+    if (document.querySelector('dialog.book-reader[open]')) return;
     if (suspended() || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.defaultPrevented) {
       if ((event.target as HTMLElement | null)?.matches('[data-resume-hold]') && ['Enter', ' '].includes(event.key)) setInputMode('keyboard');

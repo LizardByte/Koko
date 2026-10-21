@@ -156,11 +156,11 @@ fn test_inspect_libraries_counts_media_types() {
 
     let summary = &summaries[0];
     assert_eq!(summary.status, LibraryScanStatus::Available);
-    assert_eq!(summary.total_files, 5);
+    assert_eq!(summary.total_files, 6);
     assert_eq!(summary.video_files, 2);
     assert_eq!(summary.audio_files, 1);
     assert_eq!(summary.image_files, 1);
-    assert_eq!(summary.book_files, 1);
+    assert_eq!(summary.book_files, 2);
     assert_eq!(summary.other_files, 0);
     assert!(summary.error.is_none());
 

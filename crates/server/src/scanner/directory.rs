@@ -544,10 +544,10 @@ fn classify_file(path: &Path) -> FileKind {
         Some("mkv" | "mp4" | "avi" | "mov" | "wmv" | "m4v" | "webm" | "ts") => FileKind::Video,
         Some(
             "mp3" | "flac" | "aac" | "wav" | "ogg" | "m4a" | "opus" | "aif" | "aiff" | "alac"
-            | "wma" | "ape" | "wv" | "oga",
+            | "wma" | "ape" | "wv" | "oga" | "m4b",
         ) => FileKind::Audio,
         Some("jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff") => FileKind::Image,
-        Some("pdf" | "epub" | "cbz" | "cbr" | "mobi") => FileKind::Book,
+        _ if crate::media::ebooks::is_book(path) => FileKind::Book,
         _ => FileKind::Other,
     }
 }
@@ -563,7 +563,9 @@ fn should_include_library_item(
         }
         MediaLibraryKind::Music => kind == FileKind::Audio,
         MediaLibraryKind::Photos => kind == FileKind::Image,
-        MediaLibraryKind::Books => kind == FileKind::Book,
+        MediaLibraryKind::Books => {
+            kind == FileKind::Book || (kind == FileKind::Audio && !is_named_theme_asset(path))
+        }
         MediaLibraryKind::Mixed => {
             matches!(
                 kind,

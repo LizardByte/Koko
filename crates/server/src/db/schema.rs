@@ -448,3 +448,46 @@ table! {
 }
 joinable!(music_lyrics -> media_items (media_item_id));
 allow_tables_to_appear_in_same_query!(music_lyrics, media_items);
+
+table! {
+    audiobook_metadata (media_item_id) {
+        media_item_id -> Integer,
+        metadata_json -> Text,
+    }
+}
+joinable!(audiobook_metadata -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(audiobook_metadata, media_items);
+
+table! {
+    audiobook_provider_metadata (media_item_id, provider_id) {
+        media_item_id -> Integer,
+        provider_id -> Text,
+        external_id -> Text,
+        metadata_json -> Text,
+    }
+}
+joinable!(audiobook_provider_metadata -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(audiobook_provider_metadata, media_items);
+
+table! {
+    audiobook_recording_selections (media_item_id) {
+        media_item_id -> Integer,
+        provider_id -> Text,
+        external_id -> Text,
+    }
+}
+joinable!(audiobook_recording_selections -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(audiobook_recording_selections, media_items);
+
+table! {
+    reading_progress (user_id, media_item_id) {
+        user_id -> Integer,
+        media_item_id -> Integer,
+        payload_json -> Text,
+        updated_at -> BigInt,
+    }
+}
+joinable!(reading_progress -> media_items (media_item_id));
+joinable!(reading_progress -> users (user_id));
+allow_tables_to_appear_in_same_query!(reading_progress, media_items);
+allow_tables_to_appear_in_same_query!(reading_progress, users);

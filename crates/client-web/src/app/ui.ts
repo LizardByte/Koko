@@ -93,8 +93,15 @@ export function renderUserAvatar(user: BootstrapUser, className = ''): string {
   `;
 }
 
+/** Label catalog hierarchy nodes for navigation and item details. */
 export function humanizeItemType(itemType: string): string {
   switch (itemType) {
+    case 'book_author': return 'Author';
+    case 'book_work': return 'Book';
+    case 'comic_series': return 'Comic series';
+    case 'comic_issue': return 'Comic issue';
+    case 'audiobook': return 'Audiobook version';
+    case 'audiobook_part': return 'Audio file';
     case 'show':
       return 'Show';
     case 'season':
@@ -114,7 +121,10 @@ export function humanizeItemType(itemType: string): string {
   }
 }
 
+/** Book cards show page counts or narration runtime; other containers describe their immediate children. */
 export function formatChildCount(item: MediaItemSummary): string {
+  if (['book', 'comic_issue', 'book_work'].includes(item.item_type)) return formatBookExtent(item);
+  if (item.item_type === 'audiobook') return Number.isFinite(item.duration_ms) && (item.duration_ms ?? 0) > 0 ? formatDuration(item.duration_ms) : '';
   if (!item.child_count) {
     return formatDuration(item.duration_ms);
   }
@@ -128,8 +138,20 @@ export function formatChildCount(item: MediaItemSummary): string {
     return `${item.child_count} episode${item.child_count === 1 ? '' : 's'}`;
   }
 
-  const noun = ({ artist: 'album', album: 'track' } as Record<string, string>)[item.item_type] ?? 'item';
+  const noun = ({ artist: 'album', album: 'track', book_author: 'book' } as Record<string, string>)[item.item_type] ?? 'item';
   return `${item.child_count} ${noun}${item.child_count === 1 ? '' : 's'}`;
+}
+
+function formatBookExtent(item: MediaItemSummary): string {
+  const pages = item.reading_progress?.page_count;
+  if (pages && Number.isInteger(pages) && pages > 0) return `${pages} page${pages === 1 ? '' : 's'}`;
+  return '';
+}
+
+/** Keep the file format visible in edition selectors even when card badges have a page count. */
+export function formatBookFormat(item: MediaItemSummary): string {
+  if (/\.fb2\.zip$/i.test(item.relative_path)) return 'FB2.ZIP';
+  return /\.([a-z0-9]+)$/i.exec(item.relative_path ?? '')?.[1].toUpperCase() || (item.item_type === 'comic_issue' ? 'Comic' : 'Ebook');
 }
 
 export function libraryStatusLabel(status: string): string {

@@ -1,3 +1,13 @@
+pub(crate) mod comicvine;
+pub(crate) mod libex;
+pub(crate) mod librivox;
+use comicvine::ComicVineMetadataProvider;
+use libex::LibexMetadataProvider;
+use librivox::LibriVoxMetadataProvider;
+pub(crate) mod openlibrary;
+use openlibrary::OpenLibraryMetadataProvider;
+pub(crate) mod audiosilo;
+use audiosilo::AudioSiloMetadataProvider;
 pub(super) mod musicbrainz;
 use musicbrainz::MusicBrainzMetadataProvider;
 pub(crate) mod fanart;
@@ -279,7 +289,6 @@ struct TmdbMetadataProvider;
 struct TvdbMetadataProvider;
 struct ThemerrMetadataProvider;
 struct TrailerDbMetadataProvider;
-struct OpenLibraryMetadataProvider;
 struct LocalNfoMetadataProvider;
 
 impl MetadataProvider for TmdbMetadataProvider {
@@ -669,25 +678,6 @@ impl MetadataProvider for TrailerDbMetadataProvider {
     }
 }
 
-impl MetadataProvider for OpenLibraryMetadataProvider {
-    fn descriptor(&self) -> MetadataProviderDescriptor {
-        MetadataProviderDescriptor {
-            id: MetadataProviderId::OpenLibrary,
-            display_name: "Open Library".into(),
-            description: "Planned book metadata provider for ebooks, PDFs, and comics.".into(),
-            supported_kinds: vec![MediaLibraryKind::Books],
-            requires_api_key: false,
-            implemented: false,
-            role: MetadataProviderRole::Primary,
-            extends_provider_ids: Vec::new(),
-            attribution_text: "Book metadata is provided by Open Library.".into(),
-            attribution_url: "https://openlibrary.org/".into(),
-            logo_light_url: Some("/assets/providers/open-library.png".into()),
-            logo_dark_url: Some("/assets/providers/open-library.png".into()),
-        }
-    }
-}
-
 impl MetadataProvider for LocalNfoMetadataProvider {
     fn descriptor(&self) -> MetadataProviderDescriptor {
         MetadataProviderDescriptor {
@@ -728,9 +718,13 @@ impl MetadataRegistry {
                 Box::new(ThemerrMetadataProvider),
                 Box::new(TrailerDbMetadataProvider),
                 Box::new(MusicBrainzMetadataProvider),
+                Box::new(LibexMetadataProvider),
+                Box::new(LibriVoxMetadataProvider),
+                Box::new(AudioSiloMetadataProvider),
                 Box::new(FanartMetadataProvider),
                 Box::new(LrclibMetadataProvider),
                 Box::new(OpenLibraryMetadataProvider),
+                Box::new(ComicVineMetadataProvider),
                 Box::new(LocalNfoMetadataProvider),
             ],
         }

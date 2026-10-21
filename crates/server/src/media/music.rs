@@ -316,6 +316,7 @@ pub(super) fn plan_music_file(
             available_leaf_count: i32::from(file.missing_since.is_none()),
             missing_leaf_count: i32::from(file.missing_since.is_some()),
             music: Some(music),
+            audiobook: None,
         },
     )
     .collect()

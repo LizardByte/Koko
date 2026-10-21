@@ -130,7 +130,12 @@ async fn test_declared_provider_logos_are_served_as_local_image_assets() {
         .into_json()
         .await
         .expect("Expected provider descriptors");
-    assert_eq!(providers.len(), 9);
+    assert_eq!(providers.len(), 13);
+    assert!(
+        providers
+            .iter()
+            .any(|provider| provider["id"] == "librivox")
+    );
 
     for provider in providers {
         for field in [

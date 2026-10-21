@@ -107,7 +107,8 @@ export async function loadRouteData(
     const userId = state.bootstrap?.current_user?.id;
     state.itemMetadataLoading = true;
     state.libraryItemsLoading = true;
-    load('item details', getItemPageData(route.itemId, source).finally(() => {
+    const knownLibraryId = state.libraryItems.find((item) => item.id === route.itemId)?.library_id;
+    load('item details', getItemPageData(route.itemId, source, knownLibraryId).finally(() => {
       if (isCurrent()) {
         state.itemMetadataLoading = false;
         state.libraryItemsLoading = false;
@@ -155,17 +156,33 @@ function needsRouteSettings(route: AppRoute, admin: boolean): boolean {
 type RouteLoader = <T>(label: string, request: Promise<T>, apply: (value: T) => void) => void;
 
 /** Fetch saved item data concurrently, staging every row before publishing the page. */
-async function getItemPageData(itemId: number, source: RouteApi) {
+async function getItemPageData(itemId: number, source: RouteApi, knownLibraryId?: number) {
+  // Start collection and sibling data alongside item details when browsing already identified the
+  // library. A stale library hint must not publish data or access errors for an item's new library.
+  const prefetched = knownLibraryId === undefined ? undefined : getItemLibraryContext(knownLibraryId, source)
+    .then(value => ({ value }), (error: unknown) => ({ error }));
   const details = source.getItem(itemId).then(async (item) => {
-    const [home, libraryItems, itemCredits] = await Promise.all([
-      source.getHome(item.library_id), source.getItems(item.library_id), getArtistCredits(item, source),
+    const support = async () => {
+      if (!prefetched || knownLibraryId !== item.library_id) return getItemLibraryContext(item.library_id, source);
+      const result = await prefetched;
+      if ('error' in result) throw result.error;
+      return result.value;
+    };
+    const [context, itemCredits] = await Promise.all([
+      support(), getArtistCredits(item, source),
     ]);
-    return { item, home, libraryItems, itemCredits };
+    return { item, ...context, itemCredits };
   });
   const [detail, metadata, playback, similarItems] = await Promise.all([
     details, source.getItemMetadata(itemId), source.getPlaybackDecision(itemId), getSimilarItems(itemId, source),
   ]);
   return { ...detail, metadata, playback, similarItems };
+}
+
+/** Fetch collection and sibling data together without waiting for the item's filesystem lookups. */
+async function getItemLibraryContext(libraryId: number, source: RouteApi) {
+  const [home, libraryItems] = await Promise.all([source.getHome(libraryId), source.getItems(libraryId)]);
+  return { home, libraryItems };
 }
 
 /** Read Koko's saved suggestions; optional failures must not prevent opening an item. */

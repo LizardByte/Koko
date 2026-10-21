@@ -156,6 +156,44 @@ test('same-item revalidation retains its recommendations until the complete upda
   assert.equal(state.similarItems.items[0].id, 3);
 });
 
+test('known library context loads alongside item details and still publishes together', async () => {
+  const item = { ...mock.getMockItem(101), id: 1 };
+  state.libraryItems = [item];
+  const details = deferred();
+  const calls = [];
+  const pending = loadRouteData(state, state.route, () => {}, () => true, source(Promise.resolve([]), {
+    getItem: () => details.promise,
+    getHome: async (library) => { calls.push(['home', library]); return { library_id: library, collections: [] }; },
+    getItems: async (library) => { calls.push(['items', library]); return [item]; },
+  }));
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, [['home', item.library_id], ['items', item.library_id]]);
+  assert.equal(state.selectedItem, undefined);
+  details.resolve(item);
+  await pending;
+  assert.equal(state.selectedItem.id, 1);
+  assert.equal(calls.length, 2);
+});
+
+test('a relocated item discards context and access failures for its former library', async () => {
+  const item = { ...mock.getMockItem(101), id: 1, library_id: 2 };
+  state.libraryItems = [{ ...item, library_id: 1 }];
+  const calls = [];
+  await loadRouteData(state, state.route, () => {}, () => true, source(Promise.resolve([]), {
+    getItem: async () => item,
+    getHome: async (library) => {
+      calls.push(library);
+      if (library === 1) throw new ApiError(403, 'Former library unavailable');
+      return { library_id: library, collections: [] };
+    },
+    getItems: async (library) => library === 2 ? [item] : [],
+  }));
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(state.error, undefined);
+  assert.equal(state.selectedItem.library_id, 2);
+  assert.equal(state.home.library_id, 2);
+});
+
 test('a late recommendation reply cannot cross account changes', async () => {
   const delayed = deferred();
   const pending = loadRouteData(state, state.route, () => {}, () => true, source(delayed.promise));

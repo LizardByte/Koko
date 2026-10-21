@@ -85,7 +85,6 @@ use crate::media::{
     get_library_metadata_languages,
     get_library_metadata_providers,
     get_media_home_with_preferred_languages,
-    get_media_item,
     get_media_item_summary,
     get_media_item_with_preferred_languages,
     get_persisted_library_summaries,
@@ -4948,24 +4947,7 @@ pub async fn get_item_metadata(
     item_id: i32,
 ) -> Result<Json<ItemMetadataResponse>, Status> {
     require_item_access(&db, item_id, &user_guard).await?;
-    let data_dir = current_settings().general.data_dir;
     let user_id = current_user_id(Some(&user_guard))?;
-
-    let item_exists = db
-        .run(move |conn| get_media_item(conn, item_id, &data_dir))
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to confirm media item {} before metadata load: {}",
-                item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-
-    if item_exists.is_none() {
-        return Err(Status::NotFound);
-    }
 
     let matches = db
         .run(move |conn| {

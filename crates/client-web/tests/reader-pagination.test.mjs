@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { SectionProgress } from 'foliate-js/progress.js';
 
 const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false, ws: false } });
 after(() => server.close());
-const { createReaderPagination, readerColumnPages, readerTextPageLabel, verifiedReaderPages } = await server.ssrLoadModule('/src/app/readerPagination.ts');
+const { createReaderPagination, readerColumnPages, readerTextPageLabel, readerTextPagePreview, verifiedReaderPages } = await server.ssrLoadModule('/src/app/readerPagination.ts');
 const { measureReaderTextPages } = await server.ssrLoadModule('/src/app/readerText.ts');
 const { readerSequence } = await server.ssrLoadModule('/src/app/readerSupport.ts');
 const layout = { width: 1000, height: 700, size: 100, direction: 'ltr', spread: false };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-const result = (total) => ({ total, sections: [total] });
+const result = (total) => ({ total, sections: [total], columns: [1] });
 
 test('reader sequences decode lazily in order and stop when their consumer closes', async () => {
   const started = [];
@@ -49,7 +50,7 @@ test('pagination debounces resize and publishes only the most recent complete la
 
 test('partial failures and invalid totals cannot erase a previously completed count', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const counts = [], results = [result(90), result(0), result(NaN), result(3.5), result(100001), { total: 90, sections: [1] }, new Error('Section unavailable'), result(110)];
+  const counts = [], results = [result(90), result(0), result(NaN), result(3.5), result(100001), { total: 90, sections: [1], columns: [1] }, new Error('Section unavailable'), result(110)];
   const pagination = createReaderPagination(async () => { const result = results.shift(); if (result instanceof Error) { throw result; } return result; }, (count) => counts.push(count));
   t.after(() => pagination.close());
   for (let size = 100; size < 108; size++) { pagination.schedule({ ...layout, size }); t.mock.timers.tick(250); await flush(); }
@@ -95,6 +96,28 @@ test('spread labels count the cover, both visible pages, and an unpaired final p
   assert.equal(readerTextPageLabel({ total: 3, sections: [3] }, 0, 1, 2), 'Pages 2–3 of 3');
 });
 
+test('text hover destinations follow chapter weights instead of multiplying the page total by a percentage', () => {
+  const progress = new SectionProgress([{ size: 100 }, { size: 500, linear: 'no' }, { size: 900 }, { size: 100 }], 1500, 1600);
+  const pages = { total: 41, sections: [1, 0, 5, 35], columns: [1, 0, 1, 1] };
+  const cases = [[0, 'Page 1 of 41'], [100 / 1100, 'Page 2 of 41'], [0.5, 'Page 4 of 41'], [999 / 1100, 'Page 6 of 41'], [1000 / 1100, 'Page 7 of 41'], [1, 'Page 41 of 41']];
+  for (const [fraction, expected] of cases) assert.equal(readerTextPagePreview(pages, ...progress.getSection(fraction)), expected);
+  assert.equal(readerTextPagePreview(pages, 1, 0.5), undefined);
+  const resized = { total: 82, sections: [2, 0, 10, 70], columns: [1, 0, 1, 1] };
+  assert.equal(readerTextPagePreview(resized, ...progress.getSection(0.5)), 'Page 8 of 82');
+});
+
+test('hover previews use each section column layout and preserve cover and final half-spreads', () => {
+  const progress = new SectionProgress([{ size: 300 }, { size: 700 }], 1500, 1600);
+  const pages = { total: 10, sections: [4, 6], columns: [1, 2] };
+  for (const [fraction, expected] of [[0.1, 'Page 2 of 10'], [0.3, 'Page 5 of 10'], [0.65, 'Pages 8–9 of 10'], [1, 'Page 10 of 10']]) {
+    assert.equal(readerTextPagePreview(pages, ...progress.getSection(fraction)), expected);
+  }
+  const cover = { total: 4, sections: [4], columns: [2] };
+  assert.equal(readerTextPagePreview(cover, 0, 0), 'Page 1 of 4');
+  assert.equal(readerTextPagePreview(cover, 0, 0.25), 'Pages 2–3 of 4');
+  assert.equal(readerTextPagePreview(cover, 0, 0.75), 'Page 4 of 4');
+});
+
 function fixture(t, options = {}) {
   const original = { document: globalThis.document, requestAnimationFrame: globalThis.requestAnimationFrame };
   let removed = 0, destroyed = 0, released = 0;
@@ -117,20 +140,28 @@ function fixture(t, options = {}) {
   globalThis.requestAnimationFrame = (callback) => { queueMicrotask(callback); return 1; };
   t.after(() => Object.assign(globalThis, original));
   const createBook = async () => ({ sections: [{ id: 'a' }, { id: 'nav', linear: 'no' }, { id: 'b' }].map((entry) => ({ ...entry, load: async () => '' })), destroy() { released++; } });
-  return { host, createBook, visited, styles, cleanup: () => ({ removed, destroyed, released }) };
+  return { host, createBook, visited, styles, renderer, cleanup: () => ({ removed, destroyed, released }) };
 }
 
 test('whole-book measurement visits every linear section and releases its independent decoder', async (t) => {
   const f = fixture(t);
-  assert.deepEqual(await measureReaderTextPages(f.createBook, f.host, layout, new AbortController().signal), { total: 4, sections: [2, 0, 2] });
+  assert.deepEqual(await measureReaderTextPages(f.createBook, f.host, layout, new AbortController().signal), { total: 4, sections: [2, 0, 2], columns: [1, 0, 1] });
   assert.deepEqual(f.visited, [0, 2]); assert.ok(f.styles.every((css) => css.includes('font-size:100%')));
   assert.deepEqual(f.cleanup(), { removed: 1, destroyed: 1, released: 1 });
+});
+
+test('whole-book measurement retains each section actual column count for mixed-layout seek previews', async (t) => {
+  const f = fixture(t, { load: (index) => { f.renderer.columnCount = index === 0 ? 2 : 1; } });
+  const pages = await measureReaderTextPages(f.createBook, f.host, { ...layout, spread: true }, new AbortController().signal);
+  assert.deepEqual(pages, { total: 5, sections: [3, 0, 2], columns: [2, 0, 1] });
+  assert.equal(readerTextPagePreview(pages, 0, 1), 'Pages 2–3 of 5');
+  assert.equal(readerTextPagePreview(pages, 2, 1), 'Page 5 of 5');
 });
 
 test('vertical and right-to-left measurements use their respective column geometry', async (t) => {
   for (const options of [{ vertical: true }, { rtl: true }]) {
     const f = fixture(t, options);
-    assert.deepEqual(await measureReaderTextPages(f.createBook, f.host, { ...layout, direction: 'rtl' }, new AbortController().signal), { total: 4, sections: [2, 0, 2] });
+    assert.deepEqual(await measureReaderTextPages(f.createBook, f.host, { ...layout, direction: 'rtl' }, new AbortController().signal), { total: 4, sections: [2, 0, 2], columns: [1, 0, 1] });
   }
 });
 

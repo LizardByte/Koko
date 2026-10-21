@@ -13,7 +13,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 function fixture(t, predict = () => undefined) {
   const original = { window: globalThis.window, getComputedStyle: globalThis.getComputedStyle };
   const windowEvents = new EventTarget();
-  globalThis.window = windowEvents; globalThis.getComputedStyle = () => ({ getPropertyValue: () => '12px' });
+  globalThis.window = windowEvents; globalThis.getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px', borderLeftWidth: '0px', borderRightWidth: '0px' });
   t.after(() => Object.assign(globalThis, original));
   const range = new EventTarget(), preview = { hidden: true, textContent: '', style: { setProperty() {} } };
   const attributes = new Map(), pending = [], requests = [];
@@ -70,6 +70,23 @@ test('hover respects the native thumb travel and keyboard seeking does not dupli
   assert.deepEqual(f.requests, [0.6]);
   assert.equal(f.preview.textContent, 'Location 70 of 121');
   assert.equal(f.range.value, '590');
+});
+
+test('hover labels show destination pages without navigating, including the shared slider padding and native value steps', (t) => {
+  const fractions = [], f = fixture(t, (fraction) => { fractions.push(fraction); return fraction < 0.5 ? 'Page 1 of 7' : 'Pages 4–5 of 7'; });
+  globalThis.getComputedStyle = () => ({ paddingLeft: '14px', paddingRight: '14px', borderLeftWidth: '1px', borderRightWidth: '1px' });
+  for (const clientX of [123, 605.9, 1089]) f.range.dispatchEvent(event('pointermove', { clientX }));
+  assert.deepEqual(fractions, [0, 0.5, 1]);
+  assert.equal(f.preview.textContent, 'Go to pages 4–5 of 7');
+  assert.deepEqual(f.requests, []); assert.equal(f.range.value, '0');
+  f.range.dispatchEvent(event('pointerleave')); assert.equal(f.preview.hidden, true);
+});
+
+test('hover never invents percentage-based page numbers before pagination is available', (t) => {
+  const f = fixture(t);
+  f.range.dispatchEvent(event('pointermove', { clientX: 606 }));
+  assert.equal(f.preview.textContent, 'Page preview unavailable');
+  assert.deepEqual(f.requests, []);
 });
 
 test('closing or canceling a scrub does not resurrect its preview or drain stale destinations', async (t) => {

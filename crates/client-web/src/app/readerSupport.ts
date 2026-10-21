@@ -38,7 +38,7 @@ export interface ReaderEngine {
   goTo(locator: string): Promise<void>;
   seek(fraction: number): Promise<void>;
   appearance(size: number, direction: string, spread: boolean): Promise<void>;
-  /** Fixed pages can predict the target; reflowable text supplies its real location after seeking. */
+  /** Predict the destination page/spread; reflowable text waits for completed layout pagination. */
   preview(fraction: number): string | undefined;
   search(query: string): Promise<ReaderTarget[]>;
   /** Replace this account's visible highlights without changing the book's DOM anchors. */

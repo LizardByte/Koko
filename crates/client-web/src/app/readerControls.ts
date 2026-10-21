@@ -26,7 +26,7 @@ export function readerMarkup(): string {
       </form></aside><div class="book-reader-viewport" tabindex="0" aria-label="Book pages"><p class="book-reader-loading" role="status">Opening book…</p></div></div>
     <footer class="book-reader-footer player-dock" aria-label="Reader controls">
       <div class="reader-selection" data-reader-selection hidden><span data-reader-selection-quote></span>${button('data-reader-highlight', 'Highlight selection', 'highlighter')}${button('data-reader-add-note', 'Note on selection', 'notebook-pen')}</div>
-      <div class="reader-identity player-dock-identity"><div class="reader-cover music-cover" aria-hidden="true">${renderIcon('book-open')}<img data-reader-cover alt="" hidden /></div><div><h2 id="book-reader-title">Opening book…</h2><span data-reader-author hidden></span></div></div>
+      <div class="reader-identity player-dock-identity"><div class="reader-cover" aria-hidden="true">${renderIcon('book-open')}<img data-reader-cover alt="" hidden /></div><div><h2 id="book-reader-title">Opening book…</h2><span data-reader-author hidden></span></div></div>
       <div class="reader-transport player-dock-transport"><div class="player-dock-buttons">${button('data-reader-previous', 'Previous page', 'chevron-left')}${button('data-reader-next', 'Next page', 'chevron-right')}</div>
         <div class="reader-seek player-dock-timeline"><output id="reader-seek-preview" class="reader-seek-preview" hidden></output><input class="player-progress" data-reader-position aria-label="Reading position" aria-describedby="reader-seek-preview reader-location" type="range" min="0" max="1000" step="1" value="0" /><span id="reader-location" data-reader-location>Loading…</span></div></div>
       <div class="reader-tools player-dock-tools">${button('data-reader-options', 'Reading options', 'sliders-horizontal', 'aria-expanded="false" aria-controls="reader-options"')}${button('data-reader-fullscreen', 'Fullscreen', 'maximize')}${button('data-reader-close', 'Close reader', 'x')}</div>
@@ -55,7 +55,6 @@ export function readerAppearance(dialog: HTMLElement): ReaderAppearance {
 function showAppearance(dialog: HTMLElement): void {
   const value = readerAppearance(dialog), direction = dialog.querySelector<HTMLButtonElement>('[data-reader-direction]')!;
   dialog.querySelector('[data-reader-size-value]')!.textContent = `${value.size}%`;
-  dialog.querySelector<HTMLElement>('[data-reader-size]')!.style.setProperty('--reader-progress', `${(value.size - 75) / 145 * 100}%`);
   direction.setAttribute('aria-pressed', String(value.direction === 'rtl'));
   direction.innerHTML = renderIcon(value.direction === 'rtl' ? 'arrow-left' : 'arrow-right', 'player-control-icon');
   direction.title = value.direction === 'rtl' ? 'Left-to-right reading' : 'Right-to-left reading'; direction.setAttribute('aria-label', direction.title);

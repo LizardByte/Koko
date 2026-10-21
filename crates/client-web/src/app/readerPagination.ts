@@ -1,12 +1,17 @@
 /** Debounces complete layout pagination and discards counts from obsolete or closed readers. */
 
-import { readerPageLabel } from './readerSupport';
+import { readerPageIndex, readerPageLabel } from './readerSupport';
 
 /** Dimensions and preferences that determine the rendered pages of a reflowable book. */
 export interface ReaderPaginationLayout { width: number; height: number; size: number; direction: string; spread: boolean }
 
 /** Complete rendered pages per spine section; non-linear navigation sections have zero pages. */
-export interface ReaderPageMap { sections: number[]; total: number }
+export interface ReaderPageMap {
+  sections: number[];
+  total: number;
+  /** Measured columns for each section, including mixed writing modes in a two-page layout. */
+  columns: number[];
+}
 
 /** Own background work without publishing partial counts or stale layouts after a resize or close. */
 export function createReaderPagination(
@@ -26,6 +31,8 @@ export function createReaderPagination(
         void measure(layout, controller.signal).then((pages) => {
           const valid = Number.isInteger(pages.total) && pages.total > 0 && pages.total <= 100000
             && pages.sections.every((count) => Number.isInteger(count) && count >= 0)
+            && pages.columns.length === pages.sections.length
+            && pages.columns.every((columns, index) => columns === 1 || columns === 2 || columns === 0 && pages.sections[index] === 0)
             && pages.sections.reduce((sum, count) => sum + count, 0) === pages.total;
           if (!closed && !controller.signal.aborted && valid) changed(pages);
         }).catch(() => { /* An optional count failure must not interrupt reading or erase a cached count. */ });
@@ -46,6 +53,14 @@ export function readerTextPageLabel(pages: ReaderPageMap, section: number, scree
   const start = Math.min(count - 1, first);
   const visible = start === last ? [before + start] : [before + start, before + last];
   return readerPageLabel(visible, pages.total);
+}
+
+/** Use Foliate's section anchor and measured spread geometry to predict the page selected by a seek. */
+export function readerTextPagePreview(pages: ReaderPageMap, section: number, anchor: number): string | undefined {
+  const count = pages.sections[section], columns = pages.columns[section];
+  if (!count || !columns) return undefined;
+  const screens = Math.ceil((count + Number(columns === 2)) / columns);
+  return readerTextPageLabel(pages, section, readerPageIndex(anchor, screens), columns);
 }
 
 /** Count occupied columns, excluding the generated blank recto column and an empty final half-spread. */

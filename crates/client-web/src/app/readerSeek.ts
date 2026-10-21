@@ -1,7 +1,7 @@
 /** Keeps slider previews aligned with rendered destinations and coalesces rapid reading-position changes. */
 import { readingFraction } from './readerSupport';
 
-/** Fixed pages can predict a destination; reflowable text reports its real location after layout. */
+/** Engines predict page destinations once the document's current layout is known. */
 export interface ReaderSeekActions { seek(fraction: number): Promise<void>; preview(fraction: number): string | undefined }
 
 /** Scrub the document while dragging, showing the actual settled location instead of an estimated text page. */
@@ -10,13 +10,12 @@ export function bindReaderSeek(range: HTMLInputElement, preview: HTMLOutputEleme
   let rendered = { label: '', position: 0 };
   const listen = (target: EventTarget, name: string, listener: EventListener): void => target.addEventListener(name, listener, { signal });
   const value = (): number => readingFraction(Number(range.value) / Number(range.max));
-  const paint = (fraction: number): void => { range.style.setProperty('--reader-progress', `${fraction * 100}%`); };
   const show = (fraction: number, label: string): void => {
     preview.hidden = false; preview.textContent = label;
     preview.style.setProperty('--reader-preview-position', `${Math.max(5, Math.min(95, fraction * 100))}%`);
   };
   const restore = (): void => {
-    range.value = String(Math.round(rendered.position * Number(range.max))); paint(rendered.position);
+    range.value = String(Math.round(rendered.position * Number(range.max)));
     range.setAttribute('aria-valuetext', rendered.label);
   };
   const advance = async (): Promise<void> => {
@@ -40,7 +39,7 @@ export function bindReaderSeek(range: HTMLInputElement, preview: HTMLOutputEleme
   const seek = (): void => {
     const fraction = value();
     if (fraction === requested) return;
-    requested = fraction; pending = fraction; paint(fraction);
+    requested = fraction; pending = fraction;
     show(fraction, actions.preview(fraction) ?? 'Opening location…');
     // The reader owns error presentation; a failed operation must also release the scrubber.
     void drain().catch(() => { if (!signal.aborted) { pending = undefined; preview.hidden = true; } });
@@ -51,10 +50,14 @@ export function bindReaderSeek(range: HTMLInputElement, preview: HTMLOutputEleme
   listen(range, 'pointermove', (event) => {
     if (dragging || working) return;
     const rect = range.getBoundingClientRect(), pointer = event as PointerEvent;
-    // Native ranges reserve half a thumb at each end of the track.
-    const thumb = Number.parseFloat(getComputedStyle(range).getPropertyValue('--reader-thumb-size')) || 16;
-    const fraction = readingFraction((pointer.clientX - rect.left - thumb / 2) / Math.max(1, rect.width - thumb));
-    show(fraction, actions.preview(fraction) ?? `Go to ${Math.round(fraction * 100)}%`);
+    // Use the shared native player range's content box and 16px thumb travel.
+    const style = getComputedStyle(range);
+    const left = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.borderLeftWidth) || 0) + 8;
+    const right = (Number.parseFloat(style.paddingRight) || 0) + (Number.parseFloat(style.borderRightWidth) || 0) + 8;
+    const maximum = Number(range.max);
+    const fraction = Math.round(readingFraction((pointer.clientX - rect.left - left) / Math.max(1, rect.width - left - right)) * maximum) / maximum;
+    const target = actions.preview(fraction);
+    show(fraction, target ? `Go to ${target.replace(/^Page/, 'page')}` : 'Page preview unavailable');
   });
   listen(range, 'pointerleave', () => { if (!dragging) preview.hidden = true; });
   listen(range, 'input', seek);

@@ -3,11 +3,12 @@ import type { ReaderAnnotationEvents, ReaderEngine, ReaderLocation, ReaderTarget
 import type { ReadingAnnotation } from '../api';
 import { readerHighlightColors, readerSelectedText } from './readerHighlights';
 import { Overlayer } from 'foliate-js/overlayer.js';
+import { SectionProgress } from 'foliate-js/progress.js';
 import { applyReaderTextTheme } from './readerTheme';
 import { forwardReaderPointerDown } from './readerInteraction';
 import { readerPageLabel, readerPageSpread, readingFraction, readerTextPosition, sanitizeBookDocument, readerSequence } from './readerSupport';
 import { escapeHtml } from './format';
-import { createReaderPagination, readerColumnPages, readerTextPageLabel, verifiedReaderPages, type ReaderPageMap, type ReaderPaginationLayout } from './readerPagination';
+import { createReaderPagination, readerColumnPages, readerTextPageLabel, readerTextPagePreview, verifiedReaderPages, type ReaderPageMap, type ReaderPaginationLayout } from './readerPagination';
 
 interface Section { id: string; size?: number; linear?: string; pageSpread?: string; load(): Promise<string>; unload?(): void; createDocument?(): Promise<Document> }
 interface Toc { label: string; href: string; subitems?: Toc[] }
@@ -90,9 +91,10 @@ export async function measureReaderTextPages(createBook: () => Promise<Book>, ho
     renderer.setStyles(textStyles(layout.size, layout.direction, false));
     let count = 0;
     const sections = book.sections.map(() => 0);
+    const sectionColumns = book.sections.map(() => 0);
     // One paginator owns the frame, so each section must finish before the next navigation.
-    const measurements = readerSequence(book.sections.entries(), async ([index, section]): Promise<readonly [number, number]> => {
-      if (section.linear === 'no') return [index, 0];
+    const measurements = readerSequence(book.sections.entries(), async ([index, section]): Promise<readonly [number, number, number]> => {
+      if (section.linear === 'no') return [index, 0, 0];
       signal.throwIfAborted();
       const navigation = renderer.goTo({ index, anchor: 0 });
       // Foliate installs its current view only when the frame finishes loading. If canceled
@@ -108,14 +110,15 @@ export async function measureReaderTextPages(createBook: () => Promise<Book>, ho
       await paginationStep(new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))), signal);
       const columns = renderer.columnCount ?? 1;
       const occupied = columns === 1 ? 0 : columnExtent(content.doc, layout.direction, blank, renderer.size / columns);
-      return [index, verifiedReaderPages(occupied, renderer.pages - 2, columns, blank)];
+      return [index, verifiedReaderPages(occupied, renderer.pages - 2, columns, blank), columns];
     });
-    for await (const [index, pages] of measurements) {
+    for await (const [index, pages, columns] of measurements) {
       sections[index] = pages;
+      sectionColumns[index] = columns;
       count += pages;
       if (count > 100000) throw new Error('Page count limit exceeded.');
     }
-    return { sections, total: count };
+    return { sections, total: count, columns: sectionColumns };
   } finally { dispose(); }
 }
 
@@ -172,7 +175,7 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
   };
   let lastLocation: ReaderLocation | undefined, pageMap: ReaderPageMap | undefined;
   let sectionIndex = 0, screen = 0, columns = 1;
-  const sizes = book.sections.map((section) => section.linear !== 'no' && (section.size ?? 0) > 0 ? section.size! : 0);
+  const sectionProgress = new SectionProgress(book.sections, 1500, 1600), sizes = sectionProgress.sizes;
   const trackPosition = (): void => view.renderer.addEventListener('relocate', (event) => {
     const location = (event as CustomEvent<{ index: number; fraction: number }>).detail;
     // Foliate's public view fraction includes the visible page's end; navigation uses its start.
@@ -262,7 +265,11 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
       if (reopen && initialized) await navigate(view.init({ lastLocation: saved }));
       paginate();
     },
-    preview: () => undefined,
+    preview(fraction) {
+      const [index, anchor] = sectionProgress.getSection(readingFraction(fraction));
+      if (view.isFixedLayout && pageCount) return readerPageLabel(readerPageSpread(index, pageCount, spread), pageCount);
+      return pageMap ? readerTextPagePreview(pageMap, index, anchor) : undefined;
+    },
     async annotations(values) {
       const previous = annotations; annotations = structuredClone(values);
       await Promise.all(previous.filter((mark) => mark.quote).map((mark) => view.deleteAnnotation({ value: mark.locator }).catch(() => undefined)));

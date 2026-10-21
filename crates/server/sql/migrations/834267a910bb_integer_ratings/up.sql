@@ -9,7 +9,8 @@ SET rating_scaled = CASE
     WHEN typeof(rating) IN ('integer', 'real') AND rating BETWEEN 0 AND 10
         THEN CAST(round(rating * 10) AS INTEGER)
     ELSE NULL
-END;
+END
+WHERE rating IS NOT NULL;
 
 ALTER TABLE item_metadata_links DROP COLUMN rating;
 ALTER TABLE item_metadata_links RENAME COLUMN rating_scaled TO rating;

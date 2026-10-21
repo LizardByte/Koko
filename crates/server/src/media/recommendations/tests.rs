@@ -488,3 +488,129 @@ fn combined_migration_preserves_metadata_links_and_deleting_items_cascades_cache
         0
     );
 }
+
+#[test]
+#[ignore = "requires a disposable KOKO_PERF_DB catalog snapshot"]
+fn profile_saved_catalog_requests() {
+    use std::time::Instant;
+    let path =
+        std::env::var("KOKO_PERF_DB").expect("set KOKO_PERF_DB to a disposable database copy");
+    let mut conn = SqliteConnection::establish(&path).unwrap();
+    let admin = users::table
+        .filter(users::admin.eq(true))
+        .select(users::id)
+        .first::<i32>(&mut conn)
+        .unwrap();
+    let languages = ["en-US".into()];
+    let library_ids = if let Ok(ids) = std::env::var("KOKO_PERF_LIBRARIES") {
+        ids.split(',')
+            .map(|id| id.trim().parse::<i32>().expect("numeric library IDs"))
+            .collect()
+    } else {
+        libraries::table
+            .filter(libraries::kind.eq("movies"))
+            .select(libraries::id)
+            .load::<i32>(&mut conn)
+            .unwrap()
+    };
+    for library in library_ids {
+        let Some(id) = item_rows::table
+            .filter(item_rows::library_id.eq(library))
+            .filter(item_rows::item_type.eq("movie"))
+            .filter(item_rows::deleted_at.is_null())
+            .select(item_rows::id)
+            .first::<i32>(&mut conn)
+            .optional()
+            .unwrap()
+        else {
+            continue;
+        };
+        let start = Instant::now();
+        let mut detail = get_media_item_with_preferred_languages(&mut conn, id, "", &languages)
+            .unwrap()
+            .unwrap();
+        apply_user_playback_context_to_detail(&mut conn, Some(admin), &mut detail).unwrap();
+        println!(
+            "library={library} item={id} details_ms={:.2}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let start = Instant::now();
+        let matches = crate::metadata::get_item_metadata_summaries(&mut conn, id).unwrap();
+        println!(
+            "library={library} metadata_ms={:.2} matches={}",
+            start.elapsed().as_secs_f64() * 1000.0,
+            matches.len()
+        );
+        let start = Instant::now();
+        let items = list_media_items_for_user_with_preferred_languages(
+            &mut conn,
+            Some(admin),
+            Some(library),
+            &languages,
+        )
+        .unwrap();
+        println!(
+            "library={library} items_ms={:.2} count={}",
+            start.elapsed().as_secs_f64() * 1000.0,
+            items.len()
+        );
+        let start = Instant::now();
+        get_media_home_with_preferred_languages(&mut conn, Some(admin), Some(library), &languages)
+            .unwrap();
+        println!(
+            "library={library} home_ms={:.2}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let start = Instant::now();
+        list(&mut conn, Some(admin), id, &languages).unwrap();
+        println!(
+            "library={library} similar_ms={:.2}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let start = Instant::now();
+        refresh(&mut conn, &[id]).unwrap();
+        println!(
+            "library={library} fallback_refresh_ms={:.2}",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
+#[test]
+fn movie_refresh_retains_cross_library_matches_without_loading_unrelated_types() {
+    use diesel::connection::InstrumentationEvent;
+    use std::sync::{
+        Arc,
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
+    };
+    let mut conn = database();
+    for (id, library) in [(1, 1), (2, 3)] {
+        item(&mut conn, id, library, None, "movie");
+        link(
+            &mut conn,
+            id,
+            "movie",
+            &id.to_string(),
+            json!({"genres":[{"name":"Fantasy"}]}),
+        );
+    }
+    let queries = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&queries);
+    conn.set_instrumentation(move |event: InstrumentationEvent<'_>| {
+        if matches!(event, InstrumentationEvent::StartQuery { .. }) {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    refresh(&mut conn, &[1]).unwrap();
+    let small_catalog_queries = queries.load(Ordering::SeqCst);
+    for id in 3..=603 {
+        item(&mut conn, id, 1, None, "track");
+    }
+    queries.store(0, Ordering::SeqCst);
+    refresh(&mut conn, &[1]).unwrap();
+    assert_eq!(queries.load(Ordering::SeqCst), small_catalog_queries);
+    assert_eq!(recommendations(&mut conn, 1, 2), [2]);
+}

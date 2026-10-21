@@ -2339,7 +2339,10 @@ pub fn upsert_item_metadata_link(
                 sync_item_metadata_people(conn, row.id, snapshot, details)?;
             }
 
-            crate::media::recommendations::refresh(conn, &[item_id])?;
+            // Theme songs, trailers, and artwork do not change recommendation facts.
+            if relation_kind == "primary" || snapshot.provider_id == MetadataProviderId::AudioSilo {
+                crate::media::recommendations::refresh(conn, &[item_id])?;
+            }
 
             to_item_metadata_summary_with_people(conn, row)
         })

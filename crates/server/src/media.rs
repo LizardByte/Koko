@@ -2960,6 +2960,34 @@ pub fn list_media_items_with_preferred_languages(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
+    summarize_media_item_rows(conn, rows, preferred_languages)
+}
+
+/// Hydrate only selected catalog rows for item-page support and recommendation maintenance.
+fn list_media_items_by_ids(
+    conn: &mut SqliteConnection,
+    ids: &[i32],
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    use crate::db::schema::media_items as items;
+    let mut rows = Vec::new();
+    for chunk in ids.chunks(500) {
+        rows.extend(
+            items::table
+                .filter(items::id.eq_any(chunk))
+                .filter(items::deleted_at.is_null())
+                .select(MediaItem::as_select())
+                .load::<MediaItem>(conn)?,
+        );
+    }
+    summarize_media_item_rows(conn, rows, preferred_languages)
+}
+
+fn summarize_media_item_rows(
+    conn: &mut SqliteConnection,
+    rows: Vec<MediaItem>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     let metadata_links = preferred_metadata_links_by_item_id(
         conn,
         &rows.iter().map(|row| row.id).collect::<Vec<_>>(),

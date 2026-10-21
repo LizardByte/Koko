@@ -24,13 +24,13 @@ Current product direction highlights:
 
 - The browser UI is targeting a Kodi/Plex-style media-first experience.
 - TheMovieDB is the first planned online metadata source for movies and TV.
-- Metadata providers should stay pluggable so Koko can add more sources over time.
 - Packaged builds include `ffmpeg` and `ffprobe` from LizardByte/build-deps. Explicit executable paths remain configurable.
 - macOS packages require macOS 15.0 or later.
 
 If you are interested in this project, please leave a star and watch the repository for updates.
 
 If you would like to contribute, please reach out on our [discord](https://app.lizardbyte.dev/discord) server.
+Contributor references are available in [contributing](../contributing/README.md).
 
 ## ⚙️ Configuration
 
@@ -39,36 +39,10 @@ Koko uses a YAML configuration file for core server settings.
 Media libraries are stored in the application database instead of the YAML file. The browser settings UI edits
 server settings in YAML and library definitions in the database.
 
-To move a library, edit the paths of the existing library in **Settings → Libraries**, then rescan it.
-The scanner reconnects unambiguous matches using the relative path, file size, media type, and scanner
-fingerprint; unique content matches can also reconnect renamed files. Catalog IDs, linked metadata,
-recording selections, listening/watch progress, and playlist references stay with the surviving items.
-A rescan also reconciles duplicates left by an earlier path change. Progress saved on both entries uses
-each listener's most recent position. Existing metadata fills missing sources; a confirmed audiobook
-recording takes precedence over a book-only match.
-
-Roots that are still configured remain separate sources, so identical files in different locations are
-not automatically collapsed. Overlapping roots that discover the same physical file count it once.
-Ambiguous replacements and changed content are not treated as the old item. Entries under removed roots
-are retired after a complete successful scan; an unavailable replacement keeps the old entries marked
-missing so their history can be recovered when the path becomes accessible. Scanning does not move or
-delete media files on disk. Editing an existing library preserves its identity; deleting it and creating
-a new library creates a separate catalog.
-
-Database schema changes are managed only through Diesel SQL migrations in `crates/server/sql/migrations`.
-Koko has not had a release yet, so the current database starts from one consolidated initial schema migration.
-Migration directories use an opaque hash-like revision prefix, and runtime execution order is defined by
-`SQLITE_MIGRATION_ORDER` in `crates/server/src/db/mod.rs` instead of hash lexicographic order. Future schema or data
-changes should be added as new migration files instead of Rust startup repair code.
-
-Create a new migration from the repository root with:
-
-```console
-cargo new-migration add_media_flags
-```
-
-If the name is omitted, the command prompts for it. The command generates a unique revision, creates `up.sql` and
-`down.sql`, appends the revision to `SQLITE_MIGRATION_ORDER`, and runs `cargo +nightly fmt`.
+To move a library, move its files, update the existing library's paths in **Settings → Libraries**,
+and rescan it. Keep the same library to retain matched metadata, reading and playback progress, and
+playlists. Check that the new paths are accessible to the server before scanning. Deleting the library
+and creating a new one starts a separate catalog.
 
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).

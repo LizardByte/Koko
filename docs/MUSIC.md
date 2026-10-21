@@ -97,4 +97,4 @@ In **Settings → Providers → Fanart.tv**, users may save a [personal API key]
 
 For official builds, create the GitHub Actions repository secret **`FANART_PROJECT_API_KEY`**. The Rust release and Flatpak workflows pass it as **`KOKO_FANART_PROJECT_API_KEY`** only during server compilation. Flatpak uses `secret-env`, so the value is absent from exported manifests. Local builders can set the same environment variable before running Cargo. Missing secrets are allowed for forks and pull requests. The compiled server contains the key; it is not encrypted inside the binary. See the [Fanart.tv API documentation](https://api.fanart.tv/).
 
-AcoustID/Chromaprint audio fingerprint matching is planned in the [roadmap](./ROADMAP.md). This implementation uses MusicBrainz searches and optional embedded identifiers.
+AcoustID/Chromaprint audio fingerprint matching is planned in the [roadmap](../contributing/ROADMAP.md). This implementation uses MusicBrainz searches and optional embedded identifiers.

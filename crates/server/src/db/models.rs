@@ -254,7 +254,8 @@ pub struct ItemMetadataLink {
     pub logo_url: Option<String>,
     pub cached_logo_path: Option<String>,
     pub genres_json: Option<String>,
-    pub rating: Option<f32>,
+    /// Rounded community score on the inclusive 0–100 storage scale.
+    pub rating: Option<i16>,
     pub content_rating: Option<String>,
     pub locale_key: String,
     pub provider_locale_key: Option<String>,
@@ -287,7 +288,8 @@ pub struct NewItemMetadataLink {
     pub logo_url: Option<String>,
     pub cached_logo_path: Option<String>,
     pub genres_json: Option<String>,
-    pub rating: Option<f32>,
+    /// Rounded community score on the inclusive 0–100 storage scale.
+    pub rating: Option<i16>,
     pub content_rating: Option<String>,
     pub locale_key: String,
     pub provider_locale_key: Option<String>,

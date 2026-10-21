@@ -57,7 +57,7 @@ table! {
         logo_url -> Nullable<Text>,
         cached_logo_path -> Nullable<Text>,
         genres_json -> Nullable<Text>,
-        rating -> Nullable<Float>,
+        rating -> Nullable<SmallInt>,
         content_rating -> Nullable<Text>,
         locale_key -> Text,
         provider_locale_key -> Nullable<Text>,

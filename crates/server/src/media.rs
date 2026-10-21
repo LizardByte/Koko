@@ -125,7 +125,7 @@ struct SecondaryMetadataReferenceCandidate {
 struct SummaryMetadataLink {
     media_item_id: i32,
     provider_id: String,
-    rating: Option<f32>,
+    rating: Option<i16>,
     title: Option<String>,
     overview: Option<String>,
     genres_json: Option<String>,
@@ -314,7 +314,7 @@ pub struct MediaItemSummary {
     pub release_year: Option<i32>,
     /// Description or overview from linked metadata, when available.
     pub overview: Option<String>,
-    /// Community rating supplied by the item's own preferred metadata provider.
+    /// Community rating on Koko's finite 0–10 scale from the item's preferred provider.
     pub rating: Option<f32>,
     /// Provider that supplied the community rating.
     pub rating_provider_id: Option<String>,
@@ -442,7 +442,7 @@ pub struct MediaItemDetail {
     pub release_year: Option<i32>,
     /// Provider-supplied title logo URL, when available.
     pub logo_url: Option<String>,
-    /// Provider-supplied user/community rating, when available.
+    /// Provider-supplied community rating on Koko's finite 0–10 scale, when available.
     pub rating: Option<f32>,
     /// Provider that supplied the displayed community rating.
     pub rating_provider_id: Option<String>,
@@ -3308,7 +3308,11 @@ pub fn get_media_item_with_preferred_languages(
             detail.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item_id));
         }
         detail.rating = presentation.rating;
-        if let Some(link) = metadata_links.iter().find(|link| link.rating.is_some()) {
+        if let Some(link) = metadata_links.iter().find(|link| {
+            link.rating
+                .and_then(crate::metadata::ratings::validate)
+                .is_some()
+        }) {
             detail.rating_provider_id = Some(link.provider_id.clone());
             detail.rating_source_item_type = Some(detail.item_type.clone());
         }
@@ -6157,8 +6161,8 @@ fn apply_primary_metadata_link(
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default();
     summary.overview = link.overview.clone();
-    summary.rating = link.rating;
-    summary.rating_provider_id = link.rating.map(|_| link.provider_id.clone());
+    summary.rating = link.rating.and_then(crate::metadata::ratings::display);
+    summary.rating_provider_id = summary.rating.map(|_| link.provider_id.clone());
     summary.release_year = link.release_year;
     if link.cached_backdrop_path.is_some() || link.backdrop_url.is_some() {
         summary.backdrop_url = Some(format!(
@@ -6231,7 +6235,7 @@ fn preferred_metadata_links_by_item_id(
             Option<i64>,
             String,
             String,
-            Option<f32>,
+            Option<i16>,
         )>(conn)?
         .into_iter()
         .map(
@@ -7113,7 +7117,7 @@ mod tests {
         let link = SummaryMetadataLink {
             media_item_id: 1,
             provider_id: "tmdb".into(),
-            rating: Some(8.2),
+            rating: Some(82),
             title: None,
             overview: None,
             genres_json: None,

@@ -50,6 +50,7 @@ pub(crate) mod cache_policy;
 pub(crate) mod http;
 pub mod identities;
 pub(crate) mod providers;
+pub(crate) mod ratings;
 #[cfg(test)]
 pub(crate) use providers::lrclib::TEST_LYRICS_URL;
 pub(crate) use providers::lrclib::fetch_lyrics;
@@ -205,7 +206,7 @@ pub struct ItemMetadataSummary {
     pub genres: Vec<String>,
     /// People credited by the provider, including cast and crew.
     pub people: Vec<ItemMetadataPersonSummary>,
-    /// Provider-supplied user/community rating, when available.
+    /// Provider-supplied community rating on Koko's finite 0–10 scale, when available.
     pub rating: Option<f32>,
     /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
     pub content_rating: Option<String>,
@@ -510,8 +511,10 @@ pub struct ProviderMetadataDetails {
     pub logo_url: Option<String>,
     /// Provider genre labels.
     pub genres: Vec<String>,
-    /// Provider-supplied user/community rating.
-    pub rating: Option<f32>,
+    /// Raw community rating on the provider's declared scale; Koko normalizes it when saving.
+    pub rating: Option<f64>,
+    /// Retain a previous rating for the same identity when its optional upstream request fails.
+    pub rating_incomplete: bool,
     /// Provider-supplied content rating such as PG-13 or TV-MA.
     pub content_rating: Option<String>,
     /// Human-friendly trailer title.
@@ -704,7 +707,7 @@ pub struct LinkedMetadataPresentation {
     pub backdrop_available: bool,
     /// Provider-supplied title logo URL, when available.
     pub logo_url: Option<String>,
-    /// Provider-supplied user/community rating, when available.
+    /// Provider-supplied community rating on Koko's finite 0–10 scale, when available.
     pub rating: Option<f32>,
     /// Provider-supplied content rating such as PG-13 or TV-MA, when available.
     pub content_rating: Option<String>,
@@ -2240,7 +2243,26 @@ pub fn upsert_item_metadata_link(
                 } else {
                     serde_json::to_string(&details.genres).ok()
                 },
-                rating: details.rating,
+                rating: if details.rating_incomplete {
+                    existing
+                        .as_ref()
+                        .filter(|row| {
+                            !metadata_refresh_target_changed(
+                                row,
+                                snapshot.provider_id.as_storage_value(),
+                                &snapshot.external_id,
+                                snapshot.media_type.as_deref(),
+                            )
+                        })
+                        .and_then(|row| row.rating)
+                        .and_then(ratings::validate)
+                } else {
+                    details.rating.and_then(|value| {
+                        let registry = MetadataRegistry::new();
+                        let maximum = registry.provider(&snapshot.provider_id)?.rating_maximum();
+                        ratings::normalize(value, maximum)
+                    })
+                },
                 content_rating: details.content_rating.clone(),
                 locale_key: snapshot.locale_key.clone(),
                 provider_locale_key: snapshot.provider_locale_key.clone(),
@@ -2817,7 +2839,10 @@ pub(crate) fn set_item_metadata_refresh_state_in_transaction(
             .as_ref()
             .and_then(|row| row.cached_logo_path.clone()),
         genres_json: existing.as_ref().and_then(|row| row.genres_json.clone()),
-        rating: existing.as_ref().and_then(|row| row.rating),
+        rating: existing
+            .as_ref()
+            .and_then(|row| row.rating)
+            .and_then(ratings::validate),
         content_rating: existing.as_ref().and_then(|row| row.content_rating.clone()),
         locale_key: locale_key.to_string(),
         provider_locale_key: existing
@@ -3339,7 +3364,7 @@ fn presentation_from_metadata_link(link: &ItemMetadataLink) -> LinkedMetadataPre
         .unwrap_or_default();
     let release_year = link.release_year;
     let logo_url = link.logo_url.clone();
-    let rating = link.rating;
+    let rating = link.rating.and_then(ratings::display);
     let content_rating = link.content_rating.clone();
 
     LinkedMetadataPresentation {
@@ -3656,6 +3681,10 @@ pub(crate) fn metadata_response_cache_key(
     if *provider_id == MetadataProviderId::MusicBrainz {
         // Older artist lookups did not request the external URL relationships.
         hasher.update(b"artist-members-and-url-relations-v2\0");
+    }
+    if *provider_id == MetadataProviderId::OpenLibrary && kind == "item" {
+        // Older work snapshots never fetched the separate ratings endpoint.
+        hasher.update(b"work-community-ratings-v1\0");
     }
     hasher.update(provider_id.as_storage_value().as_bytes());
     hasher.update([0]);
@@ -4028,7 +4057,7 @@ fn to_item_metadata_summary(link: ItemMetadataLink) -> ItemMetadataSummary {
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .unwrap_or_default(),
         people: Vec::new(),
-        rating: link.rating,
+        rating: link.rating.and_then(ratings::display),
         content_rating: link.content_rating,
         trailer_title: None,
         trailer_url: None,

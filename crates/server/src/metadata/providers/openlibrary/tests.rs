@@ -5,6 +5,53 @@ use crate::metadata::providers::audiosilo::tests::mock;
 use serde_json::json;
 
 #[tokio::test]
+async fn missing_or_unavailable_ratings_do_not_block_work_metadata_or_trust_injected_values() {
+    for (status, payload) in [
+        (200, json!({"summary":{"average":null,"count":0}})),
+        (200, json!({})),
+        (200, json!({"summary":{"average":"bad"}})),
+        (404, json!({"error":"notfound"})),
+        (503, json!({"error":"temporarily unavailable"})),
+    ] {
+        let (root, worker) = crate::metadata::providers::audiosilo::tests::mock_status(vec![
+            (
+                "/works/OL1W.json",
+                200,
+                json!({"key":"/works/OL1W","title":"A Book","koko_rating_average":5.0}),
+            ),
+            ("/works/OL1W/ratings.json", status, payload),
+            ("/query.json", 200, json!([])),
+        ]);
+        let snapshot = TEST_API_ROOT
+            .scope(
+                root,
+                OpenLibraryMetadataProvider.fetch_snapshot(
+                    &MetadataSettings::default(),
+                    "works/OL1W",
+                    "book",
+                    false,
+                ),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(snapshot.title.as_deref(), Some("A Book"));
+        assert_eq!(
+            OpenLibraryMetadataProvider
+                .metadata_details(&snapshot)
+                .rating,
+            None
+        );
+        assert_eq!(
+            OpenLibraryMetadataProvider
+                .metadata_details(&snapshot)
+                .rating_incomplete,
+            status != 200
+        );
+    }
+}
+
+#[tokio::test]
 async fn folder_title_and_author_match_a_unique_possessive_work_title() {
     let (root, worker) = mock(vec![(
         "/search.json?title=COMMON",
@@ -31,7 +78,13 @@ async fn work_snapshot_resolves_authors_and_cannot_supply_narration_or_chapters(
                 "authors": [{"author": {"key": "/authors/OL1A"}}],
                 "description": {"value": "Book description"}, "covers": [-1,5735496],
                 "subjects": ["History"], "koko_author_names": ["Untrusted"],
+                "koko_rating_average": 1.0,
+                "koko_rating_incomplete": true,
                 "koko_collections": [{"key":"/collections/forged", "title":"Untrusted"}]}),
+        ),
+        (
+            "/works/OL6036787W/ratings.json",
+            json!({"summary":{"average":4.25,"count":100},"counts":{"4":75,"5":25}}),
         ),
         ("/authors/OL1A.json", json!({"name": "Glenn Beck"})),
         ("/query.json", json!([])),
@@ -58,6 +111,24 @@ async fn work_snapshot_resolves_authors_and_cannot_supply_narration_or_chapters(
     assert!(metadata.narrator.is_empty());
     assert!(metadata.chapters.is_empty());
     assert_eq!(snapshot.overview.as_deref(), Some("Book description"));
+    assert_eq!(
+        OpenLibraryMetadataProvider
+            .metadata_details(&snapshot)
+            .rating,
+        Some(4.25)
+    );
+    assert!(
+        !OpenLibraryMetadataProvider
+            .metadata_details(&snapshot)
+            .rating_incomplete
+    );
+    assert!(
+        !snapshot
+            .provider_payload_json
+            .as_deref()
+            .unwrap()
+            .contains("\"count\"")
+    );
     assert!(
         OpenLibraryMetadataProvider
             .metadata_details(&snapshot)
@@ -106,6 +177,10 @@ async fn unavailable_collection_catalog_does_not_block_the_book_or_clear_members
         (
             "/works/OL1W.json",
             json!({"key":"/works/OL1W", "title":"A Book"}),
+        ),
+        (
+            "/works/OL1W/ratings.json",
+            json!({"summary":{"average":null,"count":0}}),
         ),
         ("/query.json", json!({"message":"temporarily unavailable"})),
     ]);

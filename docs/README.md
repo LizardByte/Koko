@@ -44,6 +44,12 @@ and rescan it. Keep the same library to retain matched metadata, reading and pla
 playlists. Check that the new paths are accessible to the server before scanning. Deleting the library
 and creating a new one starts a separate catalog.
 
+Open an item to find **More like this**, when related items are available in your accessible libraries.
+The row shows the same kind of item: albums lead to albums, artists to artists, and songs to songs.
+After adding files, scan their library so they can appear here. To update suggestions, refresh the
+item's metadata from its management controls, or ask your server administrator. The row stays hidden
+when no similar items are available.
+
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
 For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).

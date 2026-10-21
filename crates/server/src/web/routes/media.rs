@@ -4552,6 +4552,33 @@ pub async fn get_item(
     Ok(Json(item))
 }
 
+/// Return accessible, available items of the same type using saved similarity metadata.
+#[openapi(tag = "Media")]
+#[get("/api/v1/items/<item_id>/similar")]
+pub async fn get_similar_items(
+    user_guard: UserGuard,
+    db: DbConn,
+    item_id: i32,
+) -> Result<Json<Vec<MediaItemSummary>>, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
+    let user_id = current_user_id(Some(&user_guard))?;
+    let items = db
+        .run(move |conn| {
+            let languages = user_preferred_metadata_languages(conn, user_id)?;
+            crate::media::recommendations::list(conn, user_id, item_id, &languages)
+        })
+        .await
+        .map_err(|error| {
+            if matches!(error, diesel::result::Error::NotFound) {
+                Status::NotFound
+            } else {
+                log::error!("Failed to load similar items for {item_id}: {error}");
+                Status::InternalServerError
+            }
+        })?;
+    Ok(Json(items))
+}
+
 /// Return a bounded page of source files for any item, including its descendants.
 #[openapi(tag = "Media")]
 #[get("/api/v1/items/<item_id>/files?<offset>&<limit>")]

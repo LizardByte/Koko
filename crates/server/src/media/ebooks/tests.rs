@@ -86,6 +86,53 @@ fn database() -> SqliteConnection {
 }
 
 #[test]
+fn scanning_a_new_book_updates_existing_cached_recommendations_without_provider_metadata() {
+    let fixture = Fixture::new();
+    let mut conn = database();
+    let first = fixture.seed(&mut conn);
+    let second_path = fixture.0.join("Author/Second Book/second.epub");
+    std::fs::create_dir_all(second_path.parent().unwrap()).unwrap();
+    std::fs::write(&second_path, b"second book").unwrap();
+    sync_library_catalog(
+        &mut conn,
+        &[MediaLibrarySettings {
+            name: "Books".into(),
+            path: fixture.0.to_string_lossy().into(),
+            kind: MediaLibraryKind::Books,
+            recursive: true,
+            ..Default::default()
+        }],
+        &FfmpegSettings {
+            ffprobe_path: "missing-reader-ffprobe".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let second = list_media_items(&mut conn, None)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.relative_path.ends_with("second.epub"))
+        .unwrap()
+        .id;
+    use crate::db::schema::item_recommendations as cached;
+    assert_eq!(
+        cached::table
+            .filter(cached::item_id.eq(first))
+            .filter(cached::similar_item_id.eq(second))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .unwrap(),
+        1
+    );
+    assert!(
+        crate::media::recommendations::list(&mut conn, Some(2), first, &[])
+            .unwrap()
+            .iter()
+            .any(|item| item.id == second)
+    );
+}
+
+#[test]
 fn refreshed_curated_collections_group_books_instead_of_authors_or_file_formats() {
     use crate::metadata::{
         StoredMetadataSnapshot,
@@ -229,7 +276,9 @@ fn position(revision: String) -> ReadingProgress {
 
 #[test]
 fn reading_annotations_accept_legacy_state_and_bound_private_payloads() {
-    let legacy = serde_json::json!({"revision":"v1", "locator":"2", "fraction":0.2, "completed":false, "bookmarks":[]});
+    let legacy = serde_json::json!({
+        "revision":"v1", "locator":"2", "fraction":0.2, "completed":false, "bookmarks":[]
+    });
     let legacy: ReadingProgress = serde_json::from_value(legacy).unwrap();
     assert!(legacy.valid());
     assert!(legacy.annotations.is_empty());

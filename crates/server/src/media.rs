@@ -12,6 +12,7 @@ pub use audiobooks::{
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+pub(crate) mod recommendations;
 mod relocation;
 mod source_files;
 pub use music::MusicMetadata;
@@ -1882,6 +1883,14 @@ fn sync_library_catalog_filtered(
     }
 
     delete_unreferenced_media_files(conn)?;
+
+    let scanned_ids = crate::db::schema::media_items::table
+        .filter(
+            crate::db::schema::media_items::library_id.eq_any(persisted.iter().map(|row| row.id)),
+        )
+        .select(crate::db::schema::media_items::id)
+        .load::<i32>(conn)?;
+    recommendations::refresh(conn, &scanned_ids)?;
 
     Ok(persisted)
 }

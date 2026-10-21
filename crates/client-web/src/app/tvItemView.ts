@@ -137,6 +137,7 @@ export function renderTvEpisodeCard(episode: MediaItemSummary): string {
 }
 
 function renderTvShelf(title: string, items: MediaItemSummary[], kind: 'seasons' | 'episodes', id: string, section: string): string {
+  if (!items.length) return '';
   const cards = kind === 'seasons' ? items.map(renderItemCard).join('') : items.map(renderTvEpisodeCard).join('');
   return `<section class="item-section tv-item-section" data-nav-section="${section}" data-nav-label="${escapeHtml(title)}">
     <div class="section-heading item-row-heading"><h3>${escapeHtml(title)} <span class="item-row-count">· ${items.length}</span></h3></div>
@@ -151,15 +152,15 @@ function renderTvShelf(title: string, items: MediaItemSummary[], kind: 'seasons'
 export function renderTvChildren(item: MediaItemDetail): string {
   if (item.item_type === 'show') {
     const seasons = item.children.filter((child) => child.item_type === 'season').sort((left, right) => (left.season_number ?? 0) - (right.season_number ?? 0) || left.id - right.id);
-    return seasons.length ? renderTvShelf('Seasons', seasons, 'seasons', 'show-seasons', 'children') : '';
+    return renderTvShelf('Seasons', seasons, 'seasons', 'show-seasons', 'children');
   }
   if (item.item_type === 'season') {
     const episodes = seasonEpisodes(item);
-    return episodes.length ? renderTvShelf('Episodes', episodes, 'episodes', 'season-episodes', 'children') : '<section class="item-section"><div class="section-heading"><h3>Episodes <span class="item-row-count">· 0</span></h3></div><div class="empty-state">No episodes are available in this season.</div></section>';
+    return renderTvShelf('Episodes', episodes, 'episodes', 'season-episodes', 'children');
   }
   if (item.item_type === 'episode') {
     const siblings = seasonEpisodes(item).filter((episode) => episode.id !== item.id);
-    return siblings.length ? renderTvShelf('More from this season', siblings, 'episodes', 'sibling-episodes', 'siblings') : '';
+    return renderTvShelf('More from this season', siblings, 'episodes', 'sibling-episodes', 'siblings');
   }
   return '';
 }

@@ -148,13 +148,13 @@ test('season pages show sibling season tabs and only their own episodes', () => 
   assert.match(html, /&lt;script&gt;/);
 });
 
-test('empty seasons keep season navigation visible before sibling data arrives', () => {
+test('empty seasons keep season navigation visible and omit the empty episode row', () => {
   state.route = { page: 'item', itemId: 202 };
   state.selectedItem = { ...mock.getMockItem(202), children: [] };
   state.libraryItemsLoading = true;
   const html = renderItemPage();
   assert.match(html, /data-item-id="202" aria-current="page"/);
-  assert.match(html, /No episodes are available in this season/);
+  assert.doesNotMatch(html, /<h3>Episodes|No episodes are available in this season|data-nav-section="children"/);
 });
 
 test('item technical facts and metadata are behind an accessible disclosure', () => {

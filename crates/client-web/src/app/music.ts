@@ -120,7 +120,7 @@ export function renderAlbumTracks(album: MediaItemDetail): string {
   if (!tracks.length) return '';
   const multipleDiscs = new Set(tracks.map((track) => track.music?.disc_number ?? 1)).size > 1;
   return `<section class="panel page-panel item-section" data-nav-section="tracks" data-nav-label="Tracks">
-    <div class="section-heading"><h3>Tracks</h3><span class="muted">${tracks.length} tracks</span></div>
+    <div class="section-heading item-row-heading"><h3>Tracks <span class="item-row-count">· ${tracks.length}</span></h3></div>
     <div class="music-track-list">${tracks.map((savedTrack) => {
       const track = savedTrack;
       const playback = activeMusicPlayback();

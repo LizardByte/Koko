@@ -35,7 +35,7 @@ for (const itemType of ['movie', 'show', 'artist', 'album', 'track', 'book', 'bo
       { ...template, id: 2, item_type: itemType },
     ] };
     const html = renderSimilarItems();
-    assert.match(html, /<h3>More like this<\/h3>/);
+    assert.match(html, /<h3>More like this <span class="item-row-count">· 1<\/span><\/h3>/);
     assert.match(html, /data-nav-section="similar"/);
     assert.match(html, /data-shelf-scroll="item-similar:1"/);
     assert.equal((html.match(/data-item-id="2"/g) ?? []).length, 1);
@@ -49,6 +49,7 @@ test('empty, stale-item, and stale-account recommendations leave no empty row', 
   const candidate = { ...state.selectedItem, id: 999 };
   for (const similar of [
     { itemId: state.selectedItem.id, userId: 2, items: [] },
+    { itemId: state.selectedItem.id, userId: 2, items: [state.selectedItem, { ...candidate, missing_since: 100 }, { ...candidate, item_type: 'album' }] },
     { itemId: -1, userId: 2, items: [candidate] },
     { itemId: state.selectedItem.id, userId: 3, items: [candidate] },
   ]) {
@@ -56,7 +57,7 @@ test('empty, stale-item, and stale-account recommendations leave no empty row', 
     assert.equal(renderSimilarItems(), '');
   }
   state.similarItems = { itemId: state.selectedItem.id, userId: 2, items: [candidate] };
-  assert.match(renderItemPage(), /<h3>More like this<\/h3>/);
+  assert.match(renderItemPage(), /<h3>More like this <span class="item-row-count">· 1<\/span><\/h3>/);
 });
 
 test('collections and recommendations precede cast and crew in item section navigation', () => {
@@ -69,7 +70,10 @@ test('collections and recommendations precede cast and crew in item section navi
     { id: 'second', name: 'Second collection', item_ids: [101, 102] },
   ] };
   state.similarItems = { itemId: 101, userId: 2, items: [companion] };
-  const sections = [...renderItemPage().matchAll(/data-nav-section="([^"]+)"/g)].map((match) => match[1]);
+  const html = renderItemPage();
+  assert.match(html, /<h3>First collection <span class="item-row-count">· 1<\/span><\/h3>/);
+  assert.match(html, /<h3>Second collection <span class="item-row-count">· 1<\/span><\/h3>/);
+  const sections = [...html.matchAll(/data-nav-section="([^"]+)"/g)].map((match) => match[1]);
   const start = sections.indexOf('collection:first');
   assert.notEqual(start, -1);
   assert.deepEqual(sections.slice(start, start + 5), ['collection:first', 'collection:second', 'similar', 'people', 'crew']);

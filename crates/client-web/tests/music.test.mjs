@@ -28,6 +28,7 @@ test('album queue orders discs and tracks numerically, skips missing tracks, and
   assert.deepEqual(albumPlaybackQueue(album, 2), [2, 5, 1]);
   assert.deepEqual(albumPlaybackQueue(album, 4), []);
   const html = renderAlbumTracks(album);
+  assert.match(html, /<h3>Tracks <span class="item-row-count">· 5<\/span><\/h3>/);
   assert.match(html, /A &lt;guest&gt;/);
   assert.match(html, /data-play-music-track-id="4"[^>]*disabled/);
   assert.ok(html.indexOf('data-item-id="3"') < html.indexOf('data-item-id="2"'));
@@ -46,7 +47,11 @@ test('music detail pages expose album playback, track rows, artist albums, and m
   assert.match(renderItemPage(), /music-detail-page/);
   for (const item_type of ['artist', 'album', 'track']) assert.equal(canManuallyLinkMetadata({ item_type }), true);
   state.selectedItem = { ...album, item_type: 'artist', children: [album] };
-  assert.match(renderItemPage(), /<h3>Albums<\/h3>/);
+  assert.match(renderItemPage(), /<h3>Albums <span class="item-row-count">· 1<\/span><\/h3>/);
+});
+
+test('albums with no tracks omit the track row', () => {
+  assert.equal(renderAlbumTracks({ children: [] }), '');
 });
 
 

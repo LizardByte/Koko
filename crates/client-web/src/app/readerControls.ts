@@ -3,6 +3,7 @@ import { createIcons, icons } from 'lucide';
 import type { AppIconName } from './types';
 import { renderIcon } from './ui';
 import { bindReaderSeek, type ReaderSeekActions } from './readerSeek';
+import { readerContentPointerDown } from './readerInteraction';
 
 /** Browser-local reading preferences; the reader follows Koko's dark appearance. */
 export interface ReaderAppearance { size: number; direction: string; spread: boolean }
@@ -78,6 +79,7 @@ export function bindReaderControls(dialog: HTMLElement, actions: ReaderControlsA
   const changed = (): void => { showAppearance(dialog); actions.appearance(); };
   listen(trigger, 'click', () => { options.hidden = !options.hidden; trigger.setAttribute('aria-expanded', String(!options.hidden)); });
   listen(dialog, 'pointerdown', (event) => { if (event.target instanceof Node && !options.contains(event.target) && !trigger.contains(event.target)) hideOptions(); });
+  listen(dialog, readerContentPointerDown, hideOptions);
   listen(dialog, 'keydown', (event) => { const key = event as KeyboardEvent; if (key.key === 'Escape' && !options.hidden) { key.preventDefault(); key.stopPropagation(); hideOptions(); trigger.focus(); } });
   for (const control of dialog.querySelectorAll('[data-reader-panel],[data-reader-bookmark]')) listen(control, 'click', hideOptions);
   listen(get('[data-reader-size]'), 'change', changed);

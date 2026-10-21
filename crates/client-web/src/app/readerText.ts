@@ -4,6 +4,7 @@ import type { ReadingAnnotation } from '../api';
 import { readerHighlightColors, readerSelectedText } from './readerHighlights';
 import { Overlayer } from 'foliate-js/overlayer.js';
 import { applyReaderTextTheme } from './readerTheme';
+import { forwardReaderPointerDown } from './readerInteraction';
 import { readerPageLabel, readerPageSpread, readingFraction, readerTextPosition, sanitizeBookDocument, readerSequence } from './readerSupport';
 import { escapeHtml } from './format';
 import { createReaderPagination, readerColumnPages, readerTextPageLabel, verifiedReaderPages, type ReaderPageMap, type ReaderPaginationLayout } from './readerPagination';
@@ -206,6 +207,7 @@ export async function openTextReader(file: File, format: string, host: HTMLEleme
   });
   view.addEventListener('load', (event) => {
     const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail;
+    forwardReaderPointerDown(doc, host, listeners.signal);
     if (!view.isFixedLayout) applyReaderTextTheme(doc);
     doc.addEventListener('selectionchange', () => {
       if (closed) return;

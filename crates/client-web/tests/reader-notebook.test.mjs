@@ -10,12 +10,13 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 const dom = new JSDOM('', { url: 'http://localhost' });
 globalThis.localStorage = dom.window.localStorage;
 globalThis.location = dom.window.location;
-for (const key of ['window', 'document', 'Node', 'NodeFilter', 'Range', 'Element', 'HTMLElement', 'DOMParser', 'AbortController']) globalThis[key] = dom.window[key];
+for (const key of ['window', 'document', 'Node', 'NodeFilter', 'Range', 'Element', 'HTMLElement', 'DOMParser', 'AbortController', 'Event']) globalThis[key] = dom.window[key];
 after(async () => { await server.close(); dom.window.close(); });
 const { readerMarkup, bindReaderControls } = await server.ssrLoadModule('/src/app/readerControls.ts');
 const { createReaderNotebook } = await server.ssrLoadModule('/src/app/readerAnnotations.ts');
 const { readerSelectedText, readerPdfSelection, drawReaderPdfHighlights } = await server.ssrLoadModule('/src/app/readerHighlights.ts');
 const { applyReaderTextTheme } = await server.ssrLoadModule('/src/app/readerTheme.ts');
+const { forwardReaderPointerDown } = await server.ssrLoadModule('/src/app/readerInteraction.ts');
 
 function notebook() {
   const dialog = document.createElement('div'); dialog.innerHTML = readerMarkup(); document.body.replaceChildren(dialog);
@@ -54,6 +55,46 @@ test('the shared player dock keeps page labels, seeking, and reading options con
   view.query('[data-reader-options]').click(); assert.equal(view.query('[data-reader-options]').getAttribute('aria-expanded'), 'true');
   view.query('[data-reader-direction]').click(); assert.equal(view.query('[data-reader-direction]').getAttribute('aria-pressed'), 'true');
   assert.equal(appearances, 1); view.controller.abort();
+});
+
+test('reading options dismiss on book-frame presses without consuming selection or later section clicks', () => {
+  const view = notebook(), host = view.query('.book-reader-viewport');
+  bindReaderControls(view.dialog, { appearance: () => {}, seek: () => Promise.resolve(), preview: () => undefined }, view.controller.signal);
+  const options = view.query('#reader-options'), trigger = view.query('[data-reader-options]');
+  const press = (element) => element.dispatchEvent(new element.ownerDocument.defaultView.Event('pointerdown', { bubbles: true, cancelable: true }));
+  trigger.click();
+  press(view.query('[data-reader-size]')); assert.equal(options.hidden, false);
+  press(trigger); assert.equal(options.hidden, false);
+  press(host); assert.equal(options.hidden, true); assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+
+  // Each Foliate section has its own frame document; native events never reach the outer dialog.
+  const frames = [document.createElement('iframe'), document.createElement('iframe')]; host.replaceChildren(...frames);
+  let contentPresses = 0; host.addEventListener('pointerdown', () => { contentPresses++; });
+  for (const frame of frames) {
+    const doc = frame.contentDocument; doc.body.innerHTML = '<p>A passage to select.</p>';
+    forwardReaderPointerDown(doc, host, view.controller.signal);
+    trigger.click(); assert.equal(options.hidden, false);
+    const text = doc.querySelector('p').firstChild, range = doc.createRange(); range.selectNodeContents(text);
+    const selection = doc.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    assert.equal(press(doc.querySelector('p')), true);
+    assert.equal(options.hidden, true); assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+    assert.equal(selection.toString(), 'A passage to select.');
+  }
+  assert.equal(contentPresses, 0);
+  trigger.click(); view.controller.abort();
+  press(frames[0].contentDocument.querySelector('p'));
+  assert.equal(options.hidden, false);
+});
+
+test('closed book frames no longer forward presses to another reader session', () => {
+  const host = document.createElement('div'), frame = document.createElement('iframe');
+  document.body.replaceChildren(host); host.append(frame);
+  const controller = new AbortController(), doc = frame.contentDocument;
+  let presses = 0; host.addEventListener('reader-content-pointerdown', () => { presses++; });
+  forwardReaderPointerDown(doc, host, controller.signal);
+  doc.body.dispatchEvent(new frame.contentWindow.Event('pointerdown', { bubbles: true })); assert.equal(presses, 1);
+  controller.abort();
+  doc.body.dispatchEvent(new frame.contentWindow.Event('pointerdown', { bubbles: true })); assert.equal(presses, 1);
 });
 
 test('bookmarks can be named, renamed, revisited, and removed without changing reading position', () => {

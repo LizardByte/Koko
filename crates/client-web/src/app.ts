@@ -69,6 +69,7 @@ import {
   getItem,
   getItemCredits,
   getItemMetadata,
+  getSimilarItems,
   getItems,
   getLibraries,
   getSystemActivities,
@@ -497,6 +498,7 @@ function prepareRouteState(route: AppRoute, showLoading: boolean): void {
   }
   if (route.page === 'item' && state.selectedItem?.id !== route.itemId) {
     state.selectedItem = undefined;
+    state.similarItems = undefined;
     state.itemCredits = undefined;
     state.selectedItemMetadata = undefined;
     state.selectedPlayback = undefined;
@@ -578,6 +580,7 @@ async function refreshData(showLoading = true): Promise<void> {
       state.settingsResponse = undefined;
       state.logsResponse = undefined;
       state.selectedItem = undefined;
+      state.similarItems = undefined;
       state.itemCredits = undefined;
       state.selectedItemMetadata = undefined;
       state.selectedPerson = undefined;
@@ -668,6 +671,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     selectedItem: state.selectedItem,
     selectedItemMetadata: state.selectedItemMetadata,
     itemCredits: state.itemCredits,
+    similarItems: state.similarItems,
   });
   const [activitiesResponse, libraries, item, metadata] = await Promise.all([
     canManageServer() ? getSystemActivities() : Promise.resolve({ activities: [] }),
@@ -678,10 +682,11 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
   if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
   }
-  const [home, libraryItems, credits] = await Promise.all([
+  const [home, libraryItems, credits, similarItems] = await Promise.all([
     getHome(item.library_id),
     getItems(item.library_id),
     item.item_type === 'artist' ? getItemCredits(itemId) : Promise.resolve(undefined),
+    getSimilarItems(itemId).catch(() => []),
   ]);
   if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;
@@ -694,6 +699,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
   state.selectedItem = item;
   state.selectedItemMetadata = metadata;
   state.itemCredits = credits ? { itemId, loading: false, credits } : undefined;
+  state.similarItems = { itemId, userId: state.bootstrap?.current_user?.id, items: similarItems };
   state.error = undefined;
   return previousSnapshot !== snapshotJson({
     systemActivities: state.systemActivities,
@@ -703,6 +709,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     selectedItem: state.selectedItem,
     selectedItemMetadata: state.selectedItemMetadata,
     itemCredits: state.itemCredits,
+    similarItems: state.similarItems,
   }) || previousError !== state.error;
 }
 

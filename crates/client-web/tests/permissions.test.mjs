@@ -62,7 +62,7 @@ function sourceWithCalls(calls) {
       getCapabilities: {}, getLibraries: mock.getMockLibraries(), getMetadataProviders: [],
       getSystemActivities: { activities: [] }, getHome: mock.getMockHome(1), getItems: mock.getMockItems(1),
       getSettings: mock.getMockSettings(), getUsers: [], getLogs: { entries: [] },
-      getItem: mock.getMockItem(mock.getMockItems(1)[0].id), getItemMetadata: { matches: [] }, getPlaybackDecision: {},
+      getItem: mock.getMockItem(mock.getMockItems(1)[0].id), getItemMetadata: { matches: [] }, getPlaybackDecision: {}, getSimilarItems: [],
     };
     return Promise.resolve(values[name]);
   } });

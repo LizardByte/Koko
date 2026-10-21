@@ -29,15 +29,17 @@ function source(overrides = {}) {
   };
 }
 
-test('artist credits arrive independently and link to movies without delaying the artist overview', async () => {
+test('artist credits and movie links are ready when the artist page is published', async () => {
+  state.selectedItem = undefined;
   let resolve;
   const pendingCredits = new Promise((done) => { resolve = done; });
   const loading = loadRouteData(state, state.route, () => {}, () => true, source({ getItemCredits: () => pendingCredits }));
   await setImmediate();
-  assert.equal(state.selectedItem.id, 301);
-  assert.match(renderItemPage(), /Loading screen credits/);
+  assert.equal(state.selectedItem, undefined);
+  assert.match(renderItemPage(), /Loading item details/);
   resolve(mock.getMockPerson(1).credits);
   await loading;
+  assert.equal(state.selectedItem.id, 301);
   const html = renderItemPage();
   assert.match(html, /<h3>Movies and shows<\/h3>/);
   assert.match(html, /Mock Movie/);

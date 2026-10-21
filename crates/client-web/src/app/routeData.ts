@@ -5,7 +5,7 @@ import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
 import { clearBrowseSessions } from './browseSession';
 
-type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getItemCredits' | 'getLogs' | 'searchItems'> & Partial<Pick<typeof api, 'getPlaylists' | 'getPlaylist'>>;
+type RouteApi = Pick<typeof api, 'getCapabilities' | 'getLibraries' | 'getMetadataProviders' | 'getSettings' | 'getSystemActivities' | 'getUsers' | 'getHome' | 'getItems' | 'getItem' | 'getItemMetadata' | 'getPlaybackDecision' | 'getPerson' | 'getItemCredits' | 'getLogs' | 'searchItems'> & Partial<Pick<typeof api, 'getPlaylists' | 'getPlaylist' | 'getSimilarItems'>>;
 
 /** Retain restored browsing data when the server's null scope means all libraries. */
 export function prepareBrowseRoute(state: AppState, route: AppRoute): void {
@@ -21,7 +21,7 @@ export function prepareBrowseRoute(state: AppState, route: AppRoute): void {
   state.libraryItemsLoading = !state.home;
 }
 
-/** Publish independent sections as they arrive, discarding replies from an abandoned route. */
+/** Publish item pages together and other route sections independently, discarding stale replies. */
 export async function loadRouteData(
   state: AppState,
   route: AppRoute,
@@ -29,8 +29,7 @@ export async function loadRouteData(
   isCurrent: () => boolean,
   source: RouteApi = api,
 ): Promise<void> {
-  if (route.page !== 'item' || state.itemSources?.itemId !== route.itemId) state.itemSources = undefined;
-  if (route.page !== 'item' || state.itemCredits?.itemId !== route.itemId) state.itemCredits = undefined;
+  clearStaleItemData(state, route);
   const admin = state.bootstrap?.current_user?.admin === true;
   if (!admin) {
     state.settingsResponse = undefined;
@@ -56,6 +55,7 @@ export async function loadRouteData(
         state.libraryItems = [];
         state.searchResults = [];
         state.selectedItem = undefined;
+        state.similarItems = undefined;
         state.itemSources = undefined;
         state.itemCredits = undefined;
         state.selectedItemMetadata = undefined;
@@ -78,26 +78,6 @@ export async function loadRouteData(
       render();
     }));
   };
-  const loadItemSupportingData = (item: api.MediaItemDetail): Promise<unknown[]> => Promise.all([
-    source.getHome(item.library_id).then((value) => { if (isCurrent()) { state.home = value; render(); } }),
-    source.getItems(item.library_id).then((value) => { if (isCurrent()) state.libraryItems = value; }).finally(() => {
-      if (isCurrent()) { state.libraryItemsLoading = false; render(); }
-    }),
-  ]);
-
-  const loadArtistCredits = async (itemId: number): Promise<void> => {
-    state.itemCredits = { itemId, loading: true, credits: [] };
-    render();
-    try {
-      const credits = await source.getItemCredits(itemId);
-      if (isCurrent()) state.itemCredits = { itemId, loading: false, credits };
-    } catch (error: unknown) {
-      if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) throw error;
-      if (isCurrent()) state.itemCredits = { itemId, loading: false, credits: [], error: error instanceof Error ? error.message : 'Request failed' };
-    }
-    if (isCurrent()) render();
-  };
-
   load('server capabilities', source.getCapabilities(), (value) => { state.capabilities = value; });
   load('libraries', source.getLibraries(), (value) => { state.libraries = value; });
   load('metadata providers', source.getMetadataProviders(), (value) => { state.metadataProviders = value; });
@@ -124,20 +104,24 @@ export async function loadRouteData(
       });
     }
   } else if (route.page === 'item') {
+    const userId = state.bootstrap?.current_user?.id;
     state.itemMetadataLoading = true;
-    load('item details', source.getItem(route.itemId).then(async (item) => {
-      if (!isCurrent()) return item;
-      state.selectedItem = item;
-      state.libraryItemsLoading = true;
-      render();
-      const credits = item.item_type === 'artist' ? loadArtistCredits(item.id) : Promise.resolve();
-      await Promise.all([loadItemSupportingData(item), credits]);
-      return item;
-    }), () => { /* The overview was published before its supporting sections. */ });
-    load('linked metadata', source.getItemMetadata(route.itemId).finally(() => {
-      if (isCurrent()) state.itemMetadataLoading = false;
-    }), (value) => { state.selectedItemMetadata = value; });
-    load('playback information', source.getPlaybackDecision(route.itemId), (value) => { state.selectedPlayback = value; });
+    state.libraryItemsLoading = true;
+    load('item details', getItemPageData(route.itemId, source).finally(() => {
+      if (isCurrent()) {
+        state.itemMetadataLoading = false;
+        state.libraryItemsLoading = false;
+      }
+    }), (value) => {
+      if (state.bootstrap?.current_user?.id !== userId) return;
+      state.selectedItem = value.item;
+      state.selectedItemMetadata = value.metadata;
+      state.selectedPlayback = value.playback;
+      state.home = value.home;
+      state.libraryItems = value.libraryItems;
+      state.itemCredits = value.itemCredits;
+      state.similarItems = { itemId: route.itemId, userId, items: value.similarItems };
+    });
   } else if (route.page === 'person') {
     load('person details', source.getPerson(route.personId), (value) => { state.selectedPerson = value; });
   } else if (route.section === 'dashboard') {
@@ -157,10 +141,53 @@ export async function loadRouteData(
   await Promise.all(tasks);
 }
 
+/** Keep supporting rows during same-item revalidation, discarding recommendations from other accounts. */
+function clearStaleItemData(state: AppState, route: AppRoute): void {
+  if (route.page !== 'item' || state.itemSources?.itemId !== route.itemId) state.itemSources = undefined;
+  if (route.page !== 'item' || state.itemCredits?.itemId !== route.itemId) state.itemCredits = undefined;
+  if (route.page !== 'item' || state.similarItems?.itemId !== route.itemId
+    || state.similarItems?.userId !== state.bootstrap?.current_user?.id) state.similarItems = undefined;
+}
+
 function needsRouteSettings(route: AppRoute, admin: boolean): boolean {
   return admin && (route.page === 'settings' || route.page === 'item');
 }
 type RouteLoader = <T>(label: string, request: Promise<T>, apply: (value: T) => void) => void;
+
+/** Fetch saved item data concurrently, staging every row before publishing the page. */
+async function getItemPageData(itemId: number, source: RouteApi) {
+  const details = source.getItem(itemId).then(async (item) => {
+    const [home, libraryItems, itemCredits] = await Promise.all([
+      source.getHome(item.library_id), source.getItems(item.library_id), getArtistCredits(item, source),
+    ]);
+    return { item, home, libraryItems, itemCredits };
+  });
+  const [detail, metadata, playback, similarItems] = await Promise.all([
+    details, source.getItemMetadata(itemId), source.getPlaybackDecision(itemId), getSimilarItems(itemId, source),
+  ]);
+  return { ...detail, metadata, playback, similarItems };
+}
+
+/** Read Koko's saved suggestions; optional failures must not prevent opening an item. */
+async function getSimilarItems(itemId: number, source: RouteApi): Promise<api.MediaItemSummary[]> {
+  if (!source.getSimilarItems) return [];
+  return source.getSimilarItems(itemId).catch((error: unknown) => {
+    if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) throw error;
+    return [];
+  });
+}
+
+/** Preserve optional screen-credit errors while keeping access denials fatal to the item page. */
+async function getArtistCredits(item: api.MediaItemDetail, source: RouteApi): Promise<AppState['itemCredits']> {
+  if (item.item_type !== 'artist') return undefined;
+  try {
+    return { itemId: item.id, loading: false, credits: await source.getItemCredits(item.id) };
+  } catch (error: unknown) {
+    if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) throw error;
+    return { itemId: item.id, loading: false, credits: [], error: error instanceof Error ? error.message : 'Request failed' };
+  }
+}
+
 function loadPlaylistRoutes(state: AppState, route: AppRoute, source: RouteApi, load: RouteLoader): void {
   if (route.page !== 'home' && route.page !== 'browse-detail') return;
   if (source.getPlaylists) load('playlists', source.getPlaylists(route.libraryId), value => { state.playlists = value; });

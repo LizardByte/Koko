@@ -433,6 +433,29 @@ export function renderSelectedItemCollectionRails(): string {
     .join('');
 }
 
+/** Render saved local recommendations only for the current item, type, and account. */
+export function renderSimilarItems(): string {
+  const selected = state.selectedItem;
+  const similar = state.similarItems;
+  if (!selected || similar?.itemId !== selected.id || similar.userId !== state.bootstrap?.current_user?.id) return '';
+  const seen = new Set<number>([selected.id]);
+  const items = similar.items.filter((item) => {
+    if (item.item_type !== selected.item_type || item.missing_since || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  if (!items.length) return '';
+  return `
+    <section class="panel page-panel item-section" data-nav-section="similar" data-nav-label="More like this">
+      <div class="section-heading item-row-heading"><h3>More like this</h3></div>
+      <div class="shelf-row-shell">
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-similar:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+        <div class="shelf-row" data-shelf-row="item-similar">${items.map(renderItemCard).join('')}</div>
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-similar:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+      </div>
+    </section>`;
+}
+
 export function itemSortKey(item: MediaItemSummary): string {
   const season = typeof item.season_number === 'number' ? String(item.season_number).padStart(5, '0') : '99999';
   const episode = typeof item.episode_number === 'number' ? String(item.episode_number).padStart(5, '0') : '99999';
@@ -1236,9 +1259,10 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
 
       ${renderItemExtrasRail()}
 
-      ${renderPeopleRail()}
-
       ${renderSelectedItemCollectionRails()}
+      ${renderSimilarItems()}
+
+      ${renderPeopleRail()}
 
       ${renderSelectedItemSupportGrid(
         item,

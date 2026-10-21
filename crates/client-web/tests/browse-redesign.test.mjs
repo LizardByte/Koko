@@ -378,15 +378,17 @@ test('a failed library request still publishes available hero content', async ()
   assert.equal(state.libraryItemsLoading, false);
 });
 
-test('item overview is published before collection and episode data finish', async () => {
+test('item overview waits for collection and episode data to publish together', async () => {
   const titles = deferred();
   const pending = loadRouteData(state, { page: 'item', itemId: 101 }, () => {}, () => true, source({ getItems: () => titles.promise }));
   await setImmediate();
-  assert.equal(state.selectedItem.id, 101);
+  assert.equal(state.selectedItem, undefined);
   assert.equal(state.libraryItemsLoading, true);
-  assert.equal(state.selectedItemMetadata.item_id, 101);
+  assert.equal(state.selectedItemMetadata, undefined);
   titles.resolve([]);
   await pending;
+  assert.equal(state.selectedItem.id, 101);
+  assert.equal(state.selectedItemMetadata.item_id, 101);
   assert.equal(state.libraryItemsLoading, false);
 });
 

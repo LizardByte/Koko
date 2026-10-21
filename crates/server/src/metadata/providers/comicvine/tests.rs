@@ -92,11 +92,23 @@ async fn series_results_are_distinct_and_wrong_record_types_are_rejected_before_
                 .contains("identifier")
         );
     }
+    let mut disabled = MetadataSettings::default();
+    disabled
+        .providers
+        .iter_mut()
+        .find(|provider| provider.id == MetadataProviderId::ComicVine)
+        .unwrap()
+        .enabled = false;
+    let error = ComicVineMetadataProvider
+        .search(&disabled, "Example", Some("comic_issue"))
+        .await
+        .unwrap_err();
+    assert!(error.contains("Enable Comic Vine"));
     let error = ComicVineMetadataProvider
         .search(&MetadataSettings::default(), "Example", Some("comic_issue"))
         .await
         .unwrap_err();
-    assert!(error.contains("Enable Comic Vine"));
+    assert!(error.contains("requires an API key"));
     assert!(!error.contains("fixture-key"));
 }
 

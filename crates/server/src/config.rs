@@ -355,9 +355,6 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             language: default_metadata_language(),
         },
         MetadataProviderId::MusicBrainz
-        | MetadataProviderId::AudioSilo
-        | MetadataProviderId::Libex
-        | MetadataProviderId::LibriVox
         | MetadataProviderId::Fanart
         | MetadataProviderId::Lrclib => MetadataProviderSettings {
             id,
@@ -368,18 +365,13 @@ fn default_metadata_provider_settings(id: MetadataProviderId) -> MetadataProvide
             clear_api_key: false,
             language: default_metadata_language(),
         },
-        MetadataProviderId::OpenLibrary => MetadataProviderSettings {
-            id: MetadataProviderId::OpenLibrary,
-            enabled: false,
-            api_key: None,
-            api_key_secret_ref: None,
-            api_key_configured: false,
-            clear_api_key: false,
-            language: default_metadata_language(),
-        },
-        MetadataProviderId::ComicVine => MetadataProviderSettings {
+        MetadataProviderId::OpenLibrary
+        | MetadataProviderId::Libex
+        | MetadataProviderId::LibriVox
+        | MetadataProviderId::AudioSilo
+        | MetadataProviderId::ComicVine => MetadataProviderSettings {
             id,
-            enabled: false,
+            enabled: true,
             api_key: None,
             api_key_secret_ref: None,
             api_key_configured: false,
@@ -534,9 +526,10 @@ impl MediaLibrarySettings {
                 || self.metadata_providers == [MetadataProviderId::Tmdb])
         {
             self.metadata_providers = vec![
-                MetadataProviderId::LibriVox,
-                MetadataProviderId::Libex,
+                MetadataProviderId::ComicVine,
                 MetadataProviderId::OpenLibrary,
+                MetadataProviderId::Libex,
+                MetadataProviderId::LibriVox,
                 MetadataProviderId::AudioSilo,
             ];
         } else if self.metadata_providers.is_empty() {

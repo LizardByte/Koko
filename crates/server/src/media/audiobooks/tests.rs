@@ -101,7 +101,26 @@ fn librivox_is_a_new_book_default_and_existing_provider_choices_remain_editable(
     assert_eq!(settings.metadata_providers, [MetadataProviderId::Libex]);
     settings.metadata_providers.clear();
     settings.normalize();
-    assert_eq!(settings.metadata_providers[0], MetadataProviderId::LibriVox);
+    assert_eq!(
+        settings.metadata_providers,
+        [
+            MetadataProviderId::ComicVine,
+            MetadataProviderId::OpenLibrary,
+            MetadataProviderId::Libex,
+            MetadataProviderId::LibriVox,
+            MetadataProviderId::AudioSilo
+        ]
+    );
+    for id in &settings.metadata_providers {
+        assert!(
+            crate::config::MetadataSettings::default()
+                .providers
+                .iter()
+                .find(|provider| provider.id == *id)
+                .unwrap()
+                .enabled
+        );
+    }
     assert_eq!(
         MetadataProviderId::from_storage_value("librivox"),
         Some(MetadataProviderId::LibriVox)
@@ -411,9 +430,10 @@ fn untagged_five_disc_recording_is_one_book_with_45_ordered_files() {
     assert_eq!(
         list_library_settings(&mut conn).unwrap()[0].metadata_providers,
         vec![
-            MetadataProviderId::LibriVox,
-            MetadataProviderId::Libex,
+            MetadataProviderId::ComicVine,
             MetadataProviderId::OpenLibrary,
+            MetadataProviderId::Libex,
+            MetadataProviderId::LibriVox,
             MetadataProviderId::AudioSilo
         ]
     );
@@ -828,7 +848,7 @@ fn written_work_and_secondary_recording_facts_supplement_the_primary_source() {
     .unwrap();
     let detail = book(&mut conn);
     let metadata = detail.audiobook.unwrap();
-    assert_eq!(metadata.title, "Primary title");
+    assert_eq!(metadata.title, "Written work");
     assert_eq!(metadata.author, "Primary author");
     assert_eq!(metadata.series.as_deref(), Some("Series"));
     assert_eq!(metadata.chapters.len(), 1);
@@ -843,7 +863,7 @@ fn written_work_and_secondary_recording_facts_supplement_the_primary_source() {
             .find(|item| item.id == id)
             .unwrap()
             .display_title,
-        "Primary title"
+        "Written work"
     );
     // A different recording from the secondary must not fill this narration's chapters.
     use crate::db::schema::audiobook_provider_metadata as providers;

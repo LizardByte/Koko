@@ -1053,10 +1053,7 @@ pub(crate) fn metadata_details(snapshot: &StoredMetadataSnapshot) -> ProviderMet
         tagline: text_field(&payload, "tagline"),
         logo_url: tmdb_logo_url(&payload),
         genres: tmdb_genres(&payload),
-        rating: payload
-            .get("vote_average")
-            .and_then(Value::as_f64)
-            .map(|value| value as f32),
+        rating: payload.get("vote_average").and_then(Value::as_f64),
         content_rating: tmdb_content_rating(&payload),
         trailer_title: trailer
             .and_then(|entry| entry.get("name"))

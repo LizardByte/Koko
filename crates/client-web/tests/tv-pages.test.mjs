@@ -148,6 +148,24 @@ test('ratings use actual local attribution images and label inherited values wit
   assert.match(renderRating({ ...episode, rating: 7, rating_provider_id: 'unknown-provider' }), /rating-source-name">unknown-provider/);
 });
 
+test('all community ratings show one decimal without the scale denominator', () => {
+  for (const provider of ['open_library', 'tmdb', 'tvdb']) {
+    const html = renderRating({ ...episode, rating: 8.25, rating_provider_id: provider });
+    assert.match(html, /<span>8\.3<\/span>/);
+    assert.doesNotMatch(html, /\/10/);
+    assert.match(html, /class="rating-source-logo"/);
+  }
+  const book = renderRating({ ...episode, item_type: 'book_work', rating: 8.5, rating_provider_id: 'open_library' });
+  assert.match(book, /Rating from Open Library: 8\.5/);
+  assert.match(book, /open-library\.png/);
+  for (const rating of [0, 10]) {
+    assert.match(renderRating({ ...episode, rating }), new RegExp(`<span>${rating}\\.0</span>`));
+  }
+  for (const rating of [undefined, null, -0.1, 10.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(renderRating({ ...episode, rating }), '');
+  }
+});
+
 test('episode cards retain a circular ring, rating attribution, and escaped title and description', () => {
   const html = tv.renderTvEpisodeCard({ ...episode, overview: '<ScRiPt>spoiler</ScRiPt>', rating: 8.1, rating_provider_id: 'tmdb' });
   assert.match(html, /class="media-card-progress"/);

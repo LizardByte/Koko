@@ -16,6 +16,8 @@ use serde_json::Value;
 
 pub(super) struct OpenLibraryMetadataProvider;
 
+const RATING_MAXIMUM: f64 = 5.0;
+
 #[cfg(test)]
 tokio::task_local! { static TEST_API_ROOT: String; }
 
@@ -29,6 +31,10 @@ struct Work {
     subjects: Vec<String>,
     authors: Vec<Value>,
     first_publish_date: Option<String>,
+    #[serde(rename = "koko_rating_average")]
+    rating_average: Option<f64>,
+    #[serde(rename = "koko_rating_incomplete")]
+    rating_incomplete: bool,
     #[serde(rename = "koko_author_names")]
     author_names: Vec<String>,
     #[serde(rename = "koko_collections")]
@@ -196,6 +202,10 @@ pub(crate) async fn guess(
 }
 
 impl MetadataProvider for OpenLibraryMetadataProvider {
+    fn rating_maximum(&self) -> f64 {
+        RATING_MAXIMUM
+    }
+
     fn descriptor(&self) -> MetadataProviderDescriptor {
         MetadataProviderDescriptor {
             id: MetadataProviderId::OpenLibrary,
@@ -269,6 +279,16 @@ impl MetadataProvider for OpenLibraryMetadataProvider {
                 return Err("Open Library returned a different or incomplete work".into());
             }
             work.author_names.clear();
+            // Ratings are a separate work endpoint; never accept an injected cache field.
+            work.rating_incomplete = false;
+            work.rating_average = match get(&format!("{external_id}/ratings.json"), &[]).await {
+                Ok(ratings) => ratings.pointer("/summary/average").and_then(Value::as_f64),
+                Err(error) => {
+                    work.rating_incomplete = true;
+                    log::warn!("Open Library work rating unavailable: {error}");
+                    None
+                }
+            };
             for author in work.authors.iter().take(8) {
                 let Some(key) = author.pointer("/author/key").and_then(Value::as_str) else {
                     continue;
@@ -340,6 +360,8 @@ impl MetadataProvider for OpenLibraryMetadataProvider {
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
         ProviderMetadataDetails {
+            rating: work.rating_average,
+            rating_incomplete: work.rating_incomplete,
             collections_incomplete: work.collections_incomplete,
             unavailable_collection_ids: work.unavailable_collections,
             collections: work

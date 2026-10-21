@@ -264,6 +264,7 @@ export interface MediaItemSummary {
   height?: number;
   genres: string[];
   overview?: string;
+  /** Community score normalized to 0–10; displayed with one decimal place. */
   rating?: number | null;
   rating_provider_id?: string | null;
   release_year?: number | null;
@@ -365,6 +366,7 @@ export interface MediaItemDetail extends MediaItemSummary {
   genres: string[];
   release_year?: number;
   logo_url?: string;
+  /** Community score normalized to 0–10; displayed with one decimal place. */
   rating?: number | null;
   rating_provider_id?: string | null;
   rating_source_item_type?: string | null;
@@ -436,6 +438,7 @@ export interface ItemMetadataMatch {
   cached_logo_path?: string;
   genres: string[];
   people: ItemMetadataPerson[];
+  /** Community score normalized to 0–10; displayed with one decimal place. */
   rating?: number;
   content_rating?: string;
   trailer_title?: string;

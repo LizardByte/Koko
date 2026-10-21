@@ -1,10 +1,12 @@
+/** Renders attributed community ratings on Koko's shared 0–10 scale. */
+
 import type { MediaItemDetail, MediaItemSummary } from '../api';
 import { escapeHtml } from './format';
 import { providerAttributionLogo, providerDisplayName } from './providers';
 
-/** Attribute a rating to its actual provider and identify inherited season/series values. */
+/** Format valid scores to one decimal and identify inherited season/series ratings. */
 export function renderRating(item: MediaItemSummary | MediaItemDetail): string {
-  if (typeof item.rating !== 'number' || !Number.isFinite(item.rating)) return '';
+  if (typeof item.rating !== 'number' || !Number.isFinite(item.rating) || item.rating < 0 || item.rating > 10) return '';
   const sourceType = 'rating_source_item_type' in item ? item.rating_source_item_type : item.item_type;
   let inheritedLabel = '';
   if (sourceType !== item.item_type) {

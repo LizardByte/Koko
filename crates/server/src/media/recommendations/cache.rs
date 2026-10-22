@@ -30,6 +30,9 @@ pub(crate) fn refresh(
         return Ok(());
     }
     conn.transaction(|conn| {
+        // Take the writer lock before reading facts. Promoting a deferred WAL read transaction
+        // after another connection commits would fail immediately with SQLITE_BUSY_SNAPSHOT.
+        clear_matches(conn, changed_ids)?;
         // A child refresh must not expand to its show and rebuild the show's entire family.
         let mut seeds = Vec::new();
         for chunk in changed_ids.chunks(500) {
@@ -42,10 +45,9 @@ pub(crate) fn refresh(
             );
         }
         if seeds.is_empty() {
-            return clear_matches(conn, changed_ids);
+            return Ok(());
         }
-        let (ids, mut affected) = catalog_scope(conn, &seeds)?;
-        affected.extend(changed_ids);
+        let (ids, affected) = catalog_scope(conn, &seeds)?;
         let items: HashMap<_, _> = list_media_items_by_ids(conn, &ids, &[])?
             .into_iter()
             .map(|item| (item.id, item))
@@ -85,7 +87,8 @@ pub(crate) fn refresh(
                 }
             }
         }
-        let affected: Vec<_> = affected.into_iter().collect();
+        let already_cleared: HashSet<_> = changed_ids.iter().copied().collect();
+        let affected: Vec<_> = affected.difference(&already_cleared).copied().collect();
         clear_matches(conn, &affected)?;
         // Six bindings per match, below SQLite's conservative variable limit.
         for chunk in matches.chunks(128) {

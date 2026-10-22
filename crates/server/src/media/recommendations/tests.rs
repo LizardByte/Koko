@@ -15,7 +15,11 @@ use diesel::Connection;
 use serde_json::json;
 
 pub(crate) fn database() -> SqliteConnection {
-    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    database_at(":memory:")
+}
+
+fn database_at(path: &str) -> SqliteConnection {
+    let mut conn = SqliteConnection::establish(path).unwrap();
     crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
     crate::db::configure_sqlite_connection(&mut conn).unwrap();
     for (id, admin) in [
@@ -725,4 +729,77 @@ fn tv_child_refresh_discards_legacy_matches_without_rebuilding_show_matches() {
     );
     refresh(&mut conn, &[2]).unwrap();
     assert!(recommendations(&mut conn, 1, 2).is_empty());
+}
+
+#[test]
+fn refresh_keeps_a_writable_snapshot_when_another_connection_attempts_a_write() {
+    use diesel::connection::{
+        InstrumentationEvent,
+        SimpleConnection,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
+    };
+    let path = std::env::temp_dir().join(format!(
+        "koko-recommendation-contention-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut conn = database_at(path.to_str().unwrap());
+    for id in [1, 2] {
+        item(&mut conn, id, 1, None, "movie");
+        link(
+            &mut conn,
+            id,
+            "movie",
+            &id.to_string(),
+            json!({"genres":[{"name":"Fantasy"}]}),
+        );
+    }
+    let mut contender = SqliteConnection::establish(path.to_str().unwrap()).unwrap();
+    crate::db::configure_sqlite_connection(&mut contender).unwrap();
+    contender.batch_execute("PRAGMA busy_timeout = 0").unwrap();
+    let outcome = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&outcome);
+    let mut reads = 0;
+    conn.set_instrumentation(move |event: InstrumentationEvent<'_>| {
+        let InstrumentationEvent::StartQuery { query, .. } = event else {
+            return;
+        };
+        if !query.to_string().starts_with("SELECT") {
+            return;
+        }
+        reads += 1;
+        if reads != 2 {
+            return;
+        }
+        // The first ranking read has established the snapshot. An interleaved commit would make
+        // a deferred WAL transaction fail when it later tries to write its matches.
+        let result = diesel::update(item_rows::table.find(2))
+            .set(item_rows::display_title.eq("Concurrent writer"))
+            .execute(&mut contender);
+        let state = match result {
+            Ok(_) => 1,
+            Err(diesel::result::Error::DatabaseError(_, info))
+                if info.message().contains("locked") =>
+            {
+                2
+            }
+            other => panic!("Unexpected concurrent write result: {other:?}"),
+        };
+        observed.store(state, Ordering::SeqCst);
+    });
+    refresh(&mut conn, &[1]).unwrap();
+    assert_eq!(outcome.load(Ordering::SeqCst), 2);
+    conn.set_instrumentation(None::<fn(InstrumentationEvent<'_>)>);
+    assert_eq!(recommendations(&mut conn, 1, 2), [2]);
+    drop(conn);
+    std::fs::remove_file(path).unwrap();
 }

@@ -23,7 +23,7 @@ beforeEach(() => {
   });
 });
 
-for (const itemType of ['movie', 'show', 'artist', 'album', 'track', 'book', 'book_work', 'audiobook']) {
+for (const itemType of ['movie', 'show', 'artist', 'album', 'book', 'book_work', 'audiobook']) {
   test(`the ${itemType} row shows only available distinct ${itemType} items`, () => {
     const template = mock.getMockItem(mock.getMockItems()[0].id);
     state.selectedItem = { ...template, id: 1, item_type: itemType };
@@ -43,15 +43,15 @@ for (const itemType of ['movie', 'show', 'artist', 'album', 'track', 'book', 'bo
   });
 }
 
-for (const itemType of ['season', 'episode']) {
+for (const itemType of ['season', 'episode', 'track']) {
   test(`${itemType} pages skip recommendation requests and hide old cached rows`, async () => {
-    const item = { ...mock.getMockItem(itemType === 'season' ? 202 : 203), id: 1 };
+    const item = { ...mock.getMockItem(itemType === 'season' ? 202 : 203), id: 1, item_type: itemType };
     state.selectedItem = item;
     state.similarItems = { itemId: 1, userId: 2, items: [{ ...item, id: 999 }] };
     assert.equal(renderSimilarItems(), '');
     await loadRouteData(state, state.route, () => {}, () => true, source(Promise.resolve([]), {
       getItem: async () => item,
-      getSimilarItems: () => assert.fail('TV children must not request recommendations'),
+      getSimilarItems: () => assert.fail('Excluded item types must not request recommendations'),
     }));
     assert.equal(state.selectedItem.item_type, itemType);
     assert.equal(state.error, undefined);

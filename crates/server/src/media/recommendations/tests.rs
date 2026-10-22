@@ -185,7 +185,7 @@ fn saved_results_match_later_additions_and_exclude_private_wrong_type_or_missing
 }
 
 #[test]
-fn music_matches_saved_artist_and_recording_ids_without_mixing_artists_albums_or_tracks() {
+fn music_matches_saved_artist_ids_for_artists_and_albums_without_recommending_tracks() {
     let mut conn = database();
     let a = "00000000-0000-0000-0000-000000000001";
     let b = "00000000-0000-0000-0000-000000000002";
@@ -222,10 +222,10 @@ fn music_matches_saved_artist_and_recording_ids_without_mixing_artists_albums_or
     );
     assert_eq!(recommendations(&mut conn, 10, 2), [20]);
     assert_eq!(recommendations(&mut conn, 11, 2), [21]);
-    assert_eq!(recommendations(&mut conn, 12, 2), [22]);
+    assert!(recommendations(&mut conn, 12, 2).is_empty());
     item(&mut conn, 23, 1, Some(21), "track");
     link(&mut conn, 23, "recording", b, json!({}));
-    assert_eq!(recommendations(&mut conn, 12, 2), [22, 23]);
+    assert!(recommendations(&mut conn, 12, 2).is_empty());
     // A matched album can carry artist IDs even when no parent artist was linked.
     diesel::delete(links::table.filter(links::media_item_id.eq(20)))
         .execute(&mut conn)
@@ -244,6 +244,74 @@ fn music_matches_saved_artist_and_recording_ids_without_mixing_artists_albums_or
         .execute(&mut conn)
         .unwrap();
     assert_eq!(recommendations(&mut conn, 11, 2), [21]);
+}
+
+#[test]
+fn track_genres_support_parent_matches_but_track_refreshes_do_not_rebuild_them() {
+    let mut conn = database();
+    for (id, parent, kind) in [
+        (10, None, "artist"),
+        (11, Some(10), "album"),
+        (12, Some(11), "track"),
+        (20, None, "artist"),
+        (21, Some(20), "album"),
+        (22, Some(21), "track"),
+    ] {
+        item(&mut conn, id, 1, parent, kind);
+    }
+    for (id, mbid) in [
+        (12, "00000000-0000-0000-0000-000000000001"),
+        (22, "00000000-0000-0000-0000-000000000002"),
+    ] {
+        link(&mut conn, id, "recording", mbid, json!({}));
+        diesel::update(links::table.filter(links::media_item_id.eq(id)))
+            .set(links::genres_json.eq("[\"Fantasy\"]"))
+            .execute(&mut conn)
+            .unwrap();
+    }
+    for id in 100..200 {
+        item(
+            &mut conn,
+            id,
+            1,
+            Some(if id % 2 == 0 { 11 } else { 21 }),
+            "track",
+        );
+    }
+    refresh(&mut conn, &[11, 21]).unwrap();
+    assert_eq!(recommendations(&mut conn, 10, 2), [20]);
+    assert_eq!(recommendations(&mut conn, 11, 2), [21]);
+    // Only two artist and two album matches are ranked, regardless of their song counts.
+    assert_eq!(
+        cached::table.count().get_result::<i64>(&mut conn).unwrap(),
+        4
+    );
+    for (seed, candidate) in [(12, 22), (22, 12)] {
+        diesel::insert_into(cached::table)
+            .values((
+                cached::item_id.eq(seed),
+                cached::similar_item_id.eq(candidate),
+                cached::provider_priority.eq(0),
+                cached::provider_rank.eq(0),
+                cached::local_score.eq(10),
+                cached::year_distance.eq(0_i64),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+        assert!(recommendations(&mut conn, seed, 2).is_empty());
+    }
+    diesel::update(links::table.filter(links::media_item_id.eq(22)))
+        .set(links::genres_json.eq("[\"Comedy\"]"))
+        .execute(&mut conn)
+        .unwrap();
+    refresh(&mut conn, &[12, 22]).unwrap();
+    assert_eq!(
+        cached::table.count().get_result::<i64>(&mut conn).unwrap(),
+        4
+    );
+    assert_eq!(recommendations(&mut conn, 11, 2), [21]);
+    refresh(&mut conn, &[21]).unwrap();
+    assert!(recommendations(&mut conn, 11, 2).is_empty());
 }
 
 #[test]

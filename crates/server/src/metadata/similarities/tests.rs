@@ -157,15 +157,17 @@ async fn tmdb_refresh_saves_every_page_including_items_absent_from_the_library()
 }
 
 #[tokio::test]
-async fn tv_child_snapshots_skip_provider_discovery_and_discard_saved_ids() {
+async fn excluded_snapshots_skip_provider_discovery_and_discard_saved_ids() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let mut conn = database();
-    for kind in [
-        "tv_season",
-        "tv_episode",
-        "season",
-        "episode",
+    for (provider, kind) in [
+        (MetadataProviderId::Tmdb, "tv_season"),
+        (MetadataProviderId::Tmdb, "tv_episode"),
+        (MetadataProviderId::Tmdb, "season"),
+        (MetadataProviderId::Tmdb, "episode"),
+        (MetadataProviderId::MusicBrainz, "recording"),
+        (MetadataProviderId::MusicBrainz, "track"),
     ] {
         let original = snapshot(
             MetadataProviderId::Tmdb,
@@ -175,10 +177,20 @@ async fn tv_child_snapshots_skip_provider_discovery_and_discard_saved_ids() {
         );
         let link = crate::metadata::upsert_item_metadata_snapshot(&mut conn, 1, &original).unwrap();
         assert_eq!(rows::table.count().get_result::<i64>(&mut conn).unwrap(), 1);
-        let mut child = snapshot(MetadataProviderId::Tmdb, kind, "1", json!({"name":"Child"}));
+        let mut child = snapshot(
+            provider,
+            kind,
+            "1",
+            json!({"name":"Child", "artist-credit":[
+                {"artist":{"id":"00000000-0000-0000-0000-000000000001"}}
+            ]}),
+        );
         let payload = child.provider_payload_json.clone();
         TEST_TMDB_ROOT
-            .scope(url.clone(), enrich_snapshot(&settings(), &mut child))
+            .scope(
+                url.clone(),
+                TEST_LISTENBRAINZ_ROOT.scope(url.clone(), enrich_snapshot(&settings(), &mut child)),
+            )
             .await;
         assert_eq!(child.provider_payload_json, payload);
         assert!(
@@ -363,47 +375,51 @@ fn large_id_lists_are_saved_in_batches_instead_of_one_statement_per_recommendati
 }
 
 #[tokio::test]
-async fn listenbrainz_refresh_keeps_recordings_and_artists_for_album_and_track_matching() {
+async fn listenbrainz_refresh_keeps_artist_matches_for_artists_and_albums() {
     let artist = "00000000-0000-0000-0000-000000000001";
-    let recording = "00000000-0000-0000-0000-000000000002";
-    let (url, task) = server(2, |request| {
-        if request.contains("similar-recordings") {
-            assert!(request.contains("recording_mbids="));
-            (
-                200,
-                json!([
-                    {"recording_mbid": "00000000-0000-0000-0000-000000000010"},
-                    {"recording_mbid": "invalid"}
-                ]),
-            )
-        } else {
+    for kind in [
+        "artist",
+        "release",
+        "release-group",
+    ] {
+        let (url, task) = server(1, |request| {
+            assert!(request.contains("/similar-artists/json"));
             assert!(request.contains("artist_mbids="));
             (
                 200,
                 json!([
                     {"artist_mbid": "00000000-0000-0000-0000-000000000020"},
-                    {"artist_mbid": "00000000-0000-0000-0000-000000000020"}
+                    {"artist_mbid": "00000000-0000-0000-0000-000000000020"},
+                    {"artist_mbid": "invalid"}
                 ]),
             )
-        }
-    })
-    .await;
-    let mut snapshot = snapshot(
-        MetadataProviderId::MusicBrainz,
-        "recording",
-        recording,
-        json!({"id":recording,"title":"Track","artist-credit":[{"artist":{"id":artist}}]}),
-    );
-    TEST_LISTENBRAINZ_ROOT
-        .scope(url, enrich_snapshot(&settings(), &mut snapshot))
+        })
         .await;
-    assert_eq!(task.await.unwrap().len(), 2);
-    let payload: Value =
-        serde_json::from_str(snapshot.provider_payload_json.as_deref().unwrap()).unwrap();
-    let saved: Vec<SimilarItem> = serde_json::from_value(payload[PAYLOAD_KEY].clone()).unwrap();
-    assert_eq!(saved.len(), 2);
-    assert_eq!(saved[0].identity.media_type, "recording");
-    assert_eq!(saved[1].identity.media_type, "artist");
+        let mut snapshot = snapshot(
+            MetadataProviderId::MusicBrainz,
+            kind,
+            artist,
+            json!({"id":artist,"title":"Album","artist-credit":[
+                {"artist":{"id":artist}}, {"artist":{"id":artist}}
+            ]}),
+        );
+        TEST_LISTENBRAINZ_ROOT
+            .scope(url, enrich_snapshot(&settings(), &mut snapshot))
+            .await;
+        assert_eq!(task.await.unwrap().len(), 1);
+        let payload: Value =
+            serde_json::from_str(snapshot.provider_payload_json.as_deref().unwrap()).unwrap();
+        let saved: Vec<SimilarItem> = serde_json::from_value(payload[PAYLOAD_KEY].clone()).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].identity,
+            Identity::new(
+                "musicbrainz",
+                "artist",
+                "00000000-0000-0000-0000-000000000020"
+            )
+        );
+    }
 }
 
 #[tokio::test]

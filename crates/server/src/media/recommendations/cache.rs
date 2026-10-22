@@ -33,7 +33,7 @@ pub(crate) fn refresh(
         // Take the writer lock before reading facts. Promoting a deferred WAL read transaction
         // after another connection commits would fail immediately with SQLITE_BUSY_SNAPSHOT.
         clear_matches(conn, changed_ids)?;
-        // A child refresh must not expand to its show and rebuild the show's entire family.
+        // Excluded item refreshes must not rebuild their entire show or artist family.
         let mut seeds = Vec::new();
         for chunk in changed_ids.chunks(500) {
             seeds.extend(
@@ -53,14 +53,18 @@ pub(crate) fn refresh(
             .map(|item| (item.id, item))
             .collect();
         let facts = load_facts(conn, &items)?;
-        let effective: HashMap<_, _> = items
-            .keys()
-            .map(|id| (*id, inherited(*id, &items, &facts)))
+        let eligible: Vec<_> = items
+            .values()
+            .filter(|item| !EXCLUDED_ITEM_TYPES.contains(&item.item_type.as_str()))
+            .collect();
+        let effective: HashMap<_, _> = eligible
+            .iter()
+            .map(|item| (item.id, inherited(item.id, &items, &facts)))
             .collect();
         let ranks = provider_ranks(conn, &items)?;
         let mut all_by_type = HashMap::<_, Vec<_>>::new();
         let mut changed_by_type = HashMap::<_, Vec<_>>::new();
-        for item in items.values() {
+        for item in eligible.iter().copied() {
             all_by_type
                 .entry(item.item_type.as_str())
                 .or_default()
@@ -73,7 +77,7 @@ pub(crate) fn refresh(
             }
         }
         let mut matches = Vec::new();
-        for seed in items.values() {
+        for seed in eligible {
             let by_type = if affected.contains(&seed.id) { &all_by_type } else { &changed_by_type };
             let Some(candidates) = by_type.get(seed.item_type.as_str()) else {
                 continue;
@@ -100,7 +104,7 @@ pub(crate) fn refresh(
     })
 }
 
-/// Remove old incoming and outgoing matches, including obsolete season and episode results.
+/// Remove old incoming and outgoing matches, including obsolete results for excluded item types.
 fn clear_matches(
     conn: &mut SqliteConnection,
     ids: &[i32],
@@ -119,13 +123,13 @@ fn clear_matches(
 }
 
 /// Keep cross-library candidates of the affected types, with their inheritance families. The
-/// lightweight hierarchy excludes TV children and avoids hydrating unrelated music/books.
+/// lightweight hierarchy excludes TV children; tracks provide genres for their music parents.
 fn catalog_scope(
     conn: &mut SqliteConnection,
     changed_ids: &[i32],
 ) -> QueryResult<(Vec<i32>, HashSet<i32>)> {
     let rows = item_rows::table
-        .filter(item_rows::item_type.ne_all(EXCLUDED_ITEM_TYPES))
+        .filter(item_rows::item_type.ne_all(EXCLUDED_FACT_TYPES))
         .select((item_rows::id, item_rows::parent_id, item_rows::item_type))
         .load::<(i32, Option<i32>, String)>(conn)?;
     let parents: HashMap<_, _> = rows.iter().map(|(id, parent, _)| (*id, *parent)).collect();
@@ -150,7 +154,9 @@ fn catalog_scope(
     }
     let kinds: HashSet<_> = rows
         .iter()
-        .filter(|(id, _, _)| affected.contains(id))
+        .filter(|(id, _, kind)| {
+            affected.contains(id) && !EXCLUDED_ITEM_TYPES.contains(&kind.as_str())
+        })
         .map(|(_, _, kind)| kind)
         .collect();
     let candidates: HashSet<_> = rows
@@ -171,10 +177,15 @@ fn provider_ranks(
     conn: &mut SqliteConnection,
     items: &HashMap<i32, MediaItemSummary>,
 ) -> QueryResult<HashMap<i32, Ranks>> {
+    let ids: Vec<_> = items
+        .values()
+        .filter(|item| !EXCLUDED_ITEM_TYPES.contains(&item.item_type.as_str()))
+        .map(|item| item.id)
+        .collect();
     let mut own = HashMap::<i32, Ranks>::new();
     for (item_id, provider, kind, id, rank) in similar::table
         .inner_join(links::table)
-        .filter(links::media_item_id.eq_any(items.keys().copied().collect::<Vec<_>>()))
+        .filter(links::media_item_id.eq_any(&ids))
         .filter(links::relation_kind.eq("primary"))
         .filter(links::match_state.eq("linked"))
         .select((
@@ -192,8 +203,8 @@ fn provider_ranks(
             .and_modify(|current| *current = (*current).min(rank))
             .or_insert(rank);
     }
-    Ok(items
-        .keys()
+    Ok(ids
+        .iter()
         .map(|id| {
             let mut ranks = Ranks::new();
             for source in lineage(*id, items) {

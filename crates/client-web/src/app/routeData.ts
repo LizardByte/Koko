@@ -185,7 +185,7 @@ async function getItemLibraryContext(libraryId: number, source: RouteApi) {
   return { home, libraryItems };
 }
 
-/** Skip TV children and keep optional suggestion failures from preventing item navigation. */
+/** Skip excluded item types and keep optional suggestion failures from preventing navigation. */
 async function getSimilarItems(item: api.MediaItemDetail, source: RouteApi): Promise<api.MediaItemSummary[]> {
   if (!api.supportsSimilarItems(item.item_type) || !source.getSimilarItems) return [];
   return source.getSimilarItems(item.id).catch((error: unknown) => {

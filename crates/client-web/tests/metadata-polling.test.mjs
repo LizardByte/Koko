@@ -114,8 +114,9 @@ test('route reload invalidation discards a poll even when the same item is visit
   assert.equal(previous(), false);
 });
 
-for (const itemType of ['show', 'season', 'episode']) {
-  test(`${itemType} metadata polling ${itemType === 'show' ? 'keeps' : 'skips'} recommendations`, async () => {
+for (const itemType of ['show', 'artist', 'album', 'season', 'episode', 'track']) {
+  const supported = ['show', 'artist', 'album'].includes(itemType);
+  test(`${itemType} metadata polling ${supported ? 'keeps' : 'skips'} recommendations`, async () => {
     const requests = [];
     globalThis.fetch = async (url) => {
       const path = new URL(url, location.origin).pathname;
@@ -125,7 +126,7 @@ for (const itemType of ['show', 'season', 'episode']) {
       return json(value);
     };
     await poll();
-    assert.equal(requests.some((path) => path.endsWith('/similar')), itemType === 'show');
+    assert.equal(requests.some((path) => path.endsWith('/similar')), supported);
     assert.equal(state.selectedItem.item_type, itemType);
   });
 }

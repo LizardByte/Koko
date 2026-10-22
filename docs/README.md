@@ -45,8 +45,9 @@ playlists. Check that the new paths are accessible to the server before scanning
 and creating a new one starts a separate catalog.
 
 Open an item to find **More like this**, when related items are available in your accessible libraries.
-The row shows the same kind of item: albums lead to albums, artists to artists, and songs to songs.
-For TV, suggestions appear on show pages rather than individual seasons or episodes.
+The row shows the same kind of item: albums lead to albums and artists to artists.
+Suggestions are unavailable for individual songs, TV seasons, and episodes; open their album,
+artist, or show page instead.
 After adding files, scan their library so they can appear here. To update suggestions, refresh the
 item's metadata from its management controls, or ask your server administrator. The row stays hidden
 when no similar items are available.

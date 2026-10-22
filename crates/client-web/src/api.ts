@@ -1324,9 +1324,9 @@ export function getItem(itemId: number): Promise<MediaItemDetail> {
   return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
 }
 
-/** TV recommendations belong to shows; seasons and episodes have no recommendation row. */
+/** Recommendations exclude individual songs, TV seasons, and episodes. */
 export function supportsSimilarItems(itemType: string): boolean {
-  return !['season', 'episode'].includes(itemType);
+  return !['season', 'episode', 'track'].includes(itemType);
 }
 
 /** Read saved recommendations matched to accessible local items of the same type. */

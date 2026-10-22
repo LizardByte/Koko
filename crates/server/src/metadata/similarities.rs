@@ -73,10 +73,10 @@ struct SimilarItem {
     rank: i32,
 }
 
-fn is_show_child(snapshot: &StoredMetadataSnapshot) -> bool {
+fn is_excluded_snapshot(snapshot: &StoredMetadataSnapshot) -> bool {
     matches!(
         snapshot.media_type.as_deref(),
-        Some("season" | "episode" | "tv_season" | "tv_episode")
+        Some("season" | "episode" | "tv_season" | "tv_episode" | "track" | "recording")
     )
 }
 
@@ -93,7 +93,7 @@ async fn enrich_snapshot_with_timeout(
     snapshot: &mut StoredMetadataSnapshot,
     timeout: Duration,
 ) {
-    if is_show_child(snapshot) {
+    if is_excluded_snapshot(snapshot) {
         return;
     }
     // Unit tests opt into discovery traffic with their own local HTTP fixtures.
@@ -298,53 +298,34 @@ async fn music(
 ) -> Result<Vec<SimilarItem>, String> {
     use super::listenbrainz::{
         ARTIST_ALGORITHM,
-        RECORDING_ALGORITHM,
         provider_json,
     };
     let base = root("https://labs.api.listenbrainz.org", false);
     let mut queries = Vec::new();
-    if kind == "recording" {
-        queries.push(("recording", id.to_string()));
-    }
     if kind == "artist" {
-        queries.push(("artist", id.to_string()));
+        queries.push(id.to_string());
     } else if let Some(credits) = payload["artist-credit"].as_array() {
         for artist in credits
             .iter()
             .filter_map(|credit| credit["artist"]["id"].as_str())
         {
             if crate::media::valid_mbid(artist) {
-                queries.push(("artist", artist.into()));
+                queries.push(artist.into());
             }
         }
     }
     let mut seen_queries = HashSet::new();
     let mut seen_results = HashSet::new();
     let mut items = Vec::new();
-    for (entity, id) in queries
+    for id in queries
         .into_iter()
         .filter(|query| seen_queries.insert(query.clone()))
     {
-        let (endpoint, parameter, algorithm, field) = if entity == "recording" {
-            (
-                "similar-recordings",
-                "recording_mbids",
-                RECORDING_ALGORITHM,
-                "recording_mbid",
-            )
-        } else {
-            (
-                "similar-artists",
-                "artist_mbids",
-                ARTIST_ALGORITHM,
-                "artist_mbid",
-            )
-        };
         let response = provider_json(
-            &format!("{base}/{endpoint}/json"),
+            &format!("{base}/similar-artists/json"),
             &[
-                (parameter, id),
-                ("algorithm", algorithm.into()),
+                ("artist_mbids", id),
+                ("algorithm", ARTIST_ALGORITHM.into()),
             ],
         )
         .await
@@ -354,13 +335,13 @@ async fn music(
             .as_array()
             .ok_or("Invalid ListenBrainz similarity response")?;
         for (rank, value) in values.iter().enumerate() {
-            let Some(id) = value[field]
+            let Some(id) = value["artist_mbid"]
                 .as_str()
                 .filter(|id| crate::media::valid_mbid(id))
             else {
                 continue;
             };
-            let identity = Identity::new("musicbrainz", entity, id);
+            let identity = Identity::new("musicbrainz", "artist", id);
             if seen_results.insert(identity.clone()) {
                 items.push(SimilarItem {
                     identity,
@@ -380,7 +361,7 @@ pub(crate) fn sync(
     snapshot: &StoredMetadataSnapshot,
     identity_changed: bool,
 ) -> QueryResult<()> {
-    if is_show_child(snapshot) {
+    if is_excluded_snapshot(snapshot) {
         diesel::delete(rows::table.filter(rows::metadata_link_id.eq(link_id))).execute(conn)?;
         return Ok(());
     }

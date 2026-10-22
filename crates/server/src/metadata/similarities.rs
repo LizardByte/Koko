@@ -73,6 +73,13 @@ struct SimilarItem {
     rank: i32,
 }
 
+fn is_show_child(snapshot: &StoredMetadataSnapshot) -> bool {
+    matches!(
+        snapshot.media_type.as_deref(),
+        Some("season" | "episode" | "tv_season" | "tv_episode")
+    )
+}
+
 /// Add optional discovery data to a refresh; a failed lookup preserves the previous saved list.
 pub(crate) async fn enrich_snapshot(
     settings: &MetadataSettings,
@@ -86,6 +93,9 @@ async fn enrich_snapshot_with_timeout(
     snapshot: &mut StoredMetadataSnapshot,
     timeout: Duration,
 ) {
+    if is_show_child(snapshot) {
+        return;
+    }
     // Unit tests opt into discovery traffic with their own local HTTP fixtures.
     #[cfg(test)]
     if match snapshot.provider_id {
@@ -370,6 +380,10 @@ pub(crate) fn sync(
     snapshot: &StoredMetadataSnapshot,
     identity_changed: bool,
 ) -> QueryResult<()> {
+    if is_show_child(snapshot) {
+        diesel::delete(rows::table.filter(rows::metadata_link_id.eq(link_id))).execute(conn)?;
+        return Ok(());
+    }
     let payload = snapshot
         .provider_payload_json
         .as_deref()

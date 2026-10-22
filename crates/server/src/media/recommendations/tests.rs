@@ -614,3 +614,115 @@ fn movie_refresh_retains_cross_library_matches_without_loading_unrelated_types()
     assert_eq!(queries.load(Ordering::SeqCst), small_catalog_queries);
     assert_eq!(recommendations(&mut conn, 1, 2), [2]);
 }
+
+#[test]
+fn show_refresh_retains_provider_and_local_matches_without_loading_tv_children() {
+    use diesel::connection::InstrumentationEvent;
+    use std::sync::{
+        Arc,
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
+    };
+    let mut conn = database();
+    for (id, library, genre) in [
+        (1, 1, "Fantasy"),
+        (2, 3, "Comedy"),
+        (3, 1, "Fantasy"),
+    ] {
+        item(&mut conn, id, library, None, "show");
+        link(
+            &mut conn,
+            id,
+            "tv",
+            &id.to_string(),
+            json!({"genres":[{"name":genre}], "koko_similar_items": if id == 1 {
+                json!([{"provider_id":"tmdb", "media_type":"tv", "external_id":"2", "rank":0}])
+            } else { json!([]) }}),
+        );
+    }
+    assert_eq!(recommendations(&mut conn, 1, 2), [2, 3]);
+    let queries = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&queries);
+    conn.set_instrumentation(move |event: InstrumentationEvent<'_>| {
+        if matches!(event, InstrumentationEvent::StartQuery { .. }) {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    refresh(&mut conn, &[1]).unwrap();
+    let show_only_queries = queries.load(Ordering::SeqCst);
+    let mut changed_ids = vec![1];
+    for id in 100..400 {
+        let parent = if id % 2 == 0 { 1 } else { 3 };
+        item(&mut conn, id, 1, Some(parent), "season");
+        item(&mut conn, id + 1000, 1, Some(id), "episode");
+        changed_ids.extend([id, id + 1000]);
+    }
+    queries.store(0, Ordering::SeqCst);
+    refresh(&mut conn, &[1]).unwrap();
+    assert_eq!(queries.load(Ordering::SeqCst), show_only_queries);
+    // A scan can report shows and their children in the same batch.
+    refresh(&mut conn, &changed_ids).unwrap();
+    assert_eq!(recommendations(&mut conn, 1, 2), [2, 3]);
+    let cached_ids = cached::table
+        .select((cached::item_id, cached::similar_item_id))
+        .load::<(i32, i32)>(&mut conn)
+        .unwrap();
+    assert!(!cached_ids.is_empty());
+    assert!(
+        cached_ids
+            .iter()
+            .all(|(seed, candidate)| *seed < 100 && *candidate < 100)
+    );
+}
+
+#[test]
+fn tv_child_refresh_discards_legacy_matches_without_rebuilding_show_matches() {
+    let mut conn = database();
+    for id in [1, 2] {
+        item(&mut conn, id, 1, None, "show");
+        item(&mut conn, id + 10, 1, Some(id), "season");
+        item(&mut conn, id + 20, 1, Some(id + 10), "episode");
+        link(
+            &mut conn,
+            id,
+            "tv",
+            &id.to_string(),
+            json!({"genres":[{"name":"Fantasy"}]}),
+        );
+    }
+    assert_eq!(recommendations(&mut conn, 1, 2), [2]);
+    for (seed, candidate) in [
+        (11, 12),
+        (12, 11),
+        (21, 22),
+        (22, 21),
+    ] {
+        diesel::insert_into(cached::table)
+            .values((
+                cached::item_id.eq(seed),
+                cached::similar_item_id.eq(candidate),
+                cached::provider_priority.eq(0),
+                cached::provider_rank.eq(0),
+                cached::local_score.eq(10),
+                cached::year_distance.eq(0_i64),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+        assert!(recommendations(&mut conn, seed, 2).is_empty());
+    }
+    // Stale show facts make an accidental parent rebuild observable.
+    diesel::update(links::table.filter(links::media_item_id.eq(2)))
+        .set(links::genres_json.eq("[\"Comedy\"]"))
+        .execute(&mut conn)
+        .unwrap();
+    refresh(&mut conn, &[11, 21]).unwrap();
+    assert_eq!(recommendations(&mut conn, 1, 2), [2]);
+    assert_eq!(
+        cached::table.count().get_result::<i64>(&mut conn).unwrap(),
+        2
+    );
+    refresh(&mut conn, &[2]).unwrap();
+    assert!(recommendations(&mut conn, 1, 2).is_empty());
+}

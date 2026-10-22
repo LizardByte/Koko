@@ -18,7 +18,7 @@ import type {
   MetadataPersonItemCredit,
   MetadataProviderStatus,
 } from '../api';
-import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
+import { getArtworkUrl, getPersonImageUrl, resolveApiUrl, supportsSimilarItems } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { normalizedMetadataLanguages } from './formUtils';
 import { extractYouTubeVideoId } from './youtube';
@@ -437,7 +437,8 @@ export function renderSelectedItemCollectionRails(): string {
 export function renderSimilarItems(): string {
   const selected = state.selectedItem;
   const similar = state.similarItems;
-  if (!selected || similar?.itemId !== selected.id || similar.userId !== state.bootstrap?.current_user?.id) return '';
+  if (!selected || !supportsSimilarItems(selected.item_type)
+    || similar?.itemId !== selected.id || similar.userId !== state.bootstrap?.current_user?.id) return '';
   const seen = new Set<number>([selected.id]);
   const items = similar.items.filter((item) => {
     if (item.item_type !== selected.item_type || item.missing_since || seen.has(item.id)) return false;

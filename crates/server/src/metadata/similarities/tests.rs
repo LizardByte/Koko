@@ -157,6 +157,43 @@ async fn tmdb_refresh_saves_every_page_including_items_absent_from_the_library()
 }
 
 #[tokio::test]
+async fn tv_child_snapshots_skip_provider_discovery_and_discard_saved_ids() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let mut conn = database();
+    for kind in [
+        "tv_season",
+        "tv_episode",
+        "season",
+        "episode",
+    ] {
+        let original = snapshot(
+            MetadataProviderId::Tmdb,
+            "movie",
+            "1",
+            movie_similarities("2"),
+        );
+        let link = crate::metadata::upsert_item_metadata_snapshot(&mut conn, 1, &original).unwrap();
+        assert_eq!(rows::table.count().get_result::<i64>(&mut conn).unwrap(), 1);
+        let mut child = snapshot(MetadataProviderId::Tmdb, kind, "1", json!({"name":"Child"}));
+        let payload = child.provider_payload_json.clone();
+        TEST_TMDB_ROOT
+            .scope(url.clone(), enrich_snapshot(&settings(), &mut child))
+            .await;
+        assert_eq!(child.provider_payload_json, payload);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), listener.accept())
+                .await
+                .is_err()
+        );
+        // A stale payload must not reintroduce child recommendations either.
+        child.provider_payload_json = original.provider_payload_json;
+        sync(&mut conn, link.id, &child, false).unwrap();
+        assert_eq!(rows::table.count().get_result::<i64>(&mut conn).unwrap(), 0);
+    }
+}
+
+#[tokio::test]
 async fn tmdb_pages_overlap_with_a_global_concurrency_bound_and_keep_provider_order() {
     use std::sync::atomic::{
         AtomicUsize,

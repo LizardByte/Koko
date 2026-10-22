@@ -30,7 +30,22 @@ pub(crate) fn refresh(
         return Ok(());
     }
     conn.transaction(|conn| {
-        let (ids, affected) = catalog_scope(conn, changed_ids)?;
+        // A child refresh must not expand to its show and rebuild the show's entire family.
+        let mut seeds = Vec::new();
+        for chunk in changed_ids.chunks(500) {
+            seeds.extend(
+                item_rows::table
+                    .filter(item_rows::id.eq_any(chunk))
+                    .filter(item_rows::item_type.ne_all(EXCLUDED_ITEM_TYPES))
+                    .select(item_rows::id)
+                    .load::<i32>(conn)?,
+            );
+        }
+        if seeds.is_empty() {
+            return clear_matches(conn, changed_ids);
+        }
+        let (ids, mut affected) = catalog_scope(conn, &seeds)?;
+        affected.extend(changed_ids);
         let items: HashMap<_, _> = list_media_items_by_ids(conn, &ids, &[])?
             .into_iter()
             .map(|item| (item.id, item))
@@ -71,16 +86,7 @@ pub(crate) fn refresh(
             }
         }
         let affected: Vec<_> = affected.into_iter().collect();
-        for chunk in affected.chunks(400) {
-            diesel::delete(
-                cached::table.filter(
-                    cached::item_id
-                        .eq_any(chunk)
-                        .or(cached::similar_item_id.eq_any(chunk)),
-                ),
-            )
-            .execute(conn)?;
-        }
+        clear_matches(conn, &affected)?;
         // Six bindings per match, below SQLite's conservative variable limit.
         for chunk in matches.chunks(128) {
             diesel::insert_into(cached::table)
@@ -91,13 +97,32 @@ pub(crate) fn refresh(
     })
 }
 
+/// Remove old incoming and outgoing matches, including obsolete season and episode results.
+fn clear_matches(
+    conn: &mut SqliteConnection,
+    ids: &[i32],
+) -> QueryResult<()> {
+    for chunk in ids.chunks(400) {
+        diesel::delete(
+            cached::table.filter(
+                cached::item_id
+                    .eq_any(chunk)
+                    .or(cached::similar_item_id.eq_any(chunk)),
+            ),
+        )
+        .execute(conn)?;
+    }
+    Ok(())
+}
+
 /// Keep cross-library candidates of the affected types, with their inheritance families. The
-/// lightweight hierarchy query avoids hydrating unrelated music/books for a movie refresh.
+/// lightweight hierarchy excludes TV children and avoids hydrating unrelated music/books.
 fn catalog_scope(
     conn: &mut SqliteConnection,
     changed_ids: &[i32],
 ) -> QueryResult<(Vec<i32>, HashSet<i32>)> {
     let rows = item_rows::table
+        .filter(item_rows::item_type.ne_all(EXCLUDED_ITEM_TYPES))
         .select((item_rows::id, item_rows::parent_id, item_rows::item_type))
         .load::<(i32, Option<i32>, String)>(conn)?;
     let parents: HashMap<_, _> = rows.iter().map(|(id, parent, _)| (*id, *parent)).collect();
@@ -138,7 +163,7 @@ fn catalog_scope(
     Ok((ids, affected))
 }
 
-/// Resolve complete saved provider lists, including lists inherited from a parent artist or show.
+/// Resolve complete saved provider lists, including lists inherited from a parent artist.
 fn provider_ranks(
     conn: &mut SqliteConnection,
     items: &HashMap<i32, MediaItemSummary>,
@@ -197,12 +222,8 @@ fn score(
     let seed_facts = &effective[&seed.id];
     let candidate_facts = &effective[&candidate.id];
     let ranks = &ranks[&seed.id];
-    let direct_ids = if ["season", "episode"].contains(&candidate.item_type.as_str()) {
-        &candidate_facts.identities
-    } else {
-        &own.identities
-    };
-    let direct = direct_ids
+    let direct = own
+        .identities
         .iter()
         .filter_map(|key| ranks.get(key))
         .min()

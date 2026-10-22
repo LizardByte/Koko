@@ -46,6 +46,7 @@ and creating a new one starts a separate catalog.
 
 Open an item to find **More like this**, when related items are available in your accessible libraries.
 The row shows the same kind of item: albums lead to albums, artists to artists, and songs to songs.
+For TV, suggestions appear on show pages rather than individual seasons or episodes.
 After adding files, scan their library so they can appear here. To update suggestions, refresh the
 item's metadata from its management controls, or ask your server administrator. The row stays hidden
 when no similar items are available.

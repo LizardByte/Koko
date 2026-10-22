@@ -932,7 +932,8 @@ function getMockGetResponse<T>(method: string, url: URL): T {
   const similar = /^\/api\/v1\/items\/(\d+)\/similar$/.exec(url.pathname);
   if (similar) {
     const seed = getMockItem(Number(similar[1]));
-    return getMockItems().filter((item) => item.id !== seed?.id && item.item_type === seed?.item_type && !item.missing_since).slice(0, 12) as T;
+    if (!seed || !supportsSimilarItems(seed.item_type)) return [] as T;
+    return getMockItems().filter((item) => item.id !== seed.id && item.item_type === seed.item_type && !item.missing_since).slice(0, 12) as T;
   }
   switch (url.pathname) {
     case '/api/v1/system/capabilities':
@@ -1321,6 +1322,11 @@ export async function searchItems(query: string): Promise<MediaSearchResult[]> {
 
 export function getItem(itemId: number): Promise<MediaItemDetail> {
   return requestJson<MediaItemDetail>('GET', `/api/v1/items/${itemId}`);
+}
+
+/** TV recommendations belong to shows; seasons and episodes have no recommendation row. */
+export function supportsSimilarItems(itemType: string): boolean {
+  return !['season', 'episode'].includes(itemType);
 }
 
 /** Read saved recommendations matched to accessible local items of the same type. */

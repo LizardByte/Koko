@@ -70,6 +70,7 @@ import {
   getItemCredits,
   getItemMetadata,
   getSimilarItems,
+  supportsSimilarItems,
   getItems,
   getLibraries,
   getSystemActivities,
@@ -686,7 +687,7 @@ async function refreshSelectedItemMetadata(itemId: number, previousError: string
     getHome(item.library_id),
     getItems(item.library_id),
     item.item_type === 'artist' ? getItemCredits(itemId) : Promise.resolve(undefined),
-    getSimilarItems(itemId).catch(() => []),
+    supportsSimilarItems(item.item_type) ? getSimilarItems(itemId).catch(() => []) : Promise.resolve([]),
   ]);
   if (!isCurrent() || state.route.page !== 'item' || state.route.itemId !== itemId) {
     return false;

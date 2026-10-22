@@ -43,6 +43,23 @@ for (const itemType of ['movie', 'show', 'artist', 'album', 'track', 'book', 'bo
   });
 }
 
+for (const itemType of ['season', 'episode']) {
+  test(`${itemType} pages skip recommendation requests and hide old cached rows`, async () => {
+    const item = { ...mock.getMockItem(itemType === 'season' ? 202 : 203), id: 1 };
+    state.selectedItem = item;
+    state.similarItems = { itemId: 1, userId: 2, items: [{ ...item, id: 999 }] };
+    assert.equal(renderSimilarItems(), '');
+    await loadRouteData(state, state.route, () => {}, () => true, source(Promise.resolve([]), {
+      getItem: async () => item,
+      getSimilarItems: () => assert.fail('TV children must not request recommendations'),
+    }));
+    assert.equal(state.selectedItem.item_type, itemType);
+    assert.equal(state.error, undefined);
+    assert.deepEqual(state.similarItems.items, []);
+    assert.doesNotMatch(renderItemPage(), /data-nav-section="similar"/);
+  });
+}
+
 test('empty, stale-item, and stale-account recommendations leave no empty row', () => {
   state.selectedItem = mock.getMockItem(mock.getMockItems()[0].id);
   assert.equal(renderSimilarItems(), '');

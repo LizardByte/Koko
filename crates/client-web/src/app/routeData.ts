@@ -168,15 +168,15 @@ async function getItemPageData(itemId: number, source: RouteApi, knownLibraryId?
       if ('error' in result) throw result.error;
       return result.value;
     };
-    const [context, itemCredits] = await Promise.all([
-      support(), getArtistCredits(item, source),
+    const [context, itemCredits, similarItems] = await Promise.all([
+      support(), getArtistCredits(item, source), getSimilarItems(item, source),
     ]);
-    return { item, ...context, itemCredits };
+    return { item, ...context, itemCredits, similarItems };
   });
-  const [detail, metadata, playback, similarItems] = await Promise.all([
-    details, source.getItemMetadata(itemId), source.getPlaybackDecision(itemId), getSimilarItems(itemId, source),
+  const [detail, metadata, playback] = await Promise.all([
+    details, source.getItemMetadata(itemId), source.getPlaybackDecision(itemId),
   ]);
-  return { ...detail, metadata, playback, similarItems };
+  return { ...detail, metadata, playback };
 }
 
 /** Fetch collection and sibling data together without waiting for the item's filesystem lookups. */
@@ -185,10 +185,10 @@ async function getItemLibraryContext(libraryId: number, source: RouteApi) {
   return { home, libraryItems };
 }
 
-/** Read Koko's saved suggestions; optional failures must not prevent opening an item. */
-async function getSimilarItems(itemId: number, source: RouteApi): Promise<api.MediaItemSummary[]> {
-  if (!source.getSimilarItems) return [];
-  return source.getSimilarItems(itemId).catch((error: unknown) => {
+/** Skip TV children and keep optional suggestion failures from preventing item navigation. */
+async function getSimilarItems(item: api.MediaItemDetail, source: RouteApi): Promise<api.MediaItemSummary[]> {
+  if (!api.supportsSimilarItems(item.item_type) || !source.getSimilarItems) return [];
+  return source.getSimilarItems(item.id).catch((error: unknown) => {
     if (error instanceof api.ApiError && [401, 403, 404].includes(error.status)) throw error;
     return [];
   });

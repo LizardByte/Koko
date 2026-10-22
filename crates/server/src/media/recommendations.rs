@@ -20,6 +20,7 @@ use diesel::{
 };
 
 const LIMIT: usize = 12;
+const EXCLUDED_ITEM_TYPES: [&str; 2] = ["season", "episode"];
 
 #[derive(Clone, Default)]
 struct Facts {
@@ -252,6 +253,9 @@ pub(crate) fn list(
     let visible = accessible_library_ids(conn, user_id)?;
     if !visible.contains(&seed.library_id) {
         return Err(diesel::result::Error::NotFound);
+    }
+    if EXCLUDED_ITEM_TYPES.contains(&seed.item_type.as_str()) {
+        return Ok(Vec::new());
     }
     let mut result = Vec::new();
     let mut seen = HashSet::new();

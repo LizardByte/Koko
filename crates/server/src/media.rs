@@ -12,6 +12,7 @@ pub use audiobooks::{
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+pub(crate) mod recommendations;
 mod relocation;
 mod source_files;
 pub use music::MusicMetadata;
@@ -1883,6 +1884,14 @@ fn sync_library_catalog_filtered(
 
     delete_unreferenced_media_files(conn)?;
 
+    let scanned_ids = crate::db::schema::media_items::table
+        .filter(
+            crate::db::schema::media_items::library_id.eq_any(persisted.iter().map(|row| row.id)),
+        )
+        .select(crate::db::schema::media_items::id)
+        .load::<i32>(conn)?;
+    recommendations::refresh(conn, &scanned_ids)?;
+
     Ok(persisted)
 }
 
@@ -2951,6 +2960,34 @@ pub fn list_media_items_with_preferred_languages(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
+    summarize_media_item_rows(conn, rows, preferred_languages)
+}
+
+/// Hydrate only selected catalog rows for item-page support and recommendation maintenance.
+fn list_media_items_by_ids(
+    conn: &mut SqliteConnection,
+    ids: &[i32],
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    use crate::db::schema::media_items as items;
+    let mut rows = Vec::new();
+    for chunk in ids.chunks(500) {
+        rows.extend(
+            items::table
+                .filter(items::id.eq_any(chunk))
+                .filter(items::deleted_at.is_null())
+                .select(MediaItem::as_select())
+                .load::<MediaItem>(conn)?,
+        );
+    }
+    summarize_media_item_rows(conn, rows, preferred_languages)
+}
+
+fn summarize_media_item_rows(
+    conn: &mut SqliteConnection,
+    rows: Vec<MediaItem>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
     let metadata_links = preferred_metadata_links_by_item_id(
         conn,
         &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -6863,11 +6900,16 @@ fn discover_item_assets(
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
 
+    let asset_directories = [
+        managed_dir.as_path(),
+        source_dir,
+    ]
+    .into_iter()
+    .map(index_asset_directory)
+    .collect::<Vec<_>>();
+
     let poster_path = find_first_existing_asset(
-        &[
-            managed_dir.as_path(),
-            source_dir,
-        ],
+        &asset_directories,
         &[
             "poster.jpg",
             "poster.jpeg",
@@ -6886,10 +6928,7 @@ fn discover_item_assets(
         &["jpg", "jpeg", "png", "webp"],
     );
     let backdrop_path = find_first_existing_asset(
-        &[
-            managed_dir.as_path(),
-            source_dir,
-        ],
+        &asset_directories,
         &[
             "backdrop.jpg",
             "backdrop.jpeg",
@@ -6907,10 +6946,7 @@ fn discover_item_assets(
         &["jpg", "jpeg", "png", "webp"],
     );
     let theme_song_path = find_first_existing_asset(
-        &[
-            managed_dir.as_path(),
-            source_dir,
-        ],
+        &asset_directories,
         &[
             "theme.mp3",
             "theme.flac",
@@ -6923,13 +6959,7 @@ fn discover_item_assets(
         &[],
     );
 
-    let subtitle_paths = collect_subtitle_assets(
-        &[
-            managed_dir.as_path(),
-            source_dir,
-        ],
-        &source_stem,
-    );
+    let subtitle_paths = collect_subtitle_assets(&asset_directories, &source_stem);
 
     ResolvedItemAssets {
         poster_path,
@@ -6951,24 +6981,67 @@ fn managed_item_asset_dir(
         .join(item_hex)
 }
 
+struct AssetDirectory {
+    path: PathBuf,
+    files: Option<HashMap<String, PathBuf>>,
+}
+
+fn asset_filename_key(name: &str) -> String {
+    if cfg!(windows) { name.to_ascii_lowercase() } else { name.to_string() }
+}
+
+/// DirEntry caches file types on Windows, avoiding a separate filesystem probe for every candidate.
+/// Keep direct named-file lookup when directory listing is unavailable but file access is allowed.
+fn index_asset_directory(directory: &Path) -> AssetDirectory {
+    let files = fs::read_dir(directory).ok().map(|entries| {
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let kind = entry.file_type().ok()?;
+                let path = entry.path();
+                if !kind.is_file() && !(kind.is_symlink() && path.is_file()) {
+                    return None;
+                }
+                let name = entry.file_name();
+                Some((asset_filename_key(&name.to_string_lossy()), path))
+            })
+            .collect()
+    });
+    AssetDirectory {
+        path: directory.to_path_buf(),
+        files,
+    }
+}
+
+fn indexed_asset(
+    directory: &AssetDirectory,
+    name: &str,
+) -> Option<PathBuf> {
+    if let Some(files) = &directory.files {
+        return files.get(&asset_filename_key(name)).cloned();
+    }
+    let candidate = directory.path.join(name);
+    candidate.is_file().then_some(candidate)
+}
+
 fn find_first_existing_asset(
-    directories: &[&Path],
+    directories: &[AssetDirectory],
     fixed_names: &[&str],
     stem_names: &[String],
     extensions: &[&str],
 ) -> Option<PathBuf> {
     for directory in directories {
         for fixed_name in fixed_names {
-            let candidate = directory.join(fixed_name);
-            if candidate.is_file() {
+            if let Some(candidate) = indexed_asset(directory, fixed_name) {
                 return Some(candidate);
             }
         }
 
         for stem_name in stem_names {
             for extension in extensions {
-                let candidate = directory.join(format!("{}.{}", stem_name, extension));
-                if candidate.is_file() {
+                if let Some(candidate) =
+                    indexed_asset(directory, &format!("{}.{}", stem_name, extension))
+                {
                     return Some(candidate);
                 }
             }
@@ -6979,20 +7052,19 @@ fn find_first_existing_asset(
 }
 
 fn collect_subtitle_assets(
-    directories: &[&Path],
+    directories: &[AssetDirectory],
     source_stem: &str,
 ) -> Vec<PathBuf> {
     let mut subtitle_paths = Vec::new();
     let mut seen = HashSet::new();
 
     for directory in directories {
-        let Ok(entries) = fs::read_dir(directory) else {
+        let Some(files) = &directory.files else {
             continue;
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() || !is_subtitle_extension(&path) {
+        for path in files.values() {
+            if !is_subtitle_extension(path) {
                 continue;
             }
 
@@ -7007,7 +7079,7 @@ fn collect_subtitle_assets(
 
             let key = path.to_string_lossy().to_string();
             if seen.insert(key) {
-                subtitle_paths.push(path);
+                subtitle_paths.push(path.clone());
             }
         }
     }
@@ -7057,6 +7129,61 @@ fn is_subtitle_extension(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_item_assets_preserve_directory_priority_subtitle_matching_and_fallbacks() {
+        let root = std::env::temp_dir().join(format!(
+            "koko-asset-index-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let data = root.join("data");
+        let source = root.join("movies/Movie.mkv");
+        let source_dir = source.parent().unwrap();
+        let managed = managed_item_asset_dir(data.to_str().unwrap(), 42);
+        fs::create_dir_all(source_dir).unwrap();
+        fs::create_dir_all(&managed).unwrap();
+        for path in [
+            source.clone(),
+            source_dir.join("poster.jpg"),
+            source_dir.join("Movie-poster.webp"),
+            source_dir.join("Movie.en.srt"),
+            source_dir.join("Other.srt"),
+            managed.join("poster.png"),
+            managed.join("backdrop.jpg"),
+            managed.join("theme.mp3"),
+            managed.join("Movie.vtt"),
+        ] {
+            fs::write(path, b"fixture").unwrap();
+        }
+        fs::create_dir(source_dir.join("Movie.fr.srt")).unwrap();
+        let assets = discover_item_assets(42, &source, data.to_str().unwrap());
+        assert_eq!(assets.poster_path, Some(managed.join("poster.png")));
+        assert_eq!(assets.backdrop_path, Some(managed.join("backdrop.jpg")));
+        assert_eq!(assets.theme_song_path, Some(managed.join("theme.mp3")));
+        let mut expected = vec![
+            managed.join("Movie.vtt"),
+            source_dir.join("Movie.en.srt"),
+        ];
+        expected.sort();
+        assert_eq!(assets.subtitle_paths, expected);
+        // A listing failure must keep the established direct named-file lookup behavior.
+        let unlisted = AssetDirectory {
+            path: source_dir.to_path_buf(),
+            files: None,
+        };
+        assert_eq!(
+            indexed_asset(&unlisted, "poster.jpg"),
+            Some(source_dir.join("poster.jpg"))
+        );
+        assert_eq!(indexed_asset(&unlisted, "missing.jpg"), None);
+        fs::remove_file(managed.join("poster.png")).unwrap();
+        assert_eq!(
+            discover_item_assets(42, &source, data.to_str().unwrap()).poster_path,
+            Some(source_dir.join("poster.jpg"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn summary(
         id: i32,

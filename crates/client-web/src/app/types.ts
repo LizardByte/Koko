@@ -129,6 +129,8 @@ export interface AppState {
   logsError?: string;
   logPage: number;
   selectedItem?: MediaItemDetail;
+  /** Same-type recommendations, scoped to the item and account that requested them. */
+  similarItems?: { itemId: number; userId?: number; items: MediaItemSummary[] };
   selectedItemMetadata?: ItemMetadataResponse;
   itemMetadataLoading: boolean;
   selectedPerson?: MetadataPersonResponse;

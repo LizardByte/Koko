@@ -18,7 +18,7 @@ import type {
   MetadataPersonItemCredit,
   MetadataProviderStatus,
 } from '../api';
-import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
+import { getArtworkUrl, getPersonImageUrl, resolveApiUrl, supportsSimilarItems } from '../api';
 import { escapeHtml, formatBitRate, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { normalizedMetadataLanguages } from './formUtils';
 import { extractYouTubeVideoId } from './youtube';
@@ -417,7 +417,7 @@ export function renderSelectedItemCollectionRails(): string {
         <section class="panel page-panel item-section item-collection-section" data-nav-section="collection:${escapeHtml(rail.collection.id)}" data-nav-label="${escapeHtml(rail.collection.name)}">
           <div class="section-heading section-heading-actions">
             <div>
-              <h3>${escapeHtml(rail.collection.name)}</h3>
+              <h3>${escapeHtml(rail.collection.name)} <span class="item-row-count">· ${rail.items.length}</span></h3>
               <p class="muted">Also in this collection</p>
             </div>
             <button type="button" class="secondary-button" data-collection-filter="${escapeHtml(rail.collection.id)}">${renderButtonContent('View collection', 'arrow-right')}</button>
@@ -431,6 +431,30 @@ export function renderSelectedItemCollectionRails(): string {
       `;
     })
     .join('');
+}
+
+/** Render saved local recommendations only for the current item, type, and account. */
+export function renderSimilarItems(): string {
+  const selected = state.selectedItem;
+  const similar = state.similarItems;
+  if (!selected || !supportsSimilarItems(selected.item_type)
+    || similar?.itemId !== selected.id || similar.userId !== state.bootstrap?.current_user?.id) return '';
+  const seen = new Set<number>([selected.id]);
+  const items = similar.items.filter((item) => {
+    if (item.item_type !== selected.item_type || item.missing_since || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  if (!items.length) return '';
+  return `
+    <section class="panel page-panel item-section" data-nav-section="similar" data-nav-label="More like this">
+      <div class="section-heading item-row-heading"><h3>More like this <span class="item-row-count">· ${items.length}</span></h3></div>
+      <div class="shelf-row-shell">
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-similar:-1" title="Scroll left">${renderIcon('chevron-left')}</button>
+        <div class="shelf-row" data-shelf-row="item-similar">${items.map(renderItemCard).join('')}</div>
+        <button type="button" class="shelf-scroll-button" data-shelf-scroll="item-similar:1" title="Scroll right">${renderIcon('chevron-right')}</button>
+      </div>
+    </section>`;
 }
 
 export function itemSortKey(item: MediaItemSummary): string {
@@ -608,20 +632,19 @@ export function renderPersonPage(): string {
 
       ${response.albums?.length ? `
         <section class="panel page-panel item-section" data-nav-section="music-credits" data-nav-label="Albums in your libraries">
-          <div class="section-heading"><h3>Albums in your libraries</h3></div>
+          <div class="section-heading item-row-heading"><h3>Albums in your libraries <span class="item-row-count">· ${response.albums.length}</span></h3></div>
           <div class="item-grid hierarchy-item-grid">${response.albums.map(renderItemCard).join('')}</div>
         </section>` : ''}
 
       ${response.groups?.length ? `
         <section class="panel page-panel item-section" data-nav-section="group-memberships" data-nav-label="Groups in your libraries">
-          <div class="section-heading"><h3>Groups in your libraries</h3></div>
+          <div class="section-heading item-row-heading"><h3>Groups in your libraries <span class="item-row-count">· ${response.groups.length}</span></h3></div>
           <div class="item-grid hierarchy-item-grid">${response.groups.map((entry) => `<article class="music-membership-card">${renderItemCard(entry.item)}<p class="muted">${escapeHtml(entry.credit.role ?? 'Member')}</p></article>`).join('')}</div>
         </section>` : ''}
 
-      ${credits.length ? `<section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
-        <div class="section-heading section-heading-actions">
-          <h3>Credits</h3>
-          <span class="muted">${escapeHtml(countLabel(creditGroups.length, 'title'))}</span>
+      ${creditGroups.length ? `<section class="panel page-panel item-section" data-nav-section="credits" data-nav-label="Credits">
+        <div class="section-heading item-row-heading">
+          <h3>Credits <span class="item-row-count">· ${creditGroups.length}</span></h3>
         </div>
         <div class="person-credit-grid">${creditGroups.map(renderPersonCreditGroup).join('')}</div>
       </section>` : ''}
@@ -1078,7 +1101,7 @@ function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
   if (item.item_type === 'book_work') {
     return [['audiobook', 'Audiobook versions'], ['book', 'Ebook files']].map(([type, label]) => {
       const children = item.children.filter((child) => child.item_type === type);
-      return children.length ? `<section class="panel page-panel item-section" data-nav-section="${type}" data-nav-label="${label}"><h3>${label}</h3><div class="item-grid hierarchy-item-grid">${children.map(renderItemCard).join('')}</div></section>` : '';
+      return children.length ? `<section class="panel page-panel item-section" data-nav-section="${type}" data-nav-label="${label}"><div class="section-heading item-row-heading"><h3>${label} <span class="item-row-count">· ${children.length}</span></h3></div><div class="item-grid hierarchy-item-grid">${children.map(renderItemCard).join('')}</div></section>` : '';
     }).join('');
   }
   if (['show', 'season', 'episode'].includes(item.item_type)) return renderTvChildren(item);
@@ -1088,12 +1111,10 @@ function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
   }
 
   const children = item.children;
-  const childCountLabel = countLabel(children.length, 'item');
   return `
         <section class="panel page-panel item-section" data-nav-section="children" data-nav-label="${escapeHtml(selectedItemChildSectionTitle(item))}">
-          <div class="section-heading section-heading-actions">
-            <h3>${escapeHtml(selectedItemChildSectionTitle(item))}</h3>
-            <span class="muted">${childCountLabel}</span>
+          <div class="section-heading item-row-heading">
+            <h3>${escapeHtml(selectedItemChildSectionTitle(item))} <span class="item-row-count">· ${children.length}</span></h3>
           </div>
           <div class="item-grid hierarchy-item-grid">${children.map(renderItemCard).join('')}</div>
         </section>
@@ -1176,13 +1197,16 @@ function renderSelectedItemSupportGrid(
   `;
 }
 
+/** Show a screen-credit row only when the current artist has available titles. */
 function renderArtistScreenCredits(item: MediaItemDetail): string {
   if (item.item_type !== 'artist') return '';
   const response = state.itemCredits?.itemId === item.id ? state.itemCredits : undefined;
-  const groups = personCreditGroups(response?.credits ?? []);
+  if (!response || response.loading || response.error) return '';
+  const groups = personCreditGroups(response.credits);
+  if (!groups.length) return '';
   return `<section class="panel page-panel item-section" data-nav-section="screen-credits" data-nav-label="Movies and shows">
-    <div class="section-heading section-heading-actions"><h3>Movies and shows</h3><span class="muted">${groups.length} title${groups.length === 1 ? '' : 's'}</span></div>
-    ${artistCreditContents(response, groups)}
+    <div class="section-heading item-row-heading"><h3>Movies and shows <span class="item-row-count">· ${groups.length}</span></h3></div>
+    <div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>
   </section>`;
 }
 
@@ -1232,13 +1256,14 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
       ${renderTrailerPicker(trailerOptions, hasMultipleTrailers)}
       ${renderSelectedItemChildrenSection(item)}
       ${renderTrackLyrics(item)}
-      ${renderArtistScreenCredits(item)}
 
       ${renderItemExtrasRail()}
 
-      ${renderPeopleRail()}
-
       ${renderSelectedItemCollectionRails()}
+      ${renderSimilarItems()}
+      ${renderArtistScreenCredits(item)}
+
+      ${renderPeopleRail()}
 
       ${renderSelectedItemSupportGrid(
         item,
@@ -1287,11 +1312,4 @@ function renderMusicActions(item: MediaItemDetail, playbackTarget?: MediaPlaybac
                 ${['artist', 'album', 'track'].includes(item.item_type) ? `<button type="button" class="secondary-button" data-music-radio="${item.id}">${renderButtonContent('Start radio', 'radio')}</button>` : ''}
                 ${item.item_type === 'album' && playbackTarget?.label === 'Continue album' ? `<button type="button" class="secondary-button" data-play-music-album-id="${item.id}">${renderButtonContent('Restart album', 'rotate-ccw')}</button>` : ''}
   `;
-}
-
-function artistCreditContents(response: typeof state.itemCredits, groups: PersonCreditGroup[]): string {
-  if (!response || response.loading) return '<div class="empty-state tight" role="status">Loading screen credits…</div>';
-  if (response.error) return `<div class="empty-state tight" role="alert">Unable to load screen credits: ${escapeHtml(response.error)}</div>`;
-  if (groups.length) return `<div class="person-credit-grid">${groups.map(renderPersonCreditGroup).join('')}</div>`;
-  return '<div class="empty-state tight">No matching movies or shows are in your libraries.</div>';
 }

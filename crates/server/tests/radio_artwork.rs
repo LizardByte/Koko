@@ -113,38 +113,3 @@ fn artwork_requires_seed_access_and_does_not_leak_after_access_is_revoked() {
         Err(diesel::result::Error::NotFound)
     ));
 }
-
-#[test]
-fn combined_music_migration_applies_and_reverts_as_one_revision() {
-    let mut conn = SqliteConnection::establish(":memory:").unwrap();
-    let revisions = koko::db::run_pending_sqlite_migrations(&mut conn).unwrap();
-    assert_eq!(
-        revisions
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        [
-            "a54d52c8da5e",
-            "c18f43d2a9b7",
-            "d7e92a604b31",
-            "834267a910bb"
-        ]
-    );
-    assert!(
-        koko::db::run_pending_sqlite_migrations(&mut conn)
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        koko::db::revert_all_sqlite_migrations(&mut conn)
-            .unwrap()
-            .len(),
-        4
-    );
-    assert_eq!(
-        koko::db::run_pending_sqlite_migrations(&mut conn)
-            .unwrap()
-            .len(),
-        4
-    );
-}

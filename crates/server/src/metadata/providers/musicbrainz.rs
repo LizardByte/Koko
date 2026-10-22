@@ -488,6 +488,14 @@ impl MetadataProvider for MusicBrainzMetadataProvider {
                     } else {
                         Vec::new()
                     };
+                    for credit in &entity.artist_credit {
+                        if valid_mbid(&credit.artist.id) {
+                            ids.push(crate::metadata::ProviderExternalId {
+                                source: "musicbrainz_artist".into(),
+                                external_id: credit.artist.id.clone(),
+                            });
+                        }
+                    }
                     if let Some(group) = entity
                         .release_group
                         .as_ref()

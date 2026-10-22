@@ -46,6 +46,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_library_inventory,
         media::get_items,
         media::get_item,
+        media::get_similar_items,
         media::get_item_files,
         media::get_item_credits,
         media::get_item_metadata,

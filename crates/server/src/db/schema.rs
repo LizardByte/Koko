@@ -73,6 +73,27 @@ table! {
 }
 
 table! {
+    item_similarities (metadata_link_id, provider_id, media_type, external_id) {
+        metadata_link_id -> Integer,
+        provider_id -> Text,
+        media_type -> Text,
+        external_id -> Text,
+        rank -> Integer,
+    }
+}
+
+table! {
+    item_recommendations (item_id, similar_item_id) {
+        item_id -> Integer,
+        similar_item_id -> Integer,
+        provider_priority -> Integer,
+        provider_rank -> Integer,
+        local_score -> Integer,
+        year_distance -> BigInt,
+    }
+}
+
+table! {
     metadata_collections (id) {
         id -> Integer,
         provider_id -> Text,
@@ -285,6 +306,7 @@ joinable!(metadata_collection_items -> media_items (media_item_id));
 joinable!(metadata_collection_items -> metadata_collections (collection_id));
 joinable!(item_metadata_external_ids -> item_metadata_links (metadata_link_id));
 joinable!(item_metadata_links -> media_items (media_item_id));
+joinable!(item_similarities -> item_metadata_links (metadata_link_id));
 joinable!(item_metadata_people -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> item_metadata_links (metadata_link_id));
 joinable!(metadata_person_credits -> metadata_people (person_id));
@@ -303,6 +325,8 @@ allow_tables_to_appear_in_same_query!(
     item_metadata_external_ids,
     item_metadata_links,
     item_metadata_people,
+    item_similarities,
+    item_recommendations,
     metadata_collection_items,
     metadata_collections,
     metadata_extras,

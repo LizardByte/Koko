@@ -10,6 +10,9 @@ const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { middlewareMode: true, hmr: false, ws: false },
   plugins: [{ name: 'expose-metadata-polling', enforce: 'pre', transform(code, id) {
+    if (id.replaceAll('\\', '/').endsWith('/src/api.ts')) {
+      return code + '\nexport { useLiveApi };';
+    }
     if (id.replaceAll('\\', '/').endsWith('/src/app.ts')) {
       return code + '\nexport { refreshSelectedItemMetadata, refreshPendingMetadataData };';
     }
@@ -17,6 +20,7 @@ const server = await createServer({
 });
 after(() => server.close());
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
+const { useLiveApi } = await server.ssrLoadModule('/src/api.ts');
 const { refreshSelectedItemMetadata, refreshPendingMetadataData } = await server.ssrLoadModule('/src/app.ts');
 const { beginMetadataRequest, invalidateMetadataRequests, mutateMetadata } = await server.ssrLoadModule('/src/app/metadataRequests.ts');
 const deferred = () => {
@@ -36,6 +40,7 @@ function pollingResponse(path, old) {
 }
 
 beforeEach(() => {
+  useLiveApi();
   invalidateMetadataRequests();
   Object.assign(state, {
     route: { page: 'item', itemId: 101 },
@@ -108,3 +113,20 @@ test('route reload invalidation discards a poll even when the same item is visit
   invalidateMetadataRequests();
   assert.equal(previous(), false);
 });
+
+for (const itemType of ['show', 'artist', 'album', 'season', 'episode', 'track']) {
+  const supported = ['show', 'artist', 'album'].includes(itemType);
+  test(`${itemType} metadata polling ${supported ? 'keeps' : 'skips'} recommendations`, async () => {
+    const requests = [];
+    globalThis.fetch = async (url) => {
+      const path = new URL(url, location.origin).pathname;
+      requests.push(path);
+      const value = pollingResponse(path, false);
+      if (path.endsWith('/101')) value.item_type = itemType;
+      return json(value);
+    };
+    await poll();
+    assert.equal(requests.some((path) => path.endsWith('/similar')), supported);
+    assert.equal(state.selectedItem.item_type, itemType);
+  });
+}

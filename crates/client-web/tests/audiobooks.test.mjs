@@ -316,10 +316,12 @@ test('book pages group local versions and ebook files without offering audiobook
   state.selectedItem = work;
   state.route = { page: 'item', itemId: work.id };
   const html = renderItemPage();
-  assert.match(html, /Audiobook versions/);
-  assert.match(html, /Ebook files/);
+  assert.match(html, /<h3>Audiobook versions <span class="item-row-count">· 1<\/span><\/h3>/);
+  assert.match(html, /<h3>Ebook files <span class="item-row-count">· 1<\/span><\/h3>/);
   assert.match(html, /item-title-fallback">Book</);
   assert.doesNotMatch(html, /audiobook-detail-page|audiobook-contents|Play album/);
+  state.selectedItem = { ...work, children: [] };
+  assert.doesNotMatch(renderItemPage(), /data-nav-section="(?:audiobook|book)"/);
 });
 
 test('author profiles show biographies and dates and offer Open Library metadata management', async () => {

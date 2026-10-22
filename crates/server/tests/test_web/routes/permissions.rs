@@ -46,6 +46,7 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/playlists/1"),
     (Method::Get, "/api/v1/items/1/lyrics"),
     (Method::Get, "/api/v1/items/1/radio"),
+    (Method::Get, "/api/v1/items/1/similar"),
     (Method::Get, "/api/v1/system/capabilities"),
     (Method::Get, "/api/v1/metadata/providers"),
     (Method::Get, "/api/v1/metadata/locales"),
@@ -70,6 +71,118 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Get, "/api/v1/people/1/image"),
     (Method::Get, "/api/v1/user-profile-images/example.png"),
 ];
+
+#[rocket::async_test]
+async fn similar_items_use_saved_results_with_current_library_permissions() {
+    use crate::test_utils::schema::{
+        item_metadata_links as links,
+        item_recommendations as cached,
+        item_similarities as similar,
+        media_items as items,
+    };
+    use diesel::prelude::*;
+    let (client, admin, viewer) = fixture().await;
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            diesel::update(links::table)
+                .set(links::match_state.eq("linked"))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(links::table)
+                .values((
+                    links::id.eq(3),
+                    links::media_item_id.eq(3),
+                    links::provider_id.eq("tmdb"),
+                    links::external_id.eq("3"),
+                    links::media_type.eq("movie"),
+                    links::match_state.eq("linked"),
+                ))
+                .execute(conn)
+                .unwrap();
+            for (target, rank) in [("2", 0), ("3", 1), ("99", 2)] {
+                diesel::insert_into(similar::table)
+                    .values((
+                        similar::metadata_link_id.eq(1),
+                        similar::provider_id.eq("tmdb"),
+                        similar::media_type.eq("movie"),
+                        similar::external_id.eq(target),
+                        similar::rank.eq(rank),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+            }
+            for (target, rank) in [(2, 0), (3, 1)] {
+                diesel::insert_into(cached::table)
+                    .values((
+                        cached::item_id.eq(1),
+                        cached::similar_item_id.eq(target),
+                        cached::provider_priority.eq(2),
+                        cached::provider_rank.eq(rank),
+                        cached::local_score.eq(0),
+                        cached::year_distance.eq(i64::MAX),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+            }
+        })
+        .await;
+    for (token, expected) in [
+        (&viewer, vec![3]),
+        (&admin, vec![2, 3]),
+    ] {
+        let body = response(
+            &client,
+            Method::Get,
+            "/api/v1/items/1/similar",
+            Some(token),
+            json!({}),
+            Status::Ok,
+        )
+        .await;
+        let items: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            items
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    response(
+        &client,
+        Method::Get,
+        "/api/v1/items/2/similar",
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
+    // Missing items are excluded even when their provider identity is recommended.
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            diesel::update(items::table.find(3))
+                .set(items::missing_since.eq(Some(100_i64)))
+                .execute(conn)
+                .unwrap();
+        })
+        .await;
+    let body = response(
+        &client,
+        Method::Get,
+        "/api/v1/items/1/similar",
+        Some(&viewer),
+        json!({}),
+        Status::Ok,
+    )
+    .await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!([]));
+}
 
 #[rocket::async_test]
 async fn radio_queue_resumes_one_mix_preserves_duplicate_positions_and_promotes_on_save() {

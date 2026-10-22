@@ -49,8 +49,10 @@ mod artwork;
 pub(crate) mod cache_policy;
 pub(crate) mod http;
 pub mod identities;
+pub(crate) mod listenbrainz;
 pub(crate) mod providers;
 pub(crate) mod ratings;
+pub(crate) mod similarities;
 #[cfg(test)]
 pub(crate) use providers::lrclib::TEST_LYRICS_URL;
 pub(crate) use providers::lrclib::fetch_lyrics;
@@ -1519,11 +1521,12 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
             Ok(mut snapshot) if snapshot_has_presentable_metadata(&snapshot) => {
                 snapshot.locale_key = locale_key.clone();
                 snapshot.provider_locale_key = Some(provider_locale);
-                let snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
+                let mut snapshot = merge_localized_snapshot(best_snapshot.take(), snapshot);
                 if snapshot_needs_text_fallback(&snapshot) {
                     best_snapshot = Some(snapshot);
                     continue;
                 }
+                similarities::enrich_snapshot(settings, &mut snapshot).await;
                 write_metadata_snapshot_cache(&cache_key, &snapshot);
                 return Ok(snapshot);
             }
@@ -1536,7 +1539,8 @@ pub async fn fetch_provider_metadata_snapshot_for_locale_with_options(
         }
     }
 
-    if let Some(snapshot) = best_snapshot {
+    if let Some(mut snapshot) = best_snapshot {
+        similarities::enrich_snapshot(settings, &mut snapshot).await;
         write_metadata_snapshot_cache(&cache_key, &snapshot);
         return Ok(snapshot);
     }
@@ -2289,6 +2293,14 @@ pub fn upsert_item_metadata_link(
                 updated_at: Some(current_timestamp()),
             };
 
+            let similarity_identity_changed = existing.as_ref().is_some_and(|row| {
+                metadata_refresh_target_changed(
+                    row,
+                    snapshot.provider_id.as_storage_value(),
+                    &snapshot.external_id,
+                    snapshot.media_type.as_deref(),
+                )
+            });
             if let Some(existing) = existing {
                 diesel::update(
                     metadata_links_dsl::item_metadata_links
@@ -2321,9 +2333,15 @@ pub fn upsert_item_metadata_link(
             sync_metadata_extras_for_link(conn, row.id, details, current_timestamp())?;
 
             if relation_kind == "primary" {
+                similarities::sync(conn, row.id, snapshot, similarity_identity_changed)?;
                 sync_item_metadata_collections(conn, row.id, row.media_item_id, snapshot, details)?;
                 sync_item_metadata_external_ids(conn, row.id, snapshot, details)?;
                 sync_item_metadata_people(conn, row.id, snapshot, details)?;
+            }
+
+            // Theme songs, trailers, and artwork do not change recommendation facts.
+            if relation_kind == "primary" || snapshot.provider_id == MetadataProviderId::AudioSilo {
+                crate::media::recommendations::refresh(conn, &[item_id])?;
             }
 
             to_item_metadata_summary_with_people(conn, row)
@@ -2441,6 +2459,7 @@ pub(crate) fn clear_item_metadata_tree_in_transaction(
             ))
             .execute(conn)?;
     }
+    crate::media::recommendations::refresh(conn, &ids)?;
     Ok(ids)
 }
 

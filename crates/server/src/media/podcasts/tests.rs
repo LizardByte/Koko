@@ -764,3 +764,140 @@ fn home_and_library_status_work_with_a_catalog_above_sqlites_bind_limit() {
         1
     );
 }
+
+#[test]
+fn continue_playing_selects_one_episode_per_podcast_and_advances_across_seasons() {
+    use crate::db::schema::playback_progress as progress;
+    let mut conn = database();
+    let url = "https://example.com/continuation";
+    let mut feed = feed::parse(RSS, url).unwrap();
+    feed.episodes.clear();
+    for index in 0..4 {
+        let mut episode = feed::parse(RSS, url).unwrap().episodes.remove(0);
+        episode.guid = format!("continue-{index}");
+        episode.title = format!("Episode {index}");
+        episode.season = Some(index / 2 + 1);
+        episode.metadata.published_at = Some(1_735_689_600 + index as i64);
+        feed.episodes.push(episode);
+    }
+    let root = storage::save(&mut conn, Some(1), url, url, &feed).unwrap();
+    storage::subscribe_existing(&mut conn, 2, url).unwrap();
+    let episodes = preferences::episodes(&mut conn, 1, root).unwrap();
+    for (index, position) in [(0, 1000), (1, 2000)] {
+        crate::media::upsert_playback_progress(
+            &mut conn,
+            1,
+            episodes[index].id,
+            position,
+            Some(9000),
+            false,
+        )
+        .unwrap();
+        diesel::update(
+            progress::table
+                .filter(progress::user_id.eq(1))
+                .filter(progress::media_item_id.eq(episodes[index].id)),
+        )
+        .set(progress::updated_at.eq(index as i64 + 10))
+        .execute(&mut conn)
+        .unwrap();
+    }
+    let continuation = |conn: &mut SqliteConnection, user| {
+        crate::media::get_media_home(conn, Some(user), None)
+            .unwrap()
+            .shelves
+            .into_iter()
+            .find(|shelf| shelf.id == "continue_watching")
+            .unwrap()
+            .items
+    };
+    let current = continuation(&mut conn, 1);
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].id, episodes[1].id);
+    assert_eq!(current[0].display_title, "Example show");
+    assert_eq!(current[0].display_subtitle.as_deref(), Some("Episode 1"));
+    assert!(continuation(&mut conn, 2).is_empty());
+    crate::media::upsert_playback_progress(&mut conn, 1, episodes[1].id, 9000, Some(9000), true)
+        .unwrap();
+    let next = continuation(&mut conn, 1);
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].id, episodes[2].id);
+    assert_ne!(next[0].parent_id, episodes[1].parent_id);
+    preferences::set(&mut conn, 1, root, PlaybackOrder::NewestFirst).unwrap();
+    assert_eq!(continuation(&mut conn, 1)[0].id, episodes[0].id);
+    preferences::set(&mut conn, 1, root, PlaybackOrder::OldestFirst).unwrap();
+    crate::media::upsert_playback_progress(&mut conn, 1, episodes[3].id, 9000, Some(9000), true)
+        .unwrap();
+    assert!(continuation(&mut conn, 1).is_empty());
+}
+
+#[test]
+fn personal_home_visibility_does_not_change_other_users_subscriptions_search_or_podcast_home() {
+    let mut conn = database();
+    let root = save(&mut conn, 1, "https://example.com/preferences");
+    storage::subscribe_existing(&mut conn, 2, "https://example.com/preferences").unwrap();
+    assert!(
+        preferences::user_settings(&mut conn, 1)
+            .unwrap()
+            .show_on_home
+    );
+    preferences::save_user_settings(
+        &mut conn,
+        1,
+        &PodcastUserSettings {
+            show_on_home: false,
+        },
+    )
+    .unwrap();
+    let home = crate::media::get_media_home(&mut conn, Some(1), None).unwrap();
+    assert!(
+        home.shelves
+            .iter()
+            .all(|shelf| shelf.items.iter().all(|item| item.podcast.is_none()))
+    );
+    assert!(
+        preferences::user_settings(&mut conn, 2)
+            .unwrap()
+            .show_on_home
+    );
+    assert!(
+        crate::media::get_media_home(&mut conn, Some(2), None)
+            .unwrap()
+            .shelves
+            .iter()
+            .any(|shelf| !shelf.items.is_empty())
+    );
+    let library = items::table
+        .find(root)
+        .select(items::library_id)
+        .first::<i32>(&mut conn)
+        .unwrap();
+    assert!(
+        crate::media::get_media_home(&mut conn, Some(1), Some(library))
+            .unwrap()
+            .shelves
+            .iter()
+            .any(|shelf| !shelf.items.is_empty())
+    );
+    assert_eq!(storage::subscribed(&mut conn, 1).unwrap()[0].id, root);
+    assert!(
+        !crate::media::search_media_items_for_user_with_preferred_languages(
+            &mut conn,
+            Some(1),
+            "Example",
+            None,
+            &[]
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn large_feed_archives_above_the_old_ten_megabyte_limit_are_supported() {
+    let padding = " ".repeat(10 * 1024 * 1024);
+    let xml = RSS.replacen("<channel>", &format!("<channel><!--{padding}-->"), 1);
+    assert!(xml.len() > 10 * 1024 * 1024 && xml.len() < MAX_FEED_BYTES);
+    let feed = feed::parse(&xml, "https://example.com/large-archive").unwrap();
+    assert_eq!(feed.episodes.len(), 2);
+}

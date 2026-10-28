@@ -4492,9 +4492,11 @@ pub async fn get_items(
     let items = db
         .run(move |conn| {
             let languages = user_preferred_metadata_languages(conn, user_id)?;
-            list_media_items_for_user_with_preferred_languages(
+            let mut items = list_media_items_for_user_with_preferred_languages(
                 conn, user_id, library_id, &languages,
-            )
+            )?;
+            crate::media::podcasts::filter_home(conn, user_id, library_id, &mut items)?;
+            Ok::<_, diesel::result::Error>(items)
         })
         .await
         .map_err(|error| {

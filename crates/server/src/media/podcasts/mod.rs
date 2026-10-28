@@ -19,12 +19,19 @@ pub(crate) use http::{
     normalize_url,
     request,
 };
-pub use preferences::PlaybackOrder;
+pub use preferences::{
+    PlaybackOrder,
+    PodcastUserSettings,
+};
 pub(crate) use preferences::{
     apply as apply_preferences,
     apply_detail as apply_user_context,
+    continuation,
     episodes,
+    filter_home,
+    save_user_settings,
     set as set_order,
+    user_settings,
 };
 pub use storage::{
     PodcastEpisodePage,
@@ -43,6 +50,7 @@ pub(crate) use storage::{
 };
 
 use crate::db::DbConn;
+
 use rocket_okapi::okapi::schemars::{
     self,
     JsonSchema,
@@ -51,6 +59,8 @@ use serde::{
     Deserialize,
     Serialize,
 };
+
+const MAX_FEED_BYTES: usize = 64 * 1024 * 1024;
 
 /// Origin of a podcast episode grouping.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -145,7 +155,7 @@ pub async fn subscribe(
     {
         return Ok(id);
     }
-    let (canonical, xml) = http::fetch_text(&requested, 10 * 1024 * 1024).await?;
+    let (canonical, xml) = http::fetch_text(&requested, MAX_FEED_BYTES).await?;
     let parsed = feed::parse(&xml, &canonical)?;
     db.run(move |conn| storage::save(conn, Some(user), &requested, &canonical, &parsed))
         .await
@@ -171,7 +181,7 @@ async fn refresh_url(
     url: String,
 ) -> Result<(), String> {
     let result = async {
-        let (canonical, xml) = http::fetch_text(&url, 10 * 1024 * 1024).await?;
+        let (canonical, xml) = http::fetch_text(&url, MAX_FEED_BYTES).await?;
         let parsed = feed::parse(&xml, &canonical)?;
         db.run(move |conn| storage::save(conn, None, &url, &canonical, &parsed))
             .await

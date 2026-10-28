@@ -50,7 +50,13 @@ export function renderPodcastPage(): string {
   if (tab === 'discover' && data) content = discovery();
   if (tab === 'recommended' && data) content = renderPodcastRecommended();
   if (state.showFullSearchResults && state.searchQuery.trim()) content = renderSearchResults();
-  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
+  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}${renderPodcastSettings()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
+}
+
+/** Personal preferences stay available to every subscriber, including non-administrator accounts. */
+export function renderPodcastSettings(): string {
+  const checked = state.podcasts?.settings?.show_on_home !== false;
+  return `<div class="music-song-menu podcast-personal-settings"><button type="button" class="secondary-button icon-only" popovertarget="podcast-personal-settings" aria-label="Podcast settings">${renderIcon('settings')}</button><div popover id="podcast-personal-settings"><label class="checkbox-inline"><input type="checkbox" data-podcasts-show-on-home ${checked ? 'checked' : ''}/> Show podcasts on Home</label><p class="muted">Applies only to your account. Your podcast library and search remain available.</p></div></div>`;
 }
 
 /** Subscribed shows supply the shared hero and listening shelves; publisher covers remain available. */
@@ -96,13 +102,13 @@ export function renderPodcastDownloadIcon(item: MediaItemSummary): string {
 }
 
 /** Render one episode with accessible download availability and shared audio controls. */
-export function episodeRow(item: MediaItemSummary, index: number): string {
+export function episodeRow(item: MediaItemSummary, chronologicalNumber: number): string {
   const playback = activeMusicPlayback();
   const isCurrent = playback?.item.id === item.id && !playback.ended;
   const resume = item.playback_completed ? 0 : item.playback_position_ms ?? 0;
   const subtitle = [item.podcast?.published_at ? formatTimestamp(item.podcast.published_at) : '', item.podcast?.episode_type].filter(Boolean).join(' · ');
   const actions = `<button type="button" data-item-id="${item.id}">Episode details</button><button type="button" data-podcast-play="${item.id}" data-podcast-position="0">Play from beginning</button>`;
-  return renderAudioTrackRow(item, { number: String(item.episode_number ?? index + 1), menuId: `podcast-${item.id}`, isCurrent, cover: true, playAttributes: `data-podcast-play="${item.id}" data-podcast-position="${resume}"`, subtitle, actions, warnings: renderPodcastDownloadIcon(item) });
+  return renderAudioTrackRow(item, { number: String(item.episode_number ?? chronologicalNumber), menuId: `podcast-${item.id}`, isCurrent, cover: true, playAttributes: `data-podcast-play="${item.id}" data-podcast-position="${resume}"`, subtitle, actions, warnings: renderPodcastDownloadIcon(item) });
 }
 
 /** Use TV season cards and music track rows within the ordinary shared item page. */
@@ -116,13 +122,13 @@ export function renderPodcastContents(item: MediaItemDetail): string {
     return -ascending;
   });
   const episodes = orderedPodcastEpisodes(item.children.filter(child => child.item_type === 'podcast_episode'));
+  const total = item.item_type === 'podcast_season' ? item.child_count : episodes.length;
   const heading = seasons.length ? 'Seasons' : 'Episodes';
-  const body = seasons.length ? `<div class="item-grid hierarchy-item-grid podcast-library-grid">${seasons.map(renderItemCard).join('')}</div>` : `<div class="music-track-list">${episodes.map(episodeRow).join('')}</div>`;
+  const body = seasons.length ? `<div class="item-grid hierarchy-item-grid podcast-library-grid">${seasons.map(renderItemCard).join('')}</div>` : `<div class="music-track-list">${episodes.map((episode, index) => episodeRow(episode, total - index)).join('')}</div>`;
   if (!seasons.length && !episodes.length) {
     if (item.playable) return '';
     return '<div class="empty-state">This feed has no episodes yet.</div>';
   }
-  const total = item.item_type === 'podcast_season' ? item.child_count : episodes.length;
   const pageStatus = state.podcastEpisodeLoading?.itemId === item.id ? state.podcastEpisodeLoading : undefined;
   const pageError = pageStatus?.error ? `<span role="alert">${escapeHtml(pageStatus.error)}</span>` : '';
   const loadMoreLabel = pageStatus?.error ? 'Retry loading episodes' : 'Load more episodes';

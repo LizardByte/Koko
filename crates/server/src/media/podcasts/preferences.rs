@@ -166,17 +166,12 @@ pub fn apply_detail(
     }
     let season = (detail.item_type == "podcast_season").then_some(detail.id);
     let candidates = playback_candidates(conn, user, root, season, metadata.playback_order)?;
-    let recent = candidates
-        .iter()
-        .filter(|item| {
-            !item.playback_completed && item.playback_position_ms.unwrap_or_default() > 0
-        })
-        .max_by_key(|item| item.last_played_at);
-    let selected = recent
-        .or_else(|| candidates.iter().find(|item| !item.playback_completed))
-        .or_else(|| candidates.first());
-    detail.playback_target = selected.map(target);
-    detail.restart_playback_target = candidates.first().map(|item| MediaPlaybackTarget {
+    detail.playback_target = candidates
+        .next
+        .as_ref()
+        .or(candidates.first.as_ref())
+        .map(target);
+    detail.restart_playback_target = candidates.first.as_ref().map(|item| MediaPlaybackTarget {
         start_ms: 0,
         resume: false,
         label: "Start podcast over".into(),
@@ -206,7 +201,7 @@ fn playback_candidates(
     root: i32,
     season: Option<i32>,
     order: PlaybackOrder,
-) -> QueryResult<Vec<MediaItemSummary>> {
+) -> QueryResult<PodcastTargets> {
     use crate::db::schema::{
         media_items as items,
         podcast_items as metadata,
@@ -238,15 +233,18 @@ fn playback_candidates(
     });
     let all_ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
     let progress = crate::media::playback_progress_by_item_id(conn, Some(user), &all_ids)?;
-    let recent = all_ids
-        .iter()
-        .filter_map(|id| progress.get(id))
-        .filter(|row| !row.completed && row.position_ms > 0)
-        .max_by_key(|row| row.updated_at)
+    let latest = progress.values().max_by_key(|row| (row.updated_at, row.id));
+    let resume = latest
+        .filter(|row| !row.completed)
         .map(|row| row.media_item_id);
-    let next = recent.or_else(|| {
+    let after_completed = latest
+        .filter(|row| row.completed)
+        .and_then(|row| all_ids.iter().position(|id| *id == row.media_item_id))
+        .map_or(0, |index| index + 1);
+    let next = resume.or_else(|| {
         all_ids
             .iter()
+            .skip(after_completed)
             .find(|id| progress.get(id).is_none_or(|row| !row.completed))
             .copied()
     });
@@ -258,6 +256,95 @@ fn playback_candidates(
     }
     let mut summaries = crate::media::list_media_items_by_ids(conn, &ids, &[])?;
     crate::media::apply_user_playback_progress_to_summaries(conn, Some(user), &mut summaries)?;
-    sort(&mut summaries, order);
-    Ok(summaries)
+    let mut by_id = summaries
+        .into_iter()
+        .map(|item| (item.id, item))
+        .collect::<HashMap<_, _>>();
+    let first = all_ids.first().and_then(|id| by_id.get(id)).cloned();
+    let next = next.and_then(|id| by_id.remove(&id));
+    Ok(PodcastTargets { next, first })
+}
+
+struct PodcastTargets {
+    next: Option<MediaItemSummary>,
+    first: Option<MediaItemSummary>,
+}
+
+/// One resumable or following episode for a podcast that has already been played.
+pub(crate) fn continuation(
+    conn: &mut SqliteConnection,
+    user: i32,
+    podcast: i32,
+) -> QueryResult<Option<MediaItemSummary>> {
+    let order = get(conn, user, podcast)?;
+    let mut next = playback_candidates(conn, user, podcast, None, order)?.next;
+    if let Some(metadata) = next.as_mut().and_then(|item| item.podcast.as_mut()) {
+        metadata.playback_order = order;
+    }
+    Ok(next)
+}
+
+/// Personal podcast presentation settings, independent of subscriptions and server storage.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct PodcastUserSettings {
+    /// Include podcasts on the combined Home page for this account.
+    pub show_on_home: bool,
+}
+impl Default for PodcastUserSettings {
+    fn default() -> Self {
+        Self { show_on_home: true }
+    }
+}
+
+pub(crate) fn user_settings(
+    conn: &mut SqliteConnection,
+    user: i32,
+) -> QueryResult<PodcastUserSettings> {
+    let raw = settings::table
+        .find(format!("podcast_home:{user}"))
+        .select(settings::value)
+        .first::<String>(conn)
+        .optional()?;
+    Ok(raw
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default())
+}
+
+pub(crate) fn save_user_settings(
+    conn: &mut SqliteConnection,
+    user: i32,
+    value: &PodcastUserSettings,
+) -> QueryResult<()> {
+    let row = AppSetting {
+        key: format!("podcast_home:{user}"),
+        value: serde_json::to_string(value).expect("serializable podcast preference"),
+        updated_at: Some(crate::utils::current_timestamp()),
+    };
+    diesel::insert_into(settings::table)
+        .values(&row)
+        .on_conflict(settings::key)
+        .do_update()
+        .set(&row)
+        .execute(conn)?;
+    Ok(())
+}
+
+/// Hiding Home cards leaves search, subscriptions, and the podcast library available.
+pub(crate) fn filter_home(
+    conn: &mut SqliteConnection,
+    user: Option<i32>,
+    library: Option<i32>,
+    items: &mut Vec<MediaItemSummary>,
+) -> QueryResult<()> {
+    if library.is_some() {
+        return Ok(());
+    }
+    let Some(user) = user else {
+        return Ok(());
+    };
+    if !user_settings(conn, user)?.show_on_home {
+        items.retain(|item| !item.item_type.starts_with("podcast"));
+    }
+    Ok(())
 }

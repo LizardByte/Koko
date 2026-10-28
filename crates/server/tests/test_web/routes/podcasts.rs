@@ -60,6 +60,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         "/api/v1/podcasts",
         "/api/v1/podcasts/discover",
         "/api/v1/podcasts/home",
+        "/api/v1/podcasts/settings",
         "/api/v1/podcasts/seasons/4/episodes",
         "/api/v1/podcasts/1/episodes",
         "/api/v1/podcasts/episodes/2/stream",
@@ -221,6 +222,50 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .await
         .unwrap();
     assert_eq!(rows[0]["podcast"]["playback_order"], "oldest_first");
+    let hidden = client
+        .put("/api/v1/podcasts/settings")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .header(ContentType::JSON)
+        .body(r#"{"show_on_home":false}"#)
+        .dispatch()
+        .await;
+    assert_eq!(hidden.status(), Status::NoContent);
+    let own = client
+        .get("/api/v1/podcasts/settings")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(own["show_on_home"], false);
+    let other = client
+        .get("/api/v1/podcasts/settings")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(other["show_on_home"], true);
+    let combined = client
+        .get("/api/v1/items")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Vec<Value>>()
+        .await
+        .unwrap();
+    assert!(combined.is_empty());
+    let own_library = client
+        .get("/api/v1/podcasts")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Vec<Value>>()
+        .await
+        .unwrap();
+    assert_eq!(own_library.len(), 1);
     assert_eq!(
         client
             .delete("/api/v1/podcasts/1")

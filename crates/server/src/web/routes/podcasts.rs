@@ -41,15 +41,28 @@ fn owner(user: &UserGuard) -> Result<i32, Status> {
 /// Readable podcast operation failure.
 #[derive(Serialize, JsonSchema)]
 pub struct PodcastError {
+    kind: &'static str,
     message: String,
 }
 type Error = rocket::response::status::Custom<Json<PodcastError>>;
 fn error(message: String) -> Error {
-    rocket::response::status::Custom(Status::BadGateway, Json(PodcastError { message }))
+    rocket::response::status::Custom(
+        Status::BadGateway,
+        Json(PodcastError {
+            kind: "podcast_operation",
+            message,
+        }),
+    )
 }
 
 fn bad_request(message: String) -> Error {
-    rocket::response::status::Custom(Status::BadRequest, Json(PodcastError { message }))
+    rocket::response::status::Custom(
+        Status::BadRequest,
+        Json(PodcastError {
+            kind: "podcast_operation",
+            message,
+        }),
+    )
 }
 
 /// Return popular podcasts or directory search results without adding any to Koko.
@@ -106,7 +119,12 @@ pub async fn add(
         return Err(bad_request("The feed URL is too long".into()));
     }
     let url = podcasts::normalize_url(&body.feed_url).map_err(bad_request)?;
-    let item_id = podcasts::subscribe(&db, user, &url).await.map_err(error)?;
+    let item_id = podcasts::subscribe(&db, user, &url)
+        .await
+        .map_err(|message| {
+            log::warn!("Unable to add podcast: {message}");
+            error(message)
+        })?;
     Ok(Json(AddedPodcast { item_id }))
 }
 /// Remove this subscription and delete saved copies when no subscribers remain.
@@ -138,6 +156,7 @@ pub async fn refresh(
             rocket::response::status::Custom(
                 Status::NotFound,
                 Json(PodcastError {
+                    kind: "podcast_operation",
                     message: "Podcast is unavailable".into(),
                 }),
             )
@@ -331,4 +350,33 @@ pub async fn season_episodes(
             Status::InternalServerError
         }
     })
+}
+
+/// Read only this account's podcast Home preferences.
+#[openapi(tag = "Podcasts")]
+#[get("/api/v1/podcasts/settings")]
+pub async fn get_user_settings(
+    user: UserGuard,
+    db: DbConn,
+) -> Result<Json<podcasts::PodcastUserSettings>, Status> {
+    let user = owner(&user)?;
+    db.run(move |conn| podcasts::user_settings(conn, user))
+        .await
+        .map(Json)
+        .map_err(|_| Status::InternalServerError)
+}
+
+/// Update personal presentation without changing another account or the global download policy.
+#[openapi(tag = "Podcasts")]
+#[put("/api/v1/podcasts/settings", format = "json", data = "<body>")]
+pub async fn set_user_settings(
+    user: UserGuard,
+    db: DbConn,
+    body: Json<podcasts::PodcastUserSettings>,
+) -> Result<Status, Status> {
+    let user = owner(&user)?;
+    db.run(move |conn| podcasts::save_user_settings(conn, user, &body.into_inner()))
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    Ok(Status::NoContent)
 }

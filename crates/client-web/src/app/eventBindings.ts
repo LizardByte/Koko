@@ -1,7 +1,7 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
-import { bindPodcastActions } from './podcastActions';
+import { bindPodcastActions, retryPodcastAction } from './podcastActions';
 import { bindBookActions } from './bookActions';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
@@ -642,7 +642,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     image.addEventListener('error', showFallback);
     if (image.complete && image.naturalWidth === 0) showFallback();
   });
-  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void refreshData(); });
+  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void retryPodcastAction().then(retried => { if (!retried) return refreshData(); }); });
   document.querySelector<HTMLFormElement>('#mobile-library-form')?.addEventListener('submit', (event) => event.preventDefault());
   document.querySelector<HTMLSelectElement>('#mobile-library-picker')?.addEventListener('change', (event) => {
     navigateTo((event.currentTarget as HTMLSelectElement).value);

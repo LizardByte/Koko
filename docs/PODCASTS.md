@@ -12,14 +12,24 @@ show to their own collections. **Remove** unsubscribes only your account; it doe
 another user's access. When the last subscriber removes a podcast, Koko deletes its downloaded
 episodes. Adding the show again restores your listening history.
 
+## Personal Home preferences
+
+Open **Podcast settings** (the gear beside the search box) and turn off **Show podcasts on Home**
+to hide podcast cards from your combined Home page. This setting applies only to your account.
+Your subscriptions, podcast library, and search results remain available.
+
+Continue playing shows one next episode per podcast. An unfinished latest episode resumes where
+you stopped; a completed episode advances in your chosen playback order. Displayed episode numbers
+increase from older to newer releases, even though the newest episodes appear at the top.
+
 ## Add a feed manually
 
 Select **Add RSS feed**, enter the show's public RSS or Atom feed URL and select **Add
 podcast**. Use a feed URL provided by the publisher, rather than a link to a podcast website or
 an Apple Podcasts or Spotify page. Manual entry works even when the directory is unavailable.
 
-Koko accepts HTTP and HTTPS feeds on the public internet. Feeds that require login credentials,
-private network addresses, or a platform-specific subscription cannot be added.
+Koko accepts HTTP and HTTPS feeds on the public internet, up to 64 MiB per feed. Feeds that require
+login credentials, private network addresses, or a platform-specific subscription cannot be added.
 
 ## Browse and listen
 
@@ -64,6 +74,8 @@ Turn off **Download new podcast episodes automatically** to download episodes on
 Downloaded copies are shared when several users subscribe to the same show. Saved episodes
 remain while at least one account subscribes to the podcast. Saved episodes can play when the
 publisher is unavailable, but your device still needs a connection to your Koko server.
+
+A failed podcast action can be repeated with **Retry** without re-entering its feed URL.
 
 ## Troubleshooting
 

@@ -170,3 +170,55 @@ test('the playback cover opens the podcast season', () => {
   const html = renderAudioPlayer({ item, queue, loading: false, paused: true, volume: 1, muted: false });
   assert.match(html, /data-music-open-item="45" aria-label="Open podcast season"/);
 });
+
+
+test('chronological episode numbers increase toward newer releases across loaded pages', () => {
+  const season = episode(900, { item_type: 'podcast_season', playable: false, child_count: 736, children: [episode(4), episode(3), episode(2)] });
+  const numbers = html => [...html.matchAll(/music-track-number">(\d+)<\/span>/g)].map(match => Number(match[1]));
+  assert.deepEqual(numbers(renderPodcastContents(season)), [736, 735, 734]);
+  season.podcast.playback_order = 'newest_first';
+  assert.deepEqual(numbers(renderPodcastContents(season)), [736, 735, 734]);
+  season.children.push(episode(1));
+  assert.deepEqual(numbers(renderPodcastContents(season)), [736, 735, 734, 733]);
+  season.children[1].episode_number = 42;
+  assert.deepEqual(numbers(renderPodcastContents(season)), [736, 42, 734, 733]);
+});
+
+test('podcast settings belong to the account and remain available without administrator access', async () => {
+  const { renderPodcastSettings } = await server.ssrLoadModule('/src/app/podcasts.ts');
+  state.bootstrap = { current_user: { id: 1, admin: false } };
+  state.podcasts.settings = { show_on_home: false };
+  const html = renderPodcastSettings();
+  assert.match(html, /Show podcasts on Home/);
+  assert.doesNotMatch(html, /data-podcasts-show-on-home checked/);
+  assert.match(html, /Applies only to your account/);
+});
+
+test('Retry repeats the failed podcast operation and refreshes after success', async () => {
+  const { executePodcastAction, retryPodcastAction } = await server.ssrLoadModule('/src/app/podcastActions.ts');
+  state.bootstrap = { current_user: { id: 1 } }; state.podcasts.busy = false;
+  let attempts = 0, refreshed = 0, completed = 0;
+  const context = { render() {}, async refreshData() { refreshed++; } };
+  await executePodcastAction(context, async () => { attempts++; if (attempts === 1) { throw new Error('Publisher unavailable'); } }, () => { completed++; });
+  assert.equal(attempts, 1); assert.equal(refreshed, 0);
+  assert.equal(state.error, 'Publisher unavailable');
+  assert.equal(await retryPodcastAction(), true);
+  assert.equal(attempts, 2); assert.equal(refreshed, 1); assert.equal(completed, 1);
+  assert.equal(state.error, undefined);
+  assert.equal(await retryPodcastAction(), false);
+});
+
+test('Retry cannot replay an abandoned account request or an unrelated error', async () => {
+  const { executePodcastAction, retryPodcastAction } = await server.ssrLoadModule('/src/app/podcastActions.ts');
+  state.bootstrap = { current_user: { id: 1 } }; state.podcasts.busy = false;
+  let attempts = 0;
+  await executePodcastAction({ render() {}, async refreshData() {} }, async () => { attempts++; throw new Error('Failed add'); });
+  state.bootstrap = { current_user: { id: 2 } };
+  assert.equal(await retryPodcastAction(), false);
+  state.bootstrap.current_user.id = 1;
+  const failedRoute = state.route;
+  state.route = { page: 'home' };
+  assert.equal(await retryPodcastAction(), false);
+  state.route = failedRoute; state.error = 'Different failure';
+  assert.equal(await retryPodcastAction(), false); assert.equal(attempts, 1);
+});

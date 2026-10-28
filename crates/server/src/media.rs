@@ -3578,6 +3578,8 @@ pub fn get_media_home_with_preferred_languages(
         preferred_languages,
     )?;
 
+    podcasts::filter_home(conn, user_id, library_id, &mut items)?;
+
     let excluded_libraries = if library_id.is_none() {
         use crate::db::schema::media_libraries::dsl as libraries;
         libraries::media_libraries
@@ -5063,6 +5065,32 @@ fn get_continue_watching_items(
                 let mut album = album.clone();
                 album.last_played_at = progress.updated_at;
                 items.push(album);
+            }
+            continue;
+        }
+
+        if row.item_type == "podcast_episode" {
+            let Some(episode) = visible_items_by_id.get(&row.id) else {
+                continue;
+            };
+            let Some(root) = episode.podcast.as_ref().map(|value| value.podcast_id) else {
+                continue;
+            };
+            let Some(show) = visible_items_by_id.get(&root) else {
+                continue;
+            };
+            if progress.position_ms <= 0 && !progress.completed || !seen_continue_keys.insert(root)
+            {
+                continue;
+            }
+            if let Some(mut target) = podcasts::continuation(conn, user_id, root)? {
+                target.last_played_at = progress.updated_at;
+                target.display_subtitle = Some(target.display_title.clone());
+                target.display_title = show.display_title.clone();
+                target.artwork_item_id = Some(root);
+                if library_id.is_none() || Some(target.library_id) == library_id {
+                    items.push(target);
+                }
             }
             continue;
         }

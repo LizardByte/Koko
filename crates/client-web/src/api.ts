@@ -291,14 +291,20 @@ export interface PodcastEpisodePage { items: MediaItemSummary[]; total: number; 
 export function getPodcastHome(): Promise<MediaHome> { return requestJson('GET', '/api/v1/podcasts/home'); }
 /** Fetch the next visible season page without loading the entire back catalog. */
 export function getPodcastSeasonEpisodes(id: number, offset: number): Promise<PodcastEpisodePage> { return requestJson('GET', `/api/v1/podcasts/seasons/${id}/episodes?${new URLSearchParams({ offset: String(offset), limit: '50' })}`); }
+/** Account-specific podcast presentation preferences. */
+export interface PodcastUserSettings { show_on_home: boolean }
+/** Load personal Home visibility independently of global download settings. */
+export function getPodcastUserSettings(): Promise<PodcastUserSettings> { return requestJson('GET', '/api/v1/podcasts/settings'); }
+/** Save personal Home visibility without changing another account's library. */
+export function setPodcastUserSettings(settings: PodcastUserSettings): Promise<void> { return requestJson('PUT', '/api/v1/podcasts/settings', settings); }
 /** List the current account's subscribed shows. */
 export function getPodcasts(): Promise<MediaItemSummary[]> { return requestJson('GET', '/api/v1/podcasts'); }
 /** Subscribe to a directory result or manually entered RSS feed. */
-export function addPodcast(feedUrl: string): Promise<{ item_id: number }> { return requestJson('POST', '/api/v1/podcasts', { feed_url: feedUrl }); }
+export function addPodcast(feedUrl: string): Promise<{ item_id: number }> { return requestJson('POST', '/api/v1/podcasts', { feed_url: feedUrl }, 90000); }
 /** Remove only the current account's subscription. */
 export function removePodcast(id: number): Promise<void> { return requestJson('DELETE', `/api/v1/podcasts/${id}`); }
 /** Check a subscribed show for new episodes immediately. */
-export function refreshPodcast(id: number): Promise<void> { return requestJson('POST', `/api/v1/podcasts/${id}/refresh`); }
+export function refreshPodcast(id: number): Promise<void> { return requestJson('POST', `/api/v1/podcasts/${id}/refresh`, undefined, 90000); }
 
 /** A library card with account-specific progress and metadata for its media type. */
 export interface MediaItemSummary {
@@ -1243,9 +1249,9 @@ function requestHeaders(body?: unknown): Record<string, string> {
   return headers;
 }
 
-async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
+async function fetchJsonResponse(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), timeoutMs ?? (path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS));
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),
@@ -1304,13 +1310,13 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return undefined as T;
 }
 
-async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function requestJson<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   if (shouldUseMockApi()) {
     return getMockJsonFallback<T>(method, path, body);
   }
 
   try {
-    const response = await fetchJsonResponse(method, path, body);
+    const response = await fetchJsonResponse(method, path, body, timeoutMs);
     if (!response.ok) {
       return handleErrorResponse<T>(method, path, body, response);
     }

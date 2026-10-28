@@ -846,6 +846,7 @@ fn personal_home_visibility_does_not_change_other_users_subscriptions_search_or_
         1,
         &PodcastUserSettings {
             show_on_home: false,
+            show_in_sidebar: false,
         },
     )
     .unwrap();
@@ -900,4 +901,20 @@ fn large_feed_archives_above_the_old_ten_megabyte_limit_are_supported() {
     assert!(xml.len() > 10 * 1024 * 1024 && xml.len() < MAX_FEED_BYTES);
     let feed = feed::parse(&xml, "https://example.com/large-archive").unwrap();
     assert_eq!(feed.episodes.len(), 2);
+}
+
+#[test]
+fn existing_personal_home_preferences_default_to_showing_the_sidebar() {
+    let mut conn = database();
+    diesel::insert_into(crate::db::schema::app_settings::table)
+        .values(&crate::db::models::AppSetting {
+            key: "podcast_home:1".into(),
+            value: r#"{"show_on_home":false}"#.into(),
+            updated_at: None,
+        })
+        .execute(&mut conn)
+        .unwrap();
+    let settings = preferences::user_settings(&mut conn, 1).unwrap();
+    assert!(!settings.show_on_home);
+    assert!(settings.show_in_sidebar);
 }

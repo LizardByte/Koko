@@ -226,7 +226,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .put("/api/v1/podcasts/settings")
         .header(Header::new("Authorization", format!("Bearer {listener}")))
         .header(ContentType::JSON)
-        .body(r#"{"show_on_home":false}"#)
+        .body(r#"{"show_on_home":false,"show_in_sidebar":false}"#)
         .dispatch()
         .await;
     assert_eq!(hidden.status(), Status::NoContent);
@@ -239,6 +239,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .await
         .unwrap();
     assert_eq!(own["show_on_home"], false);
+    assert_eq!(own["show_in_sidebar"], false);
     let other = client
         .get("/api/v1/podcasts/settings")
         .header(Header::new("Authorization", format!("Bearer {admin}")))
@@ -248,6 +249,24 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .await
         .unwrap();
     assert_eq!(other["show_on_home"], true);
+    assert_eq!(other["show_in_sidebar"], true);
+    for (token, visible) in [
+        (&listener, false),
+        (&admin, true),
+    ] {
+        let bootstrap = client
+            .get("/api/v1/bootstrap")
+            .header(Header::new("Authorization", format!("Bearer {token}")))
+            .dispatch()
+            .await
+            .into_json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(bootstrap["podcast_settings"]["show_on_home"], visible);
+        assert_eq!(bootstrap["podcast_settings"]["show_in_sidebar"], visible);
+        assert_eq!(bootstrap["podcasts_enabled"], true);
+    }
+
     let combined = client
         .get("/api/v1/items")
         .header(Header::new("Authorization", format!("Bearer {listener}")))
@@ -266,6 +285,104 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .await
         .unwrap();
     assert_eq!(own_library.len(), 1);
+    let settings = client
+        .get("/api/v1/settings")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    let mut settings = settings["settings"].clone();
+    settings["podcasts"]["enabled"] = Value::Bool(false);
+    assert_eq!(
+        client
+            .put("/api/v1/settings")
+            .header(Header::new("Authorization", format!("Bearer {listener}")))
+            .header(ContentType::JSON)
+            .body(settings.to_string())
+            .dispatch()
+            .await
+            .status(),
+        Status::Forbidden
+    );
+    assert_eq!(
+        client
+            .put("/api/v1/settings")
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .header(ContentType::JSON)
+            .body(settings.to_string())
+            .dispatch()
+            .await
+            .status(),
+        Status::Ok
+    );
+    for path in [
+        "/api/v1/podcasts",
+        "/api/v1/podcasts/discover",
+        "/api/v1/podcasts/home",
+        "/api/v1/items/2",
+        "/api/v1/items/2/playback",
+        "/api/v1/podcasts/episodes/2/stream",
+    ] {
+        assert_eq!(
+            client
+                .get(path)
+                .header(Header::new("Authorization", format!("Bearer {listener}")))
+                .dispatch()
+                .await
+                .status(),
+            Status::NotFound,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        client
+            .post("/api/v1/podcasts")
+            .header(Header::new("Authorization", format!("Bearer {listener}")))
+            .header(ContentType::JSON)
+            .body(r#"{"feed_url":"https://example.com/private"}"#)
+            .dispatch()
+            .await
+            .status(),
+        Status::NotFound
+    );
+    let bootstrap = client
+        .get("/api/v1/bootstrap")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(bootstrap["podcasts_enabled"], false);
+    assert_eq!(bootstrap["podcast_settings"]["show_in_sidebar"], false);
+    assert!(
+        cached.exists(),
+        "Disabling podcasts preserves existing downloads"
+    );
+    settings["podcasts"]["enabled"] = Value::Bool(true);
+    assert_eq!(
+        client
+            .put("/api/v1/settings")
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .header(ContentType::JSON)
+            .body(settings.to_string())
+            .dispatch()
+            .await
+            .status(),
+        Status::Ok
+    );
+    assert_eq!(
+        client
+            .get("/api/v1/items/2")
+            .header(Header::new("Authorization", format!("Bearer {listener}")))
+            .dispatch()
+            .await
+            .status(),
+        Status::Ok
+    );
+
     assert_eq!(
         client
             .delete("/api/v1/podcasts/1")

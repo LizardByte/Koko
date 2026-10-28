@@ -198,6 +198,9 @@ async fn refresh_url(
 
 /// Poll only feeds with subscribers, at most hourly; a failed publisher cannot block other feeds.
 pub async fn refresh_due(db: &DbConn) {
+    if !crate::config::current_settings().podcasts.enabled {
+        return;
+    }
     let feeds = match db.run(storage::due).await {
         Ok(feeds) => feeds,
         Err(error) => {
@@ -206,6 +209,9 @@ pub async fn refresh_due(db: &DbConn) {
         }
     };
     for (id, url) in feeds {
+        if !crate::config::current_settings().podcasts.enabled {
+            break;
+        }
         if let Err(error) = refresh_url(db, id, url).await {
             log::warn!("Podcast {id} refresh failed: {error}");
         }

@@ -41,6 +41,7 @@ function discovery(): string {
 
 /** Reuse the library tabs, square artwork cards, and browsing grid from music. */
 export function renderPodcastPage(): string {
+  if (state.bootstrap?.podcasts_enabled === false) return '<div class="empty-state">Podcasts are disabled by your administrator.</div>';
   const data = state.podcasts?.owner === state.bootstrap?.current_user?.id ? state.podcasts : undefined;
   const tab = data?.tab ?? 'recommended';
   const tabs = ['recommended', 'library', 'discover'].map(value => `<button type="button" class="browse-tab-button ${tab === value ? 'active' : ''}" data-podcast-tab="${value}" aria-pressed="${tab === value}">${value.charAt(0).toUpperCase() + value.slice(1)}</button>`).join('');
@@ -50,13 +51,7 @@ export function renderPodcastPage(): string {
   if (tab === 'discover' && data) content = discovery();
   if (tab === 'recommended' && data) content = renderPodcastRecommended();
   if (state.showFullSearchResults && state.searchQuery.trim()) content = renderSearchResults();
-  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}${renderPodcastSettings()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
-}
-
-/** Personal preferences stay available to every subscriber, including non-administrator accounts. */
-export function renderPodcastSettings(): string {
-  const checked = state.podcasts?.settings?.show_on_home !== false;
-  return `<div class="music-song-menu podcast-personal-settings"><button type="button" class="secondary-button icon-only" popovertarget="podcast-personal-settings" aria-label="Podcast settings">${renderIcon('settings')}</button><div popover id="podcast-personal-settings"><label class="checkbox-inline"><input type="checkbox" data-podcasts-show-on-home ${checked ? 'checked' : ''}/> Show podcasts on Home</label><p class="muted">Applies only to your account. Your podcast library and search remain available.</p></div></div>`;
+  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
 }
 
 /** Subscribed shows supply the shared hero and listening shelves; publisher covers remain available. */

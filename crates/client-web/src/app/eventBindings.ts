@@ -59,7 +59,7 @@ import {
   selectedItemDefaultMetadataYear,
   selectedItemExtras,
 } from './itemPersonView';
-import { buildSettingsFromForm } from './settingsView';
+import { buildSettingsFromForm, buildPodcastUserSettingsFromForm } from './settingsView';
 import { setButtonBusy } from './ui';
 import {
   addLibrary,
@@ -84,6 +84,7 @@ import {
   searchItems,
   setStoredAuthToken,
   updateSettings,
+  setPodcastUserSettings,
   updateUser,
   type CreateUserRequest,
   type LoginRequest,
@@ -1296,16 +1297,25 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       return;
     }
 
-    const nextSettings = buildSettingsFromForm(new FormData(form));
-    if (!nextSettings) {
-      return;
-    }
-
+    const owner = state.bootstrap?.current_user?.id;
+    const formData = new FormData(form);
+    const nextSettings = buildSettingsFromForm(formData);
+    const personal = buildPodcastUserSettingsFromForm(formData);
+    if (!nextSettings && !personal) return;
     try {
-      state.settingsResponse = await updateSettings(nextSettings);
+      if (nextSettings) {
+        const response = await updateSettings(nextSettings);
+        if (state.bootstrap?.current_user?.id !== owner) return;
+        state.settingsResponse = response;
+      }
+      if (personal) await setPodcastUserSettings(personal);
+      if (state.bootstrap?.current_user?.id !== owner) return;
+      clearBrowseSessions();
+      state.home = undefined; state.libraryItems = []; state.homePreviewItemId = undefined;
       form.reset();
       await refreshData();
     } catch (error) {
+      if (state.bootstrap?.current_user?.id !== owner) return;
       state.error = error instanceof Error ? error.message : 'Failed to save settings.';
       render();
     }

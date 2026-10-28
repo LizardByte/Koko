@@ -290,10 +290,15 @@ pub(crate) fn continuation(
 pub struct PodcastUserSettings {
     /// Include podcasts on the combined Home page for this account.
     pub show_on_home: bool,
+    /// Show the podcast navigation entry for this account.
+    pub show_in_sidebar: bool,
 }
 impl Default for PodcastUserSettings {
     fn default() -> Self {
-        Self { show_on_home: true }
+        Self {
+            show_on_home: true,
+            show_in_sidebar: true,
+        }
     }
 }
 

@@ -273,6 +273,7 @@ mod bundled_media_tool_tests {
         let mut conn = in_memory_database();
         let settings = super::Settings {
             podcasts: super::PodcastSettings {
+                enabled: false,
                 download_dir: "D:/Podcasts".into(),
                 download_new_episodes: false,
             },
@@ -282,6 +283,7 @@ mod bundled_media_tool_tests {
         let loaded = super::load_database_settings(&mut conn, &super::Settings::default()).unwrap();
         assert_eq!(loaded.podcasts, settings.podcasts);
         let old: super::Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.podcasts.enabled);
         assert!(old.podcasts.download_new_episodes);
         assert!(old.podcasts.download_dir.is_empty());
     }
@@ -872,6 +874,8 @@ pub struct Settings {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
 pub struct PodcastSettings {
+    /// Enable podcast discovery, subscriptions, downloads, and playback.
+    pub enabled: bool,
     /// Directory for new downloads; empty selects the podcasts folder under the data directory.
     pub download_dir: String,
     /// Download episodes discovered after the initial subscription automatically.
@@ -881,6 +885,7 @@ pub struct PodcastSettings {
 impl Default for PodcastSettings {
     fn default() -> Self {
         Self {
+            enabled: true,
             download_dir: String::new(),
             download_new_episodes: true,
         }

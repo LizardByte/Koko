@@ -378,7 +378,7 @@ async fn save_response(
 
 /// Work only on subscribed shows, retry failed downloads after five minutes, and bound each batch.
 pub(super) async fn download_pending(db: &DbConn) {
-    if !current_settings().podcasts.download_new_episodes {
+    if !current_settings().podcasts.enabled || !current_settings().podcasts.download_new_episodes {
         return;
     }
     let pending = db

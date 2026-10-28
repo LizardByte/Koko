@@ -12,11 +12,16 @@ show to their own collections. **Remove** unsubscribes only your account; it doe
 another user's access. When the last subscriber removes a podcast, Koko deletes its downloaded
 episodes. Adding the show again restores your listening history.
 
-## Personal Home preferences
+## Settings
 
-Open **Podcast settings** (the gear beside the search box) and turn off **Show podcasts on Home**
-to hide podcast cards from your combined Home page. This setting applies only to your account.
-Your subscriptions, podcast library, and search results remain available.
+Open **Settings → General → Podcasts**. Administrators can turn **Enable podcasts** on or off
+for the server and set the **Podcast location** for downloads. Disabling podcasts pauses feed
+checks and downloads and hides podcast browsing; saved episodes and subscriptions are retained.
+
+When podcasts are enabled, each account can choose **Show podcasts on Home** and **Show podcasts
+in sidebar**. These preferences affect only your account. Hiding the sidebar entry leaves podcast
+search and Home cards available according to your Home preference. The download location and
+personal visibility controls are hidden when podcasts are disabled.
 
 Continue playing shows one next episode per podcast. An unfinished latest episode resumes where
 you stopped; a completed episode advances in your chosen playback order. Displayed episode numbers
@@ -65,7 +70,7 @@ play them. The first play may take longer while the download finishes. Episode l
 download icons; hover over an icon or open **Media details** for its status. After downloading,
 Koko measures the saved episode's runtime when its media tools are available.
 
-Administrators can set **Podcast download directory** under **Settings → General → Storage**.
+Administrators can set **Podcast location** under **Settings → General → Podcasts**.
 Leave it empty to use the `podcasts` folder inside Koko's data directory. The server needs write
 access and sufficient free space. Changing the directory affects new downloads; existing saved
 copies remain available in their current location.

@@ -6,6 +6,8 @@ import {
   deleteMockMissingItems,
   getMockCapabilities,
   getMockBootstrap,
+  getMockPodcastUserSettings,
+  setMockPodcastUserSettings,
   getMockHome,
   getMockPlaylists,
   getMockPlaylist,
@@ -134,6 +136,10 @@ export interface BootstrapUser {
 
 export interface AppBootstrapResponse {
   has_users: boolean;
+  /** Server-wide podcast availability, controlled by administrators. */
+  podcasts_enabled?: boolean;
+  /** Presentation preferences for the signed-in account only. */
+  podcast_settings?: PodcastUserSettings;
   current_user?: BootstrapUser;
 }
 
@@ -292,7 +298,7 @@ export function getPodcastHome(): Promise<MediaHome> { return requestJson('GET',
 /** Fetch the next visible season page without loading the entire back catalog. */
 export function getPodcastSeasonEpisodes(id: number, offset: number): Promise<PodcastEpisodePage> { return requestJson('GET', `/api/v1/podcasts/seasons/${id}/episodes?${new URLSearchParams({ offset: String(offset), limit: '50' })}`); }
 /** Account-specific podcast presentation preferences. */
-export interface PodcastUserSettings { show_on_home: boolean }
+export interface PodcastUserSettings { show_on_home: boolean; show_in_sidebar: boolean }
 /** Load personal Home visibility independently of global download settings. */
 export function getPodcastUserSettings(): Promise<PodcastUserSettings> { return requestJson('GET', '/api/v1/podcasts/settings'); }
 /** Save personal Home visibility without changing another account's library. */
@@ -844,7 +850,7 @@ export interface SettingsSnapshot {
   general: {
     data_dir: string;
   };
-  podcasts?: { download_dir: string; download_new_episodes: boolean };
+  podcasts?: { enabled: boolean; download_dir: string; download_new_episodes: boolean };
   media: {
     libraries: MediaLibrarySettings[];
     missing_item_auto_delete_days?: number | null;
@@ -1007,6 +1013,8 @@ function getMockGetResponse<T>(method: string, url: URL): T {
   switch (url.pathname) {
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
+    case '/api/v1/podcasts/settings':
+      return getMockPodcastUserSettings() as T;
     case '/api/v1/bootstrap':
       return getMockBootstrap() as T;
     case '/api/v1/users':
@@ -1102,6 +1110,7 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
 }
 
 function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/api/v1/podcasts/settings') { setMockPodcastUserSettings(body as PodcastUserSettings); return undefined as T; }
   const queue = /^\/api\/v1\/playlists\/(\d+)\/(queue|name)$/.exec(url.pathname);
   if (queue) return updateMockQueue(Number(queue[1]),queue[2],body as MusicQueueState & {name:string}) as T;
   if (url.pathname === '/api/v1/settings') {

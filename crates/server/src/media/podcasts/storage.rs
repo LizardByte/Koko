@@ -329,6 +329,9 @@ pub fn can_access(
     item: i32,
     user: Option<i32>,
 ) -> Result<bool> {
+    if !crate::config::current_settings().podcasts.enabled {
+        return Ok(false);
+    }
     let Some(user) = user else {
         return Ok(false);
     };
@@ -345,6 +348,9 @@ pub(crate) fn has_subscription(
     conn: &mut SqliteConnection,
     user: i32,
 ) -> Result<bool> {
+    if !crate::config::current_settings().podcasts.enabled {
+        return Ok(false);
+    }
     Ok(subscriptions::table
         .filter(subscriptions::user_id.eq(user))
         .select(subscriptions::podcast_id)
@@ -358,6 +364,10 @@ pub fn filter_visible(
     user: Option<i32>,
     items: &mut Vec<MediaItemSummary>,
 ) -> Result<()> {
+    if !crate::config::current_settings().podcasts.enabled {
+        items.retain(|item| !item.item_type.starts_with("podcast"));
+        return Ok(());
+    }
     let visible = metadata::table
         .inner_join(subscriptions::table.on(subscriptions::podcast_id.eq(metadata::podcast_id)))
         .filter(subscriptions::user_id.eq(user.unwrap_or(-1)))

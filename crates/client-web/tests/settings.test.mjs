@@ -18,7 +18,7 @@ await new Promise((resolve) => assetServer.listen(0, '127.0.0.1', resolve));
 after(() => new Promise((resolve) => assetServer.close(resolve)));
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderLogResults, renderLogViewer } = await server.ssrLoadModule('/src/app/logView.ts');
-const { renderSettingsPage, buildSettingsFromForm, metadataProviderCheckboxes } = await server.ssrLoadModule('/src/app/settingsView.ts');
+const { renderSettingsPage, buildSettingsFromForm, buildPodcastUserSettingsFromForm, metadataProviderCheckboxes } = await server.ssrLoadModule('/src/app/settingsView.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { getMockSettings, getMockMetadataProviders, updateMockSettings } = await server.ssrLoadModule('/src/mockApi.ts');
 const { providerAttributionLogo } = await server.ssrLoadModule('/src/app/providers.ts');
@@ -480,10 +480,41 @@ test('podcast storage settings persist independently of other settings forms', (
   const form = new FormData();
   form.set('podcast_download_dir', 'D:/Podcast library');
   let settings = buildSettingsFromForm(form);
-  assert.deepEqual(settings.podcasts, { download_dir: 'D:/Podcast library', download_new_episodes: false });
+  assert.deepEqual(settings.podcasts, { enabled: true, download_dir: 'D:/Podcast library', download_new_episodes: false });
   state.settingsResponse.settings = settings;
   assert.deepEqual(buildSettingsFromForm(new FormData()).podcasts, settings.podcasts);
   form.set('podcast_download_new', 'on');
   assert.equal(buildSettingsFromForm(form).podcasts.download_new_episodes, true);
-  assert.match(renderSettingsPage(), /Podcast download directory/);
+  assert.match(renderSettingsPage(), /Podcast location/);
+});
+
+
+test('podcast controls share General settings and depend on admin enablement', () => {
+  state.settingsResponse.settings.podcasts = { enabled: false, download_dir: 'D:/Podcasts', download_new_episodes: true };
+  const disabled = renderSettingsPage();
+  assert.match(disabled, /data-podcasts-enabled\s*\/>/);
+  assert.match(disabled, /data-podcast-enabled-settings hidden/);
+  state.settingsResponse.settings.podcasts.enabled = true;
+  assert.doesNotMatch(renderSettingsPage(), /data-podcast-enabled-settings hidden/);
+  const form = new FormData(); form.set('podcast_settings_present', '1');
+  form.set('podcast_download_dir', 'D:/Podcasts'); form.set('podcast_download_new', 'on');
+  assert.equal(buildSettingsFromForm(form).podcasts.enabled, false);
+  form.set('podcasts_enabled', 'on');
+  assert.equal(buildSettingsFromForm(form).podcasts.enabled, true);
+});
+
+test('personal podcast preferences save separately and never expose server settings', () => {
+  state.bootstrap = { current_user: { id: 2, admin: false }, podcasts_enabled: true,
+    podcast_settings: { show_on_home: false, show_in_sidebar: true } };
+  const html = renderSettingsPage();
+  assert.match(html, /name="podcast_show_in_sidebar" checked/);
+  assert.doesNotMatch(html, /name="podcast_show_on_home" checked|name="podcast_download_dir"|name="podcasts_enabled"/);
+  assert.doesNotMatch(html, /href="\/settings\/users"/);
+  const form = new FormData(); form.set('podcast_preferences_present', '1');
+  form.set('podcast_show_on_home', 'on');
+  assert.deepEqual(buildPodcastUserSettingsFromForm(form), { show_on_home: true, show_in_sidebar: false });
+  assert.equal(buildSettingsFromForm(form), undefined);
+  assert.equal(buildPodcastUserSettingsFromForm(new FormData()), undefined);
+  state.bootstrap.podcasts_enabled = false;
+  assert.match(renderSettingsPage(), /data-podcast-enabled-settings hidden/);
 });

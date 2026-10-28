@@ -184,14 +184,12 @@ test('chronological episode numbers increase toward newer releases across loaded
   assert.deepEqual(numbers(renderPodcastContents(season)), [736, 42, 734, 733]);
 });
 
-test('podcast settings belong to the account and remain available without administrator access', async () => {
-  const { renderPodcastSettings } = await server.ssrLoadModule('/src/app/podcasts.ts');
-  state.bootstrap = { current_user: { id: 1, admin: false } };
-  state.podcasts.settings = { show_on_home: false };
-  const html = renderPodcastSettings();
-  assert.match(html, /Show podcasts on Home/);
-  assert.doesNotMatch(html, /data-podcasts-show-on-home checked/);
-  assert.match(html, /Applies only to your account/);
+test('podcast pages use the existing Settings page and respect server availability', () => {
+  state.bootstrap = { current_user: { id: 1, admin: false }, podcasts_enabled: true };
+  assert.doesNotMatch(renderPodcastPage(), /Podcast settings|podcast-personal-settings|Show podcasts on Home/);
+  state.bootstrap.podcasts_enabled = false;
+  assert.match(renderPodcastPage(), /disabled by your administrator/);
+  assert.doesNotMatch(renderPodcastPage(), /Add RSS feed/);
 });
 
 test('Retry repeats the failed podcast operation and refreshes after success', async () => {

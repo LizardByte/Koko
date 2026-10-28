@@ -1,5 +1,5 @@
 /** Renders settings sections and converts settings forms into API payloads. */
-import type { MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot } from '../api';
+import type { PodcastUserSettings, MediaLibrary, MediaLibrarySettings, MetadataProviderSettings, MetadataProviderStatus, ScheduledTaskId, SettingsSnapshot } from '../api';
 import { escapeHtml } from './format';
 import { formDataString, formDataStrings, joinPaths, normalizedMetadataLanguages, parseBoundedInteger, parsePathsInput } from './formUtils';
 import { hasActiveLibraryScan, libraryRefreshProgress } from './activities';
@@ -27,16 +27,21 @@ const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description
   { id: 'logs', label: 'Logs', description: 'Search and inspect server events', icon: 'search' },
 ];
 
+/** Describe General appropriately for personal settings and server administration. */
+function settingsDescription(description: string): string {
+  return canManageUsers() ? description : 'Your account preferences';
+}
+
 /** Render section links with an accessible current-page indicator. */
 export function renderSettingsSectionNav(): string {
   const activeSection = activeSettingsSection();
   return `
     <nav class="settings-section-nav" aria-label="Settings sections">
       <p class="eyebrow settings-nav-label">Settings</p>
-      ${SETTINGS_SECTIONS.map((section) => `
+      ${SETTINGS_SECTIONS.filter(section => canManageUsers() || section.id === 'general').map((section) => `
         <a class="settings-nav-link ${activeSection === section.id ? 'active' : ''}" href="/settings${section.id === 'general' ? '' : `/${section.id}`}" ${activeSection === section.id ? 'aria-current="page"' : ''}>
           ${renderIcon(section.icon, 'settings-nav-icon')}
-          <span><strong>${escapeHtml(section.label)}</strong><small>${escapeHtml(section.description)}</small></span>
+          <span><strong>${escapeHtml(section.label)}</strong><small>${escapeHtml(settingsDescription(section.description))}</small></span>
         </a>
       `).join('')}
     </nav>
@@ -54,6 +59,7 @@ function renderSettingsCreationTrigger(section: SettingsSection, disabled: strin
 
 /** Keep each page's main actions together and associate Save with its settings form. */
 function renderSettingsActions(section: SettingsSection, title: string, ready: boolean): string {
+  if (!canManageUsers() && (section !== 'general' || state.bootstrap?.podcasts_enabled === false)) return '';
   const disabled = ready ? '' : 'disabled';
   const actions: string[] = [];
   const creationTrigger = renderSettingsCreationTrigger(section, disabled);
@@ -575,6 +581,35 @@ export function renderProviderSettingsPage(settings: SettingsSnapshot): string {
   `;
 }
 
+/** Podcast settings share General, with server controls restricted to administrators. */
+function renderPodcastSettingsGroup(settings?: SettingsSnapshot): string {
+  const admin = canManageUsers();
+  const enabled = admin ? settings?.podcasts?.enabled !== false : state.bootstrap?.podcasts_enabled !== false;
+  const personal = state.bootstrap?.podcast_settings;
+  const description = admin ? 'Podcast availability, downloads, and your library preferences.' : 'Choose where podcasts appear for your account.';
+  const enabledChecked = enabled ? 'checked' : '';
+  const downloadNewChecked = settings?.podcasts?.download_new_episodes !== false ? 'checked' : '';
+  return `<section class="settings-group">
+    <div class="settings-group-heading"><h3>Podcasts</h3><p class="muted">${description}</p></div>
+    ${admin ? `<input type="hidden" name="podcast_settings_present" value="1" /><label class="checkbox-inline"><input type="checkbox" name="podcasts_enabled" data-podcasts-enabled ${enabledChecked} /> Enable podcasts</label>` : ''}
+    ${!admin && !enabled ? '<p class="muted">Podcasts are disabled by your administrator.</p>' : ''}
+    <div data-podcast-enabled-settings ${enabled ? '' : 'hidden'}>
+      ${admin ? `<label>Podcast location<input name="podcast_download_dir" value="${escapeHtml(settings?.podcasts?.download_dir ?? '')}" placeholder="Default: podcasts folder inside the data directory" /><small class="muted">Folder for new downloads. Episodes already saved remain available in their current folder.</small></label>
+      <label class="checkbox-inline"><input name="podcast_download_new" type="checkbox" ${downloadNewChecked} /> Download new episodes automatically</label>` : ''}
+      <input type="hidden" name="podcast_preferences_present" value="1" />
+      <label class="checkbox-inline"><input type="checkbox" name="podcast_show_on_home" ${personal?.show_on_home !== false ? 'checked' : ''} /> Show podcasts on Home</label>
+      <label class="checkbox-inline"><input type="checkbox" name="podcast_show_in_sidebar" ${personal?.show_in_sidebar !== false ? 'checked' : ''} /> Show podcasts in sidebar</label>
+      <small class="muted">Home and sidebar preferences apply only to your account. You can still open your podcasts from Home or search when the sidebar entry is hidden.</small>
+    </div>
+  </section>`;
+}
+
+/** Read only the current account's podcast presentation fields from General settings. */
+export function buildPodcastUserSettingsFromForm(form: FormData): PodcastUserSettings | undefined {
+  if (!form.has('podcast_preferences_present')) return undefined;
+  return { show_on_home: form.get('podcast_show_on_home') === 'on', show_in_sidebar: form.get('podcast_show_in_sidebar') === 'on' };
+}
+
 function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
   const useHttpsChecked = settings.server.use_https ? 'checked' : '';
   const useCustomCertsChecked = settings.server.use_custom_certs ? 'checked' : '';
@@ -600,10 +635,10 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
         <section class="settings-group">
           <div class="settings-group-heading"><h3>Storage</h3><p class="muted">Where Koko keeps its database and cached metadata.</p></div>
           <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
-          <label>Podcast download directory<input name="podcast_download_dir" value="${escapeHtml(settings.podcasts?.download_dir ?? '')}" placeholder="Default: podcasts folder inside the data directory" /><small class="muted">Folder for new downloads. Episodes already saved remain available in their current folder.</small></label>
-          <label class="checkbox-inline"><input name="podcast_download_new" type="checkbox" ${settings.podcasts?.download_new_episodes !== false ? 'checked' : ''} /> Download new podcast episodes automatically</label>
-          <small class="muted">Older episodes download the first time they are played. The saved copy is reused by all subscribers.</small>
+
         </section>
+
+        ${renderPodcastSettingsGroup(settings)}
 
         <section class="settings-group">
           <div class="settings-group-heading"><h3>Media tools</h3><p class="muted">Leave a path blank to use the bundled tool.</p></div>
@@ -721,18 +756,20 @@ function renderSettingsSectionContent(section: SettingsSection, settings: Settin
 }
 
 export function renderSettingsPage(): string {
-  if (!canManageUsers()) return '<div class="empty-state">Administrator access is required to manage this server.</div>';
   const settings = state.settingsResponse?.settings;
   const section = activeSettingsSection();
-  const settingsContent = renderSettingsSectionContent(section, settings);
+  const admin = canManageUsers();
+  let settingsContent = '<div class="empty-state">Administrator access is required to manage this server.</div>';
+  if (admin) settingsContent = renderSettingsSectionContent(section, settings);
+  else if (section === 'general') settingsContent = `<section class="panel page-panel settings-page-panel"><form id="settings-form" class="settings-form">${renderPodcastSettingsGroup()}</form></section>`;
   const heading = SETTINGS_SECTIONS.find((entry) => entry.id === section)!;
 
   return `
     <div class="settings-workspace">
       ${renderSettingsSectionNav()}
       <div class="settings-content">
-        ${renderPageNavbar('Settings', heading.label, heading.description)}
-        ${renderSettingsActions(section, heading.label, Boolean(settings))}
+        ${renderPageNavbar('Settings', heading.label, settingsDescription(heading.description))}
+        ${renderSettingsActions(section, heading.label, admin ? Boolean(settings) : Boolean(state.bootstrap?.current_user))}
         ${settingsContent}
       </div>
     </div>
@@ -741,7 +778,7 @@ export function renderSettingsPage(): string {
 
 export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | undefined {
   const current = state.settingsResponse?.settings;
-  if (!current) {
+  if (!canManageUsers() || !current) {
     return undefined;
   }
   const settingsSection = activeSettingsSection();
@@ -760,6 +797,7 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
 
   return {
     podcasts: {
+      enabled: formData.has('podcast_settings_present') ? formData.get('podcasts_enabled') === 'on' : current.podcasts?.enabled !== false,
       download_dir: formDataString(formData.get('podcast_download_dir'), current.podcasts?.download_dir ?? ''),
       download_new_episodes: formData.has('podcast_download_dir') ? formData.get('podcast_download_new') === 'on' : current.podcasts?.download_new_episodes !== false,
     },

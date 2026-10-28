@@ -1,8 +1,12 @@
+/** Binds settings layout controls and conditional fields without discarding unsaved edits. */
 import { state } from './state';
 import { bindStickyActionBar } from './stickyActionBar';
 
 /** Keep the settings actions visible without covering fields revealed by keyboard focus. */
 export function bindSettingsActions(signal: AbortSignal): void {
+  const podcastsEnabled = document.querySelector<HTMLInputElement>('[data-podcasts-enabled]');
+  const podcastFields = document.querySelector<HTMLElement>('[data-podcast-enabled-settings]');
+  podcastsEnabled?.addEventListener('change', () => { if (podcastFields) podcastFields.hidden = !podcastsEnabled.checked; }, { signal });
   const bar = document.querySelector<HTMLElement>('.settings-action-dock');
   const anchor = document.querySelector<HTMLElement>('.settings-actions-anchor');
   const scroller = bar?.closest<HTMLElement>('.main-shell');

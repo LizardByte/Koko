@@ -97,6 +97,10 @@ pub struct UserSummary {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BootstrapResponse {
     pub has_users: bool,
+    /// Whether the administrator enables podcast features on this server.
+    pub podcasts_enabled: bool,
+    /// Only the signed-in account's podcast presentation preferences.
+    pub podcast_settings: Option<crate::media::podcasts::PodcastUserSettings>,
     pub current_user: Option<UserSummary>,
 }
 
@@ -134,8 +138,21 @@ pub async fn get_bootstrap(
         None
     };
 
+    let podcast_settings = if let Some(user) = current_user.as_ref() {
+        let user_id = user.id;
+        Some(
+            db.run(move |conn| crate::media::podcasts::user_settings(conn, user_id))
+                .await
+                .map_err(|_| Status::InternalServerError)?,
+        )
+    } else {
+        None
+    };
+
     Ok(Json(BootstrapResponse {
         has_users,
+        podcasts_enabled: current_settings().podcasts.enabled,
+        podcast_settings,
         current_user,
     }))
 }

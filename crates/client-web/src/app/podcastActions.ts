@@ -1,5 +1,5 @@
 /** Loads podcast discovery and subscriptions and binds account-scoped podcast actions. */
-import { addPodcast, discoverPodcasts, getPodcasts, getPodcastHome, getPodcastUserSettings, setPodcastUserSettings, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
+import { addPodcast, discoverPodcasts, getPodcasts, getPodcastHome, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
 import type { AppState } from './types';
 import { state } from './state';
 import { startPlaybackForItemId } from './playbackController';
@@ -11,7 +11,7 @@ import { clearBrowseSessions } from './browseSession';
 /** Load independent catalog sections while ignoring replies from abandoned routes or accounts. */
 export async function loadPodcasts(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
   const owner = target.bootstrap?.current_user?.id;
-  if (owner === undefined) return;
+  if (owner === undefined || target.bootstrap?.podcasts_enabled === false) return;
   if (target.podcasts?.owner !== owner) target.podcasts = { owner, items: [], directory: [], country: 'us', query: '', loading: false };
   const data = target.podcasts!;
   const country = data.country, query = data.query, tab = data.tab ?? 'recommended';
@@ -19,7 +19,6 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
   data.error = undefined;
   const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data && data.country === country && data.query === query && (data.tab ?? 'recommended') === tab;
   await Promise.all([
-    getPodcastUserSettings().then(settings => { if (current()) { data.settings = settings; render(); } }).catch(error => { if (current()) data.error = error instanceof Error ? error.message : 'Podcast preferences could not load.'; }),
     tab === 'recommended' ? getPodcastHome().then(home => { if (current()) { data.home = home; render(); } }).catch(error => { if (current()) data.error = error instanceof Error ? error.message : 'Podcast shelves could not load.'; }) : Promise.resolve(),
     getPodcasts().then(items => { if (current()) { data.items = items; render(); } }).catch(error => { if (current()) target.error = error instanceof Error ? error.message : 'Subscriptions could not load.'; }),
     data.tab === 'discover' ? discoverPodcasts(country, query).then(items => { if (current()) data.directory = items; }).catch(error => { if (current()) { data.directory = []; data.error = error instanceof Error ? error.message : 'The podcast directory is unavailable. Add a feed URL above.'; } }).finally(() => { if (current()) { data.loading = false; render(); } }) : Promise.resolve(),
@@ -30,12 +29,6 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
 export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (path: string) => void; refreshData: (showLoading?: boolean) => Promise<void>; render: (preserveDom?: boolean) => void }): void {
   document.querySelectorAll<HTMLElement>('[data-nav-podcasts]').forEach(button => button.addEventListener('click', () => context.navigateTo('/podcasts'), { signal }));
   const execute = (work: () => Promise<void>, after?: () => void) => executePodcastAction(context, work, after);
-  document.querySelector<HTMLInputElement>('[data-podcasts-show-on-home]')?.addEventListener('change', event => {
-    const show_on_home = (event.currentTarget as HTMLInputElement).checked;
-    void execute(() => setPodcastUserSettings({ show_on_home }), () => {
-      state.home = undefined; state.libraryItems = []; state.homePreviewItemId = undefined;
-    });
-  }, { signal });
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-tab]').forEach(button => button.addEventListener('click', () => {
     if (!state.podcasts) return;
     const tab = button.dataset.podcastTab;

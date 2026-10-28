@@ -35,6 +35,9 @@ use serde::{
 };
 
 fn owner(user: &UserGuard) -> Result<i32, Status> {
+    if !crate::config::current_settings().podcasts.enabled {
+        return Err(Status::NotFound);
+    }
     user.claims().sub.parse().map_err(|_| Status::Unauthorized)
 }
 
@@ -65,6 +68,19 @@ fn bad_request(message: String) -> Error {
     )
 }
 
+fn require_enabled() -> Result<(), Error> {
+    if crate::config::current_settings().podcasts.enabled {
+        return Ok(());
+    }
+    Err(rocket::response::status::Custom(
+        Status::NotFound,
+        Json(PodcastError {
+            kind: "podcast_operation",
+            message: "Podcasts are disabled by the administrator".into(),
+        }),
+    ))
+}
+
 /// Return popular podcasts or directory search results without adding any to Koko.
 #[openapi(tag = "Podcasts")]
 #[get("/api/v1/podcasts/discover?<country>&<query>")]
@@ -73,6 +89,7 @@ pub async fn discover(
     country: Option<String>,
     query: Option<String>,
 ) -> Result<Json<Vec<podcasts::DirectoryPodcast>>, Error> {
+    require_enabled()?;
     podcasts::discover(
         country.as_deref().unwrap_or("us"),
         query.as_deref().unwrap_or(""),
@@ -114,6 +131,7 @@ pub async fn add(
     db: DbConn,
     body: Json<AddPodcast>,
 ) -> Result<Json<AddedPodcast>, Error> {
+    require_enabled()?;
     let user = owner(&user).map_err(|_| error("Sign in to add a podcast".into()))?;
     if body.feed_url.len() > 8192 {
         return Err(bad_request("The feed URL is too long".into()));
@@ -149,6 +167,7 @@ pub async fn refresh(
     db: DbConn,
     id: i32,
 ) -> Result<Status, Error> {
+    require_enabled()?;
     let user = owner(&user).map_err(|_| error("Sign in to refresh a podcast".into()))?;
     db.run(move |conn| podcasts::feed_for_user(conn, user, id))
         .await
@@ -359,7 +378,11 @@ pub async fn get_user_settings(
     user: UserGuard,
     db: DbConn,
 ) -> Result<Json<podcasts::PodcastUserSettings>, Status> {
-    let user = owner(&user)?;
+    let user = user
+        .claims()
+        .sub
+        .parse::<i32>()
+        .map_err(|_| Status::Unauthorized)?;
     db.run(move |conn| podcasts::user_settings(conn, user))
         .await
         .map(Json)
@@ -374,7 +397,11 @@ pub async fn set_user_settings(
     db: DbConn,
     body: Json<podcasts::PodcastUserSettings>,
 ) -> Result<Status, Status> {
-    let user = owner(&user)?;
+    let user = user
+        .claims()
+        .sub
+        .parse::<i32>()
+        .map_err(|_| Status::Unauthorized)?;
     db.run(move |conn| podcasts::save_user_settings(conn, user, &body.into_inner()))
         .await
         .map_err(|_| Status::InternalServerError)?;

@@ -51,7 +51,7 @@ beforeEach(() => {
     classList: { toggle: (_, value) => { bar.stuck = value; } },
   };
   globalThis.document = {
-    querySelector: (selector) => selector === '.settings-action-dock' ? bar : { getBoundingClientRect: () => ({ top: anchorTop }) },
+    querySelector: (selector) => ({ '.settings-action-dock': bar, '.settings-actions-anchor': { getBoundingClientRect: () => ({ top: anchorTop }) } })[selector],
     getElementById: () => panel,
   };
   globalThis.ResizeObserver = class {
@@ -123,4 +123,17 @@ test('Escape returns to Add and render teardown removes creation handlers', () =
   controller.abort();
   trigger.dispatchEvent(new Event('click'));
   assert.equal(panel.hidden, true);
+});
+
+
+test('podcast enablement hides dependent fields immediately and preserves drafts', () => {
+  const enabled = new EventTarget(); enabled.checked = true;
+  const fields = { hidden: false, draftLocation: 'D:/Pending podcasts' };
+  const originalQuery = document.querySelector;
+  document.querySelector = selector => ({ '[data-podcasts-enabled]': enabled, '[data-podcast-enabled-settings]': fields })[selector] ?? originalQuery(selector);
+  bindSettingsActions(controller.signal);
+  enabled.checked = false; enabled.dispatchEvent(new Event('change'));
+  assert.equal(fields.hidden, true); assert.equal(fields.draftLocation, 'D:/Pending podcasts');
+  enabled.checked = true; enabled.dispatchEvent(new Event('change'));
+  assert.equal(fields.hidden, false);
 });

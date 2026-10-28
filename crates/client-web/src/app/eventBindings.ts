@@ -1,6 +1,7 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
+import { bindPodcastActions } from './podcastActions';
 import { bindBookActions } from './bookActions';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
@@ -623,6 +624,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     state.error = error instanceof Error ? error.message : 'The audiobook could not start.'; context.render();
   });
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
+  bindPodcastActions(signal, context);
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();

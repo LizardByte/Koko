@@ -12,6 +12,7 @@ pub use audiobooks::{
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+pub mod podcasts;
 pub(crate) mod recommendations;
 mod relocation;
 mod source_files;
@@ -283,6 +284,8 @@ pub struct MediaItemSummary {
     pub music: Option<Box<MusicMetadata>>,
     /// Local audiobook recording and chapter metadata.
     pub audiobook: Option<Box<AudiobookMetadata>>,
+    /// Publisher metadata for a subscribed podcast, season, or episode.
+    pub podcast: Option<Box<podcasts::PodcastMetadata>>,
     /// Display title for the item.
     pub display_title: String,
     /// Optional card subtitle override for shelf-specific presentation.
@@ -387,6 +390,8 @@ pub struct MediaItemDetail {
     pub music: Option<Box<MusicMetadata>>,
     /// Local audiobook recording and chapter metadata.
     pub audiobook: Option<Box<AudiobookMetadata>>,
+    /// Publisher metadata for a subscribed podcast, season, or episode.
+    pub podcast: Option<Box<podcasts::PodcastMetadata>>,
     /// Saved lyrics for this recording, when they match its current metadata.
     pub lyrics: Option<MusicLyrics>,
     /// Display title for the item.
@@ -868,6 +873,7 @@ pub fn list_library_settings(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let rows = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -973,6 +979,9 @@ pub fn user_can_access_library(
     let Some(user_id) = user_id else {
         return Ok(false);
     };
+    if library.kind == "podcasts" {
+        return podcasts::has_subscription(conn, user_id);
+    }
     let account = users_dsl::users
         .filter(users_dsl::id.eq(user_id))
         .select(users_dsl::admin)
@@ -1014,6 +1023,7 @@ pub fn replace_library_settings(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let existing = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -1062,6 +1072,7 @@ pub fn remove_library_setting(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let existing = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -1720,6 +1731,7 @@ fn sync_library_catalog_filtered(
         enabled: detect_binary(&ffmpeg_settings.ffprobe_path).available,
     };
     let existing_library_rows = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -3002,6 +3014,7 @@ fn summarize_media_item_rows(
     }
     music::apply_summaries(conn, &mut items)?;
     audiobooks::apply_summaries(conn, &mut items)?;
+    podcasts::apply_summaries(conn, &mut items)?;
     apply_available_season_counts_from_summaries(&mut items);
 
     Ok(items)
@@ -3018,6 +3031,7 @@ pub fn list_media_items_for_user_with_preferred_languages(
         list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
+    podcasts::filter_visible(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3438,6 +3452,7 @@ pub fn get_media_item_with_preferred_languages(
 
     music::apply_detail(conn, &mut detail)?;
     audiobooks::apply_detail(conn, &mut detail)?;
+    podcasts::apply_detail(conn, &mut detail)?;
     detail.lyrics = lyrics::for_item(conn, &detail)?;
     Ok(Some(detail))
 }
@@ -3532,6 +3547,7 @@ pub fn search_media_items_for_user_with_preferred_languages(
         search_media_items_with_preferred_languages(conn, query, library_id, preferred_languages)?;
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
+    podcasts::filter_visible(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3584,7 +3600,7 @@ pub fn get_media_home_with_preferred_languages(
         None
     };
     let continue_title = match library_kind.as_deref() {
-        Some("music") => "Continue listening",
+        Some("music" | "podcasts") => "Continue listening",
         Some("books") if items.iter().any(|item| item.item_type == "audiobook") => {
             "Continue listening"
         }
@@ -3677,6 +3693,10 @@ pub fn get_playback_decision(
     let Some(item) = item else {
         return Ok(None);
     };
+
+    if let Some(decision) = podcasts::playback(conn, item_id)? {
+        return Ok(Some(decision));
+    }
 
     let backing_file = load_backing_media_file(conn, item_id)?;
 
@@ -5146,6 +5166,18 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
     leaf_items.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
 
     for item in leaf_items {
+        if let Some(podcast) = item
+            .podcast
+            .as_ref()
+            .filter(|_| item.item_type == "podcast_episode")
+        {
+            if items_by_id.contains_key(&podcast.podcast_id) {
+                let modified = album_groups.entry(podcast.podcast_id).or_default();
+                *modified = (*modified).max(item.modified_at);
+                continue;
+            }
+        }
+
         if matches!(item.item_type.as_str(), "track" | "audiobook_part") {
             if let Some(album) = item.parent_id.and_then(|id| items_by_id.get(&id)) {
                 if matches!(album.item_type.as_str(), "album" | "audiobook") {
@@ -5282,6 +5314,9 @@ fn recommended_representative_item(
     item: &MediaItemSummary,
     items_by_id: &HashMap<i32, MediaItemSummary>,
 ) -> Option<MediaItemSummary> {
+    if let Some(podcast) = &item.podcast {
+        return items_by_id.get(&podcast.podcast_id).cloned();
+    }
     if item.item_type == "audiobook_part" {
         return item.parent_id.and_then(|id| items_by_id.get(&id)).cloned();
     }
@@ -5969,6 +6004,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         parent_id: item.parent_id,
         music: None,
         audiobook: None,
+        podcast: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
         display_subtitle: None,
@@ -6126,6 +6162,7 @@ fn get_media_item_summary_without_metadata(
     let mut summary = to_media_item_summary(row);
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    podcasts::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     apply_available_season_count(conn, &mut summary)?;
     Ok(Some(summary))
 }
@@ -6151,6 +6188,7 @@ fn media_item_summary_with_preferred_languages(
     apply_primary_metadata_link(&mut summary, link.as_ref());
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    podcasts::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
 
     Ok(summary)
 }
@@ -6657,6 +6695,7 @@ fn to_media_item_detail(
         parent_id: item.parent_id,
         music: None,
         audiobook: None,
+        podcast: None,
         lyrics: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
@@ -6808,6 +6847,7 @@ pub fn list_media_item_children_with_preferred_languages(
 
     music::apply_summaries(conn, &mut items)?;
     audiobooks::apply_summaries(conn, &mut items)?;
+    podcasts::apply_summaries(conn, &mut items)?;
     items.sort_by_key(|item| {
         (
             item.music
@@ -7198,6 +7238,7 @@ mod tests {
             reading_progress: None,
             music: None,
             audiobook: None,
+            podcast: None,
             id,
             library_id: 1,
             parent_id,

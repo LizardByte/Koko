@@ -1,0 +1,459 @@
+use super::*;
+use crate::db::schema::{
+    media_items as items,
+    podcast_feeds as feeds,
+    podcast_items,
+    podcast_subscriptions as subscriptions,
+    users,
+};
+use diesel::prelude::*;
+
+const RSS: &str = include_str!("fixtures/feed.xml");
+
+fn database() -> SqliteConnection {
+    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
+    crate::db::configure_sqlite_connection(&mut conn).unwrap();
+    for id in 1..=3 {
+        diesel::insert_into(users::table)
+            .values((
+                users::id.eq(id),
+                users::username.eq(format!("user{id}")),
+                users::password.eq("hash"),
+                users::admin.eq(id == 3),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+    }
+    conn
+}
+fn save(
+    conn: &mut SqliteConnection,
+    user: i32,
+    url: &str,
+) -> i32 {
+    storage::save(conn, Some(user), url, url, &feed::parse(RSS, url).unwrap()).unwrap()
+}
+
+#[test]
+fn rss_retains_rich_metadata_and_optional_seasons() {
+    let value = feed::parse(RSS, "https://example.com/feed.xml").unwrap();
+    assert_eq!(value.title, "Example show");
+    assert_eq!(value.metadata.categories, ["Arts", "Books"]);
+    assert_eq!(
+        value.metadata.artwork_url.as_deref(),
+        Some("https://example.com/cover.jpg")
+    );
+    assert_eq!(value.episodes.len(), 2);
+    let episode = &value.episodes[0];
+    assert_eq!(episode.guid, "stable-guid");
+    assert_eq!(episode.season, Some(2));
+    assert_eq!(episode.number, Some(1));
+    assert_eq!(episode.duration_ms, Some(3_723_000));
+    assert_eq!(episode.metadata.explicit, Some(false));
+    assert_eq!(episode.metadata.author, value.metadata.author);
+    assert_eq!(episode.metadata.show_type.as_deref(), Some("serial"));
+    assert!(
+        episode
+            .metadata
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("Full &amp; detailed")
+    );
+    assert_eq!(
+        episode.metadata.transcripts[0].url,
+        "https://example.com/one.vtt"
+    );
+    assert_eq!(episode.metadata.people, ["Speaker"]);
+    assert!(episode.metadata.published_at.is_some());
+    assert_eq!(value.episodes[1].season, None);
+    assert_eq!(value.episodes[1].duration_ms, Some(45500));
+}
+
+#[test]
+fn atom_and_invalid_feeds_are_handled_without_external_entities() {
+    let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+<title>Atom show</title>
+<author>
+<name>Author</name>
+</author>
+<entry>
+<title>Entry</title>
+<id>atom-id</id>
+<published>2026-10-21T12:00:00Z</published>
+<link rel="enclosure" href="audio.mp3" type="audio/mpeg"/>
+</entry>
+</feed>"#;
+    let parsed = feed::parse(atom, "https://example.com/feed").unwrap();
+    assert_eq!(parsed.episodes[0].url, "https://example.com/audio.mp3");
+    assert_eq!(parsed.metadata.author.as_deref(), Some("Author"));
+    for invalid in [
+        "not XML",
+        "<html><title>Site</title></html>",
+        "<rss><channel/></rss>",
+        r#"<!DOCTYPE rss [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+<rss>
+<channel>
+<title>&x;</title>
+</channel>
+</rss>"#,
+    ] {
+        assert!(feed::parse(invalid, "https://example.com").is_err());
+    }
+}
+
+#[test]
+fn duplicate_guids_and_unsafe_enclosures_do_not_create_extra_episodes() {
+    let duplicate = RSS.replace(
+        "<item><title>No enclosure</title></item>",
+        r#"<item>
+<title>Duplicate</title>
+<guid>stable-guid</guid>
+<enclosure url="https://example.com/another.mp3" type="audio/mpeg"/>
+</item>
+<item>
+<title>Unsafe</title>
+<enclosure url="file:///etc/passwd" type="audio/mpeg"/>
+</item>"#,
+    );
+    assert_eq!(
+        feed::parse(&duplicate, "https://example.com/feed")
+            .unwrap()
+            .episodes
+            .len(),
+        2
+    );
+    for invalid in [
+        "-1", "NaN", "inf", "1:2:3:4", "abc",
+    ] {
+        assert_eq!(feed::duration(invalid), None);
+    }
+}
+
+#[test]
+fn subscriptions_reuse_content_but_do_not_grant_other_users_or_admins_access() {
+    let mut conn = database();
+    let root = save(&mut conn, 1, "https://example.com/feed");
+    assert_eq!(save(&mut conn, 2, "https://example.com/feed"), root);
+    assert_eq!(save(&mut conn, 1, "https://example.com/feed"), root);
+    assert_eq!(
+        feeds::table.count().get_result::<i64>(&mut conn).unwrap(),
+        1
+    );
+    assert_eq!(
+        subscriptions::table
+            .count()
+            .get_result::<i64>(&mut conn)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        items::table.count().get_result::<i64>(&mut conn).unwrap(),
+        4
+    );
+    let ids = items::table
+        .select(items::id)
+        .load::<i32>(&mut conn)
+        .unwrap();
+    for id in ids {
+        assert!(can_access(&mut conn, id, Some(1)).unwrap());
+        assert!(can_access(&mut conn, id, Some(2)).unwrap());
+        assert!(!can_access(&mut conn, id, Some(3)).unwrap());
+        assert!(!can_access(&mut conn, id, None).unwrap());
+    }
+    assert!(subscribed(&mut conn, 3).unwrap().is_empty());
+    storage::unsubscribe(&mut conn, 1, root).unwrap();
+    assert!(!can_access(&mut conn, root, Some(1)).unwrap());
+    assert!(can_access(&mut conn, root, Some(2)).unwrap());
+    assert!(storage::feed_for_user(&mut conn, 1, root).is_err());
+}
+
+#[test]
+fn redirected_aliases_share_one_feed() {
+    let mut conn = database();
+    let feed = feed::parse(RSS, "https://example.com/new").unwrap();
+    let root = storage::save(
+        &mut conn,
+        Some(1),
+        "https://example.com/old",
+        "https://example.com/new",
+        &feed,
+    )
+    .unwrap();
+    assert_eq!(
+        storage::subscribe_existing(&mut conn, 2, "https://example.com/old").unwrap(),
+        Some(root)
+    );
+    assert_eq!(
+        storage::save(
+            &mut conn,
+            Some(2),
+            "https://example.com/new",
+            "https://example.com/new",
+            &feed
+        )
+        .unwrap(),
+        root
+    );
+    assert_eq!(
+        feeds::table.count().get_result::<i64>(&mut conn).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn search_home_and_subscriptions_filter_each_feed_within_the_shared_library() {
+    let mut conn = database();
+    let first = save(&mut conn, 1, "https://example.com/one");
+    let second = save(&mut conn, 2, "https://example.com/two");
+    assert_ne!(first, second);
+    assert_eq!(
+        subscribed(&mut conn, 1)
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect::<Vec<_>>(),
+        [first]
+    );
+    let result = crate::media::search_media_items_for_user_with_preferred_languages(
+        &mut conn,
+        Some(1),
+        "episode",
+        None,
+        &[],
+    )
+    .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].podcast.as_ref().unwrap().podcast_id, first);
+    let home = crate::media::get_media_home(&mut conn, Some(1), None).unwrap();
+    for shelf in home.shelves.iter().filter(|s| {
+        [
+            "recently_added",
+            "recommended",
+        ]
+        .contains(&s.id.as_str())
+    }) {
+        assert_eq!(shelf.items.len(), 1);
+        assert_eq!(shelf.items[0].item_type, "podcast");
+    }
+    assert!(
+        home.shelves
+            .iter()
+            .flat_map(|s| &s.items)
+            .all(|i| i.podcast.as_ref().unwrap().podcast_id == first)
+    );
+    assert!(
+        crate::media::get_media_home(&mut conn, Some(3), None)
+            .unwrap()
+            .shelves
+            .iter()
+            .all(|s| s.items.is_empty())
+    );
+}
+
+#[test]
+fn refresh_preserves_ids_history_and_episodes_omitted_by_a_rolling_feed() {
+    let mut conn = database();
+    let root = save(&mut conn, 1, "https://example.com/feed");
+    let episode = items::table
+        .filter(items::display_title.eq("First episode"))
+        .select(items::id)
+        .first::<i32>(&mut conn)
+        .unwrap();
+    crate::media::upsert_playback_progress(&mut conn, 1, episode, 1000, Some(3_723_000), false)
+        .unwrap();
+    let changed = RSS.replace("one.mp3", "one-new.mp3").replace(
+        "<itunes:season>2</itunes:season>",
+        "<itunes:season>3</itunes:season>",
+    );
+    let mut parsed = feed::parse(&changed, "https://example.com/feed").unwrap();
+    parsed.episodes.truncate(1);
+    storage::save(
+        &mut conn,
+        None,
+        "https://example.com/feed",
+        "https://example.com/feed",
+        &parsed,
+    )
+    .unwrap();
+    assert_eq!(
+        items::table
+            .find(episode)
+            .select(items::season_number)
+            .first::<Option<i32>>(&mut conn)
+            .unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        podcast_items::table
+            .find(episode)
+            .select(podcast_items::enclosure_url)
+            .first::<Option<String>>(&mut conn)
+            .unwrap()
+            .as_deref(),
+        Some("https://cdn.example.com/one-new.mp3")
+    );
+    assert_eq!(
+        crate::media::get_user_playback_progress(&mut conn, Some(1), episode)
+            .unwrap()
+            .unwrap()
+            .position_ms,
+        1000
+    );
+    assert_eq!(
+        items::table
+            .filter(items::item_type.eq("podcast_episode"))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        feeds::table
+            .find(root)
+            .select(feeds::last_error)
+            .first::<Option<String>>(&mut conn)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn metadata_detail_playback_and_configuration_preserve_the_managed_library() {
+    let mut conn = database();
+    let root = save(&mut conn, 1, "https://example.com/feed");
+    let detail = crate::media::get_media_item(&mut conn, root, "")
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.children.len(), 2);
+    assert!(detail.poster_url.unwrap().ends_with("cover.jpg"));
+    assert_eq!(
+        detail.podcast.unwrap().feed_url.as_deref(),
+        Some("https://example.com/feed")
+    );
+    let episode = items::table
+        .filter(items::display_title.eq("First episode"))
+        .select(items::id)
+        .first::<i32>(&mut conn)
+        .unwrap();
+    let decision = crate::media::get_playback_decision(&mut conn, episode, None)
+        .unwrap()
+        .unwrap();
+    assert!(decision.can_direct_play);
+    assert_eq!(decision.mime_type.as_deref(), Some("audio/mpeg"));
+    assert!(
+        decision
+            .stream_url
+            .unwrap()
+            .starts_with("/api/v1/podcasts/episodes/")
+    );
+    assert!(
+        crate::media::list_library_settings(&mut conn)
+            .unwrap()
+            .is_empty()
+    );
+    crate::media::replace_library_settings(&mut conn, &[]).unwrap();
+    assert!(can_access(&mut conn, root, Some(1)).unwrap());
+    storage::record_check(&mut conn, root, Some("Publisher unavailable".into())).unwrap();
+    assert_eq!(
+        crate::media::get_media_item(&mut conn, root, "")
+            .unwrap()
+            .unwrap()
+            .podcast
+            .unwrap()
+            .last_error
+            .as_deref(),
+        Some("Publisher unavailable")
+    );
+}
+
+#[test]
+fn refresh_queue_only_includes_subscribed_feeds_after_the_interval() {
+    let mut conn = database();
+    let first = save(&mut conn, 1, "https://example.com/one");
+    let second = save(&mut conn, 2, "https://example.com/two");
+    assert!(storage::due(&mut conn).unwrap().is_empty());
+    diesel::update(feeds::table)
+        .set(feeds::checked_at.eq(0))
+        .execute(&mut conn)
+        .unwrap();
+    storage::unsubscribe(&mut conn, 2, second).unwrap();
+    assert_eq!(
+        storage::due(&mut conn).unwrap(),
+        [(first, "https://example.com/one".into())]
+    );
+}
+
+#[test]
+fn urls_reject_credentials_and_non_web_schemes_and_normalize_fragments() {
+    assert_eq!(
+        http::normalize_url(" HTTPS://Example.COM/feed#episode ").unwrap(),
+        "https://example.com/feed"
+    );
+    for url in [
+        "file:///etc/passwd",
+        "ftp://example.com/feed",
+        "https://user:password@example.com/feed",
+        "garbage",
+    ] {
+        assert!(http::normalize_url(url).is_err());
+    }
+}
+
+#[test]
+fn public_network_policy_blocks_private_reserved_and_mapped_addresses() {
+    for address in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "192.168.0.1",
+        "169.254.169.254",
+        "100.100.100.200",
+        "0.0.0.0",
+        "198.18.0.1",
+        "192.0.2.1",
+        "224.0.0.1",
+        "255.255.255.255",
+        "::1",
+        "::",
+        "::ffff:127.0.0.1",
+        "fd00::1",
+        "fe80::1",
+        "2001:db8::1",
+        "2002:7f00:1::",
+    ] {
+        assert!(!http::public_address(address.parse().unwrap()), "{address}");
+    }
+    for address in [
+        "1.1.1.1",
+        "8.8.8.8",
+        "2606:4700:4700::1111",
+    ] {
+        assert!(http::public_address(address.parse().unwrap()), "{address}");
+    }
+}
+
+#[tokio::test]
+async fn private_feed_requests_fail_before_connecting() {
+    assert!(
+        http::request("http://127.0.0.1/feed", None)
+            .await
+            .unwrap_err()
+            .contains("public internet")
+    );
+}
+
+#[test]
+fn directory_results_require_a_public_feed_and_never_write_to_storage() {
+    let response = serde_json::json!({"results": [
+        {"collectionId": 123, "collectionName": "Show",
+             "feedUrl": "https://example.com/feed", "artistName": "Author",
+             "artworkUrl600": "https://example.com/cover.jpg"},
+        {"collectionId": 456, "collectionName": "No public feed"},
+        {"collectionId": 789, "collectionName": "Unsafe", "feedUrl": "file:///local"}
+    ]});
+    let results = discovery::results(&response);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "123");
+}

@@ -20,7 +20,14 @@ use diesel::{
 };
 
 const LIMIT: usize = 12;
-const EXCLUDED_ITEM_TYPES: [&str; 3] = ["season", "episode", "track"];
+const EXCLUDED_ITEM_TYPES: [&str; 6] = [
+    "season",
+    "episode",
+    "track",
+    "podcast",
+    "podcast_season",
+    "podcast_episode",
+];
 // Track genres still contribute to album and artist fallback facts, without ranking tracks.
 const EXCLUDED_FACT_TYPES: [&str; 2] = ["season", "episode"];
 

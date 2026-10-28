@@ -283,6 +283,7 @@ impl<'r> FromRequest<'r> for Claims {
                 || path.contains("/subtitles/")))
             || (path.starts_with("/api/v1/people/") && path.ends_with("/image"))
             || (path.starts_with("/api/v1/sessions/") && path.ends_with("/stream"))
+            || (path.starts_with("/api/v1/podcasts/episodes/") && path.ends_with("/stream"))
             || path.starts_with("/api/v1/user-profile-images/"));
         let token = if let Some(header) = keys.first() {
             header.strip_prefix(BEARER)

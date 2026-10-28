@@ -1,4 +1,5 @@
 /** Coordinates app startup, route-level data loading, and shell rendering. */
+import { renderPodcastPage } from './app/podcasts';
 import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
 import {
@@ -333,6 +334,8 @@ function renderCurrentPage(): string {
       return renderPersonPage();
     case 'settings':
       return renderSettingsPage();
+    case 'podcasts':
+      return renderPodcastPage();
     default:
       return renderHomePage();
   }
@@ -371,7 +374,7 @@ function renderRail(): string {
             ${renderIcon('house')}
             <span class="rail-label">Home</span>
           </button>
-          ${state.libraries
+          ${state.libraries.filter(library => library.path !== 'koko://podcasts')
             .map((library) => `
               <button class="rail-button ${activeLibraryIdValue === library.id ? 'active' : ''}" type="button" data-nav-library-id="${library.id}" title="${escapeHtml(library.name)}">
                 ${renderIcon(selectedLibraryIcon(library.kind))}
@@ -382,6 +385,7 @@ function renderRail(): string {
               </button>
             `)
             .join('')}
+          <button class="rail-button ${state.route.page === 'podcasts' ? 'active' : ''}" type="button" data-nav-podcasts title="Podcasts">${renderIcon('mic-2')}<span class="rail-label">Podcasts</span></button>
         </nav>
       </div>
       <div class="library-rail-bottom">
@@ -402,7 +406,8 @@ function renderRail(): string {
         <label for="mobile-library-picker" class="sr-only">Library</label>
         <select id="mobile-library-picker">
           <option value="/" ${activeLibraryIdValue === undefined ? 'selected' : ''}>Home</option>
-          ${state.libraries.map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
+          ${state.libraries.filter(library => library.path !== 'koko://podcasts').map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
+          <option value="/podcasts" ${state.route.page === 'podcasts' ? 'selected' : ''}>Podcasts</option>
         </select>
         ${canManageServer() ? `<button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>` : ''}
         <button type="button" class="secondary-button icon-button" data-mobile-sign-out title="Sign out" aria-label="Sign out">${renderIcon('log-out')}</button>

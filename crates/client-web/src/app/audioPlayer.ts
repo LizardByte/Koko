@@ -690,8 +690,8 @@ async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
   bindMediaSession();
   paint();
   callbacks.changed();
-  audio!.playbackRate = item.audiobook ? (view.playbackRate ?? 1) : 1;
-  if (view.lyricsEnabled && !item.audiobook) void loadLyrics();
+  audio!.playbackRate = item.audiobook || item.podcast ? (view.playbackRate ?? 1) : 1;
+  if (view.lyricsEnabled && !item.audiobook && !item.podcast) void loadLyrics();
   try {
     await audio!.play();
   } catch {
@@ -718,7 +718,7 @@ export async function playMusicItems(
   view.queueName = undefined;
   view.chapters = book ? audiobookChapterTargets(book) : undefined;
   view.panel = undefined;
-  if (book) {
+  if (book || items.some(item => item.podcast)) {
     audioQueue.shuffle = false;
     audioQueue.repeat = 'off';
   }

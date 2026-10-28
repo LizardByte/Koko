@@ -1,6 +1,7 @@
 /** Loads route-specific data while rejecting stale responses after navigation. */
 
 import * as api from '../api';
+import { loadPodcasts } from './podcastActions';
 import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
 import { clearBrowseSessions } from './browseSession';
@@ -123,6 +124,8 @@ export async function loadRouteData(
       state.itemCredits = value.itemCredits;
       state.similarItems = { itemId: route.itemId, userId, items: value.similarItems };
     });
+  } else if (route.page === 'podcasts') {
+    tasks.push(loadPodcasts(state, isCurrent, render));
   } else if (route.page === 'person') {
     load('person details', source.getPerson(route.personId), (value) => { state.selectedPerson = value; });
   } else if (route.section === 'dashboard') {

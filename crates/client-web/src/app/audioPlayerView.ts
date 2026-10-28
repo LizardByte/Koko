@@ -83,7 +83,7 @@ export function renderAudioPlayer(view: AudioPlayerViewState): string {
   </section>`;
 }
 function renderTransportButtons(view: AudioPlayerViewState): string {
-  const book = Boolean(view.item?.audiobook), queue = view.queue;
+  const book = Boolean(view.item?.audiobook || view.item?.podcast), queue = view.queue;
   const shuffle = book ? '' : button('shuffle', 'Shuffle', 'shuffle', queue.shuffle);
   const repeatLabel = { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[queue.repeat];
   const repeatIcon = queue.repeat === 'one' ? 'repeat-1' : 'repeat';
@@ -94,9 +94,9 @@ function renderTransportButtons(view: AudioPlayerViewState): string {
 }
 
 function renderAudioTools(view: AudioPlayerViewState): string {
-  if (!view.item?.audiobook) return button('lyrics', 'Lyrics', 'mic-2', view.panel === 'lyrics') + button('queue', 'Playing queue', 'list-music', view.panel === 'queue');
+  if (!view.item?.audiobook && !view.item?.podcast) return button('lyrics', 'Lyrics', 'mic-2', view.panel === 'lyrics') + button('queue', 'Playing queue', 'list-music', view.panel === 'queue');
   const rates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((rate) => `<option value="${rate}" ${rate === (view.playbackRate ?? 1) ? 'selected' : ''}>${rate}×</option>`).join('');
-  return `${button('chapters', 'Chapters', 'list-music', view.panel === 'chapters')}<label class="audio-speed"><span class="sr-only">Playback speed</span><select data-audio-speed aria-label="Playback speed">${rates}</select></label>`;
+  return `${view.item?.audiobook ? button('chapters', 'Chapters', 'list-music', view.panel === 'chapters') : ''}<label class="audio-speed"><span class="sr-only">Playback speed</span><select data-audio-speed aria-label="Playback speed">${rates}</select></label>`;
 }
 
 function renderQueueEntry(

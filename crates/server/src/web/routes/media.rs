@@ -169,6 +169,7 @@ use crate::utils::current_timestamp;
 
 pub enum SessionStream {
     File(RangedFile),
+    Podcast(rocket::response::Redirect),
     Transcode {
         content_type: ContentType,
         stdout: ChildStdout,
@@ -182,6 +183,7 @@ impl<'r> Responder<'r, 'static> for SessionStream {
     ) -> response::Result<'static> {
         match self {
             SessionStream::File(file) => file.respond_to(_request),
+            SessionStream::Podcast(redirect) => redirect.respond_to(_request),
             SessionStream::Transcode {
                 content_type,
                 stdout,
@@ -219,7 +221,7 @@ impl<'r> Responder<'r, 'static> for RangedFile {
     }
 }
 
-pub struct RangeHeader(Option<String>);
+pub struct RangeHeader(pub(super) Option<String>);
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for RangeHeader {
@@ -3851,7 +3853,19 @@ pub(super) async fn require_item_access(
             let Some(library_id) = library_id else {
                 return Ok(false);
             };
-            user_can_access_library(conn, library_id, user_id)
+            if !user_can_access_library(conn, library_id, user_id)? {
+                return Ok(false);
+            }
+            let podcast = items::media_items
+                .find(item_id)
+                .select(items::item_type)
+                .first::<String>(conn)?
+                .starts_with("podcast");
+            if podcast {
+                crate::media::podcasts::can_access(conn, item_id, user_id)
+            } else {
+                Ok(true)
+            }
         })
         .await
         .map_err(|_| Status::InternalServerError)?;
@@ -4713,6 +4727,16 @@ pub async fn get_session_stream(
         return Err(Status::NotFound);
     }
     require_item_access(&db, session.item_id, &user_guard).await?;
+    if let Some(url) = session
+        .decision
+        .stream_url
+        .as_ref()
+        .filter(|url| url.starts_with("/api/v1/podcasts/"))
+    {
+        return Ok(SessionStream::Podcast(
+            rocket::response::Redirect::temporary(url.clone()),
+        ));
+    }
     let selected_audio_stream_index = audio_stream_index.or(session.audio_stream_index);
 
     if session.decision.can_direct_play && selected_audio_stream_index.unwrap_or_default() == 0 {
@@ -4862,7 +4886,7 @@ pub async fn stream_item(
     db: DbConn,
     range: RangeHeader,
     item_id: i32,
-) -> Result<RangedFile, Status> {
+) -> Result<SessionStream, Status> {
     require_item_access(&db, item_id, &user_guard).await?;
     let decision = db
         .run(move |conn| get_playback_decision(conn, item_id, None))
@@ -4881,6 +4905,15 @@ pub async fn stream_item(
         return Err(Status::Conflict);
     }
 
+    if let Some(url) = decision
+        .stream_url
+        .filter(|url| url.starts_with("/api/v1/podcasts/"))
+    {
+        return Ok(SessionStream::Podcast(
+            rocket::response::Redirect::temporary(url),
+        ));
+    }
+
     let source_path = db
         .run(move |conn| resolve_media_item_source_path(conn, item_id))
         .await
@@ -4894,7 +4927,9 @@ pub async fn stream_item(
         })?
         .ok_or(Status::NotFound)?;
 
-    open_ranged_file(source_path, &range).await
+    open_ranged_file(source_path, &range)
+        .await
+        .map(SessionStream::File)
 }
 
 /// Persist browser playback progress for a media item.
@@ -5962,9 +5997,39 @@ async fn start_library_metadata_refresh(
     Ok(())
 }
 
-/// Serve poster or backdrop artwork for a linked media item, caching it locally on demand.
+/// An authorized local image or publisher podcast cover.
+#[derive(rocket::Responder)]
+pub enum ItemArtwork {
+    /// Locally stored image.
+    File(NamedFile),
+    /// Publisher podcast image.
+    Podcast(super::podcasts::PodcastStream),
+}
+
+/// Serve artwork for an accessible item, including publisher podcast covers.
 #[get("/api/v1/items/<item_id>/artwork?<kind>")]
 pub async fn get_item_artwork(
+    user_guard: UserGuard,
+    db: DbConn,
+    item_id: i32,
+    kind: Option<String>,
+) -> Result<ItemArtwork, Status> {
+    require_item_access(&db, item_id, &user_guard).await?;
+    let cover = db
+        .run(move |conn| crate::media::podcasts::artwork_url(conn, item_id))
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    if let Some(url) = cover {
+        return super::podcasts::cover_image(&url)
+            .await
+            .map(ItemArtwork::Podcast);
+    }
+    get_item_artwork_file(user_guard, db, item_id, kind)
+        .await
+        .map(ItemArtwork::File)
+}
+
+async fn get_item_artwork_file(
     user_guard: UserGuard,
     db: DbConn,
     item_id: i32,

@@ -31,6 +31,7 @@ export type AppRoute =
   | { page: 'browse-detail'; kind: 'category' | 'collection' | 'playlist'; key: string; libraryId?: number }
   | { page: 'item'; itemId: number }
   | { page: 'person'; personId: number }
+  | { page: 'podcasts' }
   | { page: 'settings'; section?: SettingsSection };
 
 /** Top-level tabs shown on the home browsing surface. */
@@ -112,6 +113,8 @@ export interface AppState {
   capabilities?: ServerCapabilities;
   libraries: MediaLibrary[];
   home?: MediaHome;
+  /** Discovery and subscription data belong to the account that requested them. */
+  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; loading: boolean; error?: string; busy?: boolean };
   playlists?: MusicPlaylistDetail[];
   selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];

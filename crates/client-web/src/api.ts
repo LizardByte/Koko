@@ -240,6 +240,51 @@ export interface MusicMetadata {
   musicbrainz_recording_id?: string | null;
 }
 
+/** Publisher metadata from a subscribed podcast feed. */
+export interface PodcastMetadata {
+  podcast_id: number;
+  feed_url?: string | null;
+  author?: string | null;
+  description?: string | null;
+  artwork_url?: string | null;
+  website_url?: string | null;
+  language?: string | null;
+  categories: string[];
+  explicit?: boolean | null;
+  copyright?: string | null;
+  show_type?: string | null;
+  episode_type?: string | null;
+  published_at?: number | null;
+  guid?: string | null;
+  transcripts: { url: string; mime_type?: string | null; language?: string | null }[];
+  chapters_url?: string | null;
+  people: string[];
+  last_error?: string | null;
+  checked_at?: number | null;
+}
+/** A directory result; browsing it does not create a subscription. */
+export interface DirectoryPodcast {
+  id: string;
+  title: string;
+  author?: string | null;
+  artwork_url?: string | null;
+  apple_url?: string | null;
+  feed_url: string;
+}
+/** Browse popular podcasts or search Apple's public directory. */
+export function discoverPodcasts(country = 'us', query = ''): Promise<DirectoryPodcast[]> {
+  return requestJson('GET', `/api/v1/podcasts/discover?${new URLSearchParams({ country, query })}`);
+}
+/** List the current account's subscribed shows. */
+export function getPodcasts(): Promise<MediaItemSummary[]> { return requestJson('GET', '/api/v1/podcasts'); }
+/** Subscribe to a directory result or manually entered RSS feed. */
+export function addPodcast(feedUrl: string): Promise<{ item_id: number }> { return requestJson('POST', '/api/v1/podcasts', { feed_url: feedUrl }); }
+/** Remove only the current account's subscription. */
+export function removePodcast(id: number): Promise<void> { return requestJson('DELETE', `/api/v1/podcasts/${id}`); }
+/** Check a subscribed show for new episodes immediately. */
+export function refreshPodcast(id: number): Promise<void> { return requestJson('POST', `/api/v1/podcasts/${id}/refresh`); }
+
+/** A library card with account-specific progress and metadata for its media type. */
 export interface MediaItemSummary {
   /** Independent account reading state; a reset may retain the discovered page count. */
   reading_progress?: { fraction: number; completed: boolean; started?: boolean; page_count?: number | null } | null;
@@ -249,6 +294,7 @@ export interface MediaItemSummary {
   item_type: string;
   music?: MusicMetadata | null;
   audiobook?: AudiobookMetadata | null;
+  podcast?: PodcastMetadata | null;
   display_title: string;
   display_subtitle?: string | null;
   artwork_item_id?: number | null;

@@ -1,6 +1,6 @@
 /** Controls trailer, theme-song, and browser playback UI state. */
 
-import { playAudiobookItem, playMusicItem, musicIsActive, stopMusic } from './audioPlayer';
+import { playAudiobookItem, playMusicItem, playMusicItems, musicIsActive, stopMusic } from './audioPlayer';
 import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
 import type { MediaAudioTrack, MediaItemDetail, PlaybackSession } from '../api';
@@ -650,6 +650,11 @@ export async function startMusicPlayback(item: MediaItemDetail, startMs = 0): Pr
 
 /** Start a track with its remaining album queue, or another playable media item. */
 export async function startPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
+  if (item.item_type === 'podcast_episode' && item.media_kind === 'audio') {
+    if (state.isPlayerOpen) closeActivePlaybackSession();
+    await playMusicItems([item], 0, startMs);
+    return;
+  }
   if (['audiobook', 'audiobook_part'].includes(item.item_type)) {
     if (state.isPlayerOpen) closeActivePlaybackSession();
     await playAudiobookItem(item, startMs);

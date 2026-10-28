@@ -1,5 +1,6 @@
 /** Renders item detail, metadata search, person detail, and credit trays. */
 
+import { renderPodcastItem } from './podcasts';
 import { renderAudiobookContents } from './audiobooks';
 import { renderBookActions } from './bookActions';
 import { renderAudiobookAction } from './audiobookActions';
@@ -1211,6 +1212,7 @@ function renderArtistScreenCredits(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemPage(item: MediaItemDetail): string {
+  if (item.podcast) return renderPodcastItem(item);
   const artwork = itemArtwork(item);
   const overview = selectedItemOverview(item);
   const trailerOptions = currentTrailerOptions();

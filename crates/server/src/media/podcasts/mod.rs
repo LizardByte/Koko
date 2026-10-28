@@ -1,16 +1,30 @@
 //! Shared podcast feeds with account-owned subscriptions and ordinary media playback history.
 mod discovery;
+mod downloads;
 mod feed;
 mod http;
+mod preferences;
 mod storage;
 
 pub use discovery::{
     DirectoryPodcast,
     discover,
 };
+pub(crate) use downloads::ensure as download_episode;
+pub use downloads::{
+    DownloadInfo,
+    DownloadState,
+};
 pub(crate) use http::{
     normalize_url,
     request,
+};
+pub use preferences::PlaybackOrder;
+pub(crate) use preferences::{
+    apply as apply_preferences,
+    apply_detail as apply_user_context,
+    episodes,
+    set as set_order,
 };
 pub use storage::{
     apply_detail,
@@ -22,7 +36,6 @@ pub use storage::{
 };
 pub(crate) use storage::{
     artwork_url,
-    enclosure_url,
     feed_for_user,
     has_subscription,
     unsubscribe,
@@ -38,11 +51,33 @@ use serde::{
     Serialize,
 };
 
+/// Origin of a podcast episode grouping.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PodcastSeasonKind {
+    /// An explicit season number supplied by the publisher.
+    Number,
+    /// A publication-year grouping for episodes without a publisher season.
+    Year,
+}
+
 /// Publisher-provided metadata retained from a podcast feed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct PodcastMetadata {
     /// Shared root podcast item identifier.
     pub podcast_id: i32,
+    /// Current account's chronological playback order.
+    #[serde(default)]
+    pub playback_order: PlaybackOrder,
+    /// Whether this season came from publisher numbering or publication year.
+    #[serde(default)]
+    pub season_kind: Option<PodcastSeasonKind>,
+    /// Publication year for year-based seasons; absent for unknown dates and numbered seasons.
+    #[serde(default)]
+    pub season_year: Option<i32>,
+    /// Shared local episode availability, without exposing filesystem paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<DownloadInfo>,
     /// Public subscription feed URL, when this is the root show.
     pub feed_url: Option<String>,
     /// Last feed refresh failure, when available.
@@ -175,8 +210,11 @@ pub(crate) fn start_refresh_runner(
 ) {
     rocket::tokio::spawn(async move {
         let checks = async {
+            if let Err(error) = db.run(storage::reconcile_year_seasons).await {
+                log::warn!("Unable to group existing podcast episodes by year: {error}");
+            }
             loop {
-                refresh_due(&db).await;
+                tokio::join!(refresh_due(&db), downloads::download_pending(&db));
                 rocket::tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
         };

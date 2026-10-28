@@ -4,6 +4,7 @@ import {
   createPlaybackSession,
   deletePlaybackSession,
   getItem,
+  getPodcastEpisodes,
   getPlaylist,
   getSessionStreamUrl,
   getWebClientProfile,
@@ -577,7 +578,7 @@ function syncVisibleMusicPlayback(): void {
         createIcons({ icons, root: status });
       }
       const button = row.querySelector<HTMLButtonElement>(
-        '[data-play-music-track-id], [data-play-playlist-track]',
+        '[data-play-music-track-id], [data-play-playlist-track], [data-podcast-play]',
       );
       const label = `${isCurrent && !playback?.paused ? 'Pause' : 'Play'} ${item.display_title}`;
       if (button && button.getAttribute('aria-label') !== label) {
@@ -643,7 +644,7 @@ function syncAlbumButton(
   createIcons({ icons, root: button });
 }
 
-async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
+async function playCurrent(startMs: number | undefined = undefined, savePrevious = true): Promise<void> {
   const entry = audioQueue.current;
   if (!entry) return;
   ensurePlayer();
@@ -676,6 +677,7 @@ async function playCurrent(startMs = 0, savePrevious = true): Promise<void> {
     await deletePlaybackSession(created.session_id);
     return;
   }
+  startMs ??= item.podcast && !item.playback_completed ? item.playback_position_ms ?? 0 : 0;
   current = item;
   session = created;
   playingKey = entry.key;
@@ -732,6 +734,34 @@ export async function playMusicItems(
   );
   if (!audioQueue.current) throw new Error('No available songs to play.');
   await playCurrent(startMs, false);
+}
+
+/** Start an episode in the account's saved chronological queue across every season and year. */
+export async function playPodcastItem(item: MediaItemDetail, startMs = 0): Promise<void> {
+  const user = state.bootstrap?.current_user?.id;
+  if (user === undefined || !item.podcast) throw new Error('Sign in to listen to this podcast.');
+  const token = ++generation;
+  const episodes = await getPodcastEpisodes(item.podcast.podcast_id);
+  if (token !== generation || user !== state.bootstrap?.current_user?.id) return;
+  const playable = episodes.filter(episode => episode.playable && episode.media_kind === 'audio' && !episode.missing_since);
+  const start = playable.findIndex(episode => episode.id === item.id);
+  if (start < 0) throw new Error('This episode is unavailable.');
+  await playMusicItems(playable, start, startMs);
+}
+
+/** Apply a podcast order change to the current queue without restarting the playing episode. */
+export async function refreshPodcastQueue(podcastId: number): Promise<void> {
+  if (current?.podcast?.podcast_id !== podcastId) return;
+  const user = owner, token = generation, id = current.id;
+  const episodes = await getPodcastEpisodes(podcastId);
+  if (token !== generation || owner !== user || state.bootstrap?.current_user?.id !== user || current?.id !== id) return;
+  const items = episodes.filter(episode => episode.playable && episode.media_kind === 'audio' && !episode.missing_since);
+  const index = items.findIndex(episode => episode.id === id);
+  if (index < 0) return;
+  audioQueue.replace(items, index);
+  playingKey = audioQueue.current?.key;
+  paint();
+  callbacks.changed();
 }
 
 /** Resume an audiobook in file order; chapter seeking preserves the existing transport. */

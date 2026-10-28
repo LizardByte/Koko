@@ -33,12 +33,33 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         .unwrap()
         .run(seed)
         .await;
+    let cached =
+        std::env::temp_dir().join(format!("koko-podcast-route-{}.mp3", rand::random::<u64>()));
+    std::fs::write(&cached, b"ID3!saved-episode").unwrap();
+    let saved = cached.clone();
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(move |conn| {
+            let value = json!({
+                "podcast_id": 1, "categories": [], "transcripts": [], "people": [],
+                "local_download": {
+                "state": "ready", "path": saved, "size_bytes": 17,
+                "attempted_at": 1, "error": null
+            }});
+            diesel::update(metadata::table.find(2))
+                .set(metadata::metadata_json.eq(value.to_string()))
+                .execute(conn)
+                .unwrap();
+        })
+        .await;
     let listener = login_user(&client, "listener", "listener-password", Some(Status::Ok))
         .await
         .unwrap();
     for path in [
         "/api/v1/podcasts",
         "/api/v1/podcasts/discover",
+        "/api/v1/podcasts/1/episodes",
         "/api/v1/podcasts/episodes/2/stream",
     ] {
         assert_eq!(
@@ -55,6 +76,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
     // Admin has a subscription in this library but must still be denied another user's show.
     for path in [
         "/api/v1/items/1",
+        "/api/v1/podcasts/1/episodes",
         "/api/v1/items/2",
         "/api/v1/items/2/playback",
         "/api/v1/items/2/metadata",
@@ -106,10 +128,10 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         Status::Ok
     );
     // Native audio elements authenticate with the media cookie, including after a session redirect.
-    // The private test enclosure is rejected before connecting; 502 proves the cookie reached it.
+    // A cached copy plays even though the original enclosure is unreachable.
     for (token, expected) in [
         (&admin, Status::NotFound),
-        (&listener, Status::BadGateway),
+        (&listener, Status::Ok),
     ] {
         assert_eq!(
             client
@@ -130,6 +152,44 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
             .status(),
         Status::Unauthorized
     );
+    for _ in 0..2 {
+        let response = client
+            .get("/api/v1/podcasts/episodes/2/stream")
+            .header(Header::new("Authorization", format!("Bearer {listener}")))
+            .header(Header::new("Range", "bytes=4-8"))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::PartialContent);
+        assert_eq!(
+            response.headers().get_one("Content-Range"),
+            Some("bytes 4-8/17")
+        );
+        assert_eq!(response.into_bytes().await.unwrap(), b"saved");
+    }
+    for (token, expected) in [
+        (&admin, Status::NotFound),
+        (&listener, Status::NoContent),
+    ] {
+        let response = client
+            .put("/api/v1/podcasts/1/preferences")
+            .header(Header::new("Authorization", format!("Bearer {token}")))
+            .header(ContentType::JSON)
+            .body(r#"{"playback_order":"newest_first"}"#)
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), expected);
+    }
+    let response = client
+        .get("/api/v1/podcasts/1/episodes")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(response[0]["podcast"]["playback_order"], "newest_first");
+    assert!(!response.to_string().contains("local_download"));
+    assert!(!response.to_string().contains("koko-podcast-route"));
     // Adding an existing feed subscribes the second user without downloading or duplicating it.
     let response = client
         .post("/api/v1/podcasts")
@@ -149,6 +209,15 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
             .status(),
         Status::Ok
     );
+    let rows = client
+        .get("/api/v1/podcasts/1/episodes")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(rows[0]["podcast"]["playback_order"], "oldest_first");
     assert_eq!(
         client
             .delete("/api/v1/podcasts/1")
@@ -185,6 +254,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
             .status(),
         Status::NotFound
     );
+    std::fs::remove_file(cached).unwrap();
 }
 
 fn seed(conn: &mut diesel::SqliteConnection) {

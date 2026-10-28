@@ -156,8 +156,19 @@ fn save_metadata(
 ) -> Result<()> {
     let mut value = value.clone();
     value.podcast_id = root;
+    let local_download = metadata::table
+        .find(id)
+        .select(metadata::metadata_json)
+        .first::<String>(conn)
+        .optional()?
+        .and_then(|json| serde_json::from_str::<super::downloads::StoredMetadata>(&json).ok())
+        .and_then(|value| value.local_download);
+    let stored = super::downloads::StoredMetadata {
+        publisher: value,
+        local_download,
+    };
     let json =
-        serde_json::to_string(&value).expect("Podcast metadata contains serializable values");
+        serde_json::to_string(&stored).expect("Podcast metadata contains serializable values");
     diesel::insert_into(metadata::table)
         .values((
             metadata::media_item_id.eq(id),
@@ -186,7 +197,8 @@ pub(super) fn save(
 ) -> Result<i32> {
     conn.immediate_transaction(|conn| {
         let library_id = library(conn)?;
-        let root = match feed_id(conn, requested)?.or(feed_id(conn, canonical)?) {
+        let existing_feed = feed_id(conn, requested)?.or(feed_id(conn, canonical)?);
+        let root = match existing_feed {
             Some(id) => {
                 diesel::update(items::table.find(id))
                     .set((
@@ -233,24 +245,14 @@ pub(super) fn save(
             add_subscription(conn, user, root)?;
         }
         for episode in &feed.episodes {
-            let parent = if let Some(season) = episode.season {
-                let id = item(
-                    conn,
-                    library_id,
-                    format!("podcast:{root}:season:{season}"),
-                    &format!("Season {season}"),
-                    "podcast_season",
-                    Some(root),
-                    None,
-                )?;
-                diesel::update(items::table.find(id))
-                    .set(items::season_number.eq(season))
-                    .execute(conn)?;
-                save_metadata(conn, id, root, &feed.metadata, None, None)?;
-                id
-            } else {
-                root
-            };
+            let parent = episode_parent(
+                conn,
+                library_id,
+                root,
+                episode.season,
+                episode.metadata.published_at,
+                &feed.metadata,
+            )?;
             let id = item(
                 conn,
                 library_id,
@@ -260,6 +262,12 @@ pub(super) fn save(
                 Some(parent),
                 Some(episode),
             )?;
+            let is_new = metadata::table
+                .find(id)
+                .select(metadata::media_item_id)
+                .first::<i32>(conn)
+                .optional()?
+                .is_none();
             save_metadata(
                 conn,
                 id,
@@ -268,6 +276,14 @@ pub(super) fn save(
                 Some(&episode.url),
                 Some(&episode.mime),
             )?;
+            if existing_feed.is_some()
+                && is_new
+                && crate::config::current_settings()
+                    .podcasts
+                    .download_new_episodes
+            {
+                super::downloads::queue(conn, id)?;
+            }
         }
         // Rolling feeds often omit older episodes; keep them and their listening history.
         let parent_ids = items::table
@@ -414,8 +430,9 @@ fn load_metadata(
             .select((metadata::media_item_id, metadata::metadata_json))
             .load::<(i32, String)>(conn)?
         {
-            if let Ok(value) = serde_json::from_str(&json) {
-                result.insert(id, value);
+            if let Ok(mut value) = serde_json::from_str::<super::downloads::StoredMetadata>(&json) {
+                value.publisher.download = value.local_download.map(|record| record.info());
+                result.insert(id, value.publisher);
             }
         }
     }
@@ -507,7 +524,7 @@ pub fn playback(
         item_id: id,
         can_direct_play: true,
         transcode_required: false,
-        reason: "Stream the publisher's podcast enclosure".into(),
+        reason: "Play a saved podcast episode; download a local copy before first playback".into(),
         stream_url: Some(format!("/api/v1/podcasts/episodes/{id}/stream")),
         mime_type: mime,
         transcode_container: None,
@@ -532,14 +549,6 @@ pub(super) fn enclosure(
     Ok(row.and_then(|(url, mime)| url.map(|url| (url, mime))))
 }
 
-/// Resolve a saved publisher enclosure for an already-authorized episode.
-pub(crate) fn enclosure_url(
-    conn: &mut SqliteConnection,
-    id: i32,
-) -> Result<Option<String>> {
-    Ok(enclosure(conn, id)?.map(|(url, _)| url))
-}
-
 /// Resolve publisher cover metadata without hydrating unrelated local media sources.
 pub(crate) fn artwork_url(
     conn: &mut SqliteConnection,
@@ -548,4 +557,116 @@ pub(crate) fn artwork_url(
     Ok(load_metadata(conn, &[id])?
         .remove(&id)
         .and_then(|value| value.artwork_url))
+}
+
+/// Return all episode identifiers for one shared podcast across its real seasons.
+pub(super) fn episode_ids(
+    conn: &mut SqliteConnection,
+    podcast: i32,
+) -> Result<Vec<i32>> {
+    metadata::table
+        .filter(metadata::podcast_id.eq(podcast))
+        .filter(metadata::enclosure_url.is_not_null())
+        .select(metadata::media_item_id)
+        .load(conn)
+}
+
+fn episode_parent(
+    conn: &mut SqliteConnection,
+    library_id: i32,
+    root: i32,
+    season: Option<i32>,
+    published: Option<i64>,
+    show: &PodcastMetadata,
+) -> Result<i32> {
+    let year = published
+        .and_then(|value| chrono::DateTime::from_timestamp(value, 0))
+        .map(|value| chrono::Datelike::year(&value));
+    let (identity, title, kind) = if let Some(number) = season {
+        (
+            format!("podcast:{root}:season:{number}"),
+            format!("Season {number}"),
+            super::PodcastSeasonKind::Number,
+        )
+    } else {
+        (
+            format!(
+                "podcast:{root}:year:{}",
+                year.map(|year| year.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            ),
+            year.map(|year| year.to_string())
+                .unwrap_or_else(|| "Unknown year".into()),
+            super::PodcastSeasonKind::Year,
+        )
+    };
+    let parent = item(
+        conn,
+        library_id,
+        identity,
+        &title,
+        "podcast_season",
+        Some(root),
+        None,
+    )?;
+    diesel::update(items::table.find(parent))
+        .set(items::season_number.eq(season))
+        .execute(conn)?;
+    let mut value = show.clone();
+    value.published_at = None;
+    value.season_kind = Some(kind);
+    value.season_year = if season.is_none() { year } else { None };
+    save_metadata(conn, parent, root, &value, None, None)?;
+    Ok(parent)
+}
+
+/// Group previously imported unseasoned episodes locally without changing episode IDs or history.
+pub(super) fn reconcile_year_seasons(conn: &mut SqliteConnection) -> Result<()> {
+    let rows = items::table
+        .inner_join(metadata::table)
+        .filter(items::item_type.eq("podcast_episode"))
+        .select((
+            items::id,
+            items::library_id,
+            items::parent_id,
+            items::season_number,
+            metadata::podcast_id,
+            metadata::metadata_json,
+        ))
+        .load::<(i32, i32, Option<i32>, Option<i32>, i32, String)>(conn)?;
+    conn.immediate_transaction(|conn| {
+        let mut roots = HashSet::new();
+        for (id, library, parent, season, root, json) in rows {
+            if season.is_some() || parent != Some(root) {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<PodcastMetadata>(&json) else {
+                continue;
+            };
+            let show = super::downloads::stored(conn, root)?.publisher;
+            let parent = episode_parent(conn, library, root, None, value.published_at, &show)?;
+            diesel::update(items::table.find(id))
+                .set(items::parent_id.eq(parent))
+                .execute(conn)?;
+            roots.insert(root);
+        }
+        for root in roots {
+            let parents = items::table
+                .inner_join(metadata::table)
+                .filter(metadata::podcast_id.eq(root))
+                .filter(items::item_type.eq_any(["podcast", "podcast_season"]))
+                .select(items::id)
+                .load::<i32>(conn)?;
+            for parent in parents {
+                let count = items::table
+                    .filter(items::parent_id.eq(parent))
+                    .count()
+                    .get_result::<i64>(conn)?;
+                diesel::update(items::table.find(parent))
+                    .set(items::child_count.eq(count as i32))
+                    .execute(conn)?;
+            }
+        }
+        Ok(())
+    })
 }

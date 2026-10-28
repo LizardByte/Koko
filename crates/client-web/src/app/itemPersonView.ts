@@ -1,6 +1,6 @@
 /** Renders item detail, metadata search, person detail, and credit trays. */
 
-import { renderPodcastItem } from './podcasts';
+import { renderPodcastContents, renderPodcastControls, renderPodcastDetails, renderPodcastActions } from './podcasts';
 import { renderAudiobookContents } from './audiobooks';
 import { renderBookActions } from './bookActions';
 import { renderAudiobookAction } from './audiobookActions';
@@ -865,6 +865,7 @@ function selectedItemRemainingTime(item: MediaItemDetail): string | undefined {
 
 function renderSelectedItemHeroMeta(item: MediaItemDetail, genres: string[]): string {
   const tags = [missingItemDetailBadgeMarkup(item)];
+  if (item.podcast?.author) tags.push(`<span class="tag">${escapeHtml(item.podcast.author)}</span>`);
   if (item.release_year) {
     tags.push(`<span class="tag">${item.release_year}</span>`);
   }
@@ -947,6 +948,7 @@ function audiobookListenButton(item: MediaItemDetail): string {
 
 function selectedPlaybackLabel(item: MediaItemDetail, target?: MediaPlaybackTarget): string {
   if (!target) return '';
+  if (item.podcast) return target.resume ? 'Resume listening' : 'Play podcast';
   if (item.item_type === 'audiobook' && (target.resume || (item.playback_position_ms ?? 0) > 0 && !item.playback_completed)) return 'Resume listening';
   return tvPlaybackLabel(item, target);
 }
@@ -987,6 +989,7 @@ function renderSelectedItemActions(options: SelectedItemActionsOptions): string 
               <summary class="secondary-button" aria-label="More actions">${renderButtonContent('More', 'ellipsis')}</summary>
               <div class="item-more-menu">
                 ${renderMusicActions(item, playbackTarget)}
+                ${item.podcast ? renderPodcastActions(item) : ''}
                 ${resumeMs > 0 || item.item_type === 'episode' ? renderPrimaryPlayButton(item, resumeMs, 'item-start-over', true) : ''}
                 ${tvTargets.map((target) => renderPlaybackTargetButton(target, true, { id: target.label === 'Restart show' ? 'restart-show' : 'restart-season' })).join('')}
                 ${!tvTargets.length && restartPlaybackTarget ? renderPlaybackTargetButton(restartPlaybackTarget, true, { id: 'item-start-over' }) : ''}
@@ -1097,6 +1100,7 @@ export function renderEpisodeBrowser(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemChildrenSection(item: MediaItemDetail): string {
+  if (item.podcast) return renderPodcastContents(item);
   if (item.item_type === 'album') return renderAlbumTracks(item);
   if (['audiobook', 'audiobook_part'].includes(item.item_type)) return renderAudiobookContents(item, canManageUsers(), state.audiobookRecordingChoices);
   if (item.item_type === 'book_work') {
@@ -1174,6 +1178,7 @@ function renderSelectedItemSupportGrid(
   metadataRefreshButtonMarkup: string,
   metadataSearchPanel: string,
 ): string {
+  if (item.podcast) return renderPodcastDetails(item);
   const metadataHeading = supportsManualLinking ? 'Link metadata' : 'Metadata';
   return `
       <details class="item-management" id="item-management" ${state.itemManagementOpen ? 'open' : ''} data-nav-section="management" data-nav-label="Media details">
@@ -1212,7 +1217,6 @@ function renderArtistScreenCredits(item: MediaItemDetail): string {
 }
 
 function renderSelectedItemPage(item: MediaItemDetail): string {
-  if (item.podcast) return renderPodcastItem(item);
   const artwork = itemArtwork(item);
   const overview = selectedItemOverview(item);
   const trailerOptions = currentTrailerOptions();
@@ -1237,7 +1241,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
   const metadataRefreshButtonMarkup = renderMetadataRefreshButton(supportsManualLinking, linkedMatch, metadataRefreshActive);
 
   return `
-    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music ? 'music-detail-page' : ''} ${['audiobook', 'audiobook_part'].includes(item.item_type) ? 'audiobook-detail-page' : ''}" data-item-page-id="${item.id}">
+    <section class="item-page item-detail-page ${item.item_type === 'episode' ? 'episode-detail-page' : ''} ${item.music || item.podcast ? 'music-detail-page' : ''} ${item.podcast ? 'podcast-detail-page' : ''} ${['audiobook', 'audiobook_part'].includes(item.item_type) ? 'audiobook-detail-page' : ''}" data-item-page-id="${item.id}">
       ${artwork.backdrop ? `<div class="item-opening-backdrop" aria-hidden="true" style="--page-backdrop-image: url('${escapeHtml(artwork.backdrop)}');"></div>` : ''}
       ${renderItemWarnings(item)}
       ${renderSelectedItemIdentity(
@@ -1250,6 +1254,7 @@ function renderSelectedItemPage(item: MediaItemDetail): string {
       <div class="item-action-dock" data-nav-section="item-overview" data-nav-label="Playback actions">
         ${actionsMarkup}
         ${renderSeasonTabs(item)}
+        ${item.podcast ? renderPodcastControls(item) : ''}
       </div>
       ${overview ? `<section class="item-description-section" data-nav-section="description" data-nav-label="Description">
         ${renderCollapsibleText(overview, `item-overview:${item.id}`, 'hero-description', true)}

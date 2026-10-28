@@ -3032,6 +3032,7 @@ pub fn list_media_items_for_user_with_preferred_languages(
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
     podcasts::filter_visible(conn, user_id, &mut items)?;
+    podcasts::apply_preferences(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3548,6 +3549,7 @@ pub fn search_media_items_for_user_with_preferred_languages(
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
     podcasts::filter_visible(conn, user_id, &mut items)?;
+    podcasts::apply_preferences(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -4602,6 +4604,8 @@ pub fn apply_user_playback_context_to_detail(
     let targets = container_playback_targets(conn, user_id, &item)?;
     detail.playback_target = targets.primary;
     detail.restart_playback_target = targets.restart;
+
+    podcasts::apply_user_context(conn, user_id, detail)?;
 
     Ok(())
 }

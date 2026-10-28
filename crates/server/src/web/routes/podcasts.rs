@@ -12,11 +12,9 @@ use rocket::{
     Request,
     delete,
     get,
-    http::{
-        Header,
-        Status,
-    },
+    http::Status,
     post,
+    put,
     response::{
         self,
         Responder,
@@ -191,62 +189,75 @@ impl<'r> Responder<'r, 'static> for PodcastStream {
     }
 }
 
-/// Stream a subscribed episode from its public publisher, validating every redirect and address.
+/// Serve the shared local episode copy, downloading it on first play when needed.
 #[get("/api/v1/podcasts/episodes/<id>/stream")]
 pub async fn stream(
     user: UserGuard,
     db: DbConn,
     range: super::media::RangeHeader,
     id: i32,
-) -> Result<PodcastStream, Status> {
+) -> Result<PodcastStreamFile, Status> {
     require_item_access(&db, id, &user).await?;
-    let url = db
-        .run(move |conn| podcasts::enclosure_url(conn, id))
+    let path = podcasts::download_episode(&db, id).await.map_err(|error| {
+        log::warn!("Podcast episode {id} download failed: {error}");
+        Status::BadGateway
+    })?;
+    super::media::open_ranged_file(path, &range)
         .await
-        .map_err(|_| Status::InternalServerError)?
-        .ok_or(Status::NotFound)?;
-    let upstream = podcasts::request(&url, range.0.as_deref())
+        .map(PodcastStreamFile)
+}
+
+/// A complete local podcast file with normal byte-range seeking.
+#[derive(rocket::Responder)]
+pub struct PodcastStreamFile(super::media::RangedFile);
+
+/// Return the account's full podcast queue, including episodes in every season.
+#[openapi(tag = "Podcasts")]
+#[get("/api/v1/podcasts/<id>/episodes")]
+pub async fn episodes(
+    user: UserGuard,
+    db: DbConn,
+    id: i32,
+) -> Result<Json<Vec<MediaItemSummary>>, Status> {
+    let user = owner(&user)?;
+    db.run(move |conn| podcasts::episodes(conn, user, id))
+        .await
+        .map(Json)
+        .map_err(|error| {
+            if matches!(error, diesel::result::Error::NotFound) {
+                Status::NotFound
+            } else {
+                Status::InternalServerError
+            }
+        })
+}
+
+/// Account-owned podcast playback preferences.
+#[derive(Deserialize, JsonSchema)]
+pub struct PodcastPreferences {
+    /// Oldest-first or newest-first chronological queue order.
+    pub playback_order: podcasts::PlaybackOrder,
+}
+
+/// Save this account's order without changing another subscriber's queue.
+#[openapi(tag = "Podcasts")]
+#[put("/api/v1/podcasts/<id>/preferences", format = "json", data = "<body>")]
+pub async fn preferences(
+    user: UserGuard,
+    db: DbConn,
+    id: i32,
+    body: Json<PodcastPreferences>,
+) -> Result<Status, Status> {
+    let user = owner(&user)?;
+    let order = body.into_inner().playback_order;
+    db.run(move |conn| podcasts::set_order(conn, user, id, order))
         .await
         .map_err(|error| {
-            log::warn!("Podcast episode {id} could not stream: {error}");
-            Status::BadGateway
-        })?;
-    let content_type = upstream
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("application/octet-stream");
-    if !content_type.starts_with("audio/")
-        && !content_type.starts_with("video/")
-        && !content_type.starts_with("application/octet-stream")
-        && !content_type.starts_with("application/ogg")
-    {
-        log::warn!("Podcast episode {id} returned an unsupported media type: {content_type}");
-        return Err(Status::BadGateway);
-    }
-    let mut response = Response::build();
-    response.status(Status::new(upstream.status().as_u16()));
-    response.raw_header("Content-Type", content_type.to_string());
-    for name in [
-        "content-length",
-        "content-range",
-        "accept-ranges",
-    ] {
-        if let Some(value) = upstream.headers().get(name).and_then(|v| v.to_str().ok()) {
-            response.header(Header::new(name, value.to_owned()));
-        }
-    }
-    response.raw_header("Cache-Control", "private, no-store");
-    response.raw_header("X-Content-Type-Options", "nosniff");
-    let reader = rocket::response::stream::ReaderStream::from(rocket::futures::stream::unfold(
-        upstream,
-        |mut upstream| async move {
-            match upstream.chunk().await {
-                Ok(Some(bytes)) => Some((std::io::Cursor::new(bytes), upstream)),
-                _ => None,
+            if matches!(error, diesel::result::Error::NotFound) {
+                Status::NotFound
+            } else {
+                Status::InternalServerError
             }
-        },
-    ));
-    response.streamed_body(reader);
-    Ok(PodcastStream(response.finalize()))
+        })?;
+    Ok(Status::NoContent)
 }

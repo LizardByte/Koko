@@ -600,6 +600,9 @@ function renderGeneralSettingsPage(settings: SettingsSnapshot): string {
         <section class="settings-group">
           <div class="settings-group-heading"><h3>Storage</h3><p class="muted">Where Koko keeps its database and cached metadata.</p></div>
           <label>Data directory<input name="data_dir" value="${escapeHtml(settings.general.data_dir)}" /></label>
+          <label>Podcast download directory<input name="podcast_download_dir" value="${escapeHtml(settings.podcasts?.download_dir ?? '')}" placeholder="Default: podcasts folder inside the data directory" /><small class="muted">Folder for new downloads. Episodes already saved remain available in their current folder.</small></label>
+          <label class="checkbox-inline"><input name="podcast_download_new" type="checkbox" ${settings.podcasts?.download_new_episodes !== false ? 'checked' : ''} /> Download new podcast episodes automatically</label>
+          <small class="muted">Older episodes download the first time they are played. The saved copy is reused by all subscribers.</small>
         </section>
 
         <section class="settings-group">
@@ -756,6 +759,10 @@ export function buildSettingsFromForm(formData: FormData): SettingsSnapshot | un
   }
 
   return {
+    podcasts: {
+      download_dir: formDataString(formData.get('podcast_download_dir'), current.podcasts?.download_dir ?? ''),
+      download_new_episodes: formData.has('podcast_download_dir') ? formData.get('podcast_download_new') === 'on' : current.podcasts?.download_new_episodes !== false,
+    },
     general: {
       data_dir: formDataString(formData.get('data_dir'), current.general.data_dir),
     },

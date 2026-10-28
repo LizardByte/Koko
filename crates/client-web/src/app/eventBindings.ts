@@ -684,7 +684,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
     state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
-    if (state.itemManagementOpen) void loadItemSources(render);
+    if (state.itemManagementOpen && !state.selectedItem?.podcast) void loadItemSources(render);
   });
   document.querySelectorAll<HTMLButtonElement>('[data-item-sources-page]').forEach((button) => {
     button.addEventListener('click', () => { void loadItemSources(render, Number(button.dataset.itemSourcesPage)); });

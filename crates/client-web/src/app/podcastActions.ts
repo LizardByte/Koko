@@ -1,9 +1,9 @@
 /** Loads podcast discovery and subscriptions and binds account-scoped podcast actions. */
-import { addPodcast, discoverPodcasts, getPodcasts, refreshPodcast, removePodcast } from '../api';
+import { addPodcast, discoverPodcasts, getPodcasts, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
 import type { AppState } from './types';
 import { state } from './state';
 import { startPlaybackForItemId } from './playbackController';
-import { stopMusic } from './audioPlayer';
+import { stopMusic, toggleCurrentMusic, refreshPodcastQueue } from './audioPlayer';
 import { activeMusicPlayback } from './musicPlaybackState';
 import { clearBrowseSessions } from './browseSession';
 
@@ -14,12 +14,12 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
   if (target.podcasts?.owner !== owner) target.podcasts = { owner, items: [], directory: [], country: 'us', query: '', loading: false };
   const data = target.podcasts!;
   const country = data.country, query = data.query;
-  data.loading = true;
+  data.loading = data.tab === 'discover';
   data.error = undefined;
   const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data && data.country === country && data.query === query;
   await Promise.all([
     getPodcasts().then(items => { if (current()) { data.items = items; render(); } }).catch(error => { if (current()) target.error = error instanceof Error ? error.message : 'Subscriptions could not load.'; }),
-    discoverPodcasts(country, query).then(items => { if (current()) data.directory = items; }).catch(error => { if (current()) { data.directory = []; data.error = error instanceof Error ? error.message : 'The podcast directory is unavailable. Add a feed URL above.'; } }).finally(() => { if (current()) { data.loading = false; render(); } }),
+    data.tab === 'discover' ? discoverPodcasts(country, query).then(items => { if (current()) data.directory = items; }).catch(error => { if (current()) { data.directory = []; data.error = error instanceof Error ? error.message : 'The podcast directory is unavailable. Add a feed URL above.'; } }).finally(() => { if (current()) { data.loading = false; render(); } }) : Promise.resolve(),
   ]);
 }
 
@@ -36,9 +36,27 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     finally { if (state.bootstrap?.current_user?.id === owner) { if (state.podcasts) { state.podcasts.busy = false; }
       context.render(true); } }
   };
+  document.querySelectorAll<HTMLButtonElement>('[data-podcast-tab]').forEach(button => button.addEventListener('click', () => {
+    if (!state.podcasts) return;
+    state.podcasts.tab = button.dataset.podcastTab === 'discover' ? 'discover' : 'library';
+    void context.refreshData(false);
+  }, { signal }));
+  document.querySelector<HTMLButtonElement>('[data-podcast-feed-toggle]')?.addEventListener('click', () => {
+    if (!state.podcasts) return;
+    state.podcasts.addFeedOpen = !state.podcasts.addFeedOpen;
+    context.render(true);
+  }, { signal });
+  document.querySelectorAll<HTMLSelectElement>('[data-podcast-order]').forEach(select => select.addEventListener('change', () => {
+    const order = select.value as PodcastPlaybackOrder;
+    const id = Number(select.dataset.podcastOrder);
+    void execute(async () => {
+      await setPodcastPlaybackOrder(id, order);
+      await refreshPodcastQueue(id);
+    });
+  }, { signal }));
   document.querySelector<HTMLFormElement>('#podcast-feed-form')?.addEventListener('submit', event => {
     event.preventDefault(); const url = String(new FormData(event.currentTarget as HTMLFormElement).get('feed') ?? '');
-    void execute(async () => { await addPodcast(url); });
+    void execute(async () => { await addPodcast(url); }, () => { if (state.podcasts) { state.podcasts.addFeedOpen = false; state.podcasts.tab = 'library'; } });
   }, { signal });
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-add]').forEach(button => button.addEventListener('click', () => {
     const item = state.podcasts?.directory[Number(button.dataset.podcastAdd)];
@@ -55,7 +73,12 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     void execute(() => refreshPodcast(Number(button.dataset.podcastRefresh)));
   }, { signal }));
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-play]').forEach(button => button.addEventListener('click', () => {
-    void startPlaybackForItemId(Number(button.dataset.podcastPlay), Number(button.dataset.podcastPosition ?? 0)).catch(error => { state.error = error instanceof Error ? error.message : 'Episode could not start.'; context.render(true); });
+    const id = Number(button.dataset.podcastPlay);
+    const play = async () => {
+      if (await toggleCurrentMusic(id)) return;
+      await startPlaybackForItemId(id, Number(button.dataset.podcastPosition ?? 0));
+    };
+    void play().catch(error => { state.error = error instanceof Error ? error.message : 'Episode could not start.'; context.render(true); });
   }, { signal }));
   const search = (form: HTMLFormElement, popular = false) => {
     if (!state.podcasts) return;

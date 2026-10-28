@@ -240,9 +240,15 @@ export interface MusicMetadata {
   musicbrainz_recording_id?: string | null;
 }
 
-/** Publisher metadata from a subscribed podcast feed. */
+/** Chronological playback preference for one podcast subscription. */
+export type PodcastPlaybackOrder = 'oldest_first' | 'newest_first';
+/** Publisher metadata and the current account's podcast preferences. */
 export interface PodcastMetadata {
   podcast_id: number;
+  playback_order?: PodcastPlaybackOrder;
+  season_kind?: 'number' | 'year' | null;
+  season_year?: number | null;
+  download?: { state: 'queued' | 'downloading' | 'ready' | 'failed'; size_bytes?: number | null; error?: string | null } | null;
   feed_url?: string | null;
   author?: string | null;
   description?: string | null;
@@ -275,6 +281,10 @@ export interface DirectoryPodcast {
 export function discoverPodcasts(country = 'us', query = ''): Promise<DirectoryPodcast[]> {
   return requestJson('GET', `/api/v1/podcasts/discover?${new URLSearchParams({ country, query })}`);
 }
+/** Fetch every episode in the account's saved playback order, including real seasons. */
+export function getPodcastEpisodes(id: number): Promise<MediaItemSummary[]> { return requestJson('GET', `/api/v1/podcasts/${id}/episodes`); }
+/** Persist a chronological queue order for this account and podcast only. */
+export function setPodcastPlaybackOrder(id: number, playback_order: PodcastPlaybackOrder): Promise<void> { return requestJson('PUT', `/api/v1/podcasts/${id}/preferences`, { playback_order }); }
 /** List the current account's subscribed shows. */
 export function getPodcasts(): Promise<MediaItemSummary[]> { return requestJson('GET', '/api/v1/podcasts'); }
 /** Subscribe to a directory result or manually entered RSS feed. */
@@ -822,6 +832,7 @@ export interface SettingsSnapshot {
   general: {
     data_dir: string;
   };
+  podcasts?: { download_dir: string; download_new_episodes: boolean };
   media: {
     libraries: MediaLibrarySettings[];
     missing_item_auto_delete_days?: number | null;

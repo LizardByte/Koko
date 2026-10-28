@@ -114,7 +114,7 @@ export interface AppState {
   libraries: MediaLibrary[];
   home?: MediaHome;
   /** Discovery and subscription data belong to the account that requested them. */
-  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; loading: boolean; error?: string; busy?: boolean };
+  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; tab?: 'library' | 'discover'; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
   playlists?: MusicPlaylistDetail[];
   selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];

@@ -438,7 +438,7 @@ export function renderMetadataRefreshBadge(item: MediaItemSummary): string {
 
 function cardArtworkClass(item: MediaItemSummary, useEpisodeLayout: boolean): string {
   if (['audiobook', 'audiobook_part'].includes(item.item_type)) return 'audiobook-art';
-  if (item.music) return 'music-art';
+  if (item.music || item.podcast) return 'music-art';
   return useEpisodeLayout ? item.item_type : 'poster-art';
 }
 

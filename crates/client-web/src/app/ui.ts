@@ -102,6 +102,9 @@ export function humanizeItemType(itemType: string): string {
     case 'comic_issue': return 'Comic issue';
     case 'audiobook': return 'Audiobook version';
     case 'audiobook_part': return 'Audio file';
+    case 'podcast': return 'Podcast';
+    case 'podcast_season': return 'Season';
+    case 'podcast_episode': return 'Episode';
     case 'show':
       return 'Show';
     case 'season':
@@ -129,12 +132,12 @@ export function formatChildCount(item: MediaItemSummary): string {
     return formatDuration(item.duration_ms);
   }
 
-  if (item.item_type === 'show') {
+  if (item.item_type === 'show' || item.item_type === 'podcast') {
     const seasonCount = item.available_season_count ?? item.child_count;
     return `${seasonCount} season${seasonCount === 1 ? '' : 's'}`;
   }
 
-  if (item.item_type === 'season') {
+  if (item.item_type === 'season' || item.item_type === 'podcast_season') {
     return `${item.child_count} episode${item.child_count === 1 ? '' : 's'}`;
   }
 

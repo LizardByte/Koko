@@ -33,6 +33,7 @@ const MEDIA_SETTINGS_KEY: &str = "media";
 const SERVER_SETTINGS_KEY: &str = "server";
 const FFMPEG_SETTINGS_KEY: &str = "ffmpeg";
 const SCHEDULED_TASKS_SETTINGS_KEY: &str = "scheduled_tasks";
+const PODCAST_SETTINGS_KEY: &str = "podcasts";
 
 /// General settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -265,6 +266,24 @@ mod bundled_media_tool_tests {
             .unwrap();
         let saved: super::FfmpegSettings = serde_json::from_str(&saved).unwrap();
         assert_eq!(saved, super::FfmpegSettings::default());
+    }
+
+    #[test]
+    fn podcast_download_settings_round_trip_and_default_for_existing_databases() {
+        let mut conn = in_memory_database();
+        let settings = super::Settings {
+            podcasts: super::PodcastSettings {
+                download_dir: "D:/Podcasts".into(),
+                download_new_episodes: false,
+            },
+            ..Default::default()
+        };
+        super::save_database_settings(&mut conn, &settings).unwrap();
+        let loaded = super::load_database_settings(&mut conn, &super::Settings::default()).unwrap();
+        assert_eq!(loaded.podcasts, settings.podcasts);
+        let old: super::Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.podcasts.download_new_episodes);
+        assert!(old.podcasts.download_dir.is_empty());
     }
 
     #[test]
@@ -826,6 +845,9 @@ pub struct Settings {
     /// General settings.
     #[serde(default)]
     pub general: GeneralSettings,
+    /// Podcast episode storage and automatic downloads.
+    #[serde(default)]
+    pub podcasts: PodcastSettings,
     /// Media settings.
     #[serde(default)]
     pub media: MediaSettings,
@@ -844,6 +866,25 @@ pub struct Settings {
     /// Scheduled task settings.
     #[serde(default)]
     pub scheduled_tasks: ScheduledTasksSettings,
+}
+
+/// Storage policy for shared local podcast episodes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct PodcastSettings {
+    /// Directory for new downloads; empty selects the podcasts folder under the data directory.
+    pub download_dir: String,
+    /// Download episodes discovered after the initial subscription automatically.
+    pub download_new_episodes: bool,
+}
+
+impl Default for PodcastSettings {
+    fn default() -> Self {
+        Self {
+            download_dir: String::new(),
+            download_new_episodes: true,
+        }
+    }
 }
 
 /// Optional server-side ebook conversion settings. Originals are always read-only.
@@ -1393,6 +1434,11 @@ pub fn save_database_settings(
         SCHEDULED_TASKS_SETTINGS_KEY,
         runtime_setting_value(&normalized.scheduled_tasks)?,
     )?;
+    upsert_runtime_setting(
+        conn,
+        PODCAST_SETTINGS_KEY,
+        runtime_setting_value(&normalized.podcasts)?,
+    )?;
     Ok(())
 }
 
@@ -1428,6 +1474,11 @@ pub fn seed_database_settings(
         SCHEDULED_TASKS_SETTINGS_KEY,
         runtime_setting_value(&normalized.scheduled_tasks)?,
     )?;
+    insert_runtime_setting_if_missing(
+        conn,
+        PODCAST_SETTINGS_KEY,
+        runtime_setting_value(&normalized.podcasts)?,
+    )?;
     Ok(())
 }
 
@@ -1443,6 +1494,7 @@ pub fn load_database_settings(
             SERVER_SETTINGS_KEY,
             FFMPEG_SETTINGS_KEY,
             SCHEDULED_TASKS_SETTINGS_KEY,
+            PODCAST_SETTINGS_KEY,
         ]))
         .select(AppSetting::as_select())
         .load::<AppSetting>(conn)
@@ -1468,6 +1520,9 @@ pub fn load_database_settings(
             SCHEDULED_TASKS_SETTINGS_KEY => {
                 settings.scheduled_tasks =
                     parse_runtime_setting(&row.value, SCHEDULED_TASKS_SETTINGS_KEY)?;
+            }
+            PODCAST_SETTINGS_KEY => {
+                settings.podcasts = parse_runtime_setting(&row.value, PODCAST_SETTINGS_KEY)?;
             }
             _ => {}
         }

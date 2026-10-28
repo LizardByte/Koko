@@ -474,3 +474,16 @@ test('background activity precedes the metadata dashboard', () => {
   assert.ok(html.indexOf('id="system-activities-panel-root"') < html.indexOf('id="metadata-dashboard-panel-root"'));
   assert.ok(html.indexOf('Background activities') < html.indexOf('Metadata dashboard'));
 });
+
+
+test('podcast storage settings persist independently of other settings forms', () => {
+  const form = new FormData();
+  form.set('podcast_download_dir', 'D:/Podcast library');
+  let settings = buildSettingsFromForm(form);
+  assert.deepEqual(settings.podcasts, { download_dir: 'D:/Podcast library', download_new_episodes: false });
+  state.settingsResponse.settings = settings;
+  assert.deepEqual(buildSettingsFromForm(new FormData()).podcasts, settings.podcasts);
+  form.set('podcast_download_new', 'on');
+  assert.equal(buildSettingsFromForm(form).podcasts.download_new_episodes, true);
+  assert.match(renderSettingsPage(), /Podcast download directory/);
+});

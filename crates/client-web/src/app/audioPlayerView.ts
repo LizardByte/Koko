@@ -62,16 +62,19 @@ export function renderAudioPlayer(view: AudioPlayerViewState): string {
   const { item } = view;
   if (!item) return '';
   const book = Boolean(item.audiobook);
-  const artist = item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '';
+  const artist = item.podcast?.author ?? item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '';
   const title = item.audiobook?.title || item.display_title;
   const titleTarget = book ? item.parent_id ?? item.id : item.id;
+  const coverTarget = item.podcast?.podcast_id ?? item.parent_id ?? item.id;
+  const collectionLabel = book ? 'Open audiobook' : 'Open album';
+  const coverLabel = item.podcast ? 'Open podcast' : collectionLabel;
 
   const panel = view.panel ? renderPanel(view) : '';
-  const inlineLyrics = !book && view.lyricsEnabled
+  const inlineLyrics = !book && !item.podcast && view.lyricsEnabled
     ? '<div class="music-inline-lyrics" hidden><button type="button" data-music-action="lyrics" data-current-lyric aria-label="Expand current lyrics"></button></div>'
     : '';
   return `${panel}<section id="music-dock" class="music-dock player-dock" aria-label="Audio player" data-nav-section="music-player">
-    <div class="music-now-playing player-dock-identity"><button class="music-cover" type="button" data-music-open-item="${item.parent_id ?? item.id}" aria-label="${book ? 'Open audiobook' : 'Open album'}">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
+    <div class="music-now-playing player-dock-identity"><button class="music-cover" type="button" data-music-open-item="${coverTarget}" aria-label="${coverLabel}">${renderIcon('music')}<img src="${escapeHtml(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id, 'poster', item.artwork_updated_at))}" alt="" /></button>
       <div><button class="music-title" type="button" data-music-open-item="${titleTarget}">${escapeHtml(title)}</button><span class="muted">${escapeHtml(artist)}</span></div></div>
     <div class="music-transport player-dock-transport"><div class="music-buttons player-dock-buttons">${renderTransportButtons(view)}
       </div><div class="music-timeline player-dock-timeline"><span data-music-elapsed>0:00</span><input class="player-progress" data-music-seek type="range" min="0" max="1000" step="1" value="0" aria-label="Audio position"/><span data-music-duration>${formatAudioTime((item.duration_ms ?? 0) / 1000)}</span></div></div>
@@ -88,15 +91,18 @@ function renderTransportButtons(view: AudioPlayerViewState): string {
   const repeatLabel = { off: 'Repeat off', all: 'Repeat all', one: 'Repeat one' }[queue.repeat];
   const repeatIcon = queue.repeat === 'one' ? 'repeat-1' : 'repeat';
   const repeat = book ? '' : button('repeat', repeatLabel, repeatIcon, queue.repeat !== 'off');
-  return `${shuffle}${button('previous', book ? 'Previous audio file' : 'Previous song', 'skip-back')}${button('back', 'Back 10 seconds', 'rotate-ccw')}
+  const recording = view.item?.audiobook ? 'audio file' : 'song';
+  const previousLabel = view.item?.podcast ? 'Previous episode' : 'Previous ' + recording;
+  const nextLabel = view.item?.podcast ? 'Next episode' : 'Next ' + recording;
+  return `${shuffle}${button('previous', previousLabel, 'skip-back')}${button('back', 'Back 10 seconds', 'rotate-ccw')}
     ${button('play', view.paused ? 'Play audio' : 'Pause audio', playIcon(view), false, view.loading)}
-    ${button('forward', 'Forward 10 seconds', 'rotate-ccw')}${button('next', book ? 'Next audio file' : 'Next song', 'skip-forward', false, queue.cursor >= queue.order.length - 1 && queue.repeat !== 'all')}${repeat}`;
+    ${button('forward', 'Forward 10 seconds', 'rotate-ccw')}${button('next', nextLabel, 'skip-forward', false, queue.cursor >= queue.order.length - 1 && queue.repeat !== 'all')}${repeat}`;
 }
 
 function renderAudioTools(view: AudioPlayerViewState): string {
   if (!view.item?.audiobook && !view.item?.podcast) return button('lyrics', 'Lyrics', 'mic-2', view.panel === 'lyrics') + button('queue', 'Playing queue', 'list-music', view.panel === 'queue');
   const rates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((rate) => `<option value="${rate}" ${rate === (view.playbackRate ?? 1) ? 'selected' : ''}>${rate}×</option>`).join('');
-  return `${view.item?.audiobook ? button('chapters', 'Chapters', 'list-music', view.panel === 'chapters') : ''}<label class="audio-speed"><span class="sr-only">Playback speed</span><select data-audio-speed aria-label="Playback speed">${rates}</select></label>`;
+  return `${view.item?.audiobook ? button('chapters', 'Chapters', 'list-music', view.panel === 'chapters') : button('queue', 'Episode queue', 'list-music', view.panel === 'queue')}<label class="audio-speed"><span class="sr-only">Playback speed</span><select data-audio-speed aria-label="Playback speed">${rates}</select></label>`;
 }
 
 function renderQueueEntry(
@@ -105,20 +111,22 @@ function renderQueueEntry(
   index: number,
 ): string {
   const current = entry.key === view.queue.current?.key;
+  const recording = view.item?.podcast ? 'episode' : 'song';
   const move =
     index > view.queue.cursor
-      ? `<button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:-1" aria-label="Move song up">${renderIcon('chevron-up')}</button><button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:1" aria-label="Move song down">${renderIcon('chevron-down')}</button>`
+      ? `<button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:-1" aria-label="Move ${recording} up">${renderIcon('chevron-up')}</button><button type="button" class="music-control player-dock-control" data-music-move="${entry.key}:1" aria-label="Move ${recording} down">${renderIcon('chevron-down')}</button>`
       : '';
   const remove = current
     ? ''
     : `<button type="button" class="music-control player-dock-control" data-music-remove="${entry.key}" aria-label="Remove ${escapeHtml(entry.item.display_title)}">${renderIcon('x')}</button>`;
   return `<div class="music-queue-entry ${current ? 'is-current' : ''}">
-    <button type="button" data-music-queue-key="${entry.key}" ${current ? 'aria-current="true"' : ''}><span>${index + 1}</span><span><strong>${escapeHtml(entry.item.display_title)}</strong><small>${escapeHtml(entry.item.music?.artist ?? '')}</small></span></button>${move}${remove}</div>`;
+    <button type="button" data-music-queue-key="${entry.key}" ${current ? 'aria-current="true"' : ''}><span>${index + 1}</span><span><strong>${escapeHtml(entry.item.display_title)}</strong><small>${escapeHtml(entry.item.podcast?.author ?? entry.item.music?.artist ?? '')}</small></span></button>${move}${remove}</div>`;
 }
 function renderQueue(view: AudioPlayerViewState): string {
   const entries = view.queue.ordered
     .map((entry, index) => renderQueueEntry(view, entry, index))
     .join('');
+  if (view.item?.podcast) return `<div class="music-queue-list">${entries}</div>`;
   return `<div class="music-queue-list">${entries}</div>
     <footer><button type="button" class="secondary-button" data-music-action="clear">Clear upcoming</button><form data-music-save><label>Playlist name<input id="music-playlist-name" name="name" required maxlength="200" autocomplete="off" placeholder="My playlist"/></label><button type="submit" ${view.saving ? 'disabled' : ''}>${view.saving ? 'Saving…' : 'Save as playlist'}</button></form></footer>`;
 }
@@ -128,7 +136,7 @@ function renderPanel(view: AudioPlayerViewState): string {
     return `<section id="music-panel" class="music-panel" data-nav-section="music-panel" aria-label="Chapters"><header><h3 id="music-panel-title" tabindex="-1">Chapters</h3>${button('close-panel', 'Close audio panel', 'x')}</header><div class="music-queue-list audiobook-chapters">${chapters || '<p>No chapter markers are available for this recording.</p>'}</div></section>`;
   }
   const title = view.panel === 'queue' ? 'Playing queue' : 'Lyrics';
-  const queueName = view.queueName ?? `${view.queue.order.length} songs`;
+  const queueName = view.queueName ?? `${view.queue.order.length} ${view.item?.podcast ? 'episodes' : 'songs'}`;
   const subtitle =
     view.panel === 'queue' ? queueName : (view.item?.display_title ?? '');
   const contents =

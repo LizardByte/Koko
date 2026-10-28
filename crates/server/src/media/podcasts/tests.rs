@@ -36,7 +36,7 @@ fn save(
 }
 
 #[test]
-fn rss_retains_rich_metadata_and_optional_seasons() {
+fn rss_retains_rich_metadata_and_publisher_season_numbers() {
     let value = feed::parse(RSS, "https://example.com/feed.xml").unwrap();
     assert_eq!(value.title, "Example show");
     assert_eq!(value.metadata.categories, ["Arts", "Books"]);
@@ -150,7 +150,7 @@ fn subscriptions_reuse_content_but_do_not_grant_other_users_or_admins_access() {
     );
     assert_eq!(
         items::table.count().get_result::<i64>(&mut conn).unwrap(),
-        4
+        5
     );
     let ids = items::table
         .select(items::id)
@@ -456,4 +456,193 @@ fn directory_results_require_a_public_feed_and_never_write_to_storage() {
     let results = discovery::results(&response);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, "123");
+}
+
+#[test]
+fn unseasoned_episodes_use_publication_year_without_changing_numbered_seasons() {
+    let mut conn = database();
+    let url = "https://example.com/feed";
+    let mut parsed = feed::parse(RSS, url).unwrap();
+    parsed.episodes[1].metadata.published_at = Some(1_735_689_600); // 2025-01-01 UTC.
+    let root = storage::save(&mut conn, Some(1), url, url, &parsed).unwrap();
+    let detail = crate::media::get_media_item(&mut conn, root, "")
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.children.len(), 2);
+    let year = detail
+        .children
+        .iter()
+        .find(|item| item.display_title == "2025")
+        .unwrap();
+    assert_eq!(year.item_type, "podcast_season");
+    assert_eq!(year.season_number, None);
+    assert_eq!(
+        year.podcast.as_ref().unwrap().season_kind,
+        Some(PodcastSeasonKind::Year)
+    );
+    assert_eq!(year.podcast.as_ref().unwrap().season_year, Some(2025));
+    let numbered = detail
+        .children
+        .iter()
+        .find(|item| item.season_number == Some(2))
+        .unwrap();
+    assert_eq!(
+        numbered.podcast.as_ref().unwrap().season_kind,
+        Some(PodcastSeasonKind::Number)
+    );
+    let year_id = year.id;
+    let episode = items::table
+        .filter(items::parent_id.eq(year_id))
+        .select(items::id)
+        .first::<i32>(&mut conn)
+        .unwrap();
+    crate::media::upsert_playback_progress(&mut conn, 1, episode, 1000, Some(45500), false)
+        .unwrap();
+    // Reproduce the old layout, then reconcile without contacting the publisher.
+    diesel::update(items::table.find(episode))
+        .set(items::parent_id.eq(root))
+        .execute(&mut conn)
+        .unwrap();
+    diesel::delete(items::table.find(year_id))
+        .execute(&mut conn)
+        .unwrap();
+    storage::reconcile_year_seasons(&mut conn).unwrap();
+    storage::reconcile_year_seasons(&mut conn).unwrap();
+    let detail = crate::media::get_media_item(&mut conn, root, "")
+        .unwrap()
+        .unwrap();
+    let year = detail
+        .children
+        .iter()
+        .find(|item| item.display_title == "2025")
+        .unwrap();
+    assert_eq!(year.child_count, 1);
+    assert_eq!(
+        items::table
+            .find(episode)
+            .select(items::parent_id)
+            .first::<Option<i32>>(&mut conn)
+            .unwrap(),
+        Some(year.id)
+    );
+    assert_eq!(
+        crate::media::get_user_playback_progress(&mut conn, Some(1), episode)
+            .unwrap()
+            .unwrap()
+            .position_ms,
+        1000
+    );
+}
+
+#[test]
+fn imports_defer_archives_but_refresh_queues_new_episodes_and_preserves_saved_copies() {
+    let mut conn = database();
+    let url = "https://example.com/feed";
+    let root = save(&mut conn, 1, url);
+    let ids = storage::episode_ids(&mut conn, root).unwrap();
+    for id in &ids {
+        assert!(
+            downloads::stored(&mut conn, *id)
+                .unwrap()
+                .local_download
+                .is_none()
+        );
+    }
+    let saved = downloads::LocalDownload {
+        state: DownloadState::Ready,
+        path: Some("saved-episode.mp3".into()),
+        size_bytes: Some(4),
+        attempted_at: 10,
+        error: None,
+    };
+    downloads::set_record(&mut conn, ids[0], saved).unwrap();
+    let updated = RSS.replace("stable-guid", "new-episode-guid");
+    storage::save(
+        &mut conn,
+        None,
+        url,
+        url,
+        &feed::parse(&updated, url).unwrap(),
+    )
+    .unwrap();
+    let all = storage::episode_ids(&mut conn, root).unwrap();
+    let new = *all.iter().find(|id| !ids.contains(id)).unwrap();
+    assert_eq!(
+        downloads::stored(&mut conn, new)
+            .unwrap()
+            .local_download
+            .unwrap()
+            .state,
+        DownloadState::Queued
+    );
+    storage::save(&mut conn, None, url, url, &feed::parse(RSS, url).unwrap()).unwrap();
+    let stored = downloads::stored(&mut conn, ids[0])
+        .unwrap()
+        .local_download
+        .unwrap();
+    assert_eq!(stored.state, DownloadState::Ready);
+    assert_eq!(stored.path.unwrap().to_str(), Some("saved-episode.mp3"));
+    let public = crate::media::get_media_item(&mut conn, ids[0], "")
+        .unwrap()
+        .unwrap();
+    let public = serde_json::to_string(&public).unwrap();
+    assert!(public.contains("ready"));
+    assert!(!public.contains("saved-episode.mp3"));
+    assert!(!public.contains("local_download"));
+}
+
+#[test]
+fn playback_order_is_private_per_show_and_applies_across_seasons_with_undated_last() {
+    let mut conn = database();
+    let url = "https://example.com/feed";
+    let mut feed = feed::parse(RSS, url).unwrap();
+    feed.episodes[1].metadata.published_at = Some(1_735_689_600);
+    let root = storage::save(&mut conn, Some(1), url, url, &feed).unwrap();
+    storage::subscribe_existing(&mut conn, 2, url).unwrap();
+    let oldest = preferences::episodes(&mut conn, 1, root).unwrap();
+    assert_eq!(oldest.len(), 2);
+    assert!(
+        oldest[0].podcast.as_ref().unwrap().published_at
+            < oldest[1].podcast.as_ref().unwrap().published_at
+    );
+    preferences::set(&mut conn, 1, root, PlaybackOrder::NewestFirst).unwrap();
+    assert_eq!(
+        preferences::episodes(&mut conn, 1, root).unwrap()[0].id,
+        oldest[1].id
+    );
+    assert_eq!(
+        preferences::episodes(&mut conn, 2, root).unwrap()[0].id,
+        oldest[0].id
+    );
+    assert!(preferences::set(&mut conn, 3, root, PlaybackOrder::NewestFirst).is_err());
+    let other = save(&mut conn, 1, "https://example.com/other");
+    assert_eq!(
+        preferences::get(&mut conn, 1, other).unwrap(),
+        PlaybackOrder::OldestFirst
+    );
+    let mut detail = crate::media::get_media_item(&mut conn, root, "")
+        .unwrap()
+        .unwrap();
+    crate::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    assert_eq!(
+        detail.playback_target.as_ref().unwrap().item_id,
+        oldest[1].id
+    );
+    crate::media::upsert_playback_progress(&mut conn, 1, oldest[0].id, 1000, Some(45500), false)
+        .unwrap();
+    crate::media::apply_user_playback_context_to_detail(&mut conn, Some(1), &mut detail).unwrap();
+    assert_eq!(
+        detail.playback_target.as_ref().unwrap().item_id,
+        oldest[0].id
+    );
+    let mut undated = oldest[0].clone();
+    undated.podcast.as_mut().unwrap().published_at = None;
+    let mut rows = vec![undated, oldest[1].clone()];
+    for order in [
+        PlaybackOrder::OldestFirst,
+        PlaybackOrder::NewestFirst,
+    ] {
+        preferences::sort(&mut rows, order);
+        assert!(rows[0].podcast.as_ref().unwrap().published_at.is_some());
+    }
 }

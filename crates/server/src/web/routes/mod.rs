@@ -34,6 +34,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_home,
         podcasts::discover,
         podcasts::list,
+        podcasts::episodes,
+        podcasts::preferences,
         podcasts::add,
         podcasts::remove,
         podcasts::refresh,

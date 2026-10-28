@@ -92,3 +92,22 @@ fn download_locks_are_shared_only_for_the_same_episode() {
     assert!(Arc::ptr_eq(&first, &second));
     assert!(!Arc::ptr_eq(&first, &another));
 }
+
+#[test]
+fn measured_runtime_uses_the_downloaded_media_and_rejects_invalid_probe_output() {
+    assert_eq!(
+        measured_duration(br#"{"format":{"duration":"1900.25"}}"#),
+        Some(1_900_250)
+    );
+    assert_eq!(
+        measured_duration(br#"{"streams":[{"duration":"10.5"},{"duration":"12"}]}"#),
+        Some(12_000)
+    );
+    for bytes in [
+        br#"{"format":{"duration":"NaN"}}"#.as_slice(),
+        b"invalid",
+        br#"{"format":{"duration":"-1"}}"#,
+    ] {
+        assert_eq!(measured_duration(bytes), None);
+    }
+}

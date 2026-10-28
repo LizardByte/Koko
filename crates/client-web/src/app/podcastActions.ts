@@ -1,10 +1,11 @@
 /** Loads podcast discovery and subscriptions and binds account-scoped podcast actions. */
-import { addPodcast, discoverPodcasts, getPodcasts, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
+import { addPodcast, discoverPodcasts, getPodcasts, getPodcastHome, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
 import type { AppState } from './types';
 import { state } from './state';
 import { startPlaybackForItemId } from './playbackController';
 import { stopMusic, toggleCurrentMusic, refreshPodcastQueue } from './audioPlayer';
 import { activeMusicPlayback } from './musicPlaybackState';
+import { bindPodcastPaging } from './podcastPaging';
 import { clearBrowseSessions } from './browseSession';
 
 /** Load independent catalog sections while ignoring replies from abandoned routes or accounts. */
@@ -13,11 +14,12 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
   if (owner === undefined) return;
   if (target.podcasts?.owner !== owner) target.podcasts = { owner, items: [], directory: [], country: 'us', query: '', loading: false };
   const data = target.podcasts!;
-  const country = data.country, query = data.query;
+  const country = data.country, query = data.query, tab = data.tab ?? 'recommended';
   data.loading = data.tab === 'discover';
   data.error = undefined;
-  const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data && data.country === country && data.query === query;
+  const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data && data.country === country && data.query === query && (data.tab ?? 'recommended') === tab;
   await Promise.all([
+    tab === 'recommended' ? getPodcastHome().then(home => { if (current()) { data.home = home; render(); } }).catch(error => { if (current()) data.error = error instanceof Error ? error.message : 'Podcast shelves could not load.'; }) : Promise.resolve(),
     getPodcasts().then(items => { if (current()) { data.items = items; render(); } }).catch(error => { if (current()) target.error = error instanceof Error ? error.message : 'Subscriptions could not load.'; }),
     data.tab === 'discover' ? discoverPodcasts(country, query).then(items => { if (current()) data.directory = items; }).catch(error => { if (current()) { data.directory = []; data.error = error instanceof Error ? error.message : 'The podcast directory is unavailable. Add a feed URL above.'; } }).finally(() => { if (current()) { data.loading = false; render(); } }) : Promise.resolve(),
   ]);
@@ -38,7 +40,9 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
   };
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-tab]').forEach(button => button.addEventListener('click', () => {
     if (!state.podcasts) return;
-    state.podcasts.tab = button.dataset.podcastTab === 'discover' ? 'discover' : 'library';
+    const tab = button.dataset.podcastTab;
+    state.podcasts.tab = tab === 'discover' || tab === 'library' ? tab : 'recommended';
+    state.searchQuery = ''; state.searchResults = []; state.showFullSearchResults = false;
     void context.refreshData(false);
   }, { signal }));
   document.querySelector<HTMLButtonElement>('[data-podcast-feed-toggle]')?.addEventListener('click', () => {
@@ -64,7 +68,10 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
   }, { signal }));
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-remove]').forEach(button => button.addEventListener('click', () => {
     const id = Number(button.dataset.podcastRemove);
-    void execute(() => removePodcast(id), () => {
+    void execute(async () => {
+      if (activeMusicPlayback()?.item.podcast?.podcast_id === id) stopMusic();
+      await removePodcast(id);
+    }, () => {
       if (activeMusicPlayback()?.item.podcast?.podcast_id === id) stopMusic();
       if (state.route.page === 'item') context.navigateTo('/podcasts');
     });
@@ -80,6 +87,7 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     };
     void play().catch(error => { state.error = error instanceof Error ? error.message : 'Episode could not start.'; context.render(true); });
   }, { signal }));
+  bindPodcastPaging(signal, context);
   const search = (form: HTMLFormElement, popular = false) => {
     if (!state.podcasts) return;
     const fields = new FormData(form);

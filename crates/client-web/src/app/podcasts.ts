@@ -3,7 +3,7 @@ import './podcasts.css';
 import type { DirectoryPodcast, MediaItemDetail, MediaItemSummary, PodcastPlaybackOrder } from '../api';
 import { escapeHtml, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { renderButtonContent, renderIcon } from './ui';
-import { renderItemCard } from './homeView';
+import { renderItemCard, renderItemFeature, renderShelfStack, renderGlobalSearchControl, renderSearchPopover, renderSearchResults } from './homeView';
 import { renderAudioTrackRow } from './music';
 import { activeMusicPlayback } from './musicPlaybackState';
 import { state } from './state';
@@ -22,7 +22,10 @@ function directoryCard(item: DirectoryPodcast, index: number): string {
   const subscribed = state.podcasts?.items.some(show => show.podcast?.feed_url === item.feed_url);
   const artwork = podcastLink(item.artwork_url);
   const image = artwork ? `<img src="${escapeHtml(artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer"/>` : renderIcon('mic-2');
-  return `<article class="podcast-directory-card"><div class="detail-art music-art">${image}</div><h3>${escapeHtml(item.title)}</h3><p class="muted">${escapeHtml(item.author ?? '')}</p><div class="podcast-directory-actions"><button type="button" class="secondary-button" data-podcast-add="${index}" ${state.podcasts?.busy || subscribed ? 'disabled' : ''}>${renderButtonContent(subscribed ? 'Added' : 'Add', subscribed ? 'check' : 'plus')}</button>${link(item.apple_url, 'Apple Podcasts')}</div></article>`;
+  const label = subscribed ? 'Already added ' : 'Add ';
+  const apple = link(item.apple_url, 'Open in Apple Podcasts');
+  const menu = apple ? `<div class="music-song-menu podcast-directory-menu"><button type="button" class="secondary-button icon-only" popovertarget="podcast-directory-${index}" aria-label="More actions for ${escapeHtml(item.title)}">${renderButtonContent('', 'ellipsis')}</button><div popover id="podcast-directory-${index}">${apple}</div></div>` : '';
+  return `<article class="podcast-directory-card"><div class="detail-art music-art">${image}<button type="button" class="podcast-cover-add icon-button" data-podcast-add="${index}" aria-label="${escapeHtml(label + item.title)}" title="${escapeHtml(label + item.title)}" ${state.podcasts?.busy || subscribed ? 'disabled' : ''}>${renderIcon(subscribed ? 'check' : 'plus')}</button>${menu}</div><h3>${escapeHtml(item.title)}</h3><p class="muted">${escapeHtml(item.author ?? '')}</p></article>`;
 }
 function feedForm(): string {
   if (!state.podcasts?.addFeedOpen) return '';
@@ -39,16 +42,32 @@ function discovery(): string {
 /** Reuse the library tabs, square artwork cards, and browsing grid from music. */
 export function renderPodcastPage(): string {
   const data = state.podcasts?.owner === state.bootstrap?.current_user?.id ? state.podcasts : undefined;
-  const tab = data?.tab ?? 'library';
-  const tabs = ['library', 'discover'].map(value => `<button type="button" class="browse-tab-button ${tab === value ? 'active' : ''}" data-podcast-tab="${value}" aria-pressed="${tab === value}">${value === 'library' ? 'Library' : 'Discover'}</button>`).join('');
+  const tab = data?.tab ?? 'recommended';
+  const tabs = ['recommended', 'library', 'discover'].map(value => `<button type="button" class="browse-tab-button ${tab === value ? 'active' : ''}" data-podcast-tab="${value}" aria-pressed="${tab === value}">${value.charAt(0).toUpperCase() + value.slice(1)}</button>`).join('');
   const library = data?.items.length ? `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>` : '<div class="empty-state">No podcasts added yet. Browse Discover or add a feed URL to start listening.</div>';
   const libraryPanel = `<section class="panel page-panel shelf-stack"><div class="section-heading item-row-heading"><h2>Podcasts <span class="item-row-count">· ${data?.items.length ?? 0}</span></h2></div>${library}</section>`;
-  const content = tab === 'discover' && data ? discovery() : libraryPanel;
-  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools"><button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div></header><div class="podcast-library-content">${feedForm()}${content}</div>`;
+  let content = libraryPanel;
+  if (tab === 'discover' && data) content = discovery();
+  if (tab === 'recommended' && data) content = renderPodcastRecommended();
+  if (state.showFullSearchResults && state.searchQuery.trim()) content = renderSearchResults();
+  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
+}
+
+/** Subscribed shows supply the shared hero and listening shelves; publisher covers remain available. */
+export function renderPodcastRecommended(): string {
+  const data = state.podcasts;
+  const home = data?.home;
+  const candidates = home?.shelves.flatMap(shelf => shelf.items) ?? [];
+  const feature = candidates.find(item => item.id === state.homePreviewItemId) ?? candidates[0] ?? data?.items[0];
+  const hero = feature ? renderItemFeature(feature, [...(data?.items ?? []), ...candidates]) : '';
+  if (!data?.items.length) return '<div class="empty-state">No podcasts added yet. Browse Discover or add a feed URL to start listening.</div>';
+  const shelves = home ? renderShelfStack(home) : `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>`;
+  const error = data.error ? `<p class="status-warning" role="alert">${escapeHtml(data.error)}</p>` : '';
+  return `${hero}${error}<section class="shelf-stack panel page-panel">${shelves}</section>`;
 }
 
 /** Sort chronologically without mutating the catalog, keeping undated episodes last. */
-export function orderedPodcastEpisodes(items: MediaItemSummary[], order: PodcastPlaybackOrder = 'oldest_first'): MediaItemSummary[] {
+export function orderedPodcastEpisodes(items: MediaItemSummary[], order: PodcastPlaybackOrder = 'newest_first'): MediaItemSummary[] {
   return [...items].sort((left, right) => {
     const a = left.podcast?.published_at, b = right.podcast?.published_at;
     const known = Number(b !== null && b !== undefined) - Number(a !== null && a !== undefined);
@@ -65,13 +84,25 @@ export function podcastDownloadLabel(item: MediaItemSummary): string {
   if (!download) return 'Downloads on first play';
   return { queued: 'Download queued', downloading: 'Downloading', ready: 'Downloaded', failed: 'Download failed' }[download.state];
 }
-function episodeRow(item: MediaItemSummary, index: number): string {
+/** Use compact icons in episode lists while retaining clear tooltips and screen-reader labels. */
+export function renderPodcastDownloadIcon(item: MediaItemSummary): string {
+  const state = item.podcast?.download?.state;
+  const label = podcastDownloadLabel(item);
+  let icon = renderIcon('cloud-download');
+  if (state === 'ready') icon = renderIcon('hard-drive-download');
+  if (state === 'downloading' || state === 'queued') icon = renderIcon('refresh-cw');
+  if (state === 'failed') icon = renderIcon('triangle-alert');
+  return `<span class="podcast-download-status ${state === 'ready' ? 'is-downloaded' : ''}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${icon}</span>`;
+}
+
+/** Render one episode with accessible download availability and shared audio controls. */
+export function episodeRow(item: MediaItemSummary, index: number): string {
   const playback = activeMusicPlayback();
   const isCurrent = playback?.item.id === item.id && !playback.ended;
   const resume = item.playback_completed ? 0 : item.playback_position_ms ?? 0;
-  const subtitle = [item.podcast?.published_at ? formatTimestamp(item.podcast.published_at) : '', item.podcast?.episode_type, podcastDownloadLabel(item)].filter(Boolean).join(' · ');
+  const subtitle = [item.podcast?.published_at ? formatTimestamp(item.podcast.published_at) : '', item.podcast?.episode_type].filter(Boolean).join(' · ');
   const actions = `<button type="button" data-item-id="${item.id}">Episode details</button><button type="button" data-podcast-play="${item.id}" data-podcast-position="0">Play from beginning</button>`;
-  return renderAudioTrackRow(item, { number: String(item.episode_number ?? index + 1), menuId: `podcast-${item.id}`, isCurrent, cover: true, playAttributes: `data-podcast-play="${item.id}" data-podcast-position="${resume}"`, subtitle, actions, warnings: '' });
+  return renderAudioTrackRow(item, { number: String(item.episode_number ?? index + 1), menuId: `podcast-${item.id}`, isCurrent, cover: true, playAttributes: `data-podcast-play="${item.id}" data-podcast-position="${resume}"`, subtitle, actions, warnings: renderPodcastDownloadIcon(item) });
 }
 
 /** Use TV season cards and music track rows within the ordinary shared item page. */
@@ -82,16 +113,21 @@ export function renderPodcastContents(item: MediaItemDetail): string {
     const known = Number(b !== Number.MAX_SAFE_INTEGER) - Number(a !== Number.MAX_SAFE_INTEGER);
     if (known) return known;
     const ascending = a - b || left.id - right.id;
-    return item.podcast?.playback_order === 'newest_first' ? -ascending : ascending;
+    return -ascending;
   });
-  const episodes = orderedPodcastEpisodes(item.children.filter(child => child.item_type === 'podcast_episode'), item.podcast?.playback_order);
+  const episodes = orderedPodcastEpisodes(item.children.filter(child => child.item_type === 'podcast_episode'));
   const heading = seasons.length ? 'Seasons' : 'Episodes';
   const body = seasons.length ? `<div class="item-grid hierarchy-item-grid podcast-library-grid">${seasons.map(renderItemCard).join('')}</div>` : `<div class="music-track-list">${episodes.map(episodeRow).join('')}</div>`;
   if (!seasons.length && !episodes.length) {
     if (item.playable) return '';
     return '<div class="empty-state">This feed has no episodes yet.</div>';
   }
-  return `<section class="panel page-panel item-section" data-nav-section="podcast-episodes" data-nav-label="${heading}"><div class="section-heading item-row-heading"><h3>${heading} <span class="item-row-count">· ${seasons.length || episodes.length}</span></h3></div>${body}</section>`;
+  const total = item.item_type === 'podcast_season' ? item.child_count : episodes.length;
+  const pageStatus = state.podcastEpisodeLoading?.itemId === item.id ? state.podcastEpisodeLoading : undefined;
+  const pageError = pageStatus?.error ? `<span role="alert">${escapeHtml(pageStatus.error)}</span>` : '';
+  const loadMoreLabel = pageStatus?.error ? 'Retry loading episodes' : 'Load more episodes';
+  const paging = !seasons.length && episodes.length < total ? `<div class="podcast-page-sentinel" data-podcast-more="${item.id}"><button type="button" class="secondary-button" data-podcast-load-more="${item.id}">${loadMoreLabel}</button>${pageError}<span class="muted" role="status">${episodes.length} of ${total} episodes</span></div>` : '';
+  return `<section class="panel page-panel item-section" data-nav-section="podcast-episodes" data-nav-label="${heading}"><div class="section-heading item-row-heading"><h3>${heading} <span class="item-row-count">· ${seasons.length || total}</span></h3></div>${body}${paging}</section>`;
 }
 
 /** Each subscriber chooses an independent order for the entire podcast, across seasons and years. */

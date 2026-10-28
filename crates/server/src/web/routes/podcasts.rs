@@ -109,7 +109,7 @@ pub async fn add(
     let item_id = podcasts::subscribe(&db, user, &url).await.map_err(error)?;
     Ok(Json(AddedPodcast { item_id }))
 }
-/// Remove the current account's subscription, preserving shared episodes and listening history.
+/// Remove this subscription and delete saved copies when no subscribers remain.
 #[openapi(tag = "Podcasts")]
 #[delete("/api/v1/podcasts/<id>")]
 pub async fn remove(
@@ -118,7 +118,7 @@ pub async fn remove(
     id: i32,
 ) -> Result<Status, Status> {
     let user = owner(&user)?;
-    db.run(move |conn| podcasts::unsubscribe(conn, user, id))
+    podcasts::remove_subscription(&db, user, id)
         .await
         .map_err(|_| Status::InternalServerError)?;
     Ok(Status::NoContent)
@@ -260,4 +260,75 @@ pub async fn preferences(
             }
         })?;
     Ok(Status::NoContent)
+}
+
+/// Podcast shelves for this account's subscriptions, without directory entries.
+#[openapi(tag = "Podcasts")]
+#[get("/api/v1/podcasts/home")]
+pub async fn home(
+    user: UserGuard,
+    db: DbConn,
+) -> Result<Json<crate::media::MediaHome>, Status> {
+    let user = owner(&user)?;
+    db.run(move |conn| {
+        use crate::db::schema::media_libraries as libraries;
+        use diesel::prelude::*;
+        let id = libraries::table
+            .filter(libraries::kind.eq("podcasts"))
+            .select(libraries::id)
+            .first::<i32>(conn)
+            .optional()?;
+        match id {
+            Some(id) => crate::media::get_media_home(conn, Some(user), Some(id)),
+            None => Ok(crate::media::MediaHome {
+                library_id: None,
+                listening_queues: Vec::new(),
+                shelves: Vec::new(),
+                collections: Vec::new(),
+            }),
+        }
+    })
+    .await
+    .map(Json)
+    .map_err(|_| Status::InternalServerError)
+}
+
+/// Load one season incrementally, independently of playback order.
+#[openapi(tag = "Podcasts")]
+#[get("/api/v1/podcasts/seasons/<id>/episodes?<offset>&<limit>")]
+pub async fn season_episodes(
+    user: UserGuard,
+    db: DbConn,
+    id: i32,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Json<podcasts::PodcastEpisodePage>, Status> {
+    require_item_access(&db, id, &user).await?;
+    let user = owner(&user)?;
+    db.run(move |conn| {
+        use crate::db::schema::media_items as items;
+        use diesel::prelude::*;
+        if items::table
+            .find(id)
+            .select(items::item_type)
+            .first::<String>(conn)?
+            != "podcast_season"
+        {
+            return Err(diesel::result::Error::NotFound);
+        }
+        let mut page =
+            podcasts::episode_page(conn, id, offset.unwrap_or(0), limit.unwrap_or(50), &[])?;
+        crate::media::apply_user_playback_progress_to_summaries(conn, Some(user), &mut page.items)?;
+        podcasts::apply_preferences(conn, Some(user), &mut page.items)?;
+        Ok(page)
+    })
+    .await
+    .map(Json)
+    .map_err(|error| {
+        if error == diesel::result::Error::NotFound {
+            Status::NotFound
+        } else {
+            Status::InternalServerError
+        }
+    })
 }

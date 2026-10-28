@@ -215,3 +215,12 @@ test('panel scrolling changes only the panel, and lyrics errors have no lookup r
   const html=renderAudioPlayer({queue,item:queue.current.item,loading:false,paused:false,volume:.5,muted:false,panel:'lyrics',lyricsEnabled:true,lyricsError:'Please retry',lyricsLoading:false,saving:false});
   assert.match(html,/data-current-lyric/);assert.doesNotMatch(html,/Try lyrics again|retry-lyrics/);assert.match(html,/Jump to current lyrics/);assert.match(html,/class="player-volume"/);
 });
+
+
+test('direct audio uses the decoded runtime beyond shorter feed metadata and handles unavailable durations', async () => {
+  const { measuredAudioDuration } = await server.ssrLoadModule('/src/app/audioPlayerSupport.ts');
+  assert.equal(measuredAudioDuration(1453000, 1900.25), 1900250);
+  assert.equal(measuredAudioDuration(1453000, Infinity), 1453000);
+  assert.equal(measuredAudioDuration(undefined, NaN), 0);
+  assert.equal(measuredAudioDuration(3000000, 1200, 600000, true), 3000000);
+});

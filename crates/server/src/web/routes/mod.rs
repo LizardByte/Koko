@@ -33,6 +33,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_metadata_locales,
         media::get_home,
         podcasts::discover,
+        podcasts::home,
+        podcasts::season_episodes,
         podcasts::list,
         podcasts::episodes,
         podcasts::preferences,

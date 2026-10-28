@@ -65,9 +65,9 @@ export function renderAudioPlayer(view: AudioPlayerViewState): string {
   const artist = item.podcast?.author ?? item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '';
   const title = item.audiobook?.title || item.display_title;
   const titleTarget = book ? item.parent_id ?? item.id : item.id;
-  const coverTarget = item.podcast?.podcast_id ?? item.parent_id ?? item.id;
+  const coverTarget = item.parent_id ?? item.id;
   const collectionLabel = book ? 'Open audiobook' : 'Open album';
-  const coverLabel = item.podcast ? 'Open podcast' : collectionLabel;
+  const coverLabel = item.podcast ? 'Open podcast season' : collectionLabel;
 
   const panel = view.panel ? renderPanel(view) : '';
   const inlineLyrics = !book && !item.podcast && view.lyricsEnabled

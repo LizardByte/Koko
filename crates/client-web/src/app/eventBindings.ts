@@ -303,7 +303,7 @@ function refreshHomeFeatureElement(backdropUrl: string | undefined): void {
 
 
 function activatePreviewItem(itemId: number): void {
-  if (state.route.page === 'browse-detail' || !Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
+  if (state.route.page === 'podcasts' || state.route.page === 'browse-detail' || !Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
     return;
   }
   state.homePreviewItemId = itemId;
@@ -381,7 +381,8 @@ function bindMediaCardInteractions(root: ParentNode): void {
 
 function homeShelfForRow(row: HTMLElement): MediaShelf | undefined {
   const shelfId = row.dataset.lazyShelfId;
-  return shelfId ? state.home?.shelves.find((shelf) => shelf.id === shelfId) : undefined;
+  const home = state.route.page === 'podcasts' ? state.podcasts?.home : state.home;
+  return shelfId ? home?.shelves.find((shelf) => shelf.id === shelfId) : undefined;
 }
 
 
@@ -393,7 +394,7 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   }
 
   const renderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
-  const entries = homeShelfEntries(shelf);
+  const entries = homeShelfEntries(shelf, state.route.page === 'podcasts' ? state.podcasts?.home : state.home);
   if (!Number.isFinite(renderedCount) || renderedCount >= entries.length) {
     row.dataset.lazyComplete = 'true';
     return false;

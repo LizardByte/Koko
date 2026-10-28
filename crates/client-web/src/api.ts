@@ -285,6 +285,12 @@ export function discoverPodcasts(country = 'us', query = ''): Promise<DirectoryP
 export function getPodcastEpisodes(id: number): Promise<MediaItemSummary[]> { return requestJson('GET', `/api/v1/podcasts/${id}/episodes`); }
 /** Persist a chronological queue order for this account and podcast only. */
 export function setPodcastPlaybackOrder(id: number, playback_order: PodcastPlaybackOrder): Promise<void> { return requestJson('PUT', `/api/v1/podcasts/${id}/preferences`, { playback_order }); }
+/** A bounded newest-first page from one podcast season. */
+export interface PodcastEpisodePage { items: MediaItemSummary[]; total: number; offset: number; has_more: boolean }
+/** Load this account's podcast recommendations and listening shelves. */
+export function getPodcastHome(): Promise<MediaHome> { return requestJson('GET', '/api/v1/podcasts/home'); }
+/** Fetch the next visible season page without loading the entire back catalog. */
+export function getPodcastSeasonEpisodes(id: number, offset: number): Promise<PodcastEpisodePage> { return requestJson('GET', `/api/v1/podcasts/seasons/${id}/episodes?${new URLSearchParams({ offset: String(offset), limit: '50' })}`); }
 /** List the current account's subscribed shows. */
 export function getPodcasts(): Promise<MediaItemSummary[]> { return requestJson('GET', '/api/v1/podcasts'); }
 /** Subscribe to a directory result or manually entered RSS feed. */

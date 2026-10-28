@@ -542,3 +542,21 @@ test('cached browsing data is isolated by route and account', () => {
   state.bootstrap = { current_user: { id: 2 } };
   assert.equal(session.restoreBrowseSession(), false);
 });
+
+
+test('podcast season navigation avoids bulk library requests and retains visited pages for the same account', async () => {
+  const season = { ...mock.getMockItem(101), id: 900, item_type: 'podcast_season', podcast: { podcast_id: 800 }, hierarchy: [], children: [item(902), item(901)], child_count: 125 };
+  state.route = { page: 'item', itemId: 900 };
+  state.libraryItems = [season];
+  let bulkCalls = 0;
+  const api = source({ getItem: async () => ({ ...season, children: [...season.children] }), getHome: async () => { bulkCalls++; return { shelves: [] }; }, getItems: async () => { bulkCalls++; return []; } });
+  await loadRouteData(state, state.route, () => {}, () => true, api);
+  assert.equal(bulkCalls, 0);
+  state.selectedItem.children.push(item(899));
+  state.podcastEpisodeLoading = { itemId: 900, owner: 1, loading: false };
+  await loadRouteData(state, state.route, () => {}, () => true, api);
+  assert.equal(state.selectedItem.children.length, 3);
+  state.bootstrap = { current_user: { id: 2 } };
+  await loadRouteData(state, state.route, () => {}, () => true, api);
+  assert.equal(state.selectedItem.children.length, 2);
+});

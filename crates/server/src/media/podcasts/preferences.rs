@@ -164,10 +164,8 @@ pub fn apply_detail(
     if detail.playable {
         return Ok(());
     }
-    let mut candidates = episodes(conn, user, root)?;
-    if detail.item_type == "podcast_season" {
-        candidates.retain(|item| item.parent_id == Some(detail.id));
-    }
+    let season = (detail.item_type == "podcast_season").then_some(detail.id);
+    let candidates = playback_candidates(conn, user, root, season, metadata.playback_order)?;
     let recent = candidates
         .iter()
         .filter(|item| {
@@ -199,4 +197,67 @@ fn target(item: &MediaItemSummary) -> MediaPlaybackTarget {
         season_number: item.season_number,
         episode_number: item.episode_number,
     }
+}
+
+/// Resolve resume/start targets from compact catalog rows, hydrating at most two episodes.
+fn playback_candidates(
+    conn: &mut SqliteConnection,
+    user: i32,
+    root: i32,
+    season: Option<i32>,
+    order: PlaybackOrder,
+) -> QueryResult<Vec<MediaItemSummary>> {
+    use crate::db::schema::{
+        media_items as items,
+        podcast_items as metadata,
+    };
+    let mut query = items::table
+        .inner_join(metadata::table)
+        .filter(metadata::podcast_id.eq(root))
+        .filter(metadata::enclosure_url.is_not_null())
+        .filter(items::deleted_at.is_null())
+        .into_boxed();
+    if let Some(season) = season {
+        query = query.filter(items::parent_id.eq(season));
+    }
+    let mut rows = query
+        .select((
+            items::id,
+            items::modified_at,
+            items::season_number,
+            items::episode_number,
+        ))
+        .load::<(i32, Option<i64>, Option<i32>, Option<i32>)>(conn)?;
+    rows.sort_by(|a, b| {
+        let known = b.1.is_some().cmp(&a.1.is_some());
+        if !known.is_eq() {
+            return known;
+        }
+        let ascending = (a.1, a.2, a.3, a.0).cmp(&(b.1, b.2, b.3, b.0));
+        if order == PlaybackOrder::NewestFirst { ascending.reverse() } else { ascending }
+    });
+    let all_ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+    let progress = crate::media::playback_progress_by_item_id(conn, Some(user), &all_ids)?;
+    let recent = all_ids
+        .iter()
+        .filter_map(|id| progress.get(id))
+        .filter(|row| !row.completed && row.position_ms > 0)
+        .max_by_key(|row| row.updated_at)
+        .map(|row| row.media_item_id);
+    let next = recent.or_else(|| {
+        all_ids
+            .iter()
+            .find(|id| progress.get(id).is_none_or(|row| !row.completed))
+            .copied()
+    });
+    let mut ids = all_ids.first().copied().into_iter().collect::<Vec<_>>();
+    if let Some(next) = next {
+        if !ids.contains(&next) {
+            ids.push(next);
+        }
+    }
+    let mut summaries = crate::media::list_media_items_by_ids(conn, &ids, &[])?;
+    crate::media::apply_user_playback_progress_to_summaries(conn, Some(user), &mut summaries)?;
+    sort(&mut summaries, order);
+    Ok(summaries)
 }

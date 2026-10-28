@@ -552,6 +552,7 @@ fn imports_defer_archives_but_refresh_queues_new_episodes_and_preserves_saved_co
         state: DownloadState::Ready,
         path: Some("saved-episode.mp3".into()),
         size_bytes: Some(4),
+        duration_ms: Some(120_000),
         attempted_at: 10,
         error: None,
     };
@@ -645,4 +646,121 @@ fn playback_order_is_private_per_show_and_applies_across_seasons_with_undated_la
         preferences::sort(&mut rows, order);
         assert!(rows[0].podcast.as_ref().unwrap().published_at.is_some());
     }
+}
+
+#[test]
+fn catalog_metadata_and_progress_queries_handle_more_than_sqlites_parameter_limit() {
+    let mut conn = database();
+    let root = save(&mut conn, 1, "https://example.com/large");
+    let ids = vec![root; 33_000];
+    assert!(
+        crate::media::preferred_metadata_links_by_item_id(&mut conn, &ids, &[])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::media::playback_progress_by_item_id(&mut conn, Some(1), &ids)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::media::audiobooks::load(&mut conn, &ids)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !crate::media::get_media_home(&mut conn, Some(1), None)
+            .unwrap()
+            .shelves
+            .is_empty()
+    );
+}
+
+#[test]
+fn season_pages_are_bounded_newest_first_and_keep_the_oldest_first_playback_queue() {
+    let mut conn = database();
+    let url = "https://example.com/long";
+    let mut feed = feed::parse(RSS, url).unwrap();
+    feed.episodes.clear();
+    for index in 0..125 {
+        let mut episode = feed::parse(RSS, url).unwrap().episodes.remove(0);
+        episode.guid = format!("episode-{index}");
+        episode.metadata.published_at = Some(1_735_689_600 + index);
+        episode.title = format!("Episode {index}");
+        feed.episodes.push(episode);
+    }
+    let root = storage::save(&mut conn, Some(1), url, url, &feed).unwrap();
+    let show = crate::media::get_media_item(&mut conn, root, "")
+        .unwrap()
+        .unwrap();
+    let season = show.children[0].id;
+    let detail = crate::media::get_media_item(&mut conn, season, "")
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.children.len(), 50);
+    assert_eq!(detail.children[0].display_title, "Episode 124");
+    let mut ids = Vec::new();
+    for offset in [0, 50, 100] {
+        let page = storage::episode_page(&mut conn, season, offset, 50, &[]).unwrap();
+        assert_eq!(page.total, 125);
+        assert_eq!(page.has_more, offset < 100);
+        ids.extend(page.items.iter().map(|item| item.id));
+    }
+    assert_eq!(ids.len(), 125);
+    assert_eq!(
+        ids.iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        125
+    );
+    let playback = preferences::episodes(&mut conn, 1, root).unwrap();
+    assert_eq!(playback[0].display_title, "Episode 0");
+}
+
+#[test]
+fn home_and_library_status_work_with_a_catalog_above_sqlites_bind_limit() {
+    use crate::db::schema::media_libraries as libraries;
+    let mut conn = database();
+    diesel::insert_into(libraries::table)
+        .values((
+            libraries::id.eq(1),
+            libraries::name.eq("Large library"),
+            libraries::path.eq("/movies"),
+            libraries::kind.eq("movies"),
+        ))
+        .execute(&mut conn)
+        .unwrap();
+    conn.immediate_transaction::<_, diesel::result::Error, _>(|conn| {
+        for batch in 0..331 {
+            let values = (0..100)
+                .map(|index| {
+                    let index = batch * 100 + index;
+                    (
+                        items::library_id.eq(1),
+                        items::identity_key.eq(format!("large-{index}")),
+                        items::item_type.eq("movie"),
+                        items::display_title.eq(format!("Movie {index}")),
+                    )
+                })
+                .collect::<Vec<_>>();
+            diesel::insert_into(items::table)
+                .values(&values)
+                .execute(conn)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        !crate::media::get_media_home(&mut conn, Some(3), None)
+            .unwrap()
+            .shelves
+            .is_empty()
+    );
+    assert_eq!(
+        crate::media::get_persisted_library_summaries(&mut conn)
+            .unwrap()
+            .len(),
+        1
+    );
 }

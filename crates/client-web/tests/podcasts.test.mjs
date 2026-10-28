@@ -30,7 +30,7 @@ test('publisher links reject script, file, and credential URLs', () => {
 });
 test('episodes default oldest first and can reverse chronologically without mutation', () => {
   const episodes = [episode(3, { season_number: 2, episode_number: 1 }), episode(2, { season_number: 1, episode_number: 2 }), episode(1, { season_number: 1, episode_number: 1 })];
-  assert.deepEqual(orderedPodcastEpisodes(episodes).map(item => item.id), [1, 2, 3]);
+  assert.deepEqual(orderedPodcastEpisodes(episodes, 'oldest_first').map(item => item.id), [1, 2, 3]);
   assert.deepEqual(orderedPodcastEpisodes(episodes, 'newest_first').map(item => item.id), [3, 2, 1]);
   assert.deepEqual(episodes.map(item => item.id), [3, 2, 1]);
 });
@@ -64,7 +64,7 @@ test('podcast item pages share music layout and TV season cards including year g
   const season = { ...year, children: [episode(5), episode(4)] };
   const rows = renderPodcastContents(season);
   assert.match(rows, /music-track-list/);
-  assert.ok(rows.indexOf('data-podcast-play="4"') < rows.indexOf('data-podcast-play="5"'));
+  assert.ok(rows.indexOf('data-podcast-play="5"') < rows.indexOf('data-podcast-play="4"'));
   assert.match(renderPodcastControls(show), /value="oldest_first" selected/);
 });
 
@@ -124,4 +124,49 @@ test('switching accounts cancels a pending podcast queue before an audio session
     await pending;
     assert.equal(player.audioQueue.current, undefined);
   } finally { globalThis.fetch = originalFetch; state.bootstrap = owner; }
+});
+
+
+test('podcast navbar exposes recommendations, global search, a cover-based hero, and all-Koko results', () => {
+  const item = episode(100, { item_type: 'podcast', playable: false, display_title: 'Subscribed show' });
+  state.bootstrap = { current_user: { id: 1 } };
+  state.searchQuery = ''; state.showFullSearchResults = false;
+  state.podcasts = { owner: 1, items: [item], directory: [], country: 'us', query: '', loading: false,
+    home: { library_id: 3, shelves: [{ id: 'recommended', title: 'Recommended', items: [item] }] } };
+  const html = renderPodcastPage();
+  assert.match(html, /data-podcast-tab="recommended"/);
+  assert.match(html, /id="search-form"/);
+  assert.match(html, /podcast-feature-cover/);
+  assert.match(html, /Subscribed show/);
+  state.searchQuery = 'movie'; state.showFullSearchResults = true;
+  state.searchResults = [{ result_type: 'item', item: { ...mock.getMockItem(101), display_title: 'A movie outside podcasts' } }];
+  assert.match(renderPodcastPage(), /A movie outside podcasts/);
+  state.searchQuery = ''; state.showFullSearchResults = false; state.searchResults = [];
+});
+
+test('discovery uses cover overlay actions and a publisher menu', () => {
+  state.podcasts = { owner: 1, tab: 'discover', items: [], directory: [{ id: '9', title: 'New show', feed_url: 'https://example.com/rss', apple_url: 'https://podcasts.apple.com/show/9' }], country: 'us', query: '', loading: false };
+  const html = renderPodcastPage();
+  assert.match(html, /podcast-cover-add/);
+  assert.match(html, /aria-label="Add New show"/);
+  assert.match(html, /popovertarget="podcast-directory-0"/);
+  assert.match(html, /Open in Apple Podcasts/);
+});
+
+test('season display stays newest first independently of playback order and exposes another page', () => {
+  const season = episode(99, { item_type: 'podcast_season', playable: false, child_count: 1000, children: [episode(1), episode(2)] });
+  season.podcast.playback_order = 'oldest_first';
+  const html = renderPodcastContents(season);
+  assert.ok(html.indexOf('data-podcast-play="2"') < html.indexOf('data-podcast-play="1"'));
+  assert.match(html, /2 of 1000 episodes/);
+  assert.match(html, /data-podcast-more="99"/);
+  assert.match(html, /aria-label="Downloads on first play"/);
+  assert.doesNotMatch(html, /· Downloads on first play/);
+});
+
+test('the playback cover opens the podcast season', () => {
+  const item = episode(1, { parent_id: 45 }), queue = new AudioQueue();
+  queue.replace([item]);
+  const html = renderAudioPlayer({ item, queue, loading: false, paused: true, volume: 1, muted: false });
+  assert.match(html, /data-music-open-item="45" aria-label="Open podcast season"/);
 });

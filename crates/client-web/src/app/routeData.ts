@@ -108,7 +108,7 @@ export async function loadRouteData(
     const userId = state.bootstrap?.current_user?.id;
     state.itemMetadataLoading = true;
     state.libraryItemsLoading = true;
-    const knownLibraryId = state.libraryItems.find((item) => item.id === route.itemId)?.library_id;
+    const knownLibraryId = knownItemLibrary(state, route.itemId);
     load('item details', getItemPageData(route.itemId, source, knownLibraryId).finally(() => {
       if (isCurrent()) {
         state.itemMetadataLoading = false;
@@ -116,6 +116,7 @@ export async function loadRouteData(
       }
     }), (value) => {
       if (state.bootstrap?.current_user?.id !== userId) return;
+      retainLoadedPodcastPages(state, value.item);
       state.selectedItem = value.item;
       state.selectedItemMetadata = value.metadata;
       state.selectedPlayback = value.playback;
@@ -126,6 +127,7 @@ export async function loadRouteData(
     });
   } else if (route.page === 'podcasts') {
     tasks.push(loadPodcasts(state, isCurrent, render));
+    loadGlobalSearch(state, source, load);
   } else if (route.page === 'person') {
     load('person details', source.getPerson(route.personId), (value) => { state.selectedPerson = value; });
   } else if (route.section === 'dashboard') {
@@ -166,6 +168,7 @@ async function getItemPageData(itemId: number, source: RouteApi, knownLibraryId?
     .then(value => ({ value }), (error: unknown) => ({ error }));
   const details = source.getItem(itemId).then(async (item) => {
     const support = async () => {
+      if (item.podcast) return { home: undefined, libraryItems: [...item.hierarchy, ...item.children] };
       if (!prefetched || knownLibraryId !== item.library_id) return getItemLibraryContext(item.library_id, source);
       const result = await prefetched;
       if ('error' in result) throw result.error;
@@ -219,4 +222,29 @@ function loadPlaylistRoutes(state: AppState, route: AppRoute, source: RouteApi, 
 
 function isUserSettingsRoute(route: AppRoute, admin: boolean): boolean {
   return admin && route.page === 'settings' && route.section === 'users';
+}
+
+
+/** Keep already visited season pages during progress revalidation of the same account's item. */
+function retainLoadedPodcastPages(state: AppState, next: api.MediaItemDetail): void {
+  const previous = state.selectedItem;
+  const pages = state.podcastEpisodeLoading;
+  if (pages?.itemId !== next.id || pages.owner !== state.bootstrap?.current_user?.id) return;
+  if (next.item_type !== 'podcast_season' || previous?.id !== next.id || previous.children.length <= next.children.length) return;
+  const children = new Map(previous.children.map(item => [item.id, item]));
+  for (const item of next.children) children.set(item.id, item);
+  next.children = [...children.values()];
+}
+
+
+function loadGlobalSearch(state: AppState, source: RouteApi, load: RouteLoader): void {
+  const query = state.searchQuery.trim();
+  if (!query) return;
+  load('search results', source.searchItems(query), value => { if (state.searchQuery.trim() === query) state.searchResults = value; });
+}
+
+
+function knownItemLibrary(state: AppState, itemId: number): number | undefined {
+  const item = state.libraryItems.find(item => item.id === itemId);
+  return item?.podcast ? undefined : item?.library_id;
 }

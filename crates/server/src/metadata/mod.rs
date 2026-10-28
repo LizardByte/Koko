@@ -2984,23 +2984,34 @@ pub fn list_metadata_collection_summaries_with_preferred_languages(
         .cloned()
         .map(|item| (item.id, item))
         .collect::<HashMap<_, _>>();
-    let item_ids = items_by_id.keys().copied().collect::<Vec<_>>();
-    let collection_item_rows = collection_items_dsl::metadata_collection_items
-        .filter(collection_items_dsl::media_item_id.eq_any(&item_ids))
+    let mut membership_query = collection_items_dsl::metadata_collection_items
+        .inner_join(media_items_dsl::media_items)
+        .into_boxed();
+    if let Some(library) = library_id {
+        membership_query = membership_query.filter(media_items_dsl::library_id.eq(library));
+    }
+    let collection_item_rows = membership_query
         .select(MetadataCollectionItem::as_select())
         .load::<MetadataCollectionItem>(conn)?;
     if collection_item_rows.is_empty() {
         return Ok(Vec::new());
     }
 
-    let collection_ids = collection_item_rows
+    let mut collection_ids = collection_item_rows
         .iter()
         .map(|item| item.collection_id)
         .collect::<Vec<_>>();
-    let collection_rows = collections_dsl::metadata_collections
-        .filter(collections_dsl::id.eq_any(collection_ids))
-        .select(MetadataCollection::as_select())
-        .load::<MetadataCollection>(conn)?;
+    collection_ids.sort_unstable();
+    collection_ids.dedup();
+    let mut collection_rows = Vec::new();
+    for chunk in collection_ids.chunks(500) {
+        collection_rows.extend(
+            collections_dsl::metadata_collections
+                .filter(collections_dsl::id.eq_any(chunk))
+                .select(MetadataCollection::as_select())
+                .load::<MetadataCollection>(conn)?,
+        );
+    }
     let collection_theme_song_urls = metadata_extra_urls_by_collection_id(
         conn,
         &collection_rows

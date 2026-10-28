@@ -45,7 +45,7 @@ import {
 } from './audioPlayerView';
 import { state } from './state';
 import { setElementHtml } from './domPatcher';
-import { musicMediaMetadata, revealPanelEntry } from './audioPlayerSupport';
+import { musicMediaMetadata, revealPanelEntry, measuredAudioDuration } from './audioPlayerSupport';
 
 export const audioQueue = new AudioQueue();
 let audio: HTMLAudioElement | undefined, controls: HTMLDivElement | undefined;
@@ -309,12 +309,8 @@ function ensurePlayer(): void {
 }
 
 function durationMs(): number {
-  return (
-    current?.duration_ms ??
-    (audio && Number.isFinite(audio.duration)
-      ? Math.round(audio.duration * 1000) + baseMs
-      : 0)
-  );
+  return measuredAudioDuration(current?.duration_ms, audio?.duration, baseMs,
+    Boolean(session?.decision.transcode_required));
 }
 function positionMs(): number {
   return baseMs + Math.round((audio?.currentTime ?? 0) * 1000);

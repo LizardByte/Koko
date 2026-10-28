@@ -552,6 +552,13 @@ pub(crate) fn load_local(
     conn: &mut SqliteConnection,
     ids: &[i32],
 ) -> QueryResult<HashMap<i32, AudiobookMetadata>> {
+    if ids.len() > 500 {
+        let mut result = HashMap::new();
+        for chunk in ids.chunks(500) {
+            result.extend(load_local(conn, chunk)?);
+        }
+        return Ok(result);
+    }
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -573,6 +580,13 @@ pub(super) fn load(
     conn: &mut SqliteConnection,
     ids: &[i32],
 ) -> QueryResult<HashMap<i32, AudiobookMetadata>> {
+    if ids.len() > 500 {
+        let mut result = HashMap::new();
+        for chunk in ids.chunks(500) {
+            result.extend(load(conn, chunk)?);
+        }
+        return Ok(result);
+    }
     if ids.is_empty() {
         return Ok(HashMap::new());
     }

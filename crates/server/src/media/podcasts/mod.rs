@@ -27,6 +27,7 @@ pub(crate) use preferences::{
     set as set_order,
 };
 pub use storage::{
+    PodcastEpisodePage,
     apply_detail,
     apply_summaries,
     can_access,
@@ -36,9 +37,9 @@ pub use storage::{
 };
 pub(crate) use storage::{
     artwork_url,
+    episode_page,
     feed_for_user,
     has_subscription,
-    unsubscribe,
 };
 
 use crate::db::DbConn;
@@ -134,6 +135,7 @@ pub async fn subscribe(
     url: &str,
 ) -> Result<i32, String> {
     let requested = http::normalize_url(url)?;
+    let _mutation = SUBSCRIPTION_MUTATIONS.lock().await;
     let existing_url = requested.clone();
     // A recently checked feed can be subscribed to even while its publisher is unavailable.
     if let Some(id) = db
@@ -220,4 +222,50 @@ pub(crate) fn start_refresh_runner(
         };
         rocket::tokio::select! { _ = checks => {}, _ = &mut shutdown => {} }
     });
+}
+
+static SUBSCRIPTION_MUTATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static SHOW_LOCKS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<i32, std::sync::Weak<tokio::sync::RwLock<()>>>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+pub(super) fn show_lock(id: i32) -> std::sync::Arc<tokio::sync::RwLock<()>> {
+    let mut locks = SHOW_LOCKS.lock().expect("Podcast show lock poisoned");
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&id).and_then(std::sync::Weak::upgrade) {
+        return lock;
+    }
+    let lock = std::sync::Arc::new(tokio::sync::RwLock::new(()));
+    locks.insert(id, std::sync::Arc::downgrade(&lock));
+    lock
+}
+
+/// Preserve other subscribers' saved copies and remove files after the final subscription ends.
+pub(crate) async fn remove_subscription(
+    db: &DbConn,
+    user: i32,
+    id: i32,
+) -> Result<(), String> {
+    use crate::db::schema::podcast_subscriptions as subscriptions;
+    use diesel::prelude::*;
+    let _mutation = SUBSCRIPTION_MUTATIONS.lock().await;
+    let lock = show_lock(id);
+    let _show = lock.write().await;
+    let remaining = db
+        .run(move |conn| {
+            storage::feed_for_user(conn, user, id)?;
+            subscriptions::table
+                .filter(subscriptions::podcast_id.eq(id))
+                .count()
+                .get_result::<i64>(conn)
+        })
+        .await
+        .map_err(|_| "Unable to find podcast subscription")?;
+    if remaining == 1 {
+        downloads::cleanup_unsubscribed(db, id).await?;
+    }
+    db.run(move |conn| storage::unsubscribe(conn, user, id))
+        .await
+        .map_err(|_| "Unable to remove podcast subscription")?;
+    Ok(())
 }

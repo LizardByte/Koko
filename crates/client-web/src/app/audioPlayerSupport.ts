@@ -37,3 +37,11 @@ export function revealPanelEntry(container:HTMLElement|undefined|null,entry:HTML
   const parent=container.getBoundingClientRect(),row=entry.getBoundingClientRect();
   container.scrollTop+=row.top-parent.top-container.clientHeight/2+row.height/2;
 }
+
+
+/** Direct-file timelines use decoded media duration; transcoded segments retain the full runtime. */
+export function measuredAudioDuration(catalogMs: number | null | undefined, decodedSeconds: number | undefined, baseMs = 0, transcoded = false): number {
+  const measured = Number.isFinite(decodedSeconds) && decodedSeconds! > 0 ? Math.round(decodedSeconds! * 1000) + baseMs : undefined;
+  if (transcoded) return catalogMs ?? measured ?? 0;
+  return measured ?? catalogMs ?? 0;
+}

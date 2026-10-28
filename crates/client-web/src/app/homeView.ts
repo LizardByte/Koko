@@ -1,5 +1,5 @@
 /** Renders home, browse, shelf, and media-card markup. */
-import type { MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf, MusicPlaylistDetail } from '../api';
+import type { MediaHome, MediaCollectionSummary, MediaItemSummary, MediaLibrary, MediaPlaybackTarget, MediaSearchResult, MediaShelf, MusicPlaylistDetail } from '../api';
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
@@ -518,16 +518,18 @@ function renderCollectionFeature(collection: MediaCollectionSummary): string {
     `;
 }
 
-function renderItemFeature(item: MediaItemSummary): string {
-  const { identity, logo } = heroPresentation(item, [...homePreviewItemsById().values()]);
-  const backdropUrl = pageBackdropUrlForItem(item);
+/** Render the shared hero, using podcast cover art when no wide artwork is supplied. */
+export function renderItemFeature(item: MediaItemSummary, catalog = [...homePreviewItemsById().values()]): string {
+  const { identity, logo } = heroPresentation(item, catalog);
+  const backdropUrl = pageBackdropUrlForItem(item) ?? (item.podcast ? getArtworkUrl(item.id, 'poster', item.artwork_updated_at) : undefined);
   const logoUrl = logo ? getArtworkUrl(logo.id, 'logo', logo.artwork_updated_at) : undefined;
   const genreMarkup = item.genres.slice(0, 3).map((genre) => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
   const overview = item.overview?.trim();
   const extent = formatChildCount(item);
 
   return `
-    <section class="home-feature${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
+    <section class="home-feature${item.podcast ? ' home-feature-podcast' : ''}${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
+      ${item.podcast ? `<img class="podcast-feature-cover" src="${escapeHtml(getArtworkUrl(item.id, 'poster', item.artwork_updated_at))}" alt="" />` : ''}
       <div class="home-feature-copy">
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(identity.display_title)}" />`
@@ -655,10 +657,10 @@ export function visibleShelfItems(shelf: MediaShelf): MediaItemSummary[] {
 type ShelfEntry = { item: MediaItemSummary; radio?: never } | { radio: MusicPlaylistDetail; item?: never };
 
 /** Merge temporary queues and media by playback time, including lazy-loaded cards. */
-export function homeShelfEntries(shelf: MediaShelf): ShelfEntry[] {
+export function homeShelfEntries(shelf: MediaShelf, home = state.home): ShelfEntry[] {
   const entries: ShelfEntry[] = shelf.items.map((item) => ({ item }));
   if (shelf.id !== 'continue_watching') return entries;
-  entries.push(...(state.home?.listening_queues ?? []).filter((radio) => radio.items.length).map((radio) => ({ radio })));
+  entries.push(...(home?.listening_queues ?? []).filter((radio) => radio.items.length).map((radio) => ({ radio })));
   return entries.sort((left, right) => {
     const timestamp = (entry: ShelfEntry): number => entry.radio?.playlist.updated_at ?? entry.item?.last_played_at ?? 0;
     return timestamp(right) - timestamp(left);
@@ -692,11 +694,11 @@ function renderRadioCard({ playlist, items, artwork: source }: MusicPlaylistDeta
     <span class="media-card-meta">Continue radio</span></button>`;
 }
 
-export function renderShelfStack(): string {
-  const radios = (state.home?.listening_queues ?? []).filter((entry) => entry.items.length);
-  const sourceShelves = [...(state.home?.shelves ?? [])];
+export function renderShelfStack(home: MediaHome | undefined = state.home): string {
+  const radios = (home?.listening_queues ?? []).filter((entry) => entry.items.length);
+  const sourceShelves = [...(home?.shelves ?? [])];
   if (radios.length && !sourceShelves.some((shelf) => shelf.id === 'continue_watching')) {
-    sourceShelves.unshift({ id: 'continue_watching', title: state.home?.library_id == null ? 'Continue playing' : 'Continue listening', items: [] });
+    sourceShelves.unshift({ id: 'continue_watching', title: home?.library_id == null ? 'Continue playing' : 'Continue listening', items: [] });
   }
   const shelves = sourceShelves.filter((shelf) => shelf.items.length || (shelf.id === 'continue_watching' && radios.length));
   if (!shelves.length) {
@@ -707,11 +709,11 @@ export function renderShelfStack(): string {
   return shelves
     .map((shelf) => {
       const shelfRadios = shelf.id === 'continue_watching' ? radios : [];
-      const title = shelf.id === 'continue_watching' && state.home?.library_id == null
+      const title = shelf.id === 'continue_watching' && home?.library_id == null
         ? 'Continue playing'
         : shelf.title;
       const count = shelf.items.length + shelfRadios.length;
-      const entries = homeShelfEntries(shelf);
+      const entries = homeShelfEntries(shelf, home);
       return `
       <section class="shelf" data-nav-section="shelf:${escapeHtml(shelf.id)}" data-nav-label="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
         <div class="shelf-header">
@@ -1121,11 +1123,6 @@ export function renderHomeNavbar(): string {
   const library = activeLibrary();
   const libraryRefreshPending = library ? libraryHasActiveMetadataRefresh(library.id) : false;
   const libraryScanPending = library ? hasActiveLibraryScan(library.id) : hasActiveLibraryScan();
-  const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
-  const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
-  const searchButtonType = hasSearch ? 'button' : 'submit';
-  const searchClearAttribute = hasSearch ? 'data-clear-search' : '';
-  const searchIcon = hasSearch ? 'x' : 'search';
   const scanButtonDisabled = libraryScanPending ? 'disabled' : '';
   const refreshButtonDisabled = libraryRefreshPending ? 'disabled' : '';
   const libraryActionButtons = library && canManageServer()
@@ -1139,7 +1136,25 @@ export function renderHomeNavbar(): string {
     <header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Browse and search">
       ${renderHomeTabs()}
       <div class="home-navbar-tools">
-        <form id="search-form" class="search-form">
+        ${renderGlobalSearchControl()}
+          ${libraryActionButtons}
+      </div>
+      ${renderSearchPopover()}
+    </header>
+  `;
+}
+
+function playlistDisabled(items: MediaItemSummary[]): string { return items.some((item) => item.playable && !item.missing_since) ? '' : 'disabled'; }
+
+
+/** Share Koko-wide live search on Home and podcast library tabs. */
+export function renderGlobalSearchControl(): string {
+  const hasSearch = Boolean(state.searchQuery) || state.searchResults.length > 0 || state.showFullSearchResults;
+  const searchToggleLabel = hasSearch ? 'Clear search' : 'Search';
+  const searchButtonType = hasSearch ? 'button' : 'submit';
+  const searchClearAttribute = hasSearch ? 'data-clear-search' : '';
+  const searchIcon = hasSearch ? 'x' : 'search';
+  return `        <form id="search-form" class="search-form">
           <input id="search-input" name="search" type="search" value="${escapeHtml(state.searchQuery)}" placeholder="Search" autocomplete="off" />
           <button
             id="search-toggle"
@@ -1149,12 +1164,5 @@ export function renderHomeNavbar(): string {
             aria-label="${searchToggleLabel}"
             ${searchClearAttribute}
           >${renderIcon(searchIcon)}</button>
-          </form>
-          ${libraryActionButtons}
-      </div>
-      ${renderSearchPopover()}
-    </header>
-  `;
+          </form>`;
 }
-
-function playlistDisabled(items: MediaItemSummary[]): string { return items.some((item) => item.playable && !item.missing_since) ? '' : 'disabled'; }

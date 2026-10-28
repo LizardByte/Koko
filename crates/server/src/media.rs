@@ -1151,10 +1151,8 @@ pub fn get_persisted_library_summaries(
         HashMap::new()
     } else {
         item_metadata_links_dsl::item_metadata_links
-            .filter(
-                item_metadata_links_dsl::media_item_id
-                    .eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()),
-            )
+            .inner_join(media_items_dsl::media_items)
+            .filter(media_items_dsl::deleted_at.is_null())
             .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
             .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
             .select(ItemMetadataLink::as_select())
@@ -3335,8 +3333,11 @@ pub fn get_media_item_with_preferred_languages(
         detail.available_season_count = Some(available_season_count_for_show(conn, detail.id)?);
     }
     detail.hierarchy = load_media_item_hierarchy(conn, &item, preferred_languages)?;
-    detail.children =
-        list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?;
+    detail.children = if item.item_type == "podcast_season" {
+        podcasts::episode_page(conn, item.id, 0, 50, preferred_languages)?.items
+    } else {
+        list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?
+    };
 
     let metadata_links =
         prioritized_metadata_links_for_item(conn, item_id, item.library_id, preferred_languages)?;
@@ -4509,17 +4510,19 @@ fn playback_progress_by_item_id(
         return Ok(HashMap::new());
     }
 
-    Ok(playback_progress_dsl::playback_progress
-        .filter(playback_progress_dsl::user_id.eq(user_id))
-        .filter(playback_progress_dsl::media_item_id.eq_any(item_ids))
-        .select(PlaybackProgress::as_select())
-        .load::<PlaybackProgress>(conn)?
-        .into_iter()
-        .map(|progress| (progress.media_item_id, progress))
-        .collect())
+    let mut result = HashMap::new();
+    for chunk in item_ids.chunks(500) {
+        let rows = playback_progress_dsl::playback_progress
+            .filter(playback_progress_dsl::user_id.eq(user_id))
+            .filter(playback_progress_dsl::media_item_id.eq_any(chunk))
+            .select(PlaybackProgress::as_select())
+            .load::<PlaybackProgress>(conn)?;
+        result.extend(rows.into_iter().map(|row| (row.media_item_id, row)));
+    }
+    Ok(result)
 }
 
-fn apply_user_playback_progress_to_summaries(
+pub(crate) fn apply_user_playback_progress_to_summaries(
     conn: &mut SqliteConnection,
     user_id: Option<i32>,
     items: &mut [MediaItemSummary],
@@ -6271,90 +6274,95 @@ fn preferred_metadata_links_by_item_id(
         return Ok(HashMap::new());
     }
 
-    let rows = item_metadata_links_dsl::item_metadata_links
-        .filter(item_metadata_links_dsl::media_item_id.eq_any(item_ids))
-        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
-        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
-        .order((
-            item_metadata_links_dsl::media_item_id.asc(),
-            item_metadata_links_dsl::updated_at.desc(),
-            item_metadata_links_dsl::id.desc(),
-        ))
-        .select((
-            item_metadata_links_dsl::media_item_id,
-            item_metadata_links_dsl::title,
-            item_metadata_links_dsl::overview,
-            item_metadata_links_dsl::genres_json,
-            item_metadata_links_dsl::release_year,
-            item_metadata_links_dsl::logo_url,
-            item_metadata_links_dsl::cached_logo_path,
-            item_metadata_links_dsl::backdrop_url,
-            item_metadata_links_dsl::cached_backdrop_path,
-            item_metadata_links_dsl::refresh_state,
-            item_metadata_links_dsl::refresh_error,
-            item_metadata_links_dsl::last_refreshed_at,
-            item_metadata_links_dsl::updated_at,
-            item_metadata_links_dsl::locale_key,
-            item_metadata_links_dsl::provider_id,
-            item_metadata_links_dsl::rating,
-        ))
-        .load::<(
-            i32,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            String,
-            String,
-            Option<i16>,
-        )>(conn)?
-        .into_iter()
-        .map(
-            |(
-                media_item_id,
-                title,
-                overview,
-                genres_json,
-                release_year,
-                logo_url,
-                cached_logo_path,
-                backdrop_url,
-                cached_backdrop_path,
-                refresh_state,
-                refresh_error,
-                last_refreshed_at,
-                updated_at,
-                locale_key,
-                provider_id,
-                rating,
-            )| SummaryMetadataLink {
-                media_item_id,
-                provider_id,
-                rating,
-                title,
-                overview,
-                genres_json,
-                release_year,
-                logo_url,
-                cached_logo_path,
-                backdrop_url,
-                cached_backdrop_path,
-                refresh_state,
-                refresh_error,
-                last_refreshed_at,
-                updated_at,
-                locale_key,
-            },
-        )
-        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for chunk in item_ids.chunks(500) {
+        rows.extend(
+            item_metadata_links_dsl::item_metadata_links
+                .filter(item_metadata_links_dsl::media_item_id.eq_any(chunk))
+                .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+                .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
+                .order((
+                    item_metadata_links_dsl::media_item_id.asc(),
+                    item_metadata_links_dsl::updated_at.desc(),
+                    item_metadata_links_dsl::id.desc(),
+                ))
+                .select((
+                    item_metadata_links_dsl::media_item_id,
+                    item_metadata_links_dsl::title,
+                    item_metadata_links_dsl::overview,
+                    item_metadata_links_dsl::genres_json,
+                    item_metadata_links_dsl::release_year,
+                    item_metadata_links_dsl::logo_url,
+                    item_metadata_links_dsl::cached_logo_path,
+                    item_metadata_links_dsl::backdrop_url,
+                    item_metadata_links_dsl::cached_backdrop_path,
+                    item_metadata_links_dsl::refresh_state,
+                    item_metadata_links_dsl::refresh_error,
+                    item_metadata_links_dsl::last_refreshed_at,
+                    item_metadata_links_dsl::updated_at,
+                    item_metadata_links_dsl::locale_key,
+                    item_metadata_links_dsl::provider_id,
+                    item_metadata_links_dsl::rating,
+                ))
+                .load::<(
+                    i32,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    Option<i32>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    String,
+                    Option<String>,
+                    Option<i64>,
+                    Option<i64>,
+                    String,
+                    String,
+                    Option<i16>,
+                )>(conn)?
+                .into_iter()
+                .map(
+                    |(
+                        media_item_id,
+                        title,
+                        overview,
+                        genres_json,
+                        release_year,
+                        logo_url,
+                        cached_logo_path,
+                        backdrop_url,
+                        cached_backdrop_path,
+                        refresh_state,
+                        refresh_error,
+                        last_refreshed_at,
+                        updated_at,
+                        locale_key,
+                        provider_id,
+                        rating,
+                    )| SummaryMetadataLink {
+                        media_item_id,
+                        provider_id,
+                        rating,
+                        title,
+                        overview,
+                        genres_json,
+                        release_year,
+                        logo_url,
+                        cached_logo_path,
+                        backdrop_url,
+                        cached_backdrop_path,
+                        refresh_state,
+                        refresh_error,
+                        last_refreshed_at,
+                        updated_at,
+                        locale_key,
+                    },
+                )
+                .collect::<Vec<_>>(),
+        );
+    }
 
     let language_rank = preferred_languages
         .iter()

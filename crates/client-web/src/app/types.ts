@@ -114,7 +114,9 @@ export interface AppState {
   libraries: MediaLibrary[];
   home?: MediaHome;
   /** Discovery and subscription data belong to the account that requested them. */
-  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; tab?: 'library' | 'discover'; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
+  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; home?: MediaHome; tab?: 'recommended' | 'library' | 'discover'; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
+  /** In-flight season paging is scoped to the selected item and account. */
+  podcastEpisodeLoading?: { itemId: number; owner: number; loading: boolean; error?: string };
   playlists?: MusicPlaylistDetail[];
   selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];
@@ -237,6 +239,9 @@ export type AppIconName =
   | 'repeat-1'
   | 'shuffle'
   | 'list-music'
+  | 'download'
+  | 'hard-drive-download'
+  | 'cloud-download'
   | 'mic-2'
   | 'radio'
   | 'rotate-ccw'

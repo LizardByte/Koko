@@ -23,6 +23,7 @@ use crate::{
     utils::current_timestamp,
 };
 use diesel::prelude::*;
+use rocket_okapi::okapi::schemars;
 use std::collections::{
     HashMap,
     HashSet,
@@ -30,7 +31,7 @@ use std::collections::{
 
 type Result<T> = diesel::QueryResult<T>;
 
-fn feed_id(
+pub(super) fn feed_id(
     conn: &mut SqliteConnection,
     url: &str,
 ) -> Result<Option<i32>> {
@@ -163,6 +164,14 @@ fn save_metadata(
         .optional()?
         .and_then(|json| serde_json::from_str::<super::downloads::StoredMetadata>(&json).ok())
         .and_then(|value| value.local_download);
+    if let Some(duration) = local_download
+        .as_ref()
+        .and_then(|record| record.duration_ms)
+    {
+        diesel::update(items::table.find(id))
+            .set(items::duration_ms.eq(duration))
+            .execute(conn)?;
+    }
     let stored = super::downloads::StoredMetadata {
         publisher: value,
         local_download,
@@ -364,13 +373,13 @@ pub fn subscribed(
     conn: &mut SqliteConnection,
     user: i32,
 ) -> Result<Vec<MediaItemSummary>> {
-    let mut items = crate::media::list_media_items_for_user_with_preferred_languages(
-        conn,
-        Some(user),
-        None,
-        &[],
-    )?;
-    items.retain(|item| item.item_type == "podcast");
+    let ids = subscriptions::table
+        .filter(subscriptions::user_id.eq(user))
+        .select(subscriptions::podcast_id)
+        .load::<i32>(conn)?;
+    let mut items = crate::media::list_media_items_by_ids(conn, &ids, &[])?;
+    super::preferences::apply(conn, Some(user), &mut items)?;
+    crate::media::apply_user_playback_progress_to_summaries(conn, Some(user), &mut items)?;
     Ok(items)
 }
 pub(crate) fn feed_for_user(
@@ -668,5 +677,57 @@ pub(super) fn reconcile_year_seasons(conn: &mut SqliteConnection) -> Result<()> 
             }
         }
         Ok(())
+    })
+}
+
+/// One bounded season page, always displayed newest first independently of queue order.
+#[derive(serde::Serialize, rocket_okapi::okapi::schemars::JsonSchema)]
+pub struct PodcastEpisodePage {
+    /// Episode summaries with this account's listening state applied by the route.
+    pub items: Vec<MediaItemSummary>,
+    /// Number of available episodes in the season.
+    pub total: i64,
+    /// Index of the first episode returned.
+    pub offset: i64,
+    /// Whether another page is available.
+    pub has_more: bool,
+}
+
+pub(crate) fn episode_page(
+    conn: &mut SqliteConnection,
+    season: i32,
+    offset: i64,
+    limit: i64,
+    languages: &[String],
+) -> Result<PodcastEpisodePage> {
+    let offset = offset.max(0);
+    let limit = limit.clamp(1, 100);
+    let total = items::table
+        .filter(items::parent_id.eq(season))
+        .filter(items::item_type.eq("podcast_episode"))
+        .filter(items::deleted_at.is_null())
+        .count()
+        .get_result::<i64>(conn)?;
+    let ids = items::table
+        .filter(items::parent_id.eq(season))
+        .filter(items::item_type.eq("podcast_episode"))
+        .filter(items::deleted_at.is_null())
+        .order((
+            items::modified_at.desc(),
+            items::season_number.desc(),
+            items::episode_number.desc(),
+            items::id.desc(),
+        ))
+        .offset(offset)
+        .limit(limit)
+        .select(items::id)
+        .load::<i32>(conn)?;
+    let mut items = crate::media::list_media_items_by_ids(conn, &ids, languages)?;
+    super::preferences::sort(&mut items, super::PlaybackOrder::NewestFirst);
+    Ok(PodcastEpisodePage {
+        has_more: offset + (items.len() as i64) < total,
+        items,
+        total,
+        offset,
     })
 }

@@ -59,6 +59,8 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
     for path in [
         "/api/v1/podcasts",
         "/api/v1/podcasts/discover",
+        "/api/v1/podcasts/home",
+        "/api/v1/podcasts/seasons/4/episodes",
         "/api/v1/podcasts/1/episodes",
         "/api/v1/podcasts/episodes/2/stream",
     ] {
@@ -76,6 +78,7 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
     // Admin has a subscription in this library but must still be denied another user's show.
     for path in [
         "/api/v1/items/1",
+        "/api/v1/podcasts/seasons/4/episodes",
         "/api/v1/podcasts/1/episodes",
         "/api/v1/items/2",
         "/api/v1/items/2/playback",
@@ -254,7 +257,65 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
             .status(),
         Status::NotFound
     );
-    std::fs::remove_file(cached).unwrap();
+    assert!(
+        cached.exists(),
+        "Another subscriber must retain the shared episode"
+    );
+    let response = client
+        .get("/api/v1/podcasts/seasons/4/episodes?offset=0&limit=50")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+    let page = response.into_json::<Value>().await.unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["items"][0]["id"], 2);
+    let home = client
+        .get("/api/v1/podcasts/home")
+        .header(Header::new("Authorization", format!("Bearer {listener}")))
+        .dispatch()
+        .await
+        .into_json::<Value>()
+        .await
+        .unwrap();
+    for shelf in home["shelves"].as_array().unwrap() {
+        for item in shelf["items"].as_array().unwrap() {
+            assert_eq!(item["podcast"]["podcast_id"], 1);
+        }
+    }
+    assert_eq!(
+        client
+            .delete("/api/v1/podcasts/1")
+            .header(Header::new("Authorization", format!("Bearer {listener}")))
+            .dispatch()
+            .await
+            .status(),
+        Status::NoContent
+    );
+    assert!(
+        !cached.exists(),
+        "The final subscription must remove the saved episode"
+    );
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            assert_eq!(
+                items::table
+                    .find(2)
+                    .count()
+                    .get_result::<i64>(conn)
+                    .unwrap(),
+                1
+            );
+            let json = metadata::table
+                .find(2)
+                .select(metadata::metadata_json)
+                .first::<String>(conn)
+                .unwrap();
+            assert!(!json.contains("local_download"));
+        })
+        .await;
 }
 
 fn seed(conn: &mut diesel::SqliteConnection) {
@@ -279,7 +340,8 @@ fn seed(conn: &mut diesel::SqliteConnection) {
         .unwrap();
     for (id, title, kind, parent, playable) in [
         (1, "Private show", "podcast", None, false),
-        (2, "Private episode", "podcast_episode", Some(1), true),
+        (4, "2026", "podcast_season", Some(1), false),
+        (2, "Private episode", "podcast_episode", Some(4), true),
         (3, "Admin's own show", "podcast", None, false),
     ] {
         diesel::insert_into(items::table)
@@ -327,6 +389,7 @@ fn seed(conn: &mut diesel::SqliteConnection) {
         (1, 1, None),
         (2, 1, Some("http://127.0.0.1/audio.mp3")),
         (3, 3, None),
+        (4, 1, None),
     ] {
         let data = json!({
             "podcast_id":root,"author":"Publisher","description":"Show notes",

@@ -73,6 +73,8 @@ pub(super) struct LocalDownload {
     pub state: DownloadState,
     pub path: Option<PathBuf>,
     pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
     pub attempted_at: i64,
     pub error: Option<String>,
 }
@@ -82,6 +84,7 @@ impl LocalDownload {
             state: DownloadState::Queued,
             path: None,
             size_bytes: None,
+            duration_ms: None,
             attempted_at: 0,
             error: None,
         }
@@ -146,6 +149,11 @@ fn write_record(
     record: LocalDownload,
 ) -> QueryResult<()> {
     let mut value = stored(conn, id)?;
+    if let Some(duration) = record.duration_ms {
+        diesel::update(crate::db::schema::media_items::table.find(id))
+            .set(crate::db::schema::media_items::duration_ms.eq(duration))
+            .execute(conn)?;
+    }
     value.local_download = Some(record);
     let json = serde_json::to_string(&value).expect("Podcast download metadata is serializable");
     diesel::update(items::table.find(id))
@@ -178,6 +186,24 @@ pub async fn ensure(
     db: &DbConn,
     id: i32,
 ) -> Result<PathBuf, String> {
+    let root = db
+        .run(move |conn| stored(conn, id).map(|value| value.publisher.podcast_id))
+        .await
+        .map_err(|_| "This podcast episode is unavailable")?;
+    let show_lock = super::show_lock(root);
+    let _show = show_lock.read().await;
+    let subscribed = db
+        .run(move |conn| {
+            subscriptions::table
+                .filter(subscriptions::podcast_id.eq(root))
+                .count()
+                .get_result::<i64>(conn)
+        })
+        .await
+        .map_err(|_| "Unable to check podcast subscriptions")?;
+    if subscribed == 0 {
+        return Err("This podcast has no subscribers".into());
+    }
     let lock = episode_lock(id);
     let _episode = lock.lock().await;
     let source = db
@@ -193,6 +219,15 @@ pub async fn ensure(
         if let Some(path) = &record.path {
             if let Ok(file) = tokio::fs::metadata(path).await {
                 if file.is_file() && record.size_bytes == Some(file.len()) {
+                    if record.duration_ms.is_none() {
+                        if let Some(duration) = probe_duration(path).await {
+                            let mut record = record.clone();
+                            record.duration_ms = Some(duration);
+                            db.run(move |conn| set_record(conn, id, record))
+                                .await
+                                .map_err(|_| "Unable to save podcast duration")?;
+                        }
+                    }
                     return Ok(path.clone());
                 }
             }
@@ -235,6 +270,7 @@ pub async fn ensure(
             record.state = DownloadState::Ready;
             record.path = Some(path.clone());
             record.size_bytes = Some(*size);
+            record.duration_ms = probe_duration(path).await;
         }
         Err(error) => {
             record.state = DownloadState::Failed;
@@ -383,3 +419,98 @@ pub(super) async fn download_pending(db: &DbConn) {
 
 #[cfg(test)]
 mod tests;
+
+async fn probe_duration(path: &Path) -> Option<i64> {
+    let mut command = tokio::process::Command::new(&current_settings().ffmpeg.ffprobe_path);
+    command
+        .args([
+            "-v",
+            "error",
+            "-protocol_whitelist",
+            "file",
+            "-show_entries",
+            "format=duration:stream=duration",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    measured_duration(&output.stdout)
+}
+
+fn measured_duration(bytes: &[u8]) -> Option<i64> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let seconds = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0 && *value < (i64::MAX / 1000) as f64)
+    };
+    let duration = value
+        .get("format")
+        .and_then(|format| format.get("duration"))
+        .and_then(seconds)
+        .or_else(|| {
+            value
+                .get("streams")?
+                .as_array()?
+                .iter()
+                .filter_map(|stream| stream.get("duration").and_then(seconds))
+                .max_by(f64::total_cmp)
+        })?;
+    Some((duration * 1000.0).round() as i64)
+}
+
+/// Remove saved files only after the final account unsubscribes. The caller holds the show write
+/// lock.
+pub(super) async fn cleanup_unsubscribed(
+    db: &DbConn,
+    root: i32,
+) -> Result<(), String> {
+    let rows = db
+        .run(move |conn| {
+            items::table
+                .filter(items::podcast_id.eq(root))
+                .select((items::media_item_id, items::metadata_json))
+                .load::<(i32, String)>(conn)
+        })
+        .await
+        .map_err(|_| "Unable to load podcast downloads")?;
+    for (id, json) in rows {
+        let Ok(mut value) = serde_json::from_str::<StoredMetadata>(&json) else {
+            continue;
+        };
+        let Some(record) = value.local_download.take() else {
+            continue;
+        };
+        if let Some(path) = record.path {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err(
+                        "Unable to remove a downloaded episode; check folder permissions".into(),
+                    );
+                }
+            }
+        }
+        let json = serde_json::to_string(&value).expect("serializable metadata");
+        db.run(move |conn| {
+            diesel::update(items::table.find(id))
+                .set(items::metadata_json.eq(json))
+                .execute(conn)
+        })
+        .await
+        .map_err(|_| "Unable to clear podcast download status")?;
+    }
+    Ok(())
+}

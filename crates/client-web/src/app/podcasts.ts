@@ -3,7 +3,7 @@ import './podcasts.css';
 import type { DirectoryPodcast, MediaItemDetail, MediaItemSummary, PodcastPlaybackOrder } from '../api';
 import { escapeHtml, formatDuration, formatFileSize, formatTimestamp } from './format';
 import { renderButtonContent, renderIcon } from './ui';
-import { renderItemCard, renderItemFeature, renderShelfStack, renderGlobalSearchControl, renderSearchPopover, renderSearchResults } from './homeView';
+import { featureArtworkStyle, renderItemCard, renderItemFeature, renderShelfStack, renderGlobalSearchControl, renderSearchPopover, renderSearchResults } from './homeView';
 import { renderAudioTrackRow } from './music';
 import { activeMusicPlayback } from './musicPlaybackState';
 import { state } from './state';
@@ -85,14 +85,20 @@ function renderPodcastDirectoryFeature(data: typeof state.podcasts): string {
   const directory = data?.tab === 'discover' ? data.directory[selectedIndex] : undefined;
   const title = directory?.title ?? 'Podcasts';
   const artwork = podcastLink(directory?.artwork_url);
-  const copy = directory?.author ?? 'Discover popular podcasts or add an RSS feed to start listening.';
-  const subscribed = directory && data?.items.some(show => show.podcast?.feed_url === directory.feed_url);
+  const subscribed = directory && data?.items.find(show => show.podcast?.feed_url === directory.feed_url);
+  const copy = directory?.description?.trim() || subscribed?.overview?.trim() || directory?.author || 'Discover popular podcasts or add an RSS feed to start listening.';
+  const genres = directory?.genres?.length ? directory.genres : subscribed?.genres ?? [];
+  const genreTags = genres.filter(genre => genre !== 'Podcasts').slice(0, 3).map(genre => `<span class="tag">${escapeHtml(genre)}</span>`).join('');
+  const count = directory?.episode_count;
+  const episodeLabel = count === 1 ? 'episode' : 'episodes';
+  const episodeTag = count === undefined || count === null ? '' : `<span class="tag">${count} ${episodeLabel}</span>`;
   const disabled = data?.busy || subscribed ? 'disabled' : '';
   const label = subscribed ? 'Already added' : 'Add podcast';
   const icon = subscribed ? 'check' : 'plus';
   const action = directory ? `<button type="button" class="secondary-button home-feature-action" data-podcast-add="${selectedIndex}" ${disabled}>${renderButtonContent(label, icon)}</button>` : '';
   const cover = artwork ? `<img class="podcast-feature-cover" src="${escapeHtml(artwork)}" alt="" referrerpolicy="no-referrer"/>` : '';
-  return `<section class="home-feature home-feature-podcast" data-nav-section="featured" data-nav-label="Featured">${cover}<div class="home-feature-copy"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(copy)}</p></div>${action}</section>`;
+  const artworkClass = artwork ? ' has-artwork' : '';
+  return `<section class="home-feature home-feature-podcast${artworkClass}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(artwork)}>${cover}<div class="home-feature-copy"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(copy)}</p><div class="hero-meta-row">${genreTags}${episodeTag}</div></div>${action}</section>`;
 }
 
 /** Render listening shelves inside the shared content panel, without adding another padded wrapper. */

@@ -9,6 +9,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { renderPodcastFeature } = await server.ssrLoadModule('/src/app/podcasts.ts');
+const { featureArtworkStyle } = await server.ssrLoadModule('/src/app/homeView.ts');
 const { bindPodcastDirectoryPreviews, bindPodcastAddActions } = await server.ssrLoadModule('/src/app/podcastActions.ts');
 const mock = await server.ssrLoadModule('/src/mockApi.ts');
 
@@ -48,8 +49,38 @@ test('Discover uses current results even when subscriptions and library highligh
   assert.match(html, /<h2>Result B<\/h2>/);
   assert.match(html, /Publisher B/);
   assert.match(html, /https:\/\/example.com\/b.jpg/);
+  assert.match(html, /home-feature-podcast has-artwork/);
+  assert.match(html, /--home-feature-image: url\('https:\/\/example.com\/b.jpg'\)/);
   assert.match(html, /data-podcast-add="1"/);
   assert.doesNotMatch(html, /Subscribed [AB]/);
+});
+
+test('directory heroes use available descriptions, genres, and episode counts without fetching', () => {
+  state.podcasts.tab = 'discover';
+  Object.assign(state.podcasts.directory[0], { description: 'Full show description <script>unsafe</script>', genres: ['Science', 'Podcasts'], episode_count: 42 });
+  const html = renderPodcastFeature();
+  assert.match(html, /Full show description &lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.match(html, /<span class="tag">Science<\/span>/);
+  assert.match(html, /42 episodes/);
+  assert.doesNotMatch(html, /<span class="tag">Podcasts<\/span>|<script>/);
+});
+
+test('an added show can reuse its saved description while unknown shows retain their publisher', () => {
+  state.podcasts.tab = 'discover';
+  state.podcasts.items[0].podcast.feed_url = 'https://example.com/feed-a';
+  assert.match(renderPodcastFeature(), /Subscribed A description/);
+  state.podcasts.previewDirectoryId = 'directory-b';
+  assert.match(renderPodcastFeature(), /<p>Publisher B<\/p>/);
+  assert.doesNotMatch(renderPodcastFeature(), /Subscribed A description/);
+});
+
+test('cover backgrounds keep CSS and markup characters inside the publisher URL', () => {
+  const style = featureArtworkStyle("https://example.com/cover');color:red;('image.png?x=1&y=2");
+  assert.match(style, /cover%27\);color:red;\(%27image.png/);
+  assert.match(style, /x=1&amp;y=2/);
+  assert.doesNotMatch(style, /cover'\);/);
+  state.podcasts.tab = 'discover'; state.podcasts.directory[0].artwork_url = 'javascript:bad()';
+  assert.doesNotMatch(renderPodcastFeature(), /has-artwork|--home-feature-image|javascript:/);
 });
 
 test('a new result set cannot retain an old directory preview or fall back to subscriptions', () => {

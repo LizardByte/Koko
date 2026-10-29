@@ -279,6 +279,10 @@ export interface DirectoryPodcast {
   id: string;
   title: string;
   author?: string | null;
+  /** Directory-provided description, when available without a separate lookup. */
+  description?: string | null;
+  genres?: string[];
+  episode_count?: number | null;
   artwork_url?: string | null;
   apple_url?: string | null;
   feed_url: string;

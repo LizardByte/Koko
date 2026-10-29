@@ -456,6 +456,32 @@ fn directory_results_require_a_public_feed_and_never_write_to_storage() {
     let results = discovery::results(&response);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, "123");
+    assert!(results[0].description.is_none());
+    assert!(results[0].genres.is_empty());
+    assert!(results[0].episode_count.is_none());
+}
+
+#[test]
+fn directory_metadata_comes_only_from_the_supplied_search_or_lookup_response() {
+    let response = serde_json::json!({"results": [
+        {"collectionId": 123, "collectionName": "Detailed show",
+         "feedUrl": "https://example.com/rss",
+         "longDescription": "  Full directory description  ", "description": "Shorter description",
+         "genres": ["Science", "Podcasts", 42], "trackCount": 533},
+        {"collectionId": 456, "collectionName": "Short notes",
+         "feedUrl": "https://example.com/other",
+         "longDescription": " ", "shortDescription": "Available notes", "trackCount": -1}
+    ]});
+    let results = discovery::results(&response);
+    assert_eq!(
+        results[0].description.as_deref(),
+        Some("Full directory description")
+    );
+    assert_eq!(results[0].genres, ["Science", "Podcasts"]);
+    assert_eq!(results[0].episode_count, Some(533));
+    assert_eq!(results[1].description.as_deref(), Some("Available notes"));
+    assert!(results[1].genres.is_empty());
+    assert!(results[1].episode_count.is_none());
 }
 
 #[test]

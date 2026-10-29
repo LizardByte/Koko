@@ -29,6 +29,15 @@ pub struct DirectoryPodcast {
     pub title: String,
     /// Publisher or author name.
     pub author: Option<String>,
+    /// Description when included in the existing directory response; never fetched separately.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Categories supplied by the directory.
+    #[serde(default)]
+    pub genres: Vec<String>,
+    /// Number of available episodes reported by the directory.
+    #[serde(default)]
+    pub episode_count: Option<u64>,
     /// Publisher cover image URL.
     pub artwork_url: Option<String>,
     /// Apple Podcasts listing for directory attribution.
@@ -77,6 +86,25 @@ pub(super) fn results(value: &Value) -> Vec<DirectoryPodcast> {
                     .get("artistName")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                description: [
+                    "longDescription",
+                    "description",
+                    "shortDescription",
+                ]
+                .into_iter()
+                .filter_map(|key| row.get(key)?.as_str())
+                .map(str::trim)
+                .find(|text| !text.is_empty())
+                .map(str::to_owned),
+                genres: row
+                    .get("genres")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+                episode_count: row.get("trackCount").and_then(Value::as_u64),
                 artwork_url: row
                     .get("artworkUrl600")
                     .or_else(|| row.get("artworkUrl100"))

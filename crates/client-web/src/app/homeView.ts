@@ -494,8 +494,11 @@ export function renderHomeFeature(): string {
   return renderItemFeature(preview.item);
 }
 
-function featureArtworkStyle(backdropUrl?: string): string {
-  return backdropUrl ? `style="--home-feature-image: url('${escapeHtml(backdropUrl)}');"` : '';
+/** Share hero backgrounds while keeping publisher URLs inside their CSS string. */
+export function featureArtworkStyle(backdropUrl?: string): string {
+  if (!backdropUrl) return '';
+  const cssUrl = backdropUrl.replace(/['"\\\r\n\f]/g, character => '%' + character.charCodeAt(0).toString(16).padStart(2, '0'));
+  return `style="--home-feature-image: url('${escapeHtml(cssUrl)}');"`;
 }
 
 function renderCollectionFeature(collection: MediaCollectionSummary): string {

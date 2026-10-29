@@ -8,7 +8,7 @@ import { activeMusicPlayback } from './musicPlaybackState';
 import { bindPodcastPaging } from './podcastPaging';
 import { clearBrowseSessions } from './browseSession';
 import { bindHoverPreview } from './hoverPreview';
-import { bindPodcastDiscovery, cancelPodcastDirectorySearch, loadPodcastDirectory } from './podcastDiscovery';
+import { bindPodcastDiscovery, cancelPodcastDirectorySearch, loadPodcastCountries, loadPodcastDirectory } from './podcastDiscovery';
 
 /** Load independent catalog sections while ignoring replies from abandoned routes or accounts. */
 export async function loadPodcasts(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
@@ -24,6 +24,7 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
     tab === 'recommended' ? getPodcastHome().then(home => { if (current()) { data.home = home; render(); } }).catch(error => { if (current()) data.error = error instanceof Error ? error.message : 'Podcast shelves could not load.'; }) : Promise.resolve(),
     getPodcasts().then(items => { if (current()) { data.items = items; render(); } }).catch(error => { if (current()) target.error = error instanceof Error ? error.message : 'Subscriptions could not load.'; }),
     loadPodcastDirectory(target, current, render),
+    loadPodcastCountries(target, current, render),
   ]);
 }
 

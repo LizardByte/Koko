@@ -3,6 +3,7 @@
 // modules
 pub mod auth;
 pub mod common;
+pub mod countries;
 pub mod dependencies;
 pub mod ebooks;
 pub mod media;
@@ -27,6 +28,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         ebooks::document,
         ebooks::progress,
         dependencies::get_dependencies,
+        countries::get_countries,
         media::get_server_capabilities,
         media::get_system_activities,
         media::get_metadata_providers,

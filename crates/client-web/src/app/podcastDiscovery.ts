@@ -1,5 +1,5 @@
 /** Searches the podcast directory without reloading the library or replacing newer account results. */
-import { discoverPodcasts } from '../api';
+import { discoverPodcasts, getCountries } from '../api';
 import type { AppState } from './types';
 import { state } from './state';
 
@@ -9,6 +9,22 @@ interface DiscoveryContext {
 
 let pendingSearch: number | undefined;
 let generation = 0;
+
+/** Load reference data once per account view, preserving server labels and order. */
+export async function loadPodcastCountries(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
+  const data = target.podcasts;
+  if (!data || data.tab !== 'discover' || data.countries) return;
+  const current = () => isCurrent() && target.podcasts === data && target.bootstrap?.current_user?.id === data.owner;
+  data.countriesError = undefined;
+  try {
+    const countries = await getCountries();
+    if (current()) data.countries = countries;
+  } catch (error) {
+    if (current()) data.countriesError = error instanceof Error ? error.message : 'Country choices could not load.';
+  } finally {
+    if (current()) render();
+  }
+}
 
 /** Invalidate queued searches and replies when leaving discovery or changing accounts. */
 export function cancelPodcastDirectorySearch(): void {
@@ -53,6 +69,9 @@ export function bindPodcastDiscovery(signal: AbortSignal, context: DiscoveryCont
   const route = state.route;
   const current = () => state.route === route && state.bootstrap?.current_user?.id === owner
     && state.podcasts?.owner === owner && state.podcasts?.tab === 'discover';
+  document.querySelector<HTMLButtonElement>('[data-podcast-countries-retry]')?.addEventListener('click', () => {
+    if (current()) void loadPodcastCountries(state, current, () => context.render(true));
+  }, { signal });
   const search = (): void => {
     if (!current()) return;
     void loadPodcastDirectory(state, current, () => context.render(true));

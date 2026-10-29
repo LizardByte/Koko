@@ -8,8 +8,7 @@ globalThis.localStorage = { getItem: () => null };
 const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false, ws: false } });
 after(() => server.close());
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
-const { loadPodcastDirectory, bindPodcastDiscovery, cancelPodcastDirectorySearch } = await server.ssrLoadModule('/src/app/podcastDiscovery.ts');
-const { PODCAST_COUNTRIES } = await server.ssrLoadModule('/src/app/podcastCountries.ts');
+const { loadPodcastCountries, loadPodcastDirectory, bindPodcastDiscovery, cancelPodcastDirectorySearch } = await server.ssrLoadModule('/src/app/podcastDiscovery.ts');
 
 beforeEach(() => {
   cancelPodcastDirectorySearch();
@@ -21,12 +20,54 @@ beforeEach(() => {
 const response = title => Response.json([{ id: title, title, feed_url: 'https://example.com/feed' }]);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-test('country choices retain every region, use names, and remain alphabetically ordered', () => {
-  assert.equal(PODCAST_COUNTRIES.length, 249);
-  assert.equal(new Set(PODCAST_COUNTRIES.map(country => country.code)).size, 249);
-  const names = PODCAST_COUNTRIES.map(country => country.name);
-  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en')));
-  assert.equal(PODCAST_COUNTRIES.find(country => country.code === 'ca').name, 'Canada');
+test('country choices use server labels and ordering and are reused across directory searches', async () => {
+  const originalFetch = globalThis.fetch, requests = [];
+  const countries = [{ code: 'zw', name: 'First server choice' }, { code: 'ca', name: 'Second server choice' }];
+  globalThis.fetch = async url => { requests.push(url); return Response.json(countries); };
+  try {
+    await loadPodcastCountries(state, () => true, () => {});
+    assert.deepEqual(state.podcasts.countries, countries);
+    state.podcasts.country = 'ca'; state.podcasts.query = 'science';
+    await loadPodcastCountries(state, () => true, () => {});
+    assert.deepEqual(requests.map(url => new URL(url).pathname), ['/api/v1/countries']);
+    assert.equal(state.podcasts.query, 'science');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('country loading failures preserve directory results and can be retried', async () => {
+  const originalFetch = globalThis.fetch, originalDocument = globalThis.document;
+  const retry = new EventTarget(), form = new EventTarget(), input = new EventTarget(), country = new EventTarget();
+  const controller = new AbortController();
+  globalThis.document = { querySelector: selector => ({ '#podcast-search-form': form, '#podcast-search': input, '#podcast-country': country, '[data-podcast-countries-retry]': retry })[selector] };
+  state.podcasts.directory = [{ id: 'kept', title: 'Keep this show' }];
+  state.podcasts.country = 'gb';
+  globalThis.fetch = async () => { throw new TypeError('Network unavailable'); };
+  try {
+    await loadPodcastCountries(state, () => true, () => {});
+    assert.match(state.podcasts.countriesError, /Cannot connect to the server/);
+    assert.equal(state.podcasts.country, 'gb');
+    assert.equal(state.podcasts.directory[0].id, 'kept');
+    globalThis.fetch = async () => Response.json([{ code: 'gb', name: 'United Kingdom' }]);
+    bindPodcastDiscovery(controller.signal, { render() {} });
+    retry.dispatchEvent(new Event('click')); await flush();
+    assert.equal(state.podcasts.countriesError, undefined);
+    assert.equal(state.podcasts.countries[0].code, 'gb');
+  } finally { controller.abort(); globalThis.fetch = originalFetch; globalThis.document = originalDocument; }
+});
+
+test('country responses cannot update abandoned routes or a switched account', async () => {
+  const originalFetch = globalThis.fetch;
+  let complete, current = true;
+  globalThis.fetch = () => new Promise(resolve => { complete = resolve; });
+  try {
+    const abandoned = loadPodcastCountries(state, () => current, () => {});
+    current = false; complete(Response.json([{ code: 'ca', name: 'Canada' }])); await abandoned;
+    assert.equal(state.podcasts.countries, undefined);
+    const previousAccount = loadPodcastCountries(state, () => true, () => {});
+    state.bootstrap.current_user.id = 2;
+    complete(Response.json([{ code: 'ca', name: 'Canada' }])); await previousAccount;
+    assert.equal(state.podcasts.countries, undefined);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('older directory replies cannot replace the latest query or finish its loading indicator', async () => {

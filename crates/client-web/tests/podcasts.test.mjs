@@ -243,15 +243,29 @@ test('all podcast tabs share the normal full-width hero and one content panel', 
 
 test('discovery has a country selector and the same search/clear affordance as global search', () => {
   state.bootstrap = { current_user: { id: 1 } };
-  state.podcasts = { owner: 1, items: [], directory: [], country: 'gb', query: '', loading: false, tab: 'discover' };
+  state.podcasts = { owner: 1, items: [], directory: [], country: 'gb', countries: [{ code: 'ca', name: 'Canada' }, { code: 'gb', name: 'United Kingdom from server' }], query: '', loading: false, tab: 'discover' };
   let html = renderPodcastPage();
-  assert.match(html, /<select id="podcast-country" name="country">/);
-  assert.match(html, /value="gb" selected>United Kingdom/);
+  assert.match(html, /<select id="podcast-country" name="country"\s*>/);
+  assert.match(html, /value="gb" selected>United Kingdom from server/);
   assert.match(html, /class="icon-button search-toggle-button"[^>]*aria-label="Search podcasts"/);
   assert.doesNotMatch(html, /data-podcast-popular|pattern="\[A-Za-z\]/);
   state.podcasts.query = 'science';
   html = renderPodcastPage();
   assert.match(html, /data-podcast-search-clear[^>]*aria-label="Clear podcast search"/);
+});
+
+test('country loading retains the selected region and safely renders server labels and errors', () => {
+  state.bootstrap = { current_user: { id: 1 } };
+  state.podcasts = { owner: 1, items: [], directory: [], country: 'gb', query: '', loading: false, tab: 'discover' };
+  let html = renderPodcastPage();
+  assert.match(html, /<select id="podcast-country"[^>]*disabled><option value="gb" selected>GB<\/option>/);
+  state.podcasts.countriesError = 'Temporary <failure>';
+  html = renderPodcastPage();
+  assert.match(html, /Temporary &lt;failure&gt;/);
+  assert.match(html, /data-podcast-countries-retry/);
+  state.podcasts.countries = [{ code: 'gb', name: 'Server <name>' }];
+  html = renderPodcastPage();
+  assert.match(html, /value="gb" selected>Server &lt;name&gt;/);
 });
 
 test('new subscribers can discover a featured show before adding anything', () => {

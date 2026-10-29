@@ -1,5 +1,6 @@
 mod auth;
 mod common;
+mod countries;
 mod dependencies;
 mod media;
 mod permissions;

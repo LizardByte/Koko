@@ -7,7 +7,6 @@ import { featureArtworkStyle, renderItemCard, renderItemFeature, renderShelfStac
 import { renderAudioTrackRow } from './music';
 import { activeMusicPlayback } from './musicPlaybackState';
 import { state } from './state';
-import { PODCAST_COUNTRIES } from './podcastCountries';
 
 /** Restrict publisher links to web URLs without embedded login credentials. */
 export function podcastLink(value: string | null | undefined): string | undefined {
@@ -40,16 +39,20 @@ function discovery(): string {
   const searchType = hasQuery ? 'button' : 'submit';
   const searchAction = hasQuery ? 'data-podcast-search-clear' : '';
   const searchIcon = hasQuery ? 'x' : 'search';
-  const countries = PODCAST_COUNTRIES.map(country => `<option value="${country.code}" ${data.country.toLowerCase() === country.code ? 'selected' : ''}>${escapeHtml(country.name)}</option>`).join('');
+  const choices = data.countries ?? [];
+  const selectedCountry = data.country.toLowerCase();
+  const currentCountry = choices.some(country => country.code === selectedCountry) ? '' : `<option value="${escapeHtml(selectedCountry)}" selected>${escapeHtml(selectedCountry.toUpperCase())}</option>`;
+  const countries = currentCountry + choices.map(country => `<option value="${escapeHtml(country.code)}" ${selectedCountry === country.code ? 'selected' : ''}>${escapeHtml(country.name)}</option>`).join('');
+  const countriesError = data.countriesError ? `<p class="status-warning" role="alert">Country choices could not load: ${escapeHtml(data.countriesError)} <button type="button" class="secondary-button" data-podcast-countries-retry>Retry</button></p>` : '';
   const error = data.error ? `<div class="empty-state" role="alert">${escapeHtml(data.error)}</div>` : '';
   const status = data.loading ? 'Loading podcasts…' : '';
   const heading = data.query.trim() ? 'Search results' : 'Popular podcasts';
   return `<div class="shelf-header browse-section-header"><h3>${heading}</h3><button type="button" class="secondary-button" data-podcast-feed-toggle aria-controls="podcast-add-feed-panel" aria-expanded="${data.addFeedOpen === true}">${renderButtonContent('Add RSS feed', 'plus')}</button></div>
     <form id="podcast-search-form" class="podcast-search-controls" role="search" aria-label="Podcast directory">
       <div class="search-form"><label class="sr-only" for="podcast-search">Search podcasts</label><input id="podcast-search" name="query" type="search" maxlength="200" placeholder="Search podcasts" autocomplete="off" value="${escapeHtml(data.query)}"/><button type="${searchType}" class="icon-button search-toggle-button" ${searchAction} title="${searchLabel}" aria-label="${searchLabel}">${renderIcon(searchIcon)}</button></div>
-      <label class="sr-only" for="podcast-country">Country</label><select id="podcast-country" name="country">${countries}</select>
+      <label class="sr-only" for="podcast-country">Country</label><select id="podcast-country" name="country" ${choices.length ? '' : 'disabled'}>${countries}</select>
     </form>
-    ${feedForm()}<p class="muted podcast-directory-attribution">Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}. <span role="status">${status}</span></p>${error}<div class="item-grid podcast-library-grid" aria-busy="${data.loading}">${data.directory.map(directoryCard).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}`;
+    ${feedForm()}${countriesError}<p class="muted podcast-directory-attribution">Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}. <span role="status">${status}</span></p>${error}<div class="item-grid podcast-library-grid" aria-busy="${data.loading}">${data.directory.map(directoryCard).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}`;
 }
 
 /** Reuse the ordinary library header, full-width hero, and single content panel for every tab. */

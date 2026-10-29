@@ -291,6 +291,10 @@ export interface DirectoryPodcast {
 export function discoverPodcasts(country = 'us', query = ''): Promise<DirectoryPodcast[]> {
   return requestJson('GET', `/api/v1/podcasts/discover?${new URLSearchParams({ country, query })}`);
 }
+/** Server-provided country or territory with a lowercase ISO alpha-2 code and English name. */
+export interface Country { code: string; name: string }
+/** Fetch the server's ordered ISO country choices, shared by every client. */
+export function getCountries(): Promise<Country[]> { return requestJson('GET', '/api/v1/countries'); }
 /** Fetch every episode in the account's saved playback order, including real seasons. */
 export function getPodcastEpisodes(id: number): Promise<MediaItemSummary[]> { return requestJson('GET', `/api/v1/podcasts/${id}/episodes`); }
 /** Persist a chronological queue order for this account and podcast only. */
@@ -1015,6 +1019,8 @@ function getMockGetResponse<T>(method: string, url: URL): T {
     return getMockItems().filter((item) => item.id !== seed.id && item.item_type === seed.item_type && !item.missing_since).slice(0, 12) as T;
   }
   switch (url.pathname) {
+    case '/api/v1/countries':
+      return [{ code: 'ca', name: 'Canada' }, { code: 'gb', name: 'United Kingdom' }, { code: 'us', name: 'United States of America' }] as T;
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
     case '/api/v1/podcasts/settings':

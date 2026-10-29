@@ -497,7 +497,7 @@ export function renderHomeFeature(): string {
 /** Share hero backgrounds while keeping publisher URLs inside their CSS string. */
 export function featureArtworkStyle(backdropUrl?: string): string {
   if (!backdropUrl) return '';
-  const cssUrl = backdropUrl.replace(/['"\\\r\n\f]/g, character => '%' + character.charCodeAt(0).toString(16).padStart(2, '0'));
+  const cssUrl = backdropUrl.replace(/['"\\\r\n\f]/g, character => '%' + character.codePointAt(0)!.toString(16).padStart(2, '0'));
   return `style="--home-feature-image: url('${escapeHtml(cssUrl)}');"`;
 }
 

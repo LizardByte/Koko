@@ -62,7 +62,7 @@ test('directory heroes use available descriptions, genres, and episode counts wi
   assert.match(html, /Full show description &lt;script&gt;unsafe&lt;\/script&gt;/);
   assert.match(html, /<span class="tag">Science<\/span>/);
   assert.match(html, /42 episodes/);
-  assert.doesNotMatch(html, /<span class="tag">Podcasts<\/span>|<script>/);
+  assert.doesNotMatch(html, /<span class="tag">Podcasts<\/span>|<script>/i);
 });
 
 test('an added show can reuse its saved description while unknown shows retain their publisher', () => {

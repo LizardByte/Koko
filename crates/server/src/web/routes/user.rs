@@ -110,7 +110,10 @@ pub async fn get_bootstrap(
     user_guard: Option<UserGuard>,
     db: DbConn,
 ) -> Result<Json<BootstrapResponse>, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::{
+        id,
+        users,
+    };
 
     let has_users = db
         .run(|conn| users.count().get_result::<i64>(conn))
@@ -163,7 +166,10 @@ pub async fn list_users(
     _admin_guard: AdminGuard,
     db: DbConn,
 ) -> Result<Json<Vec<UserSummary>>, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::{
+        username,
+        users,
+    };
 
     let users_list = db
         .run(|conn| {
@@ -304,7 +310,7 @@ pub async fn create_user(
     db: DbConn,
     user_form: Json<CreateUserForm>,
 ) -> Result<&'static str, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::users;
 
     // Check if this is the first user (no authentication required)
     let existing_count = db

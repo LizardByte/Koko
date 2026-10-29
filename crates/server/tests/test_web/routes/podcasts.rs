@@ -77,31 +77,26 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
         );
     }
     // Admin has a subscription in this library but must still be denied another user's show.
-    for path in [
-        "/api/v1/items/1",
-        "/api/v1/podcasts/seasons/4/episodes",
-        "/api/v1/podcasts/1/episodes",
-        "/api/v1/items/2",
-        "/api/v1/items/2/playback",
-        "/api/v1/items/2/metadata",
-        "/api/v1/items/2/files",
-        "/api/v1/items/2/credits",
-        "/api/v1/items/2/similar",
-        "/api/v1/items/2/artwork",
-        "/api/v1/items/2/stream",
-        "/api/v1/podcasts/episodes/2/stream",
-    ] {
-        assert_eq!(
-            client
-                .get(path)
-                .header(Header::new("Authorization", format!("Bearer {admin}")))
-                .dispatch()
-                .await
-                .status(),
-            Status::NotFound,
-            "{path}"
-        );
-    }
+    assert_get_status(
+        &client,
+        &admin,
+        &[
+            "/api/v1/items/1",
+            "/api/v1/podcasts/seasons/4/episodes",
+            "/api/v1/podcasts/1/episodes",
+            "/api/v1/items/2",
+            "/api/v1/items/2/playback",
+            "/api/v1/items/2/metadata",
+            "/api/v1/items/2/files",
+            "/api/v1/items/2/credits",
+            "/api/v1/items/2/similar",
+            "/api/v1/items/2/artwork",
+            "/api/v1/items/2/stream",
+            "/api/v1/podcasts/episodes/2/stream",
+        ],
+        Status::NotFound,
+    )
+    .await;
     assert_eq!(
         client
             .post("/api/v1/items/2/progress")
@@ -317,25 +312,20 @@ async fn podcast_routes_require_authentication_and_subscriptions_for_all_item_en
             .status(),
         Status::Ok
     );
-    for path in [
-        "/api/v1/podcasts",
-        "/api/v1/podcasts/discover",
-        "/api/v1/podcasts/home",
-        "/api/v1/items/2",
-        "/api/v1/items/2/playback",
-        "/api/v1/podcasts/episodes/2/stream",
-    ] {
-        assert_eq!(
-            client
-                .get(path)
-                .header(Header::new("Authorization", format!("Bearer {listener}")))
-                .dispatch()
-                .await
-                .status(),
-            Status::NotFound,
-            "{path}"
-        );
-    }
+    assert_get_status(
+        &client,
+        &listener,
+        &[
+            "/api/v1/podcasts",
+            "/api/v1/podcasts/discover",
+            "/api/v1/podcasts/home",
+            "/api/v1/items/2",
+            "/api/v1/items/2/playback",
+            "/api/v1/podcasts/episodes/2/stream",
+        ],
+        Status::NotFound,
+    )
+    .await;
     assert_eq!(
         client
             .post("/api/v1/podcasts")
@@ -568,5 +558,25 @@ fn seed(conn: &mut diesel::SqliteConnection) {
             ))
             .execute(conn)
             .unwrap();
+    }
+}
+
+async fn assert_get_status(
+    client: &rocket::local::asynchronous::Client,
+    token: &str,
+    paths: &[&str],
+    expected: Status,
+) {
+    for path in paths {
+        assert_eq!(
+            client
+                .get(*path)
+                .header(Header::new("Authorization", format!("Bearer {token}")))
+                .dispatch()
+                .await
+                .status(),
+            expected,
+            "{path}"
+        );
     }
 }

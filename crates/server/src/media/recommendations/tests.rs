@@ -7,6 +7,7 @@ use crate::db::schema::{
     media_libraries as libraries,
     users,
 };
+use crate::media::*;
 use crate::metadata::{
     StoredMetadataSnapshot,
     upsert_item_metadata_snapshot,

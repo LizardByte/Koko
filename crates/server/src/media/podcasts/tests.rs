@@ -14,17 +14,20 @@ fn database() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
     crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
     crate::db::configure_sqlite_connection(&mut conn).unwrap();
-    for id in 1..=3 {
-        diesel::insert_into(users::table)
-            .values((
+    let accounts = (1..=3)
+        .map(|id| {
+            (
                 users::id.eq(id),
                 users::username.eq(format!("user{id}")),
                 users::password.eq("hash"),
                 users::admin.eq(id == 3),
-            ))
-            .execute(&mut conn)
-            .unwrap();
-    }
+            )
+        })
+        .collect::<Vec<_>>();
+    diesel::insert_into(users::table)
+        .values(accounts)
+        .execute(&mut conn)
+        .unwrap();
     conn
 }
 fn save(

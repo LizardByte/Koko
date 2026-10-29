@@ -278,7 +278,7 @@ fn parse_byte_range(
 
 fn content_type_for_path(path: &std::path::Path) -> ContentType {
     path.extension()
-        .and_then(|extension| extension.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .and_then(ContentType::from_extension)
         .unwrap_or(ContentType::Binary)
 }
@@ -686,215 +686,19 @@ async fn persist_secondary_metadata_for_item(
         };
 
         for locale_key in &languages {
-            let provider_locale = uses_localized_metadata
-                .then(|| provider_locale_key(provider_id.clone(), locale_key));
-            let mut found = false;
-            let mut had_error = false;
-            for (item_type, database_id, external_id) in &references {
-                match fetch_provider_secondary_metadata(
-                    &settings.metadata,
-                    provider_id.clone(),
-                    item_type,
-                    database_id,
-                    external_id,
-                    locale_key,
-                )
-                .await
-                {
-                    Ok(Some(details)) => {
-                        found = true;
-                        let snapshot = StoredMetadataSnapshot {
-                            provider_id: provider_id.clone(),
-                            external_id: format!("{item_type}:{database_id}:{external_id}"),
-                            media_type: Some(item_type.clone()),
-                            title: None,
-                            overview: None,
-                            artwork_url: details.artwork_url.clone(),
-                            backdrop_url: details.backdrop_url.clone(),
-                            release_year: None,
-                            locale_key: locale_key.clone(),
-                            provider_locale_key: provider_locale.clone(),
-                            provider_payload_json: details.provider_payload_json.clone(),
-                        };
-                        let cached_assets = if snapshot.artwork_url.is_some()
-                            || snapshot.backdrop_url.is_some()
-                            || details.logo_url.is_some()
-                        {
-                            crate::metadata::persist_item_metadata_assets_with_logo(
-                                &snapshot,
-                                item_id,
-                                &settings.general.data_dir,
-                                details.logo_url.as_deref(),
-                            )
-                            .await
-                            .map_err(|error| {
-                                log::error!("Failed to cache secondary metadata artwork: {error}");
-                                Status::InternalServerError
-                            })?
-                        } else {
-                            (None, None, None)
-                        };
-                        metadata_jobs::write(db, {
-                            let data_dir = settings.general.data_dir.clone();
-                            let refresh_interval_seconds =
-                                metadata_refresh_interval_seconds(settings);
-                            move |conn| {
-                                let summary = upsert_item_metadata_link(
-                                    conn,
-                                    item_id,
-                                    &snapshot,
-                                    &details,
-                                    "secondary",
-                                    refresh_interval_seconds,
-                                )?;
-                                for (kind, path) in [
-                                    (ArtworkKind::Poster, cached_assets.0),
-                                    (ArtworkKind::Backdrop, cached_assets.1),
-                                    (ArtworkKind::Logo, cached_assets.2),
-                                ] {
-                                    if let Some(path) = path {
-                                        update_cached_artwork_path(
-                                            conn, summary.id, kind, &path, &data_dir,
-                                        )?;
-                                    }
-                                }
-                                Ok::<_, diesel::result::Error>(())
-                            }
-                        })
-                        .await
-                        .map_err(|error| {
-                            log::error!(
-                                "Failed to persist secondary metadata for media item {}: {}",
-                                item_id,
-                                error
-                            );
-                            Status::InternalServerError
-                        })?;
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        had_error = true;
-                        log::warn!(
-                            "Failed to load {} secondary metadata for media item {} locale {} ({} \
-                             {} {}): {}",
-                            provider_id.as_storage_value(),
-                            item_id,
-                            locale_key,
-                            item_type,
-                            database_id,
-                            external_id,
-                            error
-                        );
-                    }
-                }
-            }
-            if !found && !had_error {
-                let provider_id = provider_id.clone();
-                let locale = locale_key.clone();
-                metadata_jobs::write(db, move |conn| {
-                    crate::metadata::clear_item_secondary_metadata(
-                        conn,
-                        item_id,
-                        provider_id,
-                        &locale,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    log::error!("Failed to clear stale secondary metadata: {error}");
-                    Status::InternalServerError
-                })?;
-            }
-        }
-
-        let collection_references = metadata_jobs::write(db, {
-            let provider_id = provider_id.clone();
-            move |conn| get_item_youtube_theme_collection_references(conn, item_id, provider_id)
-        })
-        .await
-        .map_err(|error| {
-            log::error!(
-                "Failed to resolve secondary collection theme-song references for media item {}: \
-                 {}",
+            persist_secondary_locale(
+                db,
                 item_id,
-                error
-            );
-            Status::InternalServerError
-        })?;
-
-        for (collection_id, item_type, database_id, external_id) in collection_references {
-            match fetch_provider_secondary_collection_metadata(
+                settings,
                 provider_id.clone(),
-                &item_type,
-                &database_id,
-                &external_id,
-                crate::metadata::DEFAULT_METADATA_LOCALE,
+                locale_key,
+                &references,
+                uses_localized_metadata,
             )
-            .await
-            {
-                Ok(Some(collection)) => {
-                    let Some(url) = collection.theme_song_url else {
-                        continue;
-                    };
-                    metadata_jobs::write(db, {
-                        let provider_id = provider_id.clone();
-                        let item_type = item_type.clone();
-                        let database_id = database_id.clone();
-                        let external_id = external_id.clone();
-                        move |conn| {
-                            upsert_secondary_collection_theme_song_url(
-                                conn,
-                                collection_id,
-                                provider_id,
-                                &item_type,
-                                &database_id,
-                                &external_id,
-                                &url,
-                            )
-                        }
-                    })
-                    .await
-                    .map_err(|error| {
-                        log::error!(
-                            "Failed to persist secondary collection theme-song metadata for media \
-                             item {}: {}",
-                            item_id,
-                            error
-                        );
-                        Status::InternalServerError
-                    })?;
-                    break;
-                }
-                Ok(None) => {
-                    let provider_id = provider_id.clone();
-                    metadata_jobs::write(db, move |conn| {
-                        crate::metadata::clear_secondary_collection_metadata(
-                            conn,
-                            collection_id,
-                            provider_id,
-                        )
-                    })
-                    .await
-                    .map_err(|error| {
-                        log::error!("Failed to clear stale secondary collection metadata: {error}");
-                        Status::InternalServerError
-                    })?;
-                }
-                Err(error) => {
-                    log::warn!(
-                        "Failed to load {} secondary collection metadata for media item {} ({} {} \
-                         {}): {}",
-                        provider_id.as_storage_value(),
-                        item_id,
-                        item_type,
-                        database_id,
-                        external_id,
-                        error
-                    );
-                }
-            }
+            .await?;
         }
+
+        persist_secondary_collections(db, item_id, provider_id).await?;
     }
 
     Ok(())
@@ -1042,88 +846,7 @@ async fn persist_snapshot_for_item(
     }
 
     if snapshot.provider_id == MetadataProviderId::Libex {
-        // A written work is a separate identity from the selected Audible recording.
-        let context = db
-            .run(move |conn| {
-                let Some(item) = get_media_item_summary(conn, item_id)? else {
-                    return Ok(None);
-                };
-                let shared_work = item
-                    .parent_id
-                    .and_then(|parent| get_media_item_summary(conn, parent).ok().flatten())
-                    .filter(|parent| parent.item_type == "book_work");
-                // Shared works have their own matching job and revision. A narration refresh
-                // must not overwrite an independently selected book identity.
-                Ok::<_, diesel::result::Error>(
-                    shared_work.is_none().then_some((item.library_id, item_id)),
-                )
-            })
-            .await
-            .map_err(|_| Status::InternalServerError)?;
-        if let Some((library_id, work_id)) = context {
-            let providers = load_item_library_metadata_providers(db, library_id).await?;
-            let has_work = metadata_jobs::write(db, move |conn| {
-                Ok(get_item_metadata_summaries(conn, work_id)?
-                    .iter()
-                    .any(|link| {
-                        link.provider_id == MetadataProviderId::OpenLibrary
-                            && link.match_state == "linked"
-                    }))
-            })
-            .await
-            .map_err(|_| Status::InternalServerError)?;
-            if providers.contains(&MetadataProviderId::OpenLibrary) && !has_work {
-                if let Some(book) = snapshot
-                    .provider_payload_json
-                    .as_deref()
-                    .and_then(crate::metadata::providers::libex::recording_metadata)
-                {
-                    let registry = crate::metadata::MetadataRegistry::new();
-                    let provider = registry
-                        .provider(&MetadataProviderId::OpenLibrary)
-                        .expect("registered Open Library");
-                    let result = async {
-                        let Some(work) = crate::metadata::providers::openlibrary::guess(
-                            &book.title,
-                            &book.author,
-                        )
-                        .await?
-                        else {
-                            return Ok::<_, String>(());
-                        };
-                        let work = provider
-                            .fetch_snapshot(&settings.metadata, &work.external_id, "book", false)
-                            .await?;
-                        // Avoid recursion: this additional source has no recording or secondary
-                        // job.
-                        let data_dir = settings.general.data_dir.clone();
-                        let assets =
-                            persist_item_metadata_assets(&work, work_id, &data_dir).await?;
-                        metadata_jobs::write(db, move |conn| {
-                            let summary = crate::metadata::upsert_item_metadata_snapshot(
-                                conn, work_id, &work,
-                            )?;
-                            if let Some(path) = assets.0 {
-                                update_cached_artwork_path(
-                                    conn,
-                                    summary.id,
-                                    ArtworkKind::Poster,
-                                    &path,
-                                    &data_dir,
-                                )?;
-                            }
-                            Ok(())
-                        })
-                        .await
-                        .map_err(|error| error.to_string())
-                    }
-                    .await;
-                    if let Err(error) = result {
-                        log::warn!("Optional Open Library work metadata unavailable: {error}");
-                    }
-                }
-            }
-        }
+        persist_recording_work_metadata(db, item_id, &snapshot, settings).await?;
     }
 
     Ok(summary)
@@ -3510,128 +3233,8 @@ async fn run_automatic_movie_metadata_linking(
             .iter()
             .filter(|provider_id| ready_providers.contains(provider_id))
         {
-            let guess_result = match candidate.library_kind {
-                crate::config::MediaLibraryKind::Music => {
-                    let registry = crate::metadata::MetadataRegistry::new();
-                    let item_id = candidate.item_id;
-                    let context = db
-                        .run(move |conn| music_match_context(conn, item_id))
-                        .await
-                        .unwrap_or_default();
-                    match (registry.provider(provider_id), candidate.music.as_ref()) {
-                        (Some(provider), Some(music)) => {
-                            provider
-                                .guess_music_match(
-                                    &settings.metadata,
-                                    &candidate.item_type,
-                                    &candidate.display_title,
-                                    music,
-                                    &context,
-                                )
-                                .await
-                        }
-                        _ => Ok(None),
-                    }
-                }
-                crate::config::MediaLibraryKind::Books => {
-                    match (provider_id, candidate.audiobook.as_ref()) {
-                        (MetadataProviderId::OpenLibrary, _)
-                            if candidate.item_type == "book_author" =>
-                        {
-                            crate::metadata::providers::openlibrary::guess_author(
-                                &candidate.display_title,
-                            )
-                            .await
-                        }
-                        (MetadataProviderId::LibriVox, Some(book))
-                            if candidate.item_type == "audiobook" =>
-                        {
-                            let id = candidate.item_id;
-                            let data_dir = settings.general.data_dir.clone();
-                            let local = db
-                                .run(move |conn| crate::media::get_media_item(conn, id, &data_dir))
-                                .await
-                                .ok()
-                                .flatten();
-                            let runtime = local.as_ref().and_then(|item| item.duration_ms);
-                            let parts = local
-                                .as_ref()
-                                .map(|item| {
-                                    item.children
-                                        .iter()
-                                        .map(|part| {
-                                            crate::metadata::providers::librivox::RecordingFile {
-                                                path: part.relative_path.clone(),
-                                                duration_ms: part.duration_ms.filter(|_| {
-                                                    part.playable && part.missing_since.is_none()
-                                                }),
-                                            }
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default();
-                            crate::metadata::providers::librivox::guess(book, runtime, &parts).await
-                        }
-                        (MetadataProviderId::Libex, Some(book))
-                            if candidate.item_type == "audiobook" =>
-                        {
-                            crate::metadata::providers::libex::guess(&settings.metadata, book).await
-                        }
-                        (MetadataProviderId::AudioSilo, Some(book)) => {
-                            let id = candidate.item_id;
-                            let duration = db
-                                .run(move |conn| crate::media::get_media_item_summary(conn, id))
-                                .await
-                                .ok()
-                                .flatten()
-                                .and_then(|item| item.duration_ms);
-                            crate::metadata::providers::audiosilo::guess(book, duration).await
-                        }
-                        (MetadataProviderId::OpenLibrary, Some(book))
-                            if candidate.item_type == "book_work" =>
-                        {
-                            crate::metadata::providers::openlibrary::guess(
-                                &book.title,
-                                &book.author,
-                            )
-                            .await
-                        }
-                        (MetadataProviderId::OpenLibrary, None)
-                            if candidate.item_type == "book" =>
-                        {
-                            let author = candidate
-                                .relative_path
-                                .rsplit_once('/')
-                                .map(|(parent, _)| parent.rsplit('/').next().unwrap_or_default())
-                                .unwrap_or_default();
-                            crate::metadata::providers::openlibrary::guess(
-                                &candidate.display_title,
-                                author,
-                            )
-                            .await
-                        }
-                        _ => Ok(None),
-                    }
-                }
-                crate::config::MediaLibraryKind::Shows => {
-                    guess_provider_show_match(
-                        &settings.metadata,
-                        provider_id.clone(),
-                        &candidate.relative_path,
-                        &candidate.display_title,
-                    )
-                    .await
-                }
-                _ => {
-                    guess_provider_movie_match(
-                        &settings.metadata,
-                        provider_id.clone(),
-                        &candidate.relative_path,
-                        &candidate.display_title,
-                    )
-                    .await
-                }
-            };
+            let guess_result =
+                guess_automatic_metadata_match(db, settings, &candidate, provider_id).await;
             match guess_result {
                 Ok(Some(result)) => {
                     let work_only = candidate.item_type == "audiobook"
@@ -3659,75 +3262,20 @@ async fn run_automatic_movie_metadata_linking(
         }
 
         if let (Some(provider_id), Some(result)) = (guessed_provider_id, guess) {
-            let pending_target = MetadataRefreshTarget {
-                revision,
-                locale_key: None,
-                item_id: candidate.item_id,
-                library_id: candidate.library_id,
-                provider_id: provider_id.clone(),
-                item_type: candidate.item_type.clone(),
-                display_title: candidate.display_title.clone(),
-                relative_path: candidate.relative_path.clone(),
-                external_id: result.external_id.clone(),
-                media_type: result.media_type.clone(),
-                fetch_kind: MetadataRefreshFetchKind::Direct,
-            };
-            if let Err(error) = mark_metadata_refresh_target_pending(db, &pending_target).await {
-                log::warn!(
-                    "Failed to mark automatic metadata candidate {} pending: {:?}",
-                    candidate.item_id,
-                    error
-                );
-                if let Some((activity_id, _)) = &activity {
-                    record_metadata_refresh_activity_progress(activity_id, candidate.item_id, true)
-                        .await;
-                }
-                continue;
-            }
-            match fetch_snapshots_for_item_metadata_languages(
+            let Some(persist_failed) = persist_automatic_metadata_match(
                 db,
                 settings,
-                candidate.item_id,
-                provider_id.clone(),
-                &result.external_id,
-                &result.media_type,
-                MetadataSnapshotFetchOptions::WITHOUT_PERSON_DETAILS,
+                &candidate,
+                revision,
+                activity.as_ref().map(|(id, _)| id.as_str()),
+                provider_id,
+                result,
             )
             .await
-            {
-                Ok(snapshots) => {
-                    if let Err(status) = revision
-                        .scope(persist_snapshot_tree_for_languages(
-                            db,
-                            candidate.item_id,
-                            &snapshots,
-                            settings,
-                            PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
-                            activity.as_ref().map(|(id, _)| id.as_str()),
-                        ))
-                        .await
-                    {
-                        log::warn!(
-                            "Failed to persist automatic metadata snapshot for item {}: {:?}",
-                            candidate.item_id,
-                            status
-                        );
-                        record_metadata_refresh_error(db, &pending_target, &format!("{status:?}"))
-                            .await;
-                        failed = true;
-                    }
-                }
-                Err(error) => {
-                    log::warn!(
-                        "Failed to fetch automatic {} snapshot for item {}: {}",
-                        provider_id.as_storage_value(),
-                        candidate.item_id,
-                        error
-                    );
-                    record_metadata_refresh_error(db, &pending_target, &format!("{error:?}")).await;
-                    failed = true;
-                }
-            }
+            else {
+                continue;
+            };
+            failed |= persist_failed;
         }
 
         if candidate.item_type == "track" && revision.is_current() {
@@ -3769,64 +3317,7 @@ async fn run_automatic_movie_metadata_linking(
         complete_metadata_refresh_activity(&id).await;
     }
 
-    let backfill_scope = scope.clone();
-    let pending_show_backfills = match db
-        .run(move |conn| {
-            metadata_jobs::load(
-                conn,
-                |conn| linked_shows_needing_descendant_backfill(conn, library_id, &backfill_scope),
-                |(id, _, _)| *id,
-            )
-        })
-        .await
-    {
-        Ok(items) => items,
-        Err(error) => {
-            log::warn!(
-                "Failed to load linked shows needing metadata backfill: {}",
-                error
-            );
-            return;
-        }
-    };
-
-    for ((show_item_id, provider_id, external_id), revision) in pending_show_backfills {
-        match revision
-            .scope(load_show_descendant_refresh_targets(
-                db,
-                settings,
-                show_item_id,
-                provider_id,
-                &external_id,
-            ))
-            .await
-        {
-            Ok(mut targets) => {
-                targets.retain(|target| scope.includes(target.item_id));
-                if let Err(status) =
-                    execute_metadata_refresh_targets(db, targets, settings, None).await
-                {
-                    log::warn!(
-                        "Failed to refresh descendant metadata for show item {}: {:?}",
-                        show_item_id,
-                        status
-                    );
-                }
-            }
-            Err(status) => {
-                log::warn!(
-                    "Failed to backfill descendant metadata for show item {}: {:?}",
-                    show_item_id,
-                    status
-                );
-            }
-        }
-    }
-
-    if library_id.is_none() {
-        recover_pending_metadata_refreshes(db, settings).await;
-        run_due_metadata_refreshes(db, settings).await;
-    }
+    backfill_automatic_show_descendants(db, settings, library_id, &scope).await;
 }
 
 pub(super) async fn require_item_access(
@@ -4298,56 +3789,27 @@ pub fn get_metadata_providers(_user: UserGuard) -> Json<Vec<MetadataProviderStat
 #[openapi(tag = "Media")]
 #[get("/api/v1/metadata/locales")]
 pub fn get_metadata_locales(_user: UserGuard) -> Json<Vec<MetadataLocale>> {
-    Json(vec![
-        MetadataLocale {
-            key: "en-US".into(),
-            name: "English (United States)".into(),
-            tmdb: "en-US".into(),
-            tvdb: "eng".into(),
-        },
-        MetadataLocale {
-            key: "en-GB".into(),
-            name: "English (United Kingdom)".into(),
-            tmdb: "en-GB".into(),
-            tvdb: "eng".into(),
-        },
-        MetadataLocale {
-            key: "es-ES".into(),
-            name: "Spanish (Spain)".into(),
-            tmdb: "es-ES".into(),
-            tvdb: "spa".into(),
-        },
-        MetadataLocale {
-            key: "fr-FR".into(),
-            name: "French (France)".into(),
-            tmdb: "fr-FR".into(),
-            tvdb: "fra".into(),
-        },
-        MetadataLocale {
-            key: "de-DE".into(),
-            name: "German (Germany)".into(),
-            tmdb: "de-DE".into(),
-            tvdb: "deu".into(),
-        },
-        MetadataLocale {
-            key: "it-IT".into(),
-            name: "Italian (Italy)".into(),
-            tmdb: "it-IT".into(),
-            tvdb: "ita".into(),
-        },
-        MetadataLocale {
-            key: "ja-JP".into(),
-            name: "Japanese (Japan)".into(),
-            tmdb: "ja-JP".into(),
-            tvdb: "jpn".into(),
-        },
-        MetadataLocale {
-            key: "pt-BR".into(),
-            name: "Portuguese (Brazil)".into(),
-            tmdb: "pt-BR".into(),
-            tvdb: "por".into(),
-        },
-    ])
+    let locales = [
+        ("en-US", "English (United States)", "eng"),
+        ("en-GB", "English (United Kingdom)", "eng"),
+        ("es-ES", "Spanish (Spain)", "spa"),
+        ("fr-FR", "French (France)", "fra"),
+        ("de-DE", "German (Germany)", "deu"),
+        ("it-IT", "Italian (Italy)", "ita"),
+        ("ja-JP", "Japanese (Japan)", "jpn"),
+        ("pt-BR", "Portuguese (Brazil)", "por"),
+    ];
+    Json(
+        locales
+            .into_iter()
+            .map(|(key, name, tvdb)| MetadataLocale {
+                key: key.into(),
+                name: name.into(),
+                tmdb: key.into(),
+                tvdb: tvdb.into(),
+            })
+            .collect(),
+    )
 }
 
 /// Return lightweight scan summaries for the configured media libraries.
@@ -6318,6 +5780,579 @@ fn collection_matches_query(
 #[cfg(test)]
 #[path = "../../../tests/test_web/routes/metadata_refresh.rs"]
 mod metadata_refresh_tests;
+
+async fn persist_secondary_locale(
+    db: &DbConn,
+    item_id: i32,
+    settings: &Settings,
+    provider_id: MetadataProviderId,
+    locale_key: &str,
+    references: &[(String, String, String)],
+    uses_localized_metadata: bool,
+) -> Result<(), Status> {
+    let provider_locale =
+        uses_localized_metadata.then(|| provider_locale_key(provider_id.clone(), locale_key));
+    let mut found = false;
+    let mut had_error = false;
+    for (item_type, database_id, external_id) in references {
+        match fetch_provider_secondary_metadata(
+            &settings.metadata,
+            provider_id.clone(),
+            item_type,
+            database_id,
+            external_id,
+            locale_key,
+        )
+        .await
+        {
+            Ok(Some(details)) => {
+                found = true;
+                let snapshot = StoredMetadataSnapshot {
+                    provider_id: provider_id.clone(),
+                    external_id: format!("{item_type}:{database_id}:{external_id}"),
+                    media_type: Some(item_type.clone()),
+                    title: None,
+                    overview: None,
+                    artwork_url: details.artwork_url.clone(),
+                    backdrop_url: details.backdrop_url.clone(),
+                    release_year: None,
+                    locale_key: locale_key.to_string(),
+                    provider_locale_key: provider_locale.clone(),
+                    provider_payload_json: details.provider_payload_json.clone(),
+                };
+                let cached_assets = if snapshot.artwork_url.is_some()
+                    || snapshot.backdrop_url.is_some()
+                    || details.logo_url.is_some()
+                {
+                    crate::metadata::persist_item_metadata_assets_with_logo(
+                        &snapshot,
+                        item_id,
+                        &settings.general.data_dir,
+                        details.logo_url.as_deref(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        log::error!("Failed to cache secondary metadata artwork: {error}");
+                        Status::InternalServerError
+                    })?
+                } else {
+                    (None, None, None)
+                };
+                metadata_jobs::write(db, {
+                    let data_dir = settings.general.data_dir.clone();
+                    let refresh_interval_seconds = metadata_refresh_interval_seconds(settings);
+                    move |conn| {
+                        let summary = upsert_item_metadata_link(
+                            conn,
+                            item_id,
+                            &snapshot,
+                            &details,
+                            "secondary",
+                            refresh_interval_seconds,
+                        )?;
+                        for (kind, path) in [
+                            (ArtworkKind::Poster, cached_assets.0),
+                            (ArtworkKind::Backdrop, cached_assets.1),
+                            (ArtworkKind::Logo, cached_assets.2),
+                        ] {
+                            if let Some(path) = path {
+                                update_cached_artwork_path(
+                                    conn, summary.id, kind, &path, &data_dir,
+                                )?;
+                            }
+                        }
+                        Ok::<_, diesel::result::Error>(())
+                    }
+                })
+                .await
+                .map_err(|error| {
+                    log::error!(
+                        "Failed to persist secondary metadata for media item {}: {}",
+                        item_id,
+                        error
+                    );
+                    Status::InternalServerError
+                })?;
+                break;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                had_error = true;
+                log::warn!(
+                    "Failed to load {} secondary metadata for media item {} locale {} ({} {} {}): \
+                     {}",
+                    provider_id.as_storage_value(),
+                    item_id,
+                    locale_key,
+                    item_type,
+                    database_id,
+                    external_id,
+                    error
+                );
+            }
+        }
+    }
+    if !found && !had_error {
+        let provider_id = provider_id.clone();
+        let locale = locale_key.to_string();
+        metadata_jobs::write(db, move |conn| {
+            crate::metadata::clear_item_secondary_metadata(conn, item_id, provider_id, &locale)
+        })
+        .await
+        .map_err(|error| {
+            log::error!("Failed to clear stale secondary metadata: {error}");
+            Status::InternalServerError
+        })?;
+    }
+
+    Ok(())
+}
+
+async fn persist_secondary_collections(
+    db: &DbConn,
+    item_id: i32,
+    provider_id: MetadataProviderId,
+) -> Result<(), Status> {
+    let collection_references = metadata_jobs::write(db, {
+        let provider_id = provider_id.clone();
+        move |conn| get_item_youtube_theme_collection_references(conn, item_id, provider_id)
+    })
+    .await
+    .map_err(|error| {
+        log::error!(
+            "Failed to resolve secondary collection theme-song references for media item {}: {}",
+            item_id,
+            error
+        );
+        Status::InternalServerError
+    })?;
+
+    for (collection_id, item_type, database_id, external_id) in collection_references {
+        match fetch_provider_secondary_collection_metadata(
+            provider_id.clone(),
+            &item_type,
+            &database_id,
+            &external_id,
+            crate::metadata::DEFAULT_METADATA_LOCALE,
+        )
+        .await
+        {
+            Ok(Some(collection)) => {
+                let Some(url) = collection.theme_song_url else {
+                    continue;
+                };
+                metadata_jobs::write(db, {
+                    let provider_id = provider_id.clone();
+                    let item_type = item_type.clone();
+                    let database_id = database_id.clone();
+                    let external_id = external_id.clone();
+                    move |conn| {
+                        upsert_secondary_collection_theme_song_url(
+                            conn,
+                            collection_id,
+                            provider_id,
+                            &item_type,
+                            &database_id,
+                            &external_id,
+                            &url,
+                        )
+                    }
+                })
+                .await
+                .map_err(|error| {
+                    log::error!(
+                        "Failed to persist secondary collection theme-song metadata for media \
+                         item {}: {}",
+                        item_id,
+                        error
+                    );
+                    Status::InternalServerError
+                })?;
+                break;
+            }
+            Ok(None) => {
+                let provider_id = provider_id.clone();
+                metadata_jobs::write(db, move |conn| {
+                    crate::metadata::clear_secondary_collection_metadata(
+                        conn,
+                        collection_id,
+                        provider_id,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    log::error!("Failed to clear stale secondary collection metadata: {error}");
+                    Status::InternalServerError
+                })?;
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to load {} secondary collection metadata for media item {} ({} {} \
+                     {}): {}",
+                    provider_id.as_storage_value(),
+                    item_id,
+                    item_type,
+                    database_id,
+                    external_id,
+                    error
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn persist_recording_work_metadata(
+    db: &DbConn,
+    item_id: i32,
+    snapshot: &StoredMetadataSnapshot,
+    settings: &Settings,
+) -> Result<(), Status> {
+    // A written work is a separate identity from the selected Audible recording.
+    let context = db
+        .run(move |conn| {
+            let Some(item) = get_media_item_summary(conn, item_id)? else {
+                return Ok(None);
+            };
+            let shared_work = item
+                .parent_id
+                .and_then(|parent| get_media_item_summary(conn, parent).ok().flatten())
+                .filter(|parent| parent.item_type == "book_work");
+            // Shared works have their own matching job and revision. A narration refresh
+            // must not overwrite an independently selected book identity.
+            Ok::<_, diesel::result::Error>(
+                shared_work.is_none().then_some((item.library_id, item_id)),
+            )
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    if let Some((library_id, work_id)) = context {
+        let providers = load_item_library_metadata_providers(db, library_id).await?;
+        let has_work = metadata_jobs::write(db, move |conn| {
+            Ok(get_item_metadata_summaries(conn, work_id)?
+                .iter()
+                .any(|link| {
+                    link.provider_id == MetadataProviderId::OpenLibrary
+                        && link.match_state == "linked"
+                }))
+        })
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+        if providers.contains(&MetadataProviderId::OpenLibrary) && !has_work {
+            if let Some(book) = snapshot
+                .provider_payload_json
+                .as_deref()
+                .and_then(crate::metadata::providers::libex::recording_metadata)
+            {
+                let registry = crate::metadata::MetadataRegistry::new();
+                let provider = registry
+                    .provider(&MetadataProviderId::OpenLibrary)
+                    .expect("registered Open Library");
+                let result = async {
+                    let Some(work) =
+                        crate::metadata::providers::openlibrary::guess(&book.title, &book.author)
+                            .await?
+                    else {
+                        return Ok::<_, String>(());
+                    };
+                    let work = provider
+                        .fetch_snapshot(&settings.metadata, &work.external_id, "book", false)
+                        .await?;
+                    // Avoid recursion: this additional source has no recording or secondary
+                    // job.
+                    let data_dir = settings.general.data_dir.clone();
+                    let assets = persist_item_metadata_assets(&work, work_id, &data_dir).await?;
+                    metadata_jobs::write(db, move |conn| {
+                        let summary =
+                            crate::metadata::upsert_item_metadata_snapshot(conn, work_id, &work)?;
+                        if let Some(path) = assets.0 {
+                            update_cached_artwork_path(
+                                conn,
+                                summary.id,
+                                ArtworkKind::Poster,
+                                &path,
+                                &data_dir,
+                            )?;
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                }
+                .await;
+                if let Err(error) = result {
+                    log::warn!("Optional Open Library work metadata unavailable: {error}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn guess_automatic_book_match(
+    db: &DbConn,
+    settings: &Settings,
+    candidate: &crate::media::AutomaticMetadataCandidate,
+    provider_id: &MetadataProviderId,
+) -> Result<Option<MetadataSearchResult>, String> {
+    match (provider_id, candidate.audiobook.as_ref()) {
+        (MetadataProviderId::OpenLibrary, _) if candidate.item_type == "book_author" => {
+            crate::metadata::providers::openlibrary::guess_author(&candidate.display_title).await
+        }
+        (MetadataProviderId::LibriVox, Some(book)) if candidate.item_type == "audiobook" => {
+            let id = candidate.item_id;
+            let data_dir = settings.general.data_dir.clone();
+            let local = db
+                .run(move |conn| crate::media::get_media_item(conn, id, &data_dir))
+                .await
+                .ok()
+                .flatten();
+            let runtime = local.as_ref().and_then(|item| item.duration_ms);
+            let parts = local
+                .as_ref()
+                .map(|item| {
+                    item.children
+                        .iter()
+                        .map(|part| crate::metadata::providers::librivox::RecordingFile {
+                            path: part.relative_path.clone(),
+                            duration_ms: part
+                                .duration_ms
+                                .filter(|_| part.playable && part.missing_since.is_none()),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            crate::metadata::providers::librivox::guess(book, runtime, &parts).await
+        }
+        (MetadataProviderId::Libex, Some(book)) if candidate.item_type == "audiobook" => {
+            crate::metadata::providers::libex::guess(&settings.metadata, book).await
+        }
+        (MetadataProviderId::AudioSilo, Some(book)) => {
+            let id = candidate.item_id;
+            let duration = db
+                .run(move |conn| crate::media::get_media_item_summary(conn, id))
+                .await
+                .ok()
+                .flatten()
+                .and_then(|item| item.duration_ms);
+            crate::metadata::providers::audiosilo::guess(book, duration).await
+        }
+        (MetadataProviderId::OpenLibrary, Some(book)) if candidate.item_type == "book_work" => {
+            crate::metadata::providers::openlibrary::guess(&book.title, &book.author).await
+        }
+        (MetadataProviderId::OpenLibrary, None) if candidate.item_type == "book" => {
+            let author = candidate
+                .relative_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.rsplit('/').next().unwrap_or_default())
+                .unwrap_or_default();
+            crate::metadata::providers::openlibrary::guess(&candidate.display_title, author).await
+        }
+        _ => Ok(None),
+    }
+}
+
+async fn guess_automatic_metadata_match(
+    db: &DbConn,
+    settings: &Settings,
+    candidate: &crate::media::AutomaticMetadataCandidate,
+    provider_id: &MetadataProviderId,
+) -> Result<Option<MetadataSearchResult>, String> {
+    match candidate.library_kind {
+        crate::config::MediaLibraryKind::Music => {
+            let registry = crate::metadata::MetadataRegistry::new();
+            let item_id = candidate.item_id;
+            let context = db
+                .run(move |conn| music_match_context(conn, item_id))
+                .await
+                .unwrap_or_default();
+            match (registry.provider(provider_id), candidate.music.as_ref()) {
+                (Some(provider), Some(music)) => {
+                    provider
+                        .guess_music_match(
+                            &settings.metadata,
+                            &candidate.item_type,
+                            &candidate.display_title,
+                            music,
+                            &context,
+                        )
+                        .await
+                }
+                _ => Ok(None),
+            }
+        }
+        crate::config::MediaLibraryKind::Books => {
+            guess_automatic_book_match(db, settings, candidate, provider_id).await
+        }
+        crate::config::MediaLibraryKind::Shows => {
+            guess_provider_show_match(
+                &settings.metadata,
+                provider_id.clone(),
+                &candidate.relative_path,
+                &candidate.display_title,
+            )
+            .await
+        }
+        _ => {
+            guess_provider_movie_match(
+                &settings.metadata,
+                provider_id.clone(),
+                &candidate.relative_path,
+                &candidate.display_title,
+            )
+            .await
+        }
+    }
+}
+
+async fn persist_automatic_metadata_match(
+    db: &DbConn,
+    settings: &Settings,
+    candidate: &crate::media::AutomaticMetadataCandidate,
+    revision: MetadataRevision,
+    activity: Option<&str>,
+    provider_id: MetadataProviderId,
+    result: MetadataSearchResult,
+) -> Option<bool> {
+    let mut failed = false;
+    let pending_target = MetadataRefreshTarget {
+        revision,
+        locale_key: None,
+        item_id: candidate.item_id,
+        library_id: candidate.library_id,
+        provider_id: provider_id.clone(),
+        item_type: candidate.item_type.clone(),
+        display_title: candidate.display_title.clone(),
+        relative_path: candidate.relative_path.clone(),
+        external_id: result.external_id.clone(),
+        media_type: result.media_type.clone(),
+        fetch_kind: MetadataRefreshFetchKind::Direct,
+    };
+    if let Err(error) = mark_metadata_refresh_target_pending(db, &pending_target).await {
+        log::warn!(
+            "Failed to mark automatic metadata candidate {} pending: {:?}",
+            candidate.item_id,
+            error
+        );
+        if let Some(activity_id) = activity {
+            record_metadata_refresh_activity_progress(activity_id, candidate.item_id, true).await;
+        }
+        return None;
+    }
+    match fetch_snapshots_for_item_metadata_languages(
+        db,
+        settings,
+        candidate.item_id,
+        provider_id.clone(),
+        &result.external_id,
+        &result.media_type,
+        MetadataSnapshotFetchOptions::WITHOUT_PERSON_DETAILS,
+    )
+    .await
+    {
+        Ok(snapshots) => {
+            if let Err(status) = revision
+                .scope(persist_snapshot_tree_for_languages(
+                    db,
+                    candidate.item_id,
+                    &snapshots,
+                    settings,
+                    PersistSnapshotOptions::WITHOUT_PERSON_ASSETS,
+                    activity,
+                ))
+                .await
+            {
+                log::warn!(
+                    "Failed to persist automatic metadata snapshot for item {}: {:?}",
+                    candidate.item_id,
+                    status
+                );
+                record_metadata_refresh_error(db, &pending_target, &format!("{status:?}")).await;
+                failed = true;
+            }
+        }
+        Err(error) => {
+            log::warn!(
+                "Failed to fetch automatic {} snapshot for item {}: {}",
+                provider_id.as_storage_value(),
+                candidate.item_id,
+                error
+            );
+            record_metadata_refresh_error(db, &pending_target, &format!("{error:?}")).await;
+            failed = true;
+        }
+    }
+
+    Some(failed)
+}
+
+async fn backfill_automatic_show_descendants(
+    db: &DbConn,
+    settings: &Settings,
+    library_id: Option<i32>,
+    scope: &AutomaticMetadataScope,
+) {
+    let backfill_scope = scope.clone();
+    let pending_show_backfills = match db
+        .run(move |conn| {
+            metadata_jobs::load(
+                conn,
+                |conn| linked_shows_needing_descendant_backfill(conn, library_id, &backfill_scope),
+                |(id, _, _)| *id,
+            )
+        })
+        .await
+    {
+        Ok(items) => items,
+        Err(error) => {
+            log::warn!(
+                "Failed to load linked shows needing metadata backfill: {}",
+                error
+            );
+            return;
+        }
+    };
+
+    for ((show_item_id, provider_id, external_id), revision) in pending_show_backfills {
+        match revision
+            .scope(load_show_descendant_refresh_targets(
+                db,
+                settings,
+                show_item_id,
+                provider_id,
+                &external_id,
+            ))
+            .await
+        {
+            Ok(mut targets) => {
+                targets.retain(|target| scope.includes(target.item_id));
+                if let Err(status) =
+                    execute_metadata_refresh_targets(db, targets, settings, None).await
+                {
+                    log::warn!(
+                        "Failed to refresh descendant metadata for show item {}: {:?}",
+                        show_item_id,
+                        status
+                    );
+                }
+            }
+            Err(status) => {
+                log::warn!(
+                    "Failed to backfill descendant metadata for show item {}: {:?}",
+                    show_item_id,
+                    status
+                );
+            }
+        }
+    }
+
+    if library_id.is_none() {
+        recover_pending_metadata_refreshes(db, settings).await;
+        run_due_metadata_refreshes(db, settings).await;
+    }
+}
 
 #[cfg(test)]
 mod tests {

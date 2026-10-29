@@ -52,7 +52,7 @@ function discovery(): string {
       <div class="search-form"><label class="sr-only" for="podcast-search">Search podcasts</label><input id="podcast-search" name="query" type="search" maxlength="200" placeholder="Search podcasts" autocomplete="off" value="${escapeHtml(data.query)}"/><button type="${searchType}" class="icon-button search-toggle-button" ${searchAction} title="${searchLabel}" aria-label="${searchLabel}">${renderIcon(searchIcon)}</button></div>
       <label class="sr-only" for="podcast-country">Country</label><select id="podcast-country" name="country" ${choices.length ? '' : 'disabled'}>${countries}</select>
     </form>
-    ${feedForm()}${countriesError}<p class="muted podcast-directory-attribution">Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}. <span role="status">${status}</span></p>${error}<div class="item-grid podcast-library-grid" aria-busy="${data.loading}">${data.directory.map(directoryCard).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}`;
+    ${feedForm()}${countriesError}<p class="muted podcast-directory-attribution">Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}. <span role="status">${status}</span></p>${error}<div class="item-grid podcast-library-grid" aria-busy="${data.loading}">${data.directory.map((item, index) => directoryCard(item, index)).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}`;
 }
 
 /** Reuse the ordinary library header, full-width hero, and single content panel for every tab. */
@@ -207,7 +207,7 @@ export function renderPodcastDetails(item: MediaItemDetail): string {
     + fact('Copyright', metadata.copyright) + fact('Last checked', metadata.checked_at ? formatTimestamp(metadata.checked_at) : undefined);
   const downloadSize = metadata.download?.size_bytes ? formatFileSize(metadata.download.size_bytes) : undefined;
   const localCopy = item.playable ? fact('Local copy', podcastDownloadLabel(item)) + fact('Download size', downloadSize) : '';
-  const links = link(metadata.website_url, 'Publisher website') + link(metadata.feed_url, 'RSS feed') + metadata.transcripts.map(transcript).join('') + link(metadata.chapters_url, 'Episode chapters');
+  const links = link(metadata.website_url, 'Publisher website') + link(metadata.feed_url, 'RSS feed') + metadata.transcripts.map((entry, index) => transcript(entry, index)).join('') + link(metadata.chapters_url, 'Episode chapters');
   const error = metadata.download?.error || metadata.last_error;
   const warning = error ? `<p class="status-warning" role="alert">${escapeHtml(error)}</p>` : '';
   return `<details class="item-management" id="item-management" ${state.itemManagementOpen ? 'open' : ''} data-nav-section="management" data-nav-label="Media details"><summary>${renderButtonContent('Media details', 'settings')}${renderIcon('chevron-down', 'disclosure-chevron')}</summary><div class="item-management-body"><div class="item-fact-list">${facts}${localCopy}</div>${warning}<div class="podcast-publisher-links">${links}</div></div></details>`;

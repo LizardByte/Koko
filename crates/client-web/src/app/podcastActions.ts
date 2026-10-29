@@ -54,7 +54,9 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     });
   }, { signal }));
   document.querySelector<HTMLFormElement>('#podcast-feed-form')?.addEventListener('submit', event => {
-    event.preventDefault(); const url = String(new FormData(event.currentTarget as HTMLFormElement).get('feed') ?? '');
+    event.preventDefault();
+    const feed = new FormData(event.currentTarget as HTMLFormElement).get('feed');
+    const url = typeof feed === 'string' ? feed : '';
     void execute(async () => { await addPodcast(url); }, () => { if (state.podcasts) { state.podcasts.addFeedOpen = false; state.podcasts.tab = 'library'; } });
   }, { signal });
   bindPodcastAddActions(document, context, signal);

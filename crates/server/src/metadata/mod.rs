@@ -2171,40 +2171,6 @@ pub fn upsert_item_metadata_link(
             {
                 invalidate_item_secondary_metadata(conn, item_id)?;
             }
-            let keep_cached_artwork = existing
-                .as_ref()
-                .map(|row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        snapshot.provider_id.as_storage_value(),
-                        &snapshot.external_id,
-                        snapshot.media_type.as_deref(),
-                    ) && row.artwork_url == snapshot.artwork_url
-                })
-                .unwrap_or(false);
-            let keep_cached_backdrop = existing
-                .as_ref()
-                .map(|row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        snapshot.provider_id.as_storage_value(),
-                        &snapshot.external_id,
-                        snapshot.media_type.as_deref(),
-                    ) && row.backdrop_url == snapshot.backdrop_url
-                })
-                .unwrap_or(false);
-            let logo_url = details.logo_url.clone();
-            let keep_cached_logo = existing
-                .as_ref()
-                .map(|row| {
-                    !metadata_refresh_target_changed(
-                        row,
-                        snapshot.provider_id.as_storage_value(),
-                        &snapshot.external_id,
-                        snapshot.media_type.as_deref(),
-                    ) && row.logo_url == logo_url
-                })
-                .unwrap_or(false);
 
             if matches!(
                 snapshot.provider_id,
@@ -2218,80 +2184,14 @@ pub fn upsert_item_metadata_link(
             if snapshot.provider_id == MetadataProviderId::MusicBrainz {
                 crate::media::music::save_provider_genres(conn, item_id, &details.genres)?;
             }
-            let payload = NewItemMetadataLink {
-                media_item_id: item_id,
-                provider_id: snapshot.provider_id.as_storage_value().to_string(),
-                external_id: snapshot.external_id.clone(),
-                title: snapshot.title.clone(),
-                overview: snapshot.overview.clone(),
-                tagline: details.tagline.clone(),
-                artwork_url: snapshot.artwork_url.clone(),
-                backdrop_url: snapshot.backdrop_url.clone(),
-                release_year: snapshot.release_year,
-                media_type: snapshot.media_type.clone(),
-                relation_kind: relation_kind.clone(),
-                match_state: "linked".into(),
-                logo_url,
-                cached_logo_path: if keep_cached_logo {
-                    existing
-                        .as_ref()
-                        .and_then(|row| row.cached_logo_path.clone())
-                } else {
-                    None
-                },
-                genres_json: if matches!(
-                    snapshot.provider_id,
-                    MetadataProviderId::MusicBrainz | MetadataProviderId::Fanart
-                ) {
-                    None
-                } else {
-                    serde_json::to_string(&details.genres).ok()
-                },
-                rating: if details.rating_incomplete {
-                    existing
-                        .as_ref()
-                        .filter(|row| {
-                            !metadata_refresh_target_changed(
-                                row,
-                                snapshot.provider_id.as_storage_value(),
-                                &snapshot.external_id,
-                                snapshot.media_type.as_deref(),
-                            )
-                        })
-                        .and_then(|row| row.rating)
-                        .and_then(ratings::validate)
-                } else {
-                    details.rating.and_then(|value| {
-                        let registry = MetadataRegistry::new();
-                        let maximum = registry.provider(&snapshot.provider_id)?.rating_maximum();
-                        ratings::normalize(value, maximum)
-                    })
-                },
-                content_rating: details.content_rating.clone(),
-                locale_key: snapshot.locale_key.clone(),
-                provider_locale_key: snapshot.provider_locale_key.clone(),
-                cached_artwork_path: if keep_cached_artwork {
-                    existing
-                        .as_ref()
-                        .and_then(|row| row.cached_artwork_path.clone())
-                } else {
-                    None
-                },
-                cached_backdrop_path: if keep_cached_backdrop {
-                    existing
-                        .as_ref()
-                        .and_then(|row| row.cached_backdrop_path.clone())
-                } else {
-                    None
-                },
-                refresh_state: "fresh".into(),
-                refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
-                last_refreshed_at: Some(current_timestamp()),
-                next_refresh_at: refresh_interval_seconds
-                    .map(|interval| current_timestamp() + interval),
-                refresh_error: None,
-                updated_at: Some(current_timestamp()),
-            };
+            let payload = metadata_link_payload(
+                item_id,
+                snapshot,
+                details,
+                existing.as_ref(),
+                &relation_kind,
+                refresh_interval_seconds,
+            );
 
             let similarity_identity_changed = existing.as_ref().is_some_and(|row| {
                 metadata_refresh_target_changed(
@@ -3340,7 +3240,8 @@ pub fn get_preferred_item_metadata_link_for_languages(
         .or_else(|| rows.into_iter().next()))
 }
 
-fn preferred_language_rank(preferred_languages: &[String]) -> HashMap<String, usize> {
+/// Rank requested metadata locales, retaining the default English fallback.
+pub(crate) fn preferred_language_rank(preferred_languages: &[String]) -> HashMap<String, usize> {
     let mut languages = preferred_languages
         .iter()
         .map(|language| normalize_locale_key(language))
@@ -3436,41 +3337,7 @@ pub fn presentation_from_metadata_links(
                 presentation.theme_song_url = Some(url);
             }
         }
-        if merged.tagline.is_none() {
-            merged.tagline = presentation.tagline;
-        }
-        if merged.overview.is_none() {
-            merged.overview = presentation.overview;
-        }
-        if merged.genres.is_empty() && !presentation.genres.is_empty() {
-            merged.genres = presentation.genres;
-        }
-        if merged.release_year.is_none() {
-            merged.release_year = presentation.release_year;
-        }
-        if merged.media_type.is_none() {
-            merged.media_type = presentation.media_type;
-        }
-        merged.poster_available |= presentation.poster_available;
-        merged.backdrop_available |= presentation.backdrop_available;
-        if merged.logo_url.is_none() {
-            merged.logo_url = presentation.logo_url;
-        }
-        if merged.rating.is_none() {
-            merged.rating = presentation.rating;
-        }
-        if merged.content_rating.is_none() {
-            merged.content_rating = presentation.content_rating;
-        }
-        if merged.trailer_title.is_none() {
-            merged.trailer_title = presentation.trailer_title;
-        }
-        if merged.trailer_url.is_none() {
-            merged.trailer_url = presentation.trailer_url;
-        }
-        if merged.theme_song_url.is_none() {
-            merged.theme_song_url = presentation.theme_song_url;
-        }
+        merge_metadata_presentation(&mut merged, presentation);
     }
 
     Ok(merged)
@@ -3588,7 +3455,9 @@ pub async fn persist_item_metadata_assets_with_logo(
         snapshot.media_type.as_deref(),
         &snapshot.locale_key,
     );
-    fs::create_dir_all(&item_dir).map_err(|error| error.to_string())?;
+    tokio::fs::create_dir_all(&item_dir)
+        .await
+        .map_err(|error| error.to_string())?;
 
     let logo_url = logo_url_override
         .map(str::to_string)
@@ -3907,14 +3776,14 @@ pub async fn cache_artwork(
     cache_dir: &Path,
     cache_key: &str,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
-
     let cache_path = expected_artwork_cache_path(url, cache_dir, cache_key);
-    if cache_path.is_file() {
-        if cached_artwork_is_valid(&cache_path) {
-            return Ok(cache_path);
-        }
-        fs::remove_file(&cache_path).map_err(|error| error.to_string())?;
+    let directory = cache_dir.to_path_buf();
+    let destination = cache_path.clone();
+    if tokio::task::spawn_blocking(move || prepare_artwork_cache(&directory, &destination))
+        .await
+        .map_err(|error| error.to_string())??
+    {
+        return Ok(cache_path);
     }
 
     let bytes = http::client()
@@ -3930,20 +3799,10 @@ pub async fn cache_artwork(
     artwork::validate(&bytes)?;
     // Publish a complete image atomically; retain the working image on failure.
     let temporary = cache_dir.join(format!(".koko-artwork-{}.tmp", rand::random::<u128>()));
-    let result = (|| {
-        use std::io::Write;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        drop(file);
-        fs::rename(&temporary, &cache_path)
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&temporary);
-        return Err(error.to_string());
-    }
+    let destination = cache_path.clone();
+    tokio::task::spawn_blocking(move || publish_artwork(&temporary, &destination, &bytes))
+        .await
+        .map_err(|error| error.to_string())??;
     Ok(cache_path)
 }
 
@@ -4202,18 +4061,11 @@ pub(crate) async fn try_cache_item_artwork(
             // The managed directory is specific to this provider identity and
             // locale. Keep serving its previous image until replacement succeeds.
             let prefix = format!("{}-", sanitize_cache_key(cache_key));
-            fs::read_dir(item_dir)
-                .ok()?
-                .filter_map(Result::ok)
-                .find_map(|entry| {
-                    let path = entry.path();
-                    let matches_key = entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with(&prefix));
-                    (matches_key && path.is_file() && cached_artwork_is_valid(&path))
-                        .then_some(path)
-                })
+            let directory = item_dir.to_path_buf();
+            tokio::task::spawn_blocking(move || previous_cached_artwork(&directory, &prefix))
+                .await
+                .ok()
+                .flatten()
         }
     }
 }
@@ -4241,12 +4093,12 @@ fn parse_movie_name(
     let path = Path::new(&relative_path);
     let file_stem = path
         .file_stem()
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or(display_title);
     let parent_name = path
         .parent()
         .and_then(Path::file_name)
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default();
 
     let preferred_source =
@@ -4335,7 +4187,7 @@ fn show_search_query(
         .to_string();
     let folder_name = Path::new(&normalized_path)
         .file_name()
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default()
         .to_string();
 
@@ -4419,7 +4271,7 @@ fn artwork_url_extension(url: &str) -> String {
     let normalized = url.split(['?', '#']).next().unwrap_or(url);
     Path::new(normalized)
         .extension()
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .filter(|value| !value.is_empty())
         .unwrap_or("jpg")
         .to_ascii_lowercase()
@@ -5029,6 +4881,219 @@ fn metadata_provider_id_from_db(value: &str) -> MetadataProviderId {
         log::warn!("Ignoring unexpected stored metadata provider id: {}", value);
         MetadataProviderId::Tmdb
     })
+}
+
+fn metadata_link_payload(
+    item_id: i32,
+    snapshot: &StoredMetadataSnapshot,
+    details: &ProviderMetadataDetails,
+    existing: Option<&ItemMetadataLink>,
+    relation_kind: &str,
+    refresh_interval_seconds: Option<i64>,
+) -> NewItemMetadataLink {
+    let keep_cached_artwork = existing
+        .as_ref()
+        .map(|row| {
+            !metadata_refresh_target_changed(
+                row,
+                snapshot.provider_id.as_storage_value(),
+                &snapshot.external_id,
+                snapshot.media_type.as_deref(),
+            ) && row.artwork_url == snapshot.artwork_url
+        })
+        .unwrap_or(false);
+    let keep_cached_backdrop = existing
+        .as_ref()
+        .map(|row| {
+            !metadata_refresh_target_changed(
+                row,
+                snapshot.provider_id.as_storage_value(),
+                &snapshot.external_id,
+                snapshot.media_type.as_deref(),
+            ) && row.backdrop_url == snapshot.backdrop_url
+        })
+        .unwrap_or(false);
+    let logo_url = details.logo_url.clone();
+    let keep_cached_logo = existing
+        .as_ref()
+        .map(|row| {
+            !metadata_refresh_target_changed(
+                row,
+                snapshot.provider_id.as_storage_value(),
+                &snapshot.external_id,
+                snapshot.media_type.as_deref(),
+            ) && row.logo_url == logo_url
+        })
+        .unwrap_or(false);
+
+    NewItemMetadataLink {
+        media_item_id: item_id,
+        provider_id: snapshot.provider_id.as_storage_value().to_string(),
+        external_id: snapshot.external_id.clone(),
+        title: snapshot.title.clone(),
+        overview: snapshot.overview.clone(),
+        tagline: details.tagline.clone(),
+        artwork_url: snapshot.artwork_url.clone(),
+        backdrop_url: snapshot.backdrop_url.clone(),
+        release_year: snapshot.release_year,
+        media_type: snapshot.media_type.clone(),
+        relation_kind: relation_kind.to_string(),
+        match_state: "linked".into(),
+        logo_url,
+        cached_logo_path: if keep_cached_logo {
+            existing
+                .as_ref()
+                .and_then(|row| row.cached_logo_path.clone())
+        } else {
+            None
+        },
+        genres_json: if matches!(
+            snapshot.provider_id,
+            MetadataProviderId::MusicBrainz | MetadataProviderId::Fanart
+        ) {
+            None
+        } else {
+            serde_json::to_string(&details.genres).ok()
+        },
+        rating: if details.rating_incomplete {
+            existing
+                .as_ref()
+                .filter(|row| {
+                    !metadata_refresh_target_changed(
+                        row,
+                        snapshot.provider_id.as_storage_value(),
+                        &snapshot.external_id,
+                        snapshot.media_type.as_deref(),
+                    )
+                })
+                .and_then(|row| row.rating)
+                .and_then(ratings::validate)
+        } else {
+            details.rating.and_then(|value| {
+                let registry = MetadataRegistry::new();
+                let maximum = registry.provider(&snapshot.provider_id)?.rating_maximum();
+                ratings::normalize(value, maximum)
+            })
+        },
+        content_rating: details.content_rating.clone(),
+        locale_key: snapshot.locale_key.clone(),
+        provider_locale_key: snapshot.provider_locale_key.clone(),
+        cached_artwork_path: if keep_cached_artwork {
+            existing
+                .as_ref()
+                .and_then(|row| row.cached_artwork_path.clone())
+        } else {
+            None
+        },
+        cached_backdrop_path: if keep_cached_backdrop {
+            existing
+                .as_ref()
+                .and_then(|row| row.cached_backdrop_path.clone())
+        } else {
+            None
+        },
+        refresh_state: "fresh".into(),
+        refresh_interval_seconds: refresh_interval_seconds.unwrap_or(0),
+        last_refreshed_at: Some(current_timestamp()),
+        next_refresh_at: refresh_interval_seconds.map(|interval| current_timestamp() + interval),
+        refresh_error: None,
+        updated_at: Some(current_timestamp()),
+    }
+}
+
+fn merge_metadata_presentation(
+    merged: &mut LinkedMetadataPresentation,
+    presentation: LinkedMetadataPresentation,
+) {
+    if merged.tagline.is_none() {
+        merged.tagline = presentation.tagline;
+    }
+    if merged.overview.is_none() {
+        merged.overview = presentation.overview;
+    }
+    if merged.genres.is_empty() && !presentation.genres.is_empty() {
+        merged.genres = presentation.genres;
+    }
+    if merged.release_year.is_none() {
+        merged.release_year = presentation.release_year;
+    }
+    if merged.media_type.is_none() {
+        merged.media_type = presentation.media_type;
+    }
+    merged.poster_available |= presentation.poster_available;
+    merged.backdrop_available |= presentation.backdrop_available;
+    if merged.logo_url.is_none() {
+        merged.logo_url = presentation.logo_url;
+    }
+    if merged.rating.is_none() {
+        merged.rating = presentation.rating;
+    }
+    if merged.content_rating.is_none() {
+        merged.content_rating = presentation.content_rating;
+    }
+    if merged.trailer_title.is_none() {
+        merged.trailer_title = presentation.trailer_title;
+    }
+    if merged.trailer_url.is_none() {
+        merged.trailer_url = presentation.trailer_url;
+    }
+    if merged.theme_song_url.is_none() {
+        merged.theme_song_url = presentation.theme_song_url;
+    }
+}
+
+fn prepare_artwork_cache(
+    directory: &Path,
+    path: &Path,
+) -> Result<bool, String> {
+    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    if !path.is_file() {
+        return Ok(false);
+    }
+    if cached_artwork_is_valid(path) {
+        return Ok(true);
+    }
+    fs::remove_file(path).map_err(|error| error.to_string())?;
+    Ok(false)
+}
+
+fn publish_artwork(
+    temporary: &Path,
+    destination: &Path,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let result = (|| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temporary)?;
+        file.write_all(bytes)?;
+        drop(file);
+        fs::rename(temporary, destination)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+fn previous_cached_artwork(
+    item_dir: &Path,
+    prefix: &str,
+) -> Option<PathBuf> {
+    fs::read_dir(item_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let path = entry.path();
+            let matches_key = entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(prefix));
+            (matches_key && path.is_file() && cached_artwork_is_valid(&path)).then_some(path)
+        })
 }
 
 #[cfg(test)]

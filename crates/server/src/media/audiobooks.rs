@@ -3,9 +3,43 @@
 #[cfg(test)]
 mod tests;
 
-use super::*;
+use super::{
+    CatalogMediaFile,
+    MediaItem,
+    MediaItemDetail,
+    MediaItemSummary,
+    PlannedMediaItem,
+    PlayableContainerTarget,
+    fallback_title_from_relative_path,
+    load_media_item_row,
+    prioritized_metadata_links_for_item,
+    to_media_item_summary,
+};
+use crate::config::MetadataProviderId;
 use crate::db::schema::audiobook_metadata as store;
-use diesel::QueryResult;
+use diesel::{
+    QueryResult,
+    prelude::*,
+};
+use rocket_okapi::okapi::schemars::{
+    self,
+    JsonSchema,
+};
+use serde::{
+    Deserialize,
+    Serialize,
+};
+use serde_json::Value;
+use std::{
+    collections::{
+        HashMap,
+        HashSet,
+    },
+    path::{
+        Path,
+        PathBuf,
+    },
+};
 
 /// One specific narration of a written work, never inferred from its title alone.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -165,32 +199,7 @@ impl AudiobookMetadata {
             .as_deref()
             .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
             .unwrap_or_default();
-        let mut tags = HashMap::new();
-        let audio = raw["streams"].as_array().and_then(|streams| {
-            streams
-                .iter()
-                .find(|stream| stream["codec_type"] == "audio")
-        });
-        for source in [
-            audio.and_then(|stream| stream.get("tags")),
-            raw.pointer("/format/tags"),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(source) = source.as_object() {
-                for (key, value) in source {
-                    if let Some(value) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
-                        let key = key
-                            .chars()
-                            .filter(char::is_ascii_alphanumeric)
-                            .flat_map(char::to_lowercase)
-                            .collect::<String>();
-                        tags.insert(key, value.to_string());
-                    }
-                }
-            }
-        }
+        let tags = audiobook_probe_tags(&raw);
         let tag = |keys: &[&str]| keys.iter().find_map(|key| tags.get(*key).cloned());
         let (directory, inferred_disc) = book_directory(&file.relative_path);
         let fallback = fallback_title_from_relative_path(&file.relative_path);
@@ -654,32 +663,7 @@ pub(super) fn load(
             }
         }
         if let (Some(value), Some((source, external))) = (local.get_mut(&id), selections.get(&id)) {
-            if let Some(chosen) = recording_sources.iter().find(|metadata| {
-                metadata.recording.as_ref().is_some_and(|recording| {
-                    recording.provider_id.as_storage_value() == source
-                        && recording.external_id == *external
-                })
-            }) {
-                let recording = chosen.recording.as_ref().unwrap();
-                value.narrator = recording.narrator.clone();
-                value.language = recording.language.clone().or(value.language.take());
-                value.chapters = chosen.chapters.clone();
-                value.chapter_files = chosen.chapter_files.clone();
-                if value.chapters.is_empty() && recording.provider_id == MetadataProviderId::Libex {
-                    if let Some(enrichment) = recording_sources.iter().find(|metadata| {
-                        metadata.recording.as_ref().is_some_and(|other| {
-                            other.provider_id == MetadataProviderId::AudioSilo
-                                && other
-                                    .asins
-                                    .iter()
-                                    .any(|asin| recording.asins.contains(asin))
-                        })
-                    }) {
-                        value.chapters = enrichment.chapters.clone();
-                    }
-                }
-                value.recording = Some(recording.clone());
-            }
+            apply_selected_recording(value, source, external, &recording_sources);
         }
     }
     Ok(local)
@@ -889,45 +873,7 @@ pub(super) fn apply_detail(
         }
         sort_parts(&mut item.children);
         if let Some(parent) = item.parent_id {
-            use crate::db::schema::media_items as items;
-            let mut siblings = items::table
-                .filter(items::parent_id.eq(parent))
-                .filter(items::item_type.eq("audiobook"))
-                .filter(items::deleted_at.is_null())
-                .select(MediaItem::as_select())
-                .load::<MediaItem>(conn)?
-                .into_iter()
-                .map(to_media_item_summary)
-                .collect::<Vec<_>>();
-            apply_summaries(conn, &mut siblings)?;
-            item.audiobook_versions = siblings
-                .into_iter()
-                .map(|sibling| {
-                    let label = sibling
-                        .audiobook
-                        .as_ref()
-                        .map(|metadata| {
-                            metadata
-                                .recording
-                                .as_ref()
-                                .map(|recording| recording.narrator.clone())
-                                .filter(|name| !name.is_empty())
-                                .unwrap_or_else(|| {
-                                    if metadata.version_label.is_empty() {
-                                        "Unconfirmed local version".into()
-                                    } else {
-                                        metadata.version_label.clone()
-                                    }
-                                })
-                        })
-                        .unwrap_or_else(|| sibling.display_title.clone());
-                    AudiobookVersion {
-                        item_id: sibling.id,
-                        label,
-                        duration_ms: sibling.duration_ms,
-                    }
-                })
-                .collect();
+            item.audiobook_versions = audiobook_versions(conn, parent)?;
         }
     }
     Ok(())
@@ -1026,6 +972,114 @@ pub(super) fn playable_parts(
             item,
             season_number: None,
             episode_number: None,
+        })
+        .collect())
+}
+
+fn audiobook_probe_tags(raw: &Value) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+    let audio = raw["streams"].as_array().and_then(|streams| {
+        streams
+            .iter()
+            .find(|stream| stream["codec_type"] == "audio")
+    });
+    for source in [
+        audio.and_then(|stream| stream.get("tags")),
+        raw.pointer("/format/tags"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(source) = source.as_object() {
+            for (key, value) in source {
+                if let Some(value) = value.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    let key = key
+                        .chars()
+                        .filter(char::is_ascii_alphanumeric)
+                        .flat_map(char::to_lowercase)
+                        .collect::<String>();
+                    tags.insert(key, value.to_string());
+                }
+            }
+        }
+    }
+    tags
+}
+
+fn apply_selected_recording(
+    value: &mut AudiobookMetadata,
+    source: &str,
+    external: &str,
+    recording_sources: &[AudiobookMetadata],
+) {
+    if let Some(chosen) = recording_sources.iter().find(|metadata| {
+        metadata.recording.as_ref().is_some_and(|recording| {
+            recording.provider_id.as_storage_value() == source && recording.external_id == external
+        })
+    }) {
+        let recording = chosen.recording.as_ref().unwrap();
+        value.narrator = recording.narrator.clone();
+        value.language = recording.language.clone().or(value.language.take());
+        value.chapters = chosen.chapters.clone();
+        value.chapter_files = chosen.chapter_files.clone();
+        if value.chapters.is_empty() && recording.provider_id == MetadataProviderId::Libex {
+            if let Some(enrichment) = recording_sources.iter().find(|metadata| {
+                metadata.recording.as_ref().is_some_and(|other| {
+                    other.provider_id == MetadataProviderId::AudioSilo
+                        && other
+                            .asins
+                            .iter()
+                            .any(|asin| recording.asins.contains(asin))
+                })
+            }) {
+                value.chapters = enrichment.chapters.clone();
+            }
+        }
+        value.recording = Some(recording.clone());
+    }
+}
+
+fn audiobook_versions(
+    conn: &mut SqliteConnection,
+    parent: i32,
+) -> QueryResult<Vec<AudiobookVersion>> {
+    use crate::db::schema::media_items as items;
+    let mut siblings = items::table
+        .filter(items::parent_id.eq(parent))
+        .filter(items::item_type.eq("audiobook"))
+        .filter(items::deleted_at.is_null())
+        .select(MediaItem::as_select())
+        .load::<MediaItem>(conn)?
+        .into_iter()
+        .map(to_media_item_summary)
+        .collect::<Vec<_>>();
+    apply_summaries(conn, &mut siblings)?;
+    Ok(siblings
+        .into_iter()
+        .map(|sibling| {
+            let label = sibling
+                .audiobook
+                .as_ref()
+                .map(|metadata| {
+                    metadata
+                        .recording
+                        .as_ref()
+                        .map(|recording| recording.narrator.clone())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| {
+                            if metadata.version_label.is_empty() {
+                                "Unconfirmed local version".into()
+                            } else {
+                                metadata.version_label.clone()
+                            }
+                        })
+                })
+                .unwrap_or_else(|| sibling.display_title.clone());
+            AudiobookVersion {
+                item_id: sibling.id,
+                label,
+                duration_ms: sibling.duration_ms,
+            }
         })
         .collect())
 }

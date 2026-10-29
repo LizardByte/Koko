@@ -124,7 +124,10 @@ impl<'r, const ROLE: u8> FromRequest<'r> for AuthGuard<ROLE> {
 
         let account = db
             .run(move |conn| {
-                use crate::db::schema::users::dsl::*;
+                use crate::db::schema::users::dsl::{
+                    admin,
+                    users,
+                };
                 users
                     .find(user_id)
                     .select(admin)

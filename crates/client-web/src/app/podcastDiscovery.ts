@@ -13,7 +13,7 @@ let generation = 0;
 /** Load reference data once per account view, preserving server labels and order. */
 export async function loadPodcastCountries(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
   const data = target.podcasts;
-  if (!data || data.tab !== 'discover' || data.countries) return;
+  if (data?.tab !== 'discover' || data.countries) return;
   const current = () => isCurrent() && target.podcasts === data && target.bootstrap?.current_user?.id === data.owner;
   data.countriesError = undefined;
   try {
@@ -36,7 +36,7 @@ export function cancelPodcastDirectorySearch(): void {
 /** Load one directory view, discarding replies for older queries, regions, routes, or accounts. */
 export async function loadPodcastDirectory(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
   const data = target.podcasts;
-  if (!data || data.tab !== 'discover') return;
+  if (data?.tab !== 'discover') return;
   cancelPodcastDirectorySearch();
   const request = generation;
   const owner = data.owner, country = data.country, query = data.query;

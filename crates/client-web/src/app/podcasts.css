@@ -2,7 +2,7 @@
 .podcast-library-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 .podcast-library-grid .music-art, .podcast-directory-card .music-art { aspect-ratio: 1; }
 .podcast-directory-card { min-width: 0; display: flex; flex-direction: column; gap: .5rem; }
-.podcast-directory-card .detail-art { width: 100%; overflow: hidden; border-radius: var(--radius-md, 12px); }
+.podcast-directory-card .detail-art { position: relative; width: 100%; overflow: hidden; border-radius: var(--radius-md, 12px); }
 .podcast-directory-card img { width: 100%; height: 100%; object-fit: cover; }
 .podcast-directory-card h3, .podcast-directory-card p { margin: 0; overflow-wrap: anywhere; }
 .podcast-directory-card h3 { font-size: 1rem; }
@@ -21,7 +21,6 @@
 .podcast-publisher-links { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
 @media (max-width: 600px) { .podcast-library-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-.podcast-directory-card .detail-art { position: relative; }
 .podcast-cover-add { position: absolute; top: .65rem; right: .65rem; border-radius: 50%; background: rgba(8, 14, 25, .86); color: white; width: 2.4rem; height: 2.4rem; }
 .podcast-directory-menu { position: absolute; bottom: .65rem; right: .65rem; }
 .podcast-directory-menu > button { background: rgba(8, 14, 25, .86); color: white; }

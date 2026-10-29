@@ -12,8 +12,16 @@ use rocket::fairing::AdHoc;
 use rocket::figment::Figment;
 use rocket_okapi::settings::UrlObject;
 use rocket_okapi::{
-    rapidoc::*,
-    swagger_ui::*,
+    rapidoc::{
+        GeneralConfig,
+        HideShowConfig,
+        RapiDocConfig,
+        make_rapidoc,
+    },
+    swagger_ui::{
+        SwaggerUIConfig,
+        make_swagger_ui,
+    },
 };
 
 // local imports

@@ -3212,101 +3212,25 @@ async fn run_automatic_movie_metadata_linking(
         None
     };
     for entry in work {
-        let (candidate, revision) = match entry {
-            AutomaticMetadataWork::Match(candidate, revision) => (candidate, revision),
+        match entry {
+            AutomaticMetadataWork::Match(candidate, revision) => {
+                process_automatic_metadata_candidate(
+                    db,
+                    settings,
+                    candidate,
+                    revision,
+                    &ready_providers,
+                    activity.as_ref().map(|(id, _)| id.as_str()),
+                    matches!(scope, AutomaticMetadataScope::AllUnmatched),
+                )
+                .await;
+            }
             AutomaticMetadataWork::Refresh(target) => {
                 let failed = execute_metadata_refresh_target(db, &target, settings).await;
                 if let Some(id) = &linked_activity_id {
                     record_metadata_refresh_activity_progress(id, target.item_id, failed).await;
                 }
-                continue;
             }
-        };
-        if !revision.is_current() {
-            continue;
-        }
-        let mut failed = false;
-        let mut guessed_provider_id = None;
-        let mut guess = None;
-        for provider_id in candidate
-            .metadata_providers
-            .iter()
-            .filter(|provider_id| ready_providers.contains(provider_id))
-        {
-            let guess_result =
-                guess_automatic_metadata_match(db, settings, &candidate, provider_id).await;
-            match guess_result {
-                Ok(Some(result)) => {
-                    let work_only = candidate.item_type == "audiobook"
-                        && !is_recording_match(provider_id, &result.external_id);
-                    if !work_only || guess.is_none() {
-                        guessed_provider_id = Some(provider_id.clone());
-                        guess = Some(result);
-                    }
-                    if !work_only {
-                        break;
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::warn!(
-                        "Automatic {} match failed for item {} ({}): {}",
-                        provider_id.as_storage_value(),
-                        candidate.item_id,
-                        candidate.relative_path,
-                        error
-                    );
-                    failed = true;
-                }
-            }
-        }
-
-        if let (Some(provider_id), Some(result)) = (guessed_provider_id, guess) {
-            let Some(persist_failed) = persist_automatic_metadata_match(
-                db,
-                settings,
-                &candidate,
-                revision,
-                activity.as_ref().map(|(id, _)| id.as_str()),
-                provider_id,
-                result,
-            )
-            .await
-            else {
-                continue;
-            };
-            failed |= persist_failed;
-        }
-
-        if candidate.item_type == "track" && revision.is_current() {
-            revision
-                .scope(super::music::refresh_metadata_lyrics(
-                    db,
-                    candidate.item_id,
-                    matches!(scope, AutomaticMetadataScope::AllUnmatched),
-                ))
-                .await;
-        }
-
-        if candidate.library_kind != crate::config::MediaLibraryKind::Shows {
-            let attempted_at = current_timestamp();
-            if let Err(error) = db
-                .run(move |conn| {
-                    mark_metadata_match_attempted(conn, candidate.item_id, attempted_at)
-                })
-                .await
-            {
-                log::warn!(
-                    "Failed to record automatic metadata attempt for item {}: {}",
-                    candidate.item_id,
-                    error
-                );
-                failed = true;
-            }
-        }
-
-        if let Some((activity_id, _)) = &activity {
-            record_metadata_refresh_activity_progress(activity_id, candidate.item_id, failed).await;
         }
     }
 
@@ -6351,6 +6275,122 @@ async fn backfill_automatic_show_descendants(
     if library_id.is_none() {
         recover_pending_metadata_refreshes(db, settings).await;
         run_due_metadata_refreshes(db, settings).await;
+    }
+}
+
+struct AutomaticMatchOutcome {
+    selected: Option<(MetadataProviderId, MetadataSearchResult)>,
+    failed: bool,
+}
+
+async fn choose_automatic_metadata_match(
+    db: &DbConn,
+    settings: &Settings,
+    candidate: &crate::media::AutomaticMetadataCandidate,
+    ready_providers: &HashSet<MetadataProviderId>,
+) -> AutomaticMatchOutcome {
+    let mut failed = false;
+    let mut guessed_provider_id = None;
+    let mut guess = None;
+    for provider_id in candidate
+        .metadata_providers
+        .iter()
+        .filter(|provider_id| ready_providers.contains(provider_id))
+    {
+        let guess_result =
+            guess_automatic_metadata_match(db, settings, candidate, provider_id).await;
+        match guess_result {
+            Ok(Some(result)) => {
+                let work_only = candidate.item_type == "audiobook"
+                    && !is_recording_match(provider_id, &result.external_id);
+                if !work_only || guess.is_none() {
+                    guessed_provider_id = Some(provider_id.clone());
+                    guess = Some(result);
+                }
+                if !work_only {
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log::warn!(
+                    "Automatic {} match failed for item {} ({}): {}",
+                    provider_id.as_storage_value(),
+                    candidate.item_id,
+                    candidate.relative_path,
+                    error
+                );
+                failed = true;
+            }
+        }
+    }
+
+    AutomaticMatchOutcome {
+        selected: guessed_provider_id.zip(guess),
+        failed,
+    }
+}
+
+async fn process_automatic_metadata_candidate(
+    db: &DbConn,
+    settings: &Settings,
+    candidate: crate::media::AutomaticMetadataCandidate,
+    revision: MetadataRevision,
+    ready_providers: &HashSet<MetadataProviderId>,
+    activity: Option<&str>,
+    force_lyrics: bool,
+) {
+    if !revision.is_current() {
+        return;
+    }
+    let AutomaticMatchOutcome {
+        selected,
+        mut failed,
+    } = choose_automatic_metadata_match(db, settings, &candidate, ready_providers).await;
+    if let Some((provider_id, result)) = selected {
+        let Some(persist_failed) = persist_automatic_metadata_match(
+            db,
+            settings,
+            &candidate,
+            revision,
+            activity,
+            provider_id,
+            result,
+        )
+        .await
+        else {
+            return;
+        };
+        failed |= persist_failed;
+    }
+
+    if candidate.item_type == "track" && revision.is_current() {
+        revision
+            .scope(super::music::refresh_metadata_lyrics(
+                db,
+                candidate.item_id,
+                force_lyrics,
+            ))
+            .await;
+    }
+
+    if candidate.library_kind != crate::config::MediaLibraryKind::Shows {
+        let attempted_at = current_timestamp();
+        if let Err(error) = db
+            .run(move |conn| mark_metadata_match_attempted(conn, candidate.item_id, attempted_at))
+            .await
+        {
+            log::warn!(
+                "Failed to record automatic metadata attempt for item {}: {}",
+                candidate.item_id,
+                error
+            );
+            failed = true;
+        }
+    }
+
+    if let Some(activity_id) = activity {
+        record_metadata_refresh_activity_progress(activity_id, candidate.item_id, failed).await;
     }
 }
 

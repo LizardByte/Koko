@@ -131,7 +131,7 @@ pub(super) fn asset_source_path(path: PathBuf) -> PathBuf {
     if let Some(directory) = path.parent() {
         if directory
             .file_name()
-            .and_then(|name| name.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .and_then(disc_number)
             .is_some()
         {
@@ -235,7 +235,7 @@ impl AudiobookMetadata {
         } else if directory.is_empty() && inferred_disc.is_some() {
             Path::new(&file.source_root_path)
                 .file_name()
-                .and_then(|name| name.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or_default()
         } else {
             directories.last().copied().unwrap_or_default()
@@ -244,7 +244,7 @@ impl AudiobookMetadata {
             let folder_title = if directory.is_empty() && inferred_disc.is_some() {
                 Path::new(&file.source_root_path)
                     .file_name()
-                    .and_then(|name| name.to_str())
+                    .and_then(std::ffi::OsStr::to_str)
             } else {
                 Some(folder)
             };
@@ -259,13 +259,13 @@ impl AudiobookMetadata {
         } else if directories.is_empty() && inferred_disc.is_some() {
             root.parent()
                 .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .filter(|name| !type_directory(name))
         } else if type_grouped {
             None
         } else {
             root.file_name()
-                .and_then(|name| name.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .filter(|name| {
                     !["audiobooks", "books", "media"].contains(&name.to_ascii_lowercase().as_str())
                 })

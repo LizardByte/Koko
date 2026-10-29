@@ -3028,13 +3028,11 @@ fn list_automatic_metadata_candidates_with_options(
             continue;
         }
 
-        let Some(library) = libraries_by_id.get(&row.library_id) else {
+        let Some(library_settings) =
+            automatic_metadata_library(&libraries_by_id, row.library_id, library_id)
+        else {
             continue;
         };
-        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
-            continue;
-        }
-        let library_settings = media_library_settings_from_row(library.clone());
         if library_settings.kind != MediaLibraryKind::Movies {
             continue;
         }
@@ -3047,7 +3045,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_type: "movie".into(),
             music: None,
             audiobook: None,
-            library_id: library.id,
+            library_id: row.library_id,
             relative_path: row.relative_path.clone(),
             display_title: row
                 .display_title
@@ -3119,13 +3117,11 @@ fn list_automatic_metadata_candidates_with_options(
             continue;
         }
 
-        let Some(library) = libraries_by_id.get(&row.library_id) else {
+        let Some(mut library_settings) =
+            automatic_metadata_library(&libraries_by_id, row.library_id, library_id)
+        else {
             continue;
         };
-        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
-            continue;
-        }
-        let mut library_settings = media_library_settings_from_row(library.clone());
         if linked_item_ids.contains(&row.id) {
             // Adding LibriVox can identify an existing work-only match without retrying
             // another commercial work match first or replacing a confirmed narration.
@@ -3153,7 +3149,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_type: row.item_type.clone(),
             music: music_items.get(&row.id).map(|(music, _)| music.clone()),
             audiobook: audiobook_items.get(&row.id).cloned().map(Box::new),
-            library_id: library.id,
+            library_id: row.library_id,
             relative_path: row.relative_path.unwrap_or_default(),
             display_title: row.display_title,
             modified_at: row.modified_at,
@@ -7271,6 +7267,18 @@ fn summarize_rows_with_metadata(
     audiobooks::apply_summaries(conn, &mut items)?;
     podcasts::apply_summaries(conn, &mut items)?;
     Ok(items)
+}
+
+fn automatic_metadata_library(
+    libraries: &HashMap<i32, MediaLibrary>,
+    library_id: i32,
+    requested: Option<i32>,
+) -> Option<MediaLibrarySettings> {
+    let library = libraries.get(&library_id)?;
+    if requested.is_some_and(|id| id != library.id) {
+        return None;
+    }
+    Some(media_library_settings_from_row(library.clone()))
 }
 
 #[cfg(test)]

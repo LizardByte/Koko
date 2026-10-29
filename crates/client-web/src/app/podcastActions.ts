@@ -1,5 +1,5 @@
 /** Loads podcast discovery and subscriptions and binds account-scoped podcast actions. */
-import { addPodcast, discoverPodcasts, getPodcasts, getPodcastHome, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
+import { addPodcast, getPodcasts, getPodcastHome, refreshPodcast, removePodcast, setPodcastPlaybackOrder, type PodcastPlaybackOrder } from '../api';
 import type { AppState } from './types';
 import { state } from './state';
 import { startPlaybackForItemId } from './playbackController';
@@ -7,6 +7,7 @@ import { stopMusic, toggleCurrentMusic, refreshPodcastQueue } from './audioPlaye
 import { activeMusicPlayback } from './musicPlaybackState';
 import { bindPodcastPaging } from './podcastPaging';
 import { clearBrowseSessions } from './browseSession';
+import { bindPodcastDiscovery, cancelPodcastDirectorySearch, loadPodcastDirectory } from './podcastDiscovery';
 
 /** Load independent catalog sections while ignoring replies from abandoned routes or accounts. */
 export async function loadPodcasts(target: AppState, isCurrent: () => boolean, render: () => void): Promise<void> {
@@ -14,14 +15,14 @@ export async function loadPodcasts(target: AppState, isCurrent: () => boolean, r
   if (owner === undefined || target.bootstrap?.podcasts_enabled === false) return;
   if (target.podcasts?.owner !== owner) target.podcasts = { owner, items: [], directory: [], country: 'us', query: '', loading: false };
   const data = target.podcasts!;
-  const country = data.country, query = data.query, tab = data.tab ?? 'recommended';
+  const tab = data.tab ?? 'recommended';
   data.loading = data.tab === 'discover';
   data.error = undefined;
-  const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data && data.country === country && data.query === query && (data.tab ?? 'recommended') === tab;
+  const current = () => isCurrent() && target.bootstrap?.current_user?.id === owner && target.podcasts === data;
   await Promise.all([
     tab === 'recommended' ? getPodcastHome().then(home => { if (current()) { data.home = home; render(); } }).catch(error => { if (current()) data.error = error instanceof Error ? error.message : 'Podcast shelves could not load.'; }) : Promise.resolve(),
     getPodcasts().then(items => { if (current()) { data.items = items; render(); } }).catch(error => { if (current()) target.error = error instanceof Error ? error.message : 'Subscriptions could not load.'; }),
-    data.tab === 'discover' ? discoverPodcasts(country, query).then(items => { if (current()) data.directory = items; }).catch(error => { if (current()) { data.directory = []; data.error = error instanceof Error ? error.message : 'The podcast directory is unavailable. Add a feed URL above.'; } }).finally(() => { if (current()) { data.loading = false; render(); } }) : Promise.resolve(),
+    loadPodcastDirectory(target, current, render),
   ]);
 }
 
@@ -31,6 +32,7 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
   const execute = (work: () => Promise<void>, after?: () => void) => executePodcastAction(context, work, after);
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-tab]').forEach(button => button.addEventListener('click', () => {
     if (!state.podcasts) return;
+    cancelPodcastDirectorySearch();
     const tab = button.dataset.podcastTab;
     state.podcasts.tab = tab === 'discover' || tab === 'library' ? tab : 'recommended';
     state.searchQuery = ''; state.searchResults = []; state.showFullSearchResults = false;
@@ -79,16 +81,7 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     void play().catch(error => { state.error = error instanceof Error ? error.message : 'Episode could not start.'; context.render(true); });
   }, { signal }));
   bindPodcastPaging(signal, context);
-  const search = (form: HTMLFormElement, popular = false) => {
-    if (!state.podcasts) return;
-    const fields = new FormData(form);
-    state.podcasts.country = String(fields.get('country') ?? 'us').toLowerCase();
-    state.podcasts.query = popular ? '' : String(fields.get('query') ?? '').trim();
-    void context.refreshData(false);
-  };
-  const form = document.querySelector<HTMLFormElement>('#podcast-search-form');
-  form?.addEventListener('submit', event => { event.preventDefault(); if (form.reportValidity()) search(form); }, { signal });
-  document.querySelector<HTMLButtonElement>('[data-podcast-popular]')?.addEventListener('click', () => { if (form?.reportValidity()) search(form, true); }, { signal });
+  bindPodcastDiscovery(signal, context);
 }
 
 interface PodcastActionContext {

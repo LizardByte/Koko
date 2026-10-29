@@ -36,7 +36,7 @@ test('episodes default oldest first and can reverse chronologically without muta
 });
 test('directory failure preserves subscriptions and manual RSS entry and hides another account data', () => {
   state.bootstrap = { current_user: { id: 1 } };
-  state.podcasts = { owner: 1, items: [episode(100, { item_type: 'podcast', display_title: 'Private show' })], directory: [], country: 'us', query: '', loading: false, error: 'Directory is unavailable', addFeedOpen: true };
+  state.podcasts = { owner: 1, items: [episode(100, { item_type: 'podcast', display_title: 'Private show' })], directory: [], country: 'us', query: '', loading: false, error: 'Directory is unavailable', addFeedOpen: true, tab: 'discover' };
   const html = renderPodcastPage();
   assert.match(html, /Private show/);
   assert.match(html, /podcast-feed-form/);
@@ -219,4 +219,48 @@ test('Retry cannot replay an abandoned account request or an unrelated error', a
   assert.equal(await retryPodcastAction(), false);
   state.route = failedRoute; state.error = 'Different failure';
   assert.equal(await retryPodcastAction(), false); assert.equal(attempts, 1);
+});
+
+
+test('all podcast tabs share the normal full-width hero and one content panel', () => {
+  state.bootstrap = { current_user: { id: 1 } };
+  state.searchQuery = ''; state.showFullSearchResults = false;
+  const show = episode(100, { item_type: 'podcast', playable: false, display_title: 'Shared featured show' });
+  state.podcasts = { owner: 1, items: [show], directory: [], country: 'gb', query: '', loading: false };
+  for (const tab of ['recommended', 'library', 'discover']) {
+    state.podcasts.tab = tab;
+    const html = renderPodcastPage();
+    assert.match(html, /home-pinned-header/);
+    assert.match(html, /podcast-feature-cover/);
+    assert.equal([...html.matchAll(/class="shelf-stack panel page-panel"/g)].length, 1);
+    assert.doesNotMatch(html, /podcast-library-content/);
+    const navbar = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
+    assert.doesNotMatch(navbar, /Add RSS feed/);
+    assert.equal(html.includes('data-podcast-feed-toggle'), tab === 'discover');
+  }
+});
+
+test('discovery has a country selector and the same search/clear affordance as global search', () => {
+  state.bootstrap = { current_user: { id: 1 } };
+  state.podcasts = { owner: 1, items: [], directory: [], country: 'gb', query: '', loading: false, tab: 'discover' };
+  let html = renderPodcastPage();
+  assert.match(html, /<select id="podcast-country" name="country">/);
+  assert.match(html, /value="gb" selected>United Kingdom/);
+  assert.match(html, /class="icon-button search-toggle-button"[^>]*aria-label="Search podcasts"/);
+  assert.doesNotMatch(html, /data-podcast-popular|pattern="\[A-Za-z\]/);
+  state.podcasts.query = 'science';
+  html = renderPodcastPage();
+  assert.match(html, /data-podcast-search-clear[^>]*aria-label="Clear podcast search"/);
+});
+
+test('new subscribers can discover a featured show before adding anything', () => {
+  state.bootstrap = { current_user: { id: 1 } };
+  state.podcasts = { owner: 1, items: [], country: 'us', query: '', loading: false, tab: 'discover',
+    directory: [{ id: '9', title: 'Directory featured show', author: 'A publisher', artwork_url: 'https://example.com/cover.png', feed_url: 'https://example.com/feed' }] };
+  const html = renderPodcastPage();
+  const feature = html.slice(html.indexOf('<section class="home-feature'), html.indexOf('</section>'));
+  assert.match(feature, /Directory featured show/);
+  assert.match(feature, /podcast-feature-cover/);
+  assert.match(feature, /data-podcast-add="0"/);
+  assert.equal(state.podcasts.items.length, 0);
 });

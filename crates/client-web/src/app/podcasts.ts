@@ -7,6 +7,7 @@ import { renderItemCard, renderItemFeature, renderShelfStack, renderGlobalSearch
 import { renderAudioTrackRow } from './music';
 import { activeMusicPlayback } from './musicPlaybackState';
 import { state } from './state';
+import { PODCAST_COUNTRIES } from './podcastCountries';
 
 /** Restrict publisher links to web URLs without embedded login credentials. */
 export function podcastLink(value: string | null | undefined): string | undefined {
@@ -29,42 +30,64 @@ function directoryCard(item: DirectoryPodcast, index: number): string {
 }
 function feedForm(): string {
   if (!state.podcasts?.addFeedOpen) return '';
-  return `<section class="panel page-panel podcast-add-panel"><div class="section-heading"><h3>Add a podcast feed</h3></div><form id="podcast-feed-form" class="form-row"><label>RSS or Atom feed URL<input name="feed" type="url" required maxlength="8192" placeholder="https://example.com/podcast.xml"/></label><button type="submit" ${state.podcasts.busy ? 'disabled' : ''}>${renderButtonContent('Add podcast', 'plus')}</button></form><p class="muted">Paste the publisher's public feed URL. No directory listing or API key is required.</p></section>`;
+  return `<div class="podcast-add-panel" id="podcast-add-feed-panel"><div class="section-heading"><h3>Add a podcast feed</h3></div><form id="podcast-feed-form" class="form-row"><label>RSS or Atom feed URL<input name="feed" type="url" required maxlength="8192" placeholder="https://example.com/podcast.xml"/></label><button type="submit" ${state.podcasts.busy ? 'disabled' : ''}>${renderButtonContent('Add podcast', 'plus')}</button></form><p class="muted">Paste the publisher's public feed URL. No directory listing or API key is required.</p></div>`;
 }
 function discovery(): string {
   const data = state.podcasts;
   if (!data) return '';
+  const hasQuery = Boolean(data.query);
+  const searchLabel = hasQuery ? 'Clear podcast search' : 'Search podcasts';
+  const searchType = hasQuery ? 'button' : 'submit';
+  const searchAction = hasQuery ? 'data-podcast-search-clear' : '';
+  const searchIcon = hasQuery ? 'x' : 'search';
+  const countries = PODCAST_COUNTRIES.map(country => `<option value="${country.code}" ${data.country.toLowerCase() === country.code ? 'selected' : ''}>${escapeHtml(country.name)}</option>`).join('');
   const error = data.error ? `<div class="empty-state" role="alert">${escapeHtml(data.error)}</div>` : '';
-  const status = data.loading ? '<div class="empty-state" role="status">Loading podcasts…</div>' : '';
-  return `<section class="panel page-panel shelf-stack"><div class="section-heading"><h2>${data.query ? 'Search results' : 'Popular podcasts'}</h2></div><form id="podcast-search-form" class="podcast-search-controls"><label class="sr-only" for="podcast-search">Search podcasts</label><input id="podcast-search" name="query" type="search" maxlength="200" placeholder="Search podcasts" value="${escapeHtml(data.query)}"/><label>Country<input name="country" class="podcast-country" minlength="2" maxlength="2" pattern="[A-Za-z]{2}" required value="${escapeHtml(data.country)}"/></label><button type="submit" class="secondary-button" ${data.loading ? 'disabled' : ''}>${renderButtonContent('Search', 'search')}</button><button type="button" class="secondary-button" data-podcast-popular ${data.loading ? 'disabled' : ''}>Popular</button></form><p class="muted">Choose a country such as US, CA, or GB. Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}.</p>${error}${status}<div class="item-grid podcast-library-grid">${data.directory.map(directoryCard).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}</section>`;
+  const status = data.loading ? 'Loading podcasts…' : '';
+  const heading = data.query.trim() ? 'Search results' : 'Popular podcasts';
+  return `<div class="shelf-header browse-section-header"><h3>${heading}</h3><button type="button" class="secondary-button" data-podcast-feed-toggle aria-controls="podcast-add-feed-panel" aria-expanded="${data.addFeedOpen === true}">${renderButtonContent('Add RSS feed', 'plus')}</button></div>
+    <form id="podcast-search-form" class="podcast-search-controls" role="search" aria-label="Podcast directory">
+      <div class="search-form"><label class="sr-only" for="podcast-search">Search podcasts</label><input id="podcast-search" name="query" type="search" maxlength="200" placeholder="Search podcasts" autocomplete="off" value="${escapeHtml(data.query)}"/><button type="${searchType}" class="icon-button search-toggle-button" ${searchAction} title="${searchLabel}" aria-label="${searchLabel}">${renderIcon(searchIcon)}</button></div>
+      <label class="sr-only" for="podcast-country">Country</label><select id="podcast-country" name="country">${countries}</select>
+    </form>
+    ${feedForm()}<p class="muted podcast-directory-attribution">Directory: ${link('https://podcasts.apple.com/', 'Apple Podcasts')}. <span role="status">${status}</span></p>${error}<div class="item-grid podcast-library-grid" aria-busy="${data.loading}">${data.directory.map(directoryCard).join('')}</div>${!data.loading && !data.error && !data.directory.length ? '<div class="empty-state">No podcasts found. Try another search or add an RSS feed.</div>' : ''}`;
 }
 
-/** Reuse the library tabs, square artwork cards, and browsing grid from music. */
+/** Reuse the ordinary library header, full-width hero, and single content panel for every tab. */
 export function renderPodcastPage(): string {
   if (state.bootstrap?.podcasts_enabled === false) return '<div class="empty-state">Podcasts are disabled by your administrator.</div>';
   const data = state.podcasts?.owner === state.bootstrap?.current_user?.id ? state.podcasts : undefined;
   const tab = data?.tab ?? 'recommended';
   const tabs = ['recommended', 'library', 'discover'].map(value => `<button type="button" class="browse-tab-button ${tab === value ? 'active' : ''}" data-podcast-tab="${value}" aria-pressed="${tab === value}">${value.charAt(0).toUpperCase() + value.slice(1)}</button>`).join('');
-  const library = data?.items.length ? `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>` : '<div class="empty-state">No podcasts added yet. Browse Discover or add a feed URL to start listening.</div>';
-  const libraryPanel = `<section class="panel page-panel shelf-stack"><div class="section-heading item-row-heading"><h2>Podcasts <span class="item-row-count">· ${data?.items.length ?? 0}</span></h2></div>${library}</section>`;
-  let content = libraryPanel;
+  const library = data?.items.length ? `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>` : '<div class="empty-state">No podcasts added yet. Browse Discover to add a podcast or RSS feed.</div>';
+  let content = `<div class="shelf-header browse-section-header"><h3>Podcasts <span class="item-row-count">· ${data?.items.length ?? 0}</span></h3></div>${library}`;
   if (tab === 'discover' && data) content = discovery();
   if (tab === 'recommended' && data) content = renderPodcastRecommended();
   if (state.showFullSearchResults && state.searchQuery.trim()) content = renderSearchResults();
-  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}<button type="button" class="secondary-button" data-podcast-feed-toggle>${renderButtonContent('Add RSS feed', 'plus')}</button></div>${renderSearchPopover()}</header><div class="podcast-library-content">${feedForm()}${content}</div>`;
+  return `<div class="home-pinned-header"><header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}</div>${renderSearchPopover()}</header>${renderPodcastFeature(data)}</div><section class="shelf-stack panel page-panel">${content}</section>`;
 }
 
-/** Subscribed shows supply the shared hero and listening shelves; publisher covers remain available. */
+/** Keep the same selected podcast above all tabs, falling back to discovery for new subscribers. */
+function renderPodcastFeature(data: typeof state.podcasts): string {
+  const candidates = data?.home?.shelves.flatMap(shelf => shelf.items) ?? [];
+  const feature = candidates.find(item => item.id === state.homePreviewItemId) ?? candidates[0] ?? data?.items[0];
+  if (feature) return renderItemFeature(feature, [...(data?.items ?? []), ...candidates]);
+  const directory = data?.tab === 'discover' ? data.directory[0] : undefined;
+  const title = directory?.title ?? 'Podcasts';
+  const artwork = podcastLink(directory?.artwork_url);
+  const copy = directory?.author ?? 'Discover popular podcasts or add an RSS feed to start listening.';
+  const disabled = data?.busy ? 'disabled' : '';
+  const action = directory ? `<button type="button" class="secondary-button home-feature-action" data-podcast-add="0" ${disabled}>${renderButtonContent('Add podcast', 'plus')}</button>` : '';
+  const cover = artwork ? `<img class="podcast-feature-cover" src="${escapeHtml(artwork)}" alt="" referrerpolicy="no-referrer"/>` : '';
+  return `<section class="home-feature home-feature-podcast" data-nav-section="featured" data-nav-label="Featured">${cover}<div class="home-feature-copy"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(copy)}</p></div>${action}</section>`;
+}
+
+/** Render listening shelves inside the shared content panel, without adding another padded wrapper. */
 export function renderPodcastRecommended(): string {
   const data = state.podcasts;
-  const home = data?.home;
-  const candidates = home?.shelves.flatMap(shelf => shelf.items) ?? [];
-  const feature = candidates.find(item => item.id === state.homePreviewItemId) ?? candidates[0] ?? data?.items[0];
-  const hero = feature ? renderItemFeature(feature, [...(data?.items ?? []), ...candidates]) : '';
-  if (!data?.items.length) return '<div class="empty-state">No podcasts added yet. Browse Discover or add a feed URL to start listening.</div>';
-  const shelves = home ? renderShelfStack(home) : `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>`;
+  if (!data?.items.length) return '<div class="empty-state">No podcasts added yet. Browse Discover to add a podcast or RSS feed.</div>';
+  const shelves = data.home ? renderShelfStack(data.home) : `<div class="item-grid podcast-library-grid">${data.items.map(renderItemCard).join('')}</div>`;
   const error = data.error ? `<p class="status-warning" role="alert">${escapeHtml(data.error)}</p>` : '';
-  return `${hero}${error}<section class="shelf-stack panel page-panel">${shelves}</section>`;
+  return `${error}${shelves}`;
 }
 
 /** Sort chronologically without mutating the catalog, keeping undated episodes last. */

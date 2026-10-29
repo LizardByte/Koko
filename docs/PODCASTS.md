@@ -2,9 +2,10 @@
 
 Open **Podcasts** in the navigation for **Recommended** shows and listening shelves. Use
 **Library** to see all your subscriptions. Select **Discover** to browse popular shows or search
-by name. Choose a two-letter country code, such as `US`, `CA`, or `GB`, to change the
-directory's region. Popular shows come from Apple Podcasts. Browsing does not add any shows to
-your collection. No API key or Apple account is required.
+by name. Choose a country from the dropdown to change the directory's region. Search results
+update as you type; select **X** to clear the search and return to popular shows. Popular shows
+come from Apple Podcasts. Browsing does not add any shows to your collection. No API key or
+Apple account is required.
 
 Select **+** on a show's cover to subscribe. Its three-dot menu opens the show in Apple
 Podcasts. Your podcasts are available only to your Koko account. Other users can add the same
@@ -29,7 +30,7 @@ increase from older to newer releases, even though the newest episodes appear at
 
 ## Add a feed manually
 
-Select **Add RSS feed**, enter the show's public RSS or Atom feed URL and select **Add
+On **Discover**, select **Add RSS feed**, enter the show's public RSS or Atom feed URL and select **Add
 podcast**. Use a feed URL provided by the publisher, rather than a link to a podcast website or
 an Apple Podcasts or Spotify page. Manual entry works even when the directory is unavailable.
 

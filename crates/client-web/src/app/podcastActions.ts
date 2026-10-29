@@ -7,6 +7,7 @@ import { stopMusic, toggleCurrentMusic, refreshPodcastQueue } from './audioPlaye
 import { activeMusicPlayback } from './musicPlaybackState';
 import { bindPodcastPaging } from './podcastPaging';
 import { clearBrowseSessions } from './browseSession';
+import { bindHoverPreview } from './hoverPreview';
 import { bindPodcastDiscovery, cancelPodcastDirectorySearch, loadPodcastDirectory } from './podcastDiscovery';
 
 /** Load independent catalog sections while ignoring replies from abandoned routes or accounts. */
@@ -55,10 +56,7 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
     event.preventDefault(); const url = String(new FormData(event.currentTarget as HTMLFormElement).get('feed') ?? '');
     void execute(async () => { await addPodcast(url); }, () => { if (state.podcasts) { state.podcasts.addFeedOpen = false; state.podcasts.tab = 'library'; } });
   }, { signal });
-  document.querySelectorAll<HTMLButtonElement>('[data-podcast-add]').forEach(button => button.addEventListener('click', () => {
-    const item = state.podcasts?.directory[Number(button.dataset.podcastAdd)];
-    if (item) void execute(async () => { await addPodcast(item.feed_url); });
-  }, { signal }));
+  bindPodcastAddActions(document, context, signal);
   document.querySelectorAll<HTMLButtonElement>('[data-podcast-remove]').forEach(button => button.addEventListener('click', () => {
     const id = Number(button.dataset.podcastRemove);
     void execute(async () => {
@@ -87,6 +85,36 @@ export function bindPodcastActions(signal: AbortSignal, context: { navigateTo: (
 interface PodcastActionContext {
   refreshData: (showLoading?: boolean) => Promise<void>;
   render: (preserveDom?: boolean) => void;
+}
+
+/** Use the shared hover delay and immediate focus preview for current directory cards only. */
+export function bindPodcastDirectoryPreviews(root: ParentNode, refreshFeature: () => void): void {
+  const owner = state.bootstrap?.current_user?.id;
+  root.querySelectorAll<HTMLElement>('[data-podcast-preview-id]').forEach(element => {
+    if (element.dataset.boundPodcastPreview === 'true') return;
+    element.dataset.boundPodcastPreview = 'true';
+    const update = (): void => {
+      const data = state.podcasts;
+      const id = element.dataset.podcastPreviewId;
+      if (state.route.page !== 'podcasts' || data?.tab !== 'discover' || data.owner !== owner
+        || state.bootstrap?.current_user?.id !== owner || data.previewDirectoryId === id
+        || !data.directory.some(item => item.id === id)) return;
+      data.previewDirectoryId = id;
+      refreshFeature();
+    };
+    bindHoverPreview(element, update);
+    element.addEventListener('focusin', update);
+  });
+}
+
+/** Bind directory subscription buttons, including a hero replaced by a hover preview. */
+export function bindPodcastAddActions(root: ParentNode, context: PodcastActionContext, signal?: AbortSignal): void {
+  const owner = state.bootstrap?.current_user?.id;
+  root.querySelectorAll<HTMLButtonElement>('[data-podcast-add]').forEach(button => button.addEventListener('click', () => {
+    if (owner !== state.bootstrap?.current_user?.id || state.podcasts?.owner !== owner) return;
+    const item = state.podcasts?.directory[Number(button.dataset.podcastAdd)];
+    if (item) void executePodcastAction(context, async () => { await addPodcast(item.feed_url); });
+  }, { signal }));
 }
 
 /** Preserve the failed operation so Retry repeats its request, retaining the original feed URL. */

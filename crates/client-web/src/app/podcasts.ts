@@ -26,7 +26,7 @@ function directoryCard(item: DirectoryPodcast, index: number): string {
   const label = subscribed ? 'Already added ' : 'Add ';
   const apple = link(item.apple_url, 'Open in Apple Podcasts');
   const menu = apple ? `<div class="music-song-menu podcast-directory-menu"><button type="button" class="secondary-button icon-only" popovertarget="podcast-directory-${index}" aria-label="More actions for ${escapeHtml(item.title)}">${renderButtonContent('', 'ellipsis')}</button><div popover id="podcast-directory-${index}">${apple}</div></div>` : '';
-  return `<article class="podcast-directory-card"><div class="detail-art music-art">${image}<button type="button" class="podcast-cover-add icon-button" data-podcast-add="${index}" aria-label="${escapeHtml(label + item.title)}" title="${escapeHtml(label + item.title)}" ${state.podcasts?.busy || subscribed ? 'disabled' : ''}>${renderIcon(subscribed ? 'check' : 'plus')}</button>${menu}</div><h3>${escapeHtml(item.title)}</h3><p class="muted">${escapeHtml(item.author ?? '')}</p></article>`;
+  return `<article class="podcast-directory-card" data-podcast-preview-id="${escapeHtml(item.id)}" tabindex="0" aria-label="${escapeHtml(item.title)}"><div class="detail-art music-art">${image}<button type="button" class="podcast-cover-add icon-button" data-podcast-add="${index}" aria-label="${escapeHtml(label + item.title)}" title="${escapeHtml(label + item.title)}" ${state.podcasts?.busy || subscribed ? 'disabled' : ''}>${renderIcon(subscribed ? 'check' : 'plus')}</button>${menu}</div><h3>${escapeHtml(item.title)}</h3><p class="muted">${escapeHtml(item.author ?? '')}</p></article>`;
 }
 function feedForm(): string {
   if (!state.podcasts?.addFeedOpen) return '';
@@ -66,17 +66,31 @@ export function renderPodcastPage(): string {
   return `<div class="home-pinned-header"><header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Podcasts"><nav class="browse-tabs" aria-label="Podcast views">${tabs}</nav><div class="home-navbar-tools">${renderGlobalSearchControl()}</div>${renderSearchPopover()}</header>${renderPodcastFeature(data)}</div><section class="shelf-stack panel page-panel">${content}</section>`;
 }
 
-/** Keep the same selected podcast above all tabs, falling back to discovery for new subscribers. */
-function renderPodcastFeature(data: typeof state.podcasts): string {
-  const candidates = data?.home?.shelves.flatMap(shelf => shelf.items) ?? [];
-  const feature = candidates.find(item => item.id === state.homePreviewItemId) ?? candidates[0] ?? data?.items[0];
-  if (feature) return renderItemFeature(feature, [...(data?.items ?? []), ...candidates]);
-  const directory = data?.tab === 'discover' ? data.directory[0] : undefined;
+/** Render the highlighted library item or a podcast from the current directory results. */
+export function renderPodcastFeature(data = state.podcasts?.owner === state.bootstrap?.current_user?.id ? state.podcasts : undefined): string {
+  const catalog = [...(data?.home?.shelves.flatMap(shelf => shelf.items) ?? []), ...(data?.items ?? [])];
+  const search = state.searchQuery.trim() ? state.searchResults.flatMap(result => result.result_type === 'item' ? [result.item] : []) : [];
+  const libraryCandidates = data?.tab === 'library' ? data.items : catalog;
+  const candidates = search.length ? search : libraryCandidates;
+  if (search.length || data?.tab !== 'discover') {
+    const feature = candidates.find(item => item.id === state.homePreviewItemId) ?? candidates[0];
+    if (feature) return renderItemFeature(feature, [...catalog, ...search]);
+  }
+  return renderPodcastDirectoryFeature(data);
+}
+
+function renderPodcastDirectoryFeature(data: typeof state.podcasts): string {
+  const index = data?.directory.findIndex(item => item.id === data.previewDirectoryId) ?? -1;
+  const selectedIndex = Math.max(0, index);
+  const directory = data?.tab === 'discover' ? data.directory[selectedIndex] : undefined;
   const title = directory?.title ?? 'Podcasts';
   const artwork = podcastLink(directory?.artwork_url);
   const copy = directory?.author ?? 'Discover popular podcasts or add an RSS feed to start listening.';
-  const disabled = data?.busy ? 'disabled' : '';
-  const action = directory ? `<button type="button" class="secondary-button home-feature-action" data-podcast-add="0" ${disabled}>${renderButtonContent('Add podcast', 'plus')}</button>` : '';
+  const subscribed = directory && data?.items.some(show => show.podcast?.feed_url === directory.feed_url);
+  const disabled = data?.busy || subscribed ? 'disabled' : '';
+  const label = subscribed ? 'Already added' : 'Add podcast';
+  const icon = subscribed ? 'check' : 'plus';
+  const action = directory ? `<button type="button" class="secondary-button home-feature-action" data-podcast-add="${selectedIndex}" ${disabled}>${renderButtonContent(label, icon)}</button>` : '';
   const cover = artwork ? `<img class="podcast-feature-cover" src="${escapeHtml(artwork)}" alt="" referrerpolicy="no-referrer"/>` : '';
   return `<section class="home-feature home-feature-podcast" data-nav-section="featured" data-nav-label="Featured">${cover}<div class="home-feature-copy"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(copy)}</p></div>${action}</section>`;
 }

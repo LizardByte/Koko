@@ -1,7 +1,8 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
-import { bindPodcastActions, retryPodcastAction } from './podcastActions';
+import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
+import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
@@ -294,9 +295,13 @@ function bindHomeFeatureAction(): void {
 function refreshHomeFeatureElement(backdropUrl: string | undefined): void {
   const root = document.querySelector<HTMLElement>('.home-feature');
   if (root) {
-    root.outerHTML = renderHomeFeature();
+    root.outerHTML = state.route.page === 'podcasts' ? renderPodcastFeature() : renderHomeFeature();
     createIcons({ icons });
     bindHomeFeatureAction();
+    const feature = document.querySelector<HTMLElement>('.home-feature');
+    if (state.route.page === 'podcasts' && feature && activeBindingContext) {
+      bindPodcastAddActions(feature, activeBindingContext, renderEventController?.signal);
+    }
   }
   updatePageBackdrop(backdropUrl);
 }
@@ -304,11 +309,15 @@ function refreshHomeFeatureElement(backdropUrl: string | undefined): void {
 
 
 function activatePreviewItem(itemId: number): void {
-  if (state.route.page === 'podcasts' || state.route.page === 'browse-detail' || !Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
+  if (state.route.page === 'browse-detail' || !Number.isFinite(itemId) || state.homePreviewItemId === itemId) {
     return;
   }
   state.homePreviewItemId = itemId;
   state.homePreviewCollectionId = undefined;
+  if (state.route.page === 'podcasts') {
+    refreshHomeFeatureElement(undefined);
+    return;
+  }
   const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
   const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
   refreshHomeFeatureElement(pageBackdropUrlForItem(previewItem));
@@ -1486,6 +1495,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
   document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach(bindPreviewItemElement);
   document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach(bindPreviewCollectionElement);
+  bindPodcastDirectoryPreviews(document, () => refreshHomeFeatureElement(undefined));
   bindHomeFeatureAction();
   document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
     const button = document.querySelector<HTMLButtonElement>('#scan-active-library');

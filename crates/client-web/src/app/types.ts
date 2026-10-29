@@ -114,7 +114,7 @@ export interface AppState {
   libraries: MediaLibrary[];
   home?: MediaHome;
   /** Discovery and subscription data belong to the account that requested them. */
-  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; home?: MediaHome; tab?: 'recommended' | 'library' | 'discover'; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
+  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; query: string; home?: MediaHome; tab?: 'recommended' | 'library' | 'discover'; previewDirectoryId?: string; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
   /** Retry only the failed podcast action belonging to the current account and visible error. */
   podcastRetry?: { owner: number; message: string; route: AppRoute; run: () => Promise<void> };
   /** In-flight season paging is scoped to the selected item and account. */

@@ -37,9 +37,10 @@ test('episodes default oldest first and can reverse chronologically without muta
 test('directory failure preserves subscriptions and manual RSS entry and hides another account data', () => {
   state.bootstrap = { current_user: { id: 1 } };
   state.podcasts = { owner: 1, items: [episode(100, { item_type: 'podcast', display_title: 'Private show' })], directory: [], country: 'us', query: '', loading: false, error: 'Directory is unavailable', addFeedOpen: true, tab: 'discover' };
-  const html = renderPodcastPage();
-  assert.match(html, /Private show/);
-  assert.match(html, /podcast-feed-form/);
+  state.podcasts.tab = 'library';
+  assert.match(renderPodcastPage(), /Private show/);
+  state.podcasts.tab = 'discover';
+  assert.match(renderPodcastPage(), /podcast-feed-form/);
   state.podcasts.tab = 'discover';
   assert.match(renderPodcastPage(), /Directory is unavailable/);
   state.bootstrap.current_user.id = 2;
@@ -226,7 +227,7 @@ test('all podcast tabs share the normal full-width hero and one content panel', 
   state.bootstrap = { current_user: { id: 1 } };
   state.searchQuery = ''; state.showFullSearchResults = false;
   const show = episode(100, { item_type: 'podcast', playable: false, display_title: 'Shared featured show' });
-  state.podcasts = { owner: 1, items: [show], directory: [], country: 'gb', query: '', loading: false };
+  state.podcasts = { owner: 1, items: [show], directory: [{ id: 'featured', title: 'Directory show', feed_url: 'https://example.com/feed', artwork_url: 'https://example.com/art.jpg' }], country: 'gb', query: '', loading: false };
   for (const tab of ['recommended', 'library', 'discover']) {
     state.podcasts.tab = tab;
     const html = renderPodcastPage();

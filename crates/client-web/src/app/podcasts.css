@@ -30,7 +30,6 @@
 .podcast-download-status .rail-icon, .podcast-download-status svg { width: 16px; height: 16px; }
 .podcast-download-status.is-downloaded { color: var(--accent, #76d79a); }
 .podcast-page-sentinel { display: flex; justify-content: center; align-items: center; gap: 1rem; padding: 1.5rem; }
-.home-feature-podcast { isolation: isolate; min-height: 300px; }
 .home-feature-podcast::before { filter: blur(32px); opacity: .25; }
 .podcast-feature-cover { position: absolute; right: 8%; top: 10%; height: 75%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; box-shadow: 0 20px 50px #0008; }
 .home-feature-podcast .home-feature-copy { max-width: 55%; position: relative; }

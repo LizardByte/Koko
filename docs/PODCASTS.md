@@ -7,6 +7,9 @@ update as you type; select **X** to clear the search and return to popular shows
 come from Apple Podcasts. Browsing does not add any shows to your collection. No API key or
 Apple account is required.
 
+Hover over or focus a podcast to preview it in the hero. On Discover, the preview follows the
+current directory results.
+
 Select **+** on a show's cover to subscribe. Its three-dot menu opens the show in Apple
 Podcasts. Your podcasts are available only to your Koko account. Other users can add the same
 show to their own collections. **Remove** unsubscribes only your account; it does not remove

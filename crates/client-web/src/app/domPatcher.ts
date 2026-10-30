@@ -167,7 +167,7 @@ function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): voi
     const activeElement = snapshot.activeSelector
       ? document.querySelector<HTMLInputElement | HTMLTextAreaElement>(snapshot.activeSelector)
       : undefined;
-    activeElement?.focus({ preventScroll: true });
+    if (activeElement && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
     if (snapshot.activeSelection && activeElement?.setSelectionRange) {
       activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
     }
@@ -267,6 +267,11 @@ function patchNode(current: Node, next: Node): Node {
   }
 
   if (current instanceof Element && next instanceof Element) {
+    // The player owns its live controls. Background page updates must not replace
+    // focused menus, in-progress clicks, volume, or the controls' idle state.
+    if (current.id === 'media-player-overlay' && next.id === current.id
+      && current.hasAttribute('data-player-view-key')
+      && current.getAttribute('data-player-view-key') === next.getAttribute('data-player-view-key')) return current;
     // A results refresh must preserve the user's expanded settings cards.
     const detailsOpen = current instanceof HTMLDetailsElement ? current.open : undefined;
     patchAttributes(current, next);

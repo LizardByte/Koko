@@ -5,7 +5,7 @@ import { state } from './state';
 import { startTvPlayback, stopTvPlayback } from './playbackController';
 import { bindTvDiscovery } from './liveTvDiscovery';
 import { bindTvGuideActions } from './liveTvGuideActions';
-import { channelPrograms, tvImage } from './liveTvGuideModel';
+import { channelArtwork, channelPrograms, tvImage } from './liveTvGuideModel';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -79,15 +79,16 @@ export function syncLiveTvAccount(): void {
 function play(kind: 'channels' | 'recordings', id: number): void {
   const data = state.liveTv;
   if (!data || data.owner !== state.bootstrap?.current_user?.id) return;
-  const channel = data.channels.find(c => c.id === id);
   const recording = data.recordings.find(r => r.id === id);
+  const channel = data.channels.find(c => c.id === (kind === 'channels' ? id : recording?.channel_id));
   const now = Date.now()/1000;
   const program = channel && channelPrograms(channel,data.programs).find(p => p.starts_at <= now && p.ends_at > now);
   const title = kind === 'channels' ? channel?.name : recording?.title;
   if (!title) return;
   if (kind === 'channels') { data.selectedChannelId = id; data.selectedProgramId = program?.id; }
   const image = tvImage(kind === 'channels' ? program?.metadata.image || channel?.logo : recording?.metadata.image);
-  void startTvPlayback({kind,id,title,image,url:api.tvStreamUrl(kind,id)});
+  const logo = channel ? channelArtwork(channel,data) : undefined;
+  void startTvPlayback({kind,id,title,image,logo,url:api.tvStreamUrl(kind,id)});
 }
 /** Bind route controls once per render and cancel listeners when the app replaces its DOM. */
 export function bindLiveTvActions(signal: AbortSignal, context: Context): void {

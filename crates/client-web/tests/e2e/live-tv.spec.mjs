@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 
 test('IPTV imports its guide, plays live video, releases the tuner, and saves a timed recording', async ({ page }, testInfo) => {
-  test.setTimeout(240000);
+  test.setTimeout(300000);
   page.setDefaultTimeout(15000);
   const children = new Set();
   let activeStreams = 0;
@@ -15,7 +15,10 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
   const fixture = createServer((request, response) => {
     const base = `http://127.0.0.1:${fixture.address().port}`;
     if (request.url === '/tv.m3u') {
-      response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="test-tv" tvg-chno="7.1" group-title="News",Live Test TV\n${base}/stream.ts\n#EXTINF:-1 tvg-id="hls-tv" tvg-chno="7.2",HLS Test TV\n${base}/master.m3u8\n#EXTINF:-1 tvg-id="alternate-tv" tvg-chno="7.3",Alternate TV\n${base}/stream.ts\n`);
+      response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="test-tv" tvg-chno="7.1" tvg-logo="${base}/logo.svg" group-title="News",Live Test TV\n${base}/stream.ts\n#EXTINF:-1 tvg-id="hls-tv" tvg-chno="7.2",HLS Test TV\n${base}/master.m3u8\n#EXTINF:-1 tvg-id="alternate-tv" tvg-chno="7.3",Alternate TV\n${base}/stream.ts\n`);
+    } else if (request.url === '/logo.svg') {
+      response.setHeader('Content-Type','image/svg+xml');
+      response.end('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="#3a8"/><text y="40" x="15" fill="white" font-size="30">TV</text></svg>');
     } else if (request.url === '/master.m3u8') {
       response.setHeader('Content-Type', 'application/octet-stream');
       response.write('#EXT');
@@ -116,6 +119,20 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     expect(viewport.x).toBe(0); expect(viewport.y).toBe(0); expect(viewport.height).toBe(900);
     await page.getByRole('button',{name:'Pause',exact:true}).click();
     await page.getByRole('button',{name:'Play',exact:true}).click();
+    await expect(page.locator('.player-channel-heading h2')).toHaveText('Live Test TV');
+    await expect.poll(()=>page.locator('.player-channel-logo').evaluate(image=>image.naturalWidth)).toBeGreaterThan(0);
+    await page.locator('#player-volume').evaluate(input=>{input.value='0.27';input.dispatchEvent(new Event('input',{bubbles:true}));});
+    // Refresh the surrounding app much more frequently than the real guide timer.
+    // These updates must not rebind controls, change volume, or replace SVG click targets.
+    await page.evaluate(()=>{
+      window.tvCloseIcon=document.querySelector('#close-player svg');
+      window.tvQuality=document.querySelector('#player-quality');
+      window.tvRefreshTimer=setInterval(()=>document.querySelector('[data-tv-refresh]')?.click(),750);
+    });
+    await page.getByLabel('Playback quality',{exact:true}).focus();
+    await page.waitForTimeout(2200);
+    expect(await page.evaluate(()=>window.tvQuality===document.activeElement && window.tvQuality===document.querySelector('#player-quality'))).toBe(true);
+    await page.locator('.media-player-shell').focus();
     await page.mouse.move(5,5);
     await expect(page.locator('.media-player-shell')).toHaveClass(/is-controls-hidden/);
     const steady = await page.locator('#media-player').evaluate(async video=>{
@@ -126,17 +143,33 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
       return {elapsed:video.currentTime-start,waits};
     });
     expect(steady.elapsed).toBeGreaterThan(10); expect(steady.waits).toBeLessThanOrEqual(1);
+    await expect(page.locator('.media-player-shell')).toHaveClass(/is-controls-hidden/);
+    expect(await page.locator('#media-player').evaluate(video=>video.volume)).toBe(0.27);
+    expect(await page.evaluate(()=>window.tvCloseIcon===document.querySelector('#close-player svg'))).toBe(true);
+    await page.evaluate(()=>clearInterval(window.tvRefreshTimer));
     await page.locator('.media-player-shell').hover();
     expect(activeStreams).toBe(1);
     const video = await page.locator('#media-player').elementHandle();
     const originalSource = await video.getAttribute('src');
     const bufferId = new URL(originalSource,'http://localhost').pathname.split('/').at(-2);
+    // Freeze only the reported clock: readyState stays healthy, as in a decoder
+    // that stops advancing without emitting a useful stalled/error event.
+    await video.evaluate(node=>{
+      const frozen=node.currentTime;
+      Object.defineProperty(node,'currentTime',{configurable:true,get:()=>frozen});
+    });
+    await expect.poll(()=>page.locator('#media-player').getAttribute('src'),{timeout:25000}).not.toBe(originalSource);
+    await expect(page.locator('#media-player')).toHaveAttribute('src',new RegExp(`sessions/${bufferId}/stream.*quality=original`));
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.currentTime>0.2),{timeout:20000}).toBeTruthy();
+    expect(await page.locator('#media-player').evaluate(node=>node.volume)).toBe(0.27);
+    expect(activeStreams).toBe(1);
+    const recoveredVideo = await page.locator('#media-player').elementHandle();
     const initialBuffer = await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json();
     await page.getByRole('button',{name:'Pause',exact:true}).click();
     await expect.poll(async()=> (await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json()).end_ms,{timeout:15000}).toBeGreaterThan(initialBuffer.end_ms);
     await page.getByRole('button',{name:'Play',exact:true}).click();
     await page.getByRole('button', { name:'Close player',exact:true }).click();
-    expect(await video.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
+    expect(await recoveredVideo.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
     await expect(page.locator('.tv-preview-player')).toBeVisible();
     await expect(page.locator('#tv-guide-hero #tv-hero-media .tv-preview-player #media-player')).toHaveCount(1);
     await expect(page.locator('.tv-preview-player .player-controls')).toHaveCount(0);
@@ -148,7 +181,7 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     expect(activeStreams).toBe(1);
     await page.locator('[data-tv-channel-view="recent"]').click();
     await expect(page.locator('.tv-guide-row')).toHaveCount(3);
-    expect(await video.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
+    expect(await recoveredVideo.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
     await page.getByRole('button',{name:'Expand player',exact:true}).click();
     await page.getByLabel('Playback quality',{exact:true}).selectOption('720p');
     await expect(page.locator('#media-player')).toHaveAttribute('src',new RegExp(`sessions/${bufferId}/stream.*quality=720p`));
@@ -176,8 +209,18 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:45000}).toBeTruthy();
     const keepResponse = page.waitForResponse(response=>response.url().endsWith('/keep') && response.request().method()==='POST');
     await page.getByRole('button',{name:'Keep recording',exact:true}).click();
+    await expect(page.getByRole('menu',{name:'Keep recording',exact:true})).toBeVisible();
+    const recordingButton=await page.locator('#player-keep-tv').boundingBox();
+    const recordingMenu=await page.locator('#player-recording-menu').boundingBox();
+    expect(recordingMenu.y+recordingMenu.height).toBeLessThan(recordingButton.y);
+    await page.evaluate(()=>document.querySelector('[data-tv-refresh]').click());
+    await page.waitForTimeout(1000);
+    await expect(page.getByRole('menu',{name:'Keep recording',exact:true})).toBeVisible();
+    await page.getByRole('menuitem',{name:/Shared recording/}).click();
     const keptResult = await keepResponse;
     expect(keptResult.ok()).toBeTruthy();
+    expect(keptResult.request().postDataJSON()).toEqual({private:false});
+    await expect(page.getByRole('button',{name:'Recording kept',exact:true})).toBeDisabled();
     const keptId = await keptResult.json();
     await expect.poll(async()=> (await stat(testInfo.outputPath('dvr-storage',`recording-${keptId}.ts`)).catch(()=>({size:0}))).size).toBeGreaterThan(0);
     expect(activeStreams).toBe(1);
@@ -327,6 +370,7 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   const channel = (id,source_id,name,number) => ({id,source_id,name,number,source_key:String(id),guide_key:String(id),group_name:'',enabled:true,available:true});
   const channels = [channel(101,10,'Local News','9.1'),channel(102,10,'Sports Network','13.6'),channel(201,20,'Cable Movies','1'),...Array.from({length:20},(_,i)=>channel(300+i,10,`News ${i+1}`,String(20+i)))];
   channels[0].logo='/api/v1/live-tv/channels/101/artwork';
+  channels[1].logo='/api/v1/live-tv/channels/102/artwork';
   const cover='https://zpmc.tmsimg.com/assets/p13159645_b_v13_aa.jpg?w=165';
   const poster='https://zpmc.tmsimg.com/assets/poster_b_v13_aa.jpg?w=165';
   const logo='https://zpmc.tmsimg.com/h3/NowShowing/45738/station.png?w=55';
@@ -340,6 +384,7 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   await page.route('**/api/v1/live-tv/channels',route=>route.fulfill({json:channels}));
   await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs,stations:[{source_id:10,guide_key:'101',name:'Local News',number:'9.1',aliases:[],logo}],sources:[{id:10,name:'Antenna',kind:'hdhomerun'},{id:20,name:'Cable',kind:'nextpvr'}],preferences:{favorites:[],recent:[]}}}));
   await page.route('**/api/v1/live-tv/channels/101/artwork',route=>route.fulfill({status:404}));
+  await page.route('**/api/v1/live-tv/channels/102/artwork',route=>route.fulfill({status:404}));
   await page.route('https://zpmc.tmsimg.com/**',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g"><stop stop-color="#15394f"/><stop offset="1" stop-color="#244b43"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><text x="60" y="290" fill="#c7f5e0" font-size="70" font-family="sans-serif">Koko Live TV</text></svg>'}));
   await page.goto('/');
   await page.getByLabel('Username',{exact:true}).fill('playback-admin');
@@ -360,6 +405,31 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   await expect.poll(()=>page.locator('#tv-guide-hero .tv-hero-channel-logo').evaluate(image=>image.naturalWidth)).toBeGreaterThan(0);
   await expect(page.locator('#tv-guide-hero .tv-hero-channel-logo')).toHaveAttribute('src',/w=320/);
   await expect(page.locator('#tv-guide-scroll')).toHaveCount(1);
+  await expect(page.locator('[data-tv-select-channel="102"] .tv-channel-logo')).toBeHidden();
+  const textPositions=await page.locator('.tv-channel-select > span:last-child').evaluateAll(labels=>labels.map(label=>label.getBoundingClientRect().left));
+  expect(new Set(textPositions).size).toBe(1);
+  await page.setViewportSize({width:390,height:844});
+  const mobilePositions=await page.locator('.tv-channel-select > span:last-child').evaluateAll(labels=>labels.map(label=>label.getBoundingClientRect().left));
+  expect(new Set(mobilePositions).size).toBe(1);
+  await page.setViewportSize({width:1440,height:900});
+  const guideEdges = () => page.locator('#tv-guide-scroll').evaluate(scroll=>{
+    const box=selector=>scroll.querySelector(selector).getBoundingClientRect();
+    const corner=box('.tv-guide-corner'),tick=box('.tv-guide-tick'),header=box('.tv-guide-time-row');
+    const channel=box('.tv-guide-channel'),track=box('.tv-guide-track'),first=box('#tv-program-101-1'),next=box('#tv-program-101-2');
+    const style=getComputedStyle(scroll.querySelector('#tv-program-101-1'));
+    return {cornerEdge:Math.abs(corner.right-channel.right),timeEdge:Math.abs(tick.left-track.left),
+      headerBottom:Math.abs(corner.bottom-tick.bottom),overflow:Math.max(corner.bottom,tick.bottom)-header.bottom,
+      topGap:Math.abs(first.top-track.top),programGap:Math.abs(first.right-next.left),
+      borders:[style.borderTopWidth,style.borderRightWidth,style.borderBottomWidth,style.borderLeftWidth],radius:style.borderRadius};
+  });
+  for(const fontSize of ['16px','24px']) {
+    await page.evaluate(size=>{document.documentElement.style.fontSize=size;},fontSize);
+    const edges=await guideEdges();
+    for(const gap of [edges.cornerEdge,edges.timeEdge,edges.headerBottom,edges.overflow,edges.topGap,edges.programGap]) expect(gap).toBeLessThanOrEqual(1);
+    expect(edges.borders).toEqual(['0px','1px','0px','0px']);
+    expect(edges.radius).toBe('0px');
+  }
+  await page.evaluate(()=>{document.documentElement.style.fontSize='';});
   const alignment = await page.locator('#tv-guide-scroll').evaluate(scroll => {
     const header=scroll.querySelector('.tv-guide-tick'), program=scroll.querySelector('.tv-guide-program'), channel=scroll.querySelector('.tv-guide-channel');
     const before={header:header.getBoundingClientRect().left,program:program.getBoundingClientRect().left,channel:channel.getBoundingClientRect().left};

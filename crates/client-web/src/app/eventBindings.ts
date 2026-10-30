@@ -505,7 +505,9 @@ function eventListenerOptionsWithSignal(
     return { signal };
   }
 
-  return { ...options, signal };
+  // Long-lived media bindings have their own lifetime while the surrounding page
+  // refreshes. Only supply the render signal when a caller did not provide one.
+  return { ...options, signal: options.signal ?? signal };
 }
 
 /** Binds all event handlers for the current rendered DOM tree. */

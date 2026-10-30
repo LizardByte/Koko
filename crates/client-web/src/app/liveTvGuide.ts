@@ -69,7 +69,7 @@ function programCell(channel: TvChannel, program: TvProgram, data: LiveTvState):
   const selected = data.selectedProgramId === program.id && data.selectedChannelId === channel.id;
   const dimmed = !matchesTvCategory(program, data.category);
   const subtitle = program.metadata.subtitle ? `<span class="tv-guide-subtitle">${escape(program.metadata.subtitle)}</span>` : '';
-  return `<button id="tv-program-${channel.id}-${program.id}" type="button" class="tv-guide-program${onAir ? ' is-on-air' : ''}${dimmed ? ' is-dimmed' : ''}" data-tv-select-program="${program.id}" data-tv-select-channel="${channel.id}" aria-pressed="${selected}" aria-label="${escape(program.title)}, ${escape(tvTime(program.starts_at))} to ${escape(tvTime(program.ends_at))}" style="left:${position.left}%;width:calc(${position.width}% - 2px)">
+  return `<button id="tv-program-${channel.id}-${program.id}" type="button" class="tv-guide-program${onAir ? ' is-on-air' : ''}${dimmed ? ' is-dimmed' : ''}" data-tv-select-program="${program.id}" data-tv-select-channel="${channel.id}" aria-pressed="${selected}" aria-label="${escape(program.title)}, ${escape(tvTime(program.starts_at))} to ${escape(tvTime(program.ends_at))}" style="left:${position.left}%;width:${position.width}%">
     <strong>${escape(program.title)}</strong>${subtitle}<span class="tv-guide-badges">${badges(program)}</span></button>`;
 }
 
@@ -77,7 +77,7 @@ function channelRow(channel: TvChannel, data: LiveTvState): string {
   const favorite = data.preferences?.favorites.includes(channel.id) === true;
   const programs = channelPrograms(channel, data.programs).map(p => programCell(channel, p, data)).join('');
   return `<div class="tv-guide-row" role="row"><div class="tv-guide-channel" role="rowheader"><button type="button" class="tv-channel-select" data-tv-select-channel="${channel.id}" aria-label="Details for ${escape(channel.name)}">
-    ${channelLogo(channel,data)}<span><strong>${escape(channel.number)}</strong><span>${escape(channel.name)}</span></span></button>
+    <span class="tv-channel-logo-slot" aria-hidden="true">${channelLogo(channel,data)}</span><span><strong>${escape(channel.number)}</strong><span>${escape(channel.name)}</span></span></button>
     <div class="tv-channel-actions"><button type="button" data-tv-play="${channel.id}" aria-label="Watch ${escape(channel.name)} live">${renderIcon('play')}</button>
     <button type="button" data-tv-favorite="${channel.id}" aria-pressed="${favorite}" aria-label="${favorite ? 'Remove' : 'Add'} ${escape(channel.name)} ${favorite ? 'from' : 'to'} favorites">${renderIcon('star')}</button></div></div>
     <div class="tv-guide-track" role="cell">${programs || '<span class="tv-guide-no-listings">No listings available · Watch this channel live</span>'}</div></div>`;

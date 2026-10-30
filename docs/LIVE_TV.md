@@ -96,18 +96,21 @@ recordings by time even without guide data.
 Watching a channel automatically starts a temporary recording. Playback uses this buffer, so
 you can pause, rewind within the available buffer, and change playback quality. You can only rewind
 as far as the point when you started watching. Choose **Go live** to return to the live edge.
+If playback stalls, Koko tries to reconnect automatically. You can still choose **Go live**
+or **Retry playback** if it cannot recover.
 
 Closing the full player keeps the channel playing as the hero's artwork. Choose **Expand player** to
 return to the full player, or choose **Stop playback** to stop it. Changing channels or leaving
 Live TV stops that channel's temporary recording and removes its buffer.
 
-Choose **Keep recording** in the full player to save the available buffered portion of the
-current program and continue recording until its scheduled end. If listings are missing, it
+Choose the recording icon in the full player's playback bar, then **Shared recording** or
+**Private recording**, to save the available buffered portion of the current program and
+continue recording until its scheduled end. If listings are missing, it
 records for one hour from when you choose to keep it. Kept recordings continue when you
 change channel or leave Live TV; watching another channel then requires another available
 stream. Use **Stop recording** under **Recordings** to end one early.
 
-Kept recordings are shared by default. Choose **Private** before keeping one to limit access
+Choose **Shared recording** to make it available to all accounts, or **Private recording** to limit access
 to your account. Accounts without recording permission can use temporary playback buffers
 but cannot keep them. Buffers use the configured DVR save folder and need free disk space.
 

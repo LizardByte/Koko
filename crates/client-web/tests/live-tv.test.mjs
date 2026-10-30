@@ -16,6 +16,7 @@ const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { programPosition, programBadges, matchesTvCategory, visibleGuideChannels, guideSources } = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
 const { renderPlayerOverlay } = await server.ssrLoadModule('/src/app/playbackController.ts');
+const { TvPlaybackWatchdog } = await server.ssrLoadModule('/src/app/tvPlaybackRecovery.ts');
 const now = Math.floor(Date.now() / 1000);
 const channel = { id: 1, source_id: 1, source_key: 'source', name: 'Test TV', number: '7.1', group_name: 'News', guide_key: 'station', enabled: true, available: true };
 const program = { id: 1, source_id: 1, guide_key: 'station', title: 'News', starts_at: now - 30, ends_at: now + 3600, metadata: { description: 'Evening news', categories: ['News'], credits: ['Presenter'] } };
@@ -64,12 +65,18 @@ test('Zap2It logos and cover art request larger sizes while other hosts remain u
 
 test('TV uses the shared video player in both overlay and hero modes without exposing another account', () => {
   state.bootstrap={current_user:{id:1,admin:true}};
-  state.activeTvPlayback={owner:1,kind:'channels',id:5,title:'Live news',url:'/api/v1/live-tv/sessions/test/stream',buffer:{session_id:'test',start_ms:0,end_ms:12000,can_keep:true}};
+  state.activeTvPlayback={owner:1,kind:'channels',id:5,title:'Live news',logo:'/channel-logo.png',url:'/api/v1/live-tv/sessions/test/stream',buffer:{session_id:'test',start_ms:0,end_ms:12000,can_keep:true}};
   state.isPlayerOpen=true;
   let dom=new JSDOM(renderPlayerOverlay());
   assert.ok(dom.window.document.querySelector('.media-player-shell video#media-player'));
   assert.ok(dom.window.document.querySelector('#player-quality'));
   assert.ok(dom.window.document.querySelector('#player-keep-tv'));
+  assert.ok(dom.window.document.querySelector('.player-bottom-controls #player-keep-tv'));
+  assert.equal(dom.window.document.querySelector('.player-top-controls #player-keep-tv'),null);
+  assert.equal(dom.window.document.querySelector('#player-recording-menu').hidden,true);
+  assert.equal(dom.window.document.querySelectorAll('#player-recording-menu [role="menuitem"]').length,2);
+  assert.equal(dom.window.document.querySelector('.player-channel-logo').getAttribute('src'),'/channel-logo.png');
+  assert.equal(dom.window.document.querySelector('.player-channel-heading h2').textContent,'Live news');
   assert.equal(dom.window.document.querySelector('video').hasAttribute('controls'),false);
   const source=dom.window.document.querySelector('video').getAttribute('src'); dom.window.close();
   state.isPlayerOpen=false; dom=new JSDOM(renderPlayerOverlay());
@@ -78,6 +85,27 @@ test('TV uses the shared video player in both overlay and hero modes without exp
   state.bootstrap.current_user.id=2;
   assert.equal(renderPlayerOverlay(),'');
   state.activeTvPlayback=undefined;
+});
+
+test('TV recovery detects frozen clocks, respects pauses, and caps retries across decoder replacements',()=>{
+  const watchdog=new TvPlaybackWatchdog();
+  const playing={position:1000,paused:false,interrupted:false,unavailable:false};
+  watchdog.attach(1000,0);
+  assert.equal(watchdog.observe(playing,11999),undefined);
+  assert.equal(watchdog.observe(playing,12000),'recover');
+  watchdog.attach(1000,12000);
+  assert.equal(watchdog.observe({...playing,interrupted:true},13000),undefined);
+  assert.equal(watchdog.observe(playing,27000),'recover');
+  watchdog.attach(1000,27000);
+  assert.equal(watchdog.observe(playing,42000),'recover');
+  watchdog.attach(1000,42000);
+  assert.equal(watchdog.observe(playing,57000),'exhausted');
+  assert.equal(watchdog.observe({...playing,paused:true},90000),undefined);
+  assert.equal(watchdog.observe(playing,91000),undefined);
+  for(let second=92;second<=124;second+=2) watchdog.observe({...playing,position:1000+(second-91)*1000},second*1000);
+  assert.equal(watchdog.attempts,0);
+  assert.equal(watchdog.observe({...playing,position:34000,interrupted:true},125000),'recover');
+  assert.equal(watchdog.observe({...playing,unavailable:true,interrupted:true},200000),undefined);
 });
 test('guide mappings require the correct source and honor explicit overrides', () => {
   const rows = [program, { ...program, id: 2, source_id: 2 }, { ...program, id: 3, guide_key: 'override' }];

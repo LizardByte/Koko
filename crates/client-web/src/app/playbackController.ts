@@ -16,7 +16,7 @@ import {
   resolveApiUrl,
   updatePlaybackProgress,
 } from '../api';
-import { PLAYBACK_QUALITIES, mediaPlaybackProblem, playbackDeliveryLabel, playbackProfile, playbackRequestProblem, renderPlaybackProblem, renderPlaybackQuality, type PlaybackQuality, type PlaybackProblem } from './playbackOptions';
+import { PLAYBACK_QUALITIES, mediaPlaybackProblem, playbackDeliveryDetail, playbackDeliveryLabel, playbackProfile, playbackRequestProblem, renderPlaybackProblem, renderPlaybackQuality, type PlaybackQuality, type PlaybackProblem } from './playbackOptions';
 import { YOUTUBE_PLAYER_STATE, YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID } from './constants';
 import { escapeHtml, formatDuration, formatMediaTime } from './format';
 import { currentThemeSongTarget } from './mediaTargets';
@@ -258,18 +258,20 @@ function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string): st
     : `<h2>${escapeHtml(title)}</h2>`;
 }
 
-function renderTranscodeBadge(isRemuxingForAudio: boolean): string {
+function renderTranscodeBadge(isAudioStreamOverride: boolean): string {
   const session = state.activePlaybackSession;
   if (!session) {
     return '';
   }
 
-  const transcodeReason = isRemuxingForAudio
+  const transcodeReason = isAudioStreamOverride
     ? 'Using this audio track requires a converted stream.'
     : session.decision.reason;
-  const label = playbackDeliveryLabel(session.decision, isRemuxingForAudio);
+  const label = playbackDeliveryLabel(session.decision, isAudioStreamOverride);
+  const detail = playbackDeliveryDetail(session.decision, isAudioStreamOverride);
+  const tooltip = `${detail}\n${transcodeReason}`;
   const className = label === 'Direct Play' ? 'is-direct' : 'is-transcoding';
-  return `<span class="player-badge ${className}" title="${escapeHtml(transcodeReason)}">${label}</span>`;
+  return `<span class="player-badge ${className}" title="${escapeHtml(tooltip)}">${label}</span>`;
 }
 
 function selectedAudioStreamIndexForPlayback(session: PlaybackSession): number | undefined {
@@ -354,7 +356,7 @@ function renderMediaPlayerOverlay(): string {
             ${renderPlayerTitleMarkup(logoUrl, playbackItem.display_title)}
           </div>
           <div class="player-top-actions">
-            ${renderTranscodeBadge(isRemuxingForAudio)}
+            ${renderTranscodeBadge(isAudioStreamOverride)}
             <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
           </div>
         </div>

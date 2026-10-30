@@ -36,11 +36,17 @@ export function renderPlaybackQuality(quality: PlaybackQuality): string {
   return `<label class="player-quality">Quality <select id="player-quality" aria-label="Playback quality">${options}</select></label>`;
 }
 
-/** Distinguishes file delivery, container changes, and actual audio/video conversion. */
+/** Labels direct delivery or server processing, including an alternate audio track. */
 export function playbackDeliveryLabel(decision: PlaybackDecision, audioOverride = false): string {
-  if (decision.video_transcode_required || audioOverride) return 'Video conversion';
-  if (decision.audio_transcode_required) return 'Audio conversion';
-  return decision.transcode_required ? 'Remuxing' : 'Direct Play';
+  return decision.transcode_required || audioOverride ? 'Transcoding' : 'Direct Play';
+}
+
+/** Describes the active processing mode, showing both conversions when both tracks are encoded. */
+export function playbackDeliveryDetail(decision: PlaybackDecision, audioOverride = false): string {
+  const conversions: string[] = [];
+  if (decision.video_transcode_required || audioOverride) conversions.push('Video conversion');
+  if (decision.audio_transcode_required || audioOverride) conversions.push('Audio conversion');
+  return conversions.join(' · ') || (decision.transcode_required ? 'Remuxing' : 'Direct Play');
 }
 
 /** Converts session or transport failures into useful actions without exposing server details. */

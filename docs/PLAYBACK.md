@@ -18,8 +18,10 @@ Use **Quality** in the player to choose a maximum resolution and bitrate:
 unsupported formats. Lower settings can help on slower connections, but conversion requires
 server resources. Videos smaller than the selected resolution are not enlarged.
 
-The player badge shows **Direct Play**, **Remuxing**, **Audio conversion**, or **Video conversion**,
-so you can see how Koko is delivering the video. Original quality does not guarantee direct play.
+The player badge shows **Direct Play** or **Transcoding**, so you can see whether Koko is
+delivering the original file or preparing a compatible stream. Original quality does not guarantee direct play.
+Hover over the badge to see **Remuxing**, **Audio conversion**, or **Video conversion**, along
+with the reason. When both audio and video are converted, both appear in the tooltip.
 
 If the browser rejects the original video, Koko tries compatible playback once automatically.
 After successful recovery, quality changes keep compatible playback for that video until you

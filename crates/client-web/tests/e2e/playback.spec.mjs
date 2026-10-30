@@ -182,7 +182,8 @@ test('a rejected original stream recovers at the saved position and stays workin
   expect(sessions).toHaveLength(2);
   expect(sessions[1].client_profile.force_transcode).toBeTruthy();
   await expect(page.locator('#player-current-time')).toContainText('0:3');
-  await expect(page.locator('.player-badge')).toHaveText('Video conversion');
+  await expect(page.locator('.player-badge')).toHaveText('Transcoding');
+  await expect(page.locator('.player-badge')).toHaveAttribute('title', /^Video conversion · Audio conversion\n/);
   await sessionGone(page, original);
   await sessionAfter(page, () => page.getByLabel('Playback quality').selectOption('480p'));
   await playing(page);

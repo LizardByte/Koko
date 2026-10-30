@@ -6,7 +6,7 @@ import { createServer } from 'vite';
 
 const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false, ws: false } });
 after(() => server.close());
-const { playbackProfile, playbackDeliveryLabel, playbackRequestProblem, mediaPlaybackProblem, renderPlaybackProblem, renderPlaybackQuality } = await server.ssrLoadModule('/src/app/playbackOptions.ts');
+const { playbackProfile, playbackDeliveryDetail, playbackDeliveryLabel, playbackRequestProblem, mediaPlaybackProblem, renderPlaybackProblem, renderPlaybackQuality } = await server.ssrLoadModule('/src/app/playbackOptions.ts');
 const { ApiError } = await server.ssrLoadModule('/src/api.ts');
 
 test('quality caps preserve capabilities and Original clears limits', () => {
@@ -46,8 +46,14 @@ test('decoder recovery actions avoid repeating conversion for an already convert
 test('quality and delivery labels distinguish source quality from direct play', () => {
   assert.match(renderPlaybackQuality('original'), /Original quality/);
   assert.equal(playbackDeliveryLabel({ transcode_required: false }), 'Direct Play');
-  assert.equal(playbackDeliveryLabel({ transcode_required: true }), 'Remuxing');
-  assert.equal(playbackDeliveryLabel({ transcode_required: true, audio_transcode_required: true }), 'Audio conversion');
-  assert.equal(playbackDeliveryLabel({ transcode_required: true, video_transcode_required: true }), 'Video conversion');
-  assert.equal(playbackDeliveryLabel({ transcode_required: false }, true), 'Video conversion');
+  assert.equal(playbackDeliveryLabel({ transcode_required: true }), 'Transcoding');
+  assert.equal(playbackDeliveryLabel({ transcode_required: true, audio_transcode_required: true }), 'Transcoding');
+  assert.equal(playbackDeliveryLabel({ transcode_required: true, video_transcode_required: true }), 'Transcoding');
+  assert.equal(playbackDeliveryLabel({ transcode_required: false }, true), 'Transcoding');
+  assert.equal(playbackDeliveryDetail({ transcode_required: false }), 'Direct Play');
+  assert.equal(playbackDeliveryDetail({ transcode_required: true }), 'Remuxing');
+  assert.equal(playbackDeliveryDetail({ transcode_required: true, audio_transcode_required: true }), 'Audio conversion');
+  assert.equal(playbackDeliveryDetail({ transcode_required: true, video_transcode_required: true }), 'Video conversion');
+  assert.equal(playbackDeliveryDetail({ transcode_required: true, video_transcode_required: true, audio_transcode_required: true }), 'Video conversion · Audio conversion');
+  assert.equal(playbackDeliveryDetail({ transcode_required: false }, true), 'Video conversion · Audio conversion');
 });

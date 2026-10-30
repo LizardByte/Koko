@@ -17,6 +17,11 @@ test('quality caps preserve capabilities and Original clears limits', () => {
   assert.deepEqual(limited.supported_video_codecs, browser.supported_video_codecs);
   assert.equal(browser.max_video_height, 0);
   assert.deepEqual(playbackProfile(limited, 'original', true), { ...browser, force_transcode: true });
+  const ultraHD = playbackProfile(browser, '4k', false);
+  assert.equal(ultraHD.max_video_width, 3840);
+  assert.equal(ultraHD.max_video_height, 2160);
+  assert.equal(ultraHD.max_bitrate_kbps, 25000);
+  assert.deepEqual(ultraHD.supported_video_codecs, browser.supported_video_codecs);
 });
 
 test('access failures do not suggest transcoding around restrictions', () => {
@@ -45,6 +50,7 @@ test('decoder recovery actions avoid repeating conversion for an already convert
 
 test('quality and delivery labels distinguish source quality from direct play', () => {
   assert.match(renderPlaybackQuality('original'), /Original quality/);
+  assert.match(renderPlaybackQuality('4k'), /value="4k" selected>4K · 25 Mbps<\/option>[\s\S]*value="1080p"/);
   assert.equal(playbackDeliveryLabel({ transcode_required: false }), 'Direct Play');
   assert.equal(playbackDeliveryLabel({ transcode_required: true }), 'Transcoding');
   assert.equal(playbackDeliveryLabel({ transcode_required: true, audio_transcode_required: true }), 'Transcoding');

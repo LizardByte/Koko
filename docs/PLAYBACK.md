@@ -10,6 +10,7 @@ Use **Quality** in the player to choose a maximum resolution and bitrate:
 | Quality          | Maximum bitrate |
 | ---------------- | --------------- |
 | Original quality | No limit        |
+| 4K               | 25 Mbps         |
 | 1080p            | 8 Mbps          |
 | 720p             | 4 Mbps          |
 | 480p             | 1.5 Mbps        |

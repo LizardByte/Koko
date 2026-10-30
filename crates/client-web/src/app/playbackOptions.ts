@@ -4,7 +4,7 @@ import { ApiError, type ClientProfile, type PlaybackDecision, type PlaybackSessi
 import { escapeHtml } from './format';
 
 /** A user-selected upper bound; Original retains automatic codec compatibility. */
-export type PlaybackQuality = 'original' | '1080p' | '720p' | '480p';
+export type PlaybackQuality = 'original' | '4k' | '1080p' | '720p' | '480p';
 
 /** Recovery choices available for a failed playback attempt. */
 export interface PlaybackProblem {
@@ -17,6 +17,7 @@ export interface PlaybackProblem {
 /** Fixed quality targets expressed as maximum dimensions and total bitrate in kbps. */
 export const PLAYBACK_QUALITIES = [
   { id: 'original', label: 'Original quality', width: 0, height: 0, bitrate: 0 },
+  { id: '4k', label: '4K · 25 Mbps', width: 3840, height: 2160, bitrate: 25000 },
   { id: '1080p', label: '1080p · 8 Mbps', width: 1920, height: 1080, bitrate: 8000 },
   { id: '720p', label: '720p · 4 Mbps', width: 1280, height: 720, bitrate: 4000 },
   { id: '480p', label: '480p · 1.5 Mbps', width: 854, height: 480, bitrate: 1500 },

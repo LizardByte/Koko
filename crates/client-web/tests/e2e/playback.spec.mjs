@@ -88,10 +88,15 @@ test('quality changes preserve position and pause, resize real video, and return
   await expect.poll(() => media(page).evaluate((player) => player.paused)).toBeTruthy();
   await page.getByLabel('Subtitles', { exact: true }).selectOption('0');
   await page.locator('#player-volume').evaluate((input) => { input.value = '0.35'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+  const ultraHD = await sessionAfter(page, () => page.getByLabel('Playback quality').selectOption('4k'));
+  expect(ultraHD.client_profile).toMatchObject({ max_video_width: 3840, max_video_height: 2160, max_bitrate_kbps: 25000 });
+  await sessionGone(page, original);
+  await expect.poll(() => media(page).evaluate((player) => player.videoHeight)).toBe(540);
+  expect(await media(page).evaluate((player) => player.paused)).toBeTruthy();
   const limited = await sessionAfter(page, () => page.getByLabel('Playback quality').selectOption('480p'));
   expect(limited.client_profile).toMatchObject({ max_video_width: 854, max_video_height: 480, max_bitrate_kbps: 1500 });
   expect(limited.decision.video_transcode_required).toBeTruthy();
-  await sessionGone(page, original);
+  await sessionGone(page, ultraHD);
   await expect.poll(() => media(page).evaluate((player) => player.videoHeight)).toBe(480);
   expect(await media(page).evaluate((player) => player.videoWidth)).toBeLessThanOrEqual(854);
   expect(await media(page).evaluate((player) => player.paused)).toBeTruthy();

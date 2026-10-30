@@ -3618,27 +3618,10 @@ pub fn get_playback_decision(
         let can_direct_play = item.playable && can_client_direct_play(&row, p);
         let mime_type = detect_mime_type(&row);
 
-        let video_codec =
-            if row.media_kind == "audio" { "" } else { row.video_codec.as_deref().unwrap_or("") };
-        let audio_codec = row.audio_codec.as_deref().unwrap_or("");
         let exceeds_quality_limits = row.media_kind != "audio"
             && (!within_resolution_limits(&row, p) || !within_bitrate_limit(&row, p));
-        let video_transcode_required = row.media_kind != "audio"
-            && (p.force_transcode
-                || exceeds_quality_limits
-                || !video_codec.is_empty()
-                    && !p
-                        .supported_video_codecs
-                        .iter()
-                        .any(|c| codec_matches(video_codec, c)));
-        let audio_transcode_required = p.force_transcode
-            || exceeds_quality_limits
-            || (row.media_kind == "audio" && !can_direct_play)
-            || !audio_codec.is_empty()
-                && !p
-                    .supported_audio_codecs
-                    .iter()
-                    .any(|c| codec_matches(audio_codec, c));
+        let (video_transcode_required, audio_transcode_required) =
+            playback_codec_requirements(&row, p, can_direct_play, exceeds_quality_limits);
 
         // Target codecs when transcoding is required
         let transcode_video_codec =
@@ -5329,6 +5312,35 @@ fn can_client_direct_play(
         && is_supported_audio
         && (file.media_kind == "audio"
             || (within_resolution_limits(file, profile) && within_bitrate_limit(file, profile)))
+}
+
+/// Determine which tracks require encoding while leaving compatible tracks untouched.
+fn playback_codec_requirements(
+    file: &CatalogMediaFile,
+    profile: &ClientProfile,
+    can_direct_play: bool,
+    exceeds_quality_limits: bool,
+) -> (bool, bool) {
+    let video_codec =
+        if file.media_kind == "audio" { "" } else { file.video_codec.as_deref().unwrap_or("") };
+    let audio_codec = file.audio_codec.as_deref().unwrap_or("");
+    let video_required = file.media_kind != "audio"
+        && (profile.force_transcode
+            || exceeds_quality_limits
+            || !video_codec.is_empty()
+                && !profile
+                    .supported_video_codecs
+                    .iter()
+                    .any(|codec| codec_matches(video_codec, codec)));
+    let audio_required = profile.force_transcode
+        || exceeds_quality_limits
+        || (file.media_kind == "audio" && !can_direct_play)
+        || !audio_codec.is_empty()
+            && !profile
+                .supported_audio_codecs
+                .iter()
+                .any(|codec| codec_matches(audio_codec, codec));
+    (video_required, audio_required)
 }
 
 fn within_bitrate_limit(

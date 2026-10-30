@@ -1240,7 +1240,7 @@ export function bindPlayerProgress(): void {
   const source = player.getAttribute('src') ?? '';
   let initialization = initializedMediaSources.get(player);
   initialization?.cleanup?.();
-  if (!initialization || initialization.source !== source) {
+  if (initialization?.source !== source) {
     initialization = { source, seekApplied: false, settingsApplied: false, started: false };
     initializedMediaSources.set(player, initialization);
   }

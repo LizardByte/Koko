@@ -40,7 +40,10 @@ use rocket::tokio::io::{
     AsyncSeekExt,
     Take,
 };
-use rocket::tokio::process::ChildStdout;
+use rocket::tokio::process::{
+    Child,
+    ChildStdout,
+};
 use rocket_okapi::okapi::schemars::{
     self,
     JsonSchema,
@@ -4188,6 +4191,89 @@ pub async fn get_session_status(
     Ok(Json(PlaybackSessionStatus { error }))
 }
 
+/// Drain process diagnostics without blocking FFmpeg or retaining unbounded stderr.
+async fn monitor_session_transcode(
+    mut child: Child,
+    session_id: String,
+    generation: u64,
+) {
+    let mut stderr_text = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut buffer = [0; 1024];
+        while let Ok(count) = stderr.read(&mut buffer).await {
+            if count == 0 {
+                break;
+            }
+            let keep = count.min(4096_usize.saturating_sub(stderr_text.len()));
+            stderr_text.extend_from_slice(&buffer[..keep]);
+        }
+    }
+    let status = child.wait().await;
+    if !stderr_text.is_empty() {
+        log::warn!(
+            "FFmpeg stderr: {}",
+            String::from_utf8_lossy(&stderr_text).trim()
+        );
+    }
+    if !status.is_ok_and(|status| status.success()) {
+        log::warn!("FFmpeg failed for session {}", session_id);
+        record_playback_failure(
+            &session_id,
+            generation,
+            "transcode_failed",
+            "The server could not convert this media. Try Original quality, or ask an \
+             administrator to check the source file and FFmpeg settings.",
+        )
+        .await;
+    }
+}
+
+/// Verify output before sending HTTP headers, so empty streams cannot leave browsers waiting.
+async fn read_initial_transcode_output(
+    session_id: &str,
+    generation: u64,
+    stdout: &mut ChildStdout,
+) -> Result<Vec<u8>, Status> {
+    let mut initial = vec![0; 4096];
+    let first_read = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        stdout.read(&mut initial),
+    )
+    .await;
+    let count = match first_read {
+        Ok(Ok(count)) if count > 0 => count,
+        result => {
+            let (code, message, status) = if result.is_err() {
+                (
+                    "transcode_timeout",
+                    "The server took too long to start conversion. Try a lower quality, or ask an \
+                     administrator to check FFmpeg and the server logs.",
+                    Status::GatewayTimeout,
+                )
+            } else {
+                (
+                    "transcode_failed",
+                    "The server could not convert this media. Try Original quality, or ask an \
+                     administrator to check the source file and FFmpeg settings.",
+                    Status::UnprocessableEntity,
+                )
+            };
+            record_playback_failure(session_id, generation, code, message).await;
+            // A late failure must not stop a newer stream for the same session.
+            let sessions = ACTIVE_PLAYBACK_SESSIONS.read().await;
+            if sessions
+                .get(session_id)
+                .is_some_and(|record| record.generation == generation)
+            {
+                stop_active_transcode(session_id).await;
+            }
+            return Err(status);
+        }
+    };
+    initial.truncate(count);
+    Ok(initial)
+}
+
 /// Stream content for a session (handles transcode or direct play).
 #[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>&<audio_stream_index>")]
 pub async fn get_session_stream(
@@ -4308,85 +4394,16 @@ pub async fn get_session_stream(
     match crate::transcode::spawn_transcode_stdout(&session_id, &spec, &settings.ffmpeg).await {
         Ok(mut child) => {
             let mut stdout = child.stdout.take().ok_or(Status::InternalServerError)?;
-            let stderr = child.stderr.take();
-            let transcode_session_id = session_id.clone();
-            let worker_session_id = session_id.clone();
-            let handle = tokio::spawn(async move {
-                let mut stderr_text = Vec::new();
-                if let Some(mut stderr) = stderr {
-                    // Drain stderr fully so FFmpeg cannot block, retaining only a bounded
-                    // diagnostic.
-                    let mut buffer = [0; 1024];
-                    while let Ok(count) = stderr.read(&mut buffer).await {
-                        if count == 0 {
-                            break;
-                        }
-                        let keep = count.min(4096_usize.saturating_sub(stderr_text.len()));
-                        stderr_text.extend_from_slice(&buffer[..keep]);
-                    }
-                }
-                let status = child.wait().await;
-                if !stderr_text.is_empty() {
-                    log::warn!(
-                        "FFmpeg stderr: {}",
-                        String::from_utf8_lossy(&stderr_text).trim()
-                    );
-                }
-                if !status.is_ok_and(|status| status.success()) {
-                    log::warn!("FFmpeg failed for session {}", worker_session_id);
-                    record_playback_failure(
-                        &worker_session_id,
-                        generation,
-                        "transcode_failed",
-                        "The server could not convert this media. Try Original quality, or ask an \
-                         administrator to check the source file and FFmpeg settings.",
-                    )
-                    .await;
-                }
-            });
-            if !replace_active_transcode(transcode_session_id, generation, handle).await {
+            let handle = tokio::spawn(monitor_session_transcode(
+                child,
+                session_id.clone(),
+                generation,
+            ));
+            if !replace_active_transcode(session_id.clone(), generation, handle).await {
                 return Err(Status::NotFound);
             }
-
-            // An empty successful response can leave Firefox waiting without a media error.
-            // Verify output before committing the HTTP headers, retaining those initial bytes.
-            let mut initial = vec![0; 4096];
-            let first_read = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
-                stdout.read(&mut initial),
-            )
-            .await;
-            let count = match first_read {
-                Ok(Ok(count)) if count > 0 => count,
-                result => {
-                    let (code, message, status) = if result.is_err() {
-                        (
-                            "transcode_timeout",
-                            "The server took too long to start conversion. Try a lower quality, \
-                             or ask an administrator to check FFmpeg and the server logs.",
-                            Status::GatewayTimeout,
-                        )
-                    } else {
-                        (
-                            "transcode_failed",
-                            "The server could not convert this media. Try Original quality, or \
-                             ask an administrator to check the source file and FFmpeg settings.",
-                            Status::UnprocessableEntity,
-                        )
-                    };
-                    record_playback_failure(&session_id, generation, code, message).await;
-                    // A late failure must not stop a newer stream for the same session.
-                    let sessions = ACTIVE_PLAYBACK_SESSIONS.read().await;
-                    if sessions
-                        .get(&session_id)
-                        .is_some_and(|record| record.generation == generation)
-                    {
-                        stop_active_transcode(&session_id).await;
-                    }
-                    return Err(status);
-                }
-            };
-            initial.truncate(count);
+            let initial =
+                read_initial_transcode_output(&session_id, generation, &mut stdout).await?;
 
             Ok(SessionStream::Transcode {
                 content_type: ContentType::MP4,

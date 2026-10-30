@@ -114,9 +114,9 @@ jobs:
         run: |
           npm ci --ignore-scripts
           if [[ "${KOKO_E2E_BROWSER}" == "firefox" ]]; then
-            npx playwright install --with-deps firefox
+            node node_modules/playwright/cli.js install --with-deps firefox
           else
-            npx playwright install --with-deps chrome
+            node node_modules/playwright/cli.js install --with-deps chrome
           fi
 
       - name: Test real browser playback

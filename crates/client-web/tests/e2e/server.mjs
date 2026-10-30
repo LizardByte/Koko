@@ -6,6 +6,7 @@ import { createServer as createTcpServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url));
 const root = await mkdtemp(resolve(tmpdir(), 'koko-playback-e2e-'));
@@ -26,7 +27,7 @@ async function run(command, args, options = {}) {
   });
 }
 
-async function request(path, method = 'GET', body, token) {
+async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${baseURL}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
@@ -34,11 +35,19 @@ async function request(path, method = 'GET', body, token) {
   return response.headers.get('content-type')?.includes('application/json') ? response.json() : undefined;
 }
 
+/** Poll dependent server state without overlapping requests or leaving timers running. */
+async function waitUntil(check, message, attempts = 120) {
+  if (await check()) return;
+  if (attempts === 0) throw new Error(message);
+  await delay(250);
+  return waitUntil(check, message, attempts - 1);
+}
+
 async function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   readiness.close();
-  if (child && child.exitCode === null) {
+  if (child?.exitCode === null) {
     const exited = new Promise((done) => child.once('exit', done));
     child.kill('SIGTERM');
     await Promise.race([exited, new Promise((done) => setTimeout(done, 5000))]);
@@ -84,27 +93,25 @@ try {
   child = spawn(executable, [], { cwd: workspace, windowsHide: true, stdio: 'inherit',
     env: { ...process.env, KOKO_SETTINGS_DIR: root, KOKO_SETTINGS_PATH: settingsPath, ROCKET_WORKERS: '2' } });
   child.once('error', (error) => { console.error(error); void shutdown(1); });
-  for (let attempt = 0; ; attempt++) {
-    try { await request('/api/v1/bootstrap'); break; }
+  await waitUntil(async () => {
+    try { await request('/api/v1/bootstrap'); return true; }
     catch (error) {
-      if (attempt >= 120 || child.exitCode !== null) throw error;
-      await new Promise((done) => setTimeout(done, 250));
+      if (child.exitCode !== null) throw error;
+      return false;
     }
-  }
-  await request('/create_user', 'POST', { username: 'playback-admin', password: process.env.KOKO_E2E_PASSWORD, admin: true });
-  const login = await request('/login', 'POST', { username: 'playback-admin', password: process.env.KOKO_E2E_PASSWORD });
+  }, 'The playback test server did not become ready.');
+  await request('/create_user', { method: 'POST', body: { username: 'playback-admin', password: process.env.KOKO_E2E_PASSWORD, admin: true } });
+  const login = await request('/login', { method: 'POST', body: { username: 'playback-admin', password: process.env.KOKO_E2E_PASSWORD } });
   const token = login.token;
-  const response = await request('/api/v1/settings', 'GET', undefined, token);
+  const response = await request('/api/v1/settings', { token });
   response.settings.metadata.providers = response.settings.metadata.providers.map((provider) => ({ ...provider, enabled: false }));
-  await request('/api/v1/settings', 'PUT', response.settings, token);
-  await request('/api/v1/settings/libraries', 'POST', { library: { name: 'Playback E2E', path: media, paths: [media], kind: 'home_videos', scanner: 'directory', metadata_providers: [] } }, token);
-  const libraries = await request('/api/v1/libraries', 'GET', undefined, token);
-  for (let attempt = 0; ; attempt++) {
-    const items = await request(`/api/v1/items?library_id=${libraries[0].id}`, 'GET', undefined, token);
-    if (['Playback Sample', 'Broken Sample', 'Missing Sample'].every((title) => items.some((item) => item.display_title === title))) break;
-    if (attempt >= 120) throw new Error('Media scan did not publish the playback fixtures.');
-    await new Promise((done) => setTimeout(done, 250));
-  }
+  await request('/api/v1/settings', { method: 'PUT', body: response.settings, token });
+  await request('/api/v1/settings/libraries', { method: 'POST', body: { library: { name: 'Playback E2E', path: media, paths: [media], kind: 'home_videos', scanner: 'directory', metadata_providers: [] } }, token });
+  // This database contains only this suite's library; keep request URLs independent of response data.
+  await waitUntil(async () => {
+    const items = await request('/api/v1/items', { token });
+    return ['Playback Sample', 'Broken Sample', 'Missing Sample'].every((title) => items.some((item) => item.display_title === title));
+  }, 'Media scan did not publish the playback fixtures.');
   // A separate loopback listener becomes ready only after the real server has scanned the fixtures.
   await new Promise((done, reject) => {
     readiness.once('error', reject);

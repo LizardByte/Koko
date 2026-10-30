@@ -18,6 +18,7 @@ export interface LiveTvState {
   guideSources?: api.TvGuideSource[]; preferences?: api.TvPreferences;
   sourceId?: number; category?: string; channelView?: 'all' | 'favorites' | 'recent';
   selectedProgramId?: number; selectedChannelId?: number;
+  filtersOpen?: boolean;
 }
 
 /** Identify the administrator's dedicated Live TV settings section. */

@@ -310,6 +310,7 @@ pub(super) fn parse(value: &Value) -> Result<Guide, String> {
                     .map(str::to_owned)
                     .collect(),
                 image: field(event, "thumbnail").as_deref().and_then(image),
+                poster: field(event, "thumbnail").as_deref().and_then(image),
                 rating: field(event, "rating"),
                 episode: episode.map(|e| match season {
                     Some(s) => format!("S{s}E{e}"),

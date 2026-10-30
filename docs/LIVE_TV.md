@@ -44,8 +44,9 @@ numbers. If needed, specify the full path to `dvbv5-zap`.
 ## Program guide
 
 The guide aligns channels along one scrollable timeline. Select a program to see its artwork,
-description, and recording options above the guide. When you have several sources, choose one
-in the source list. Use the category filters, channel groups, or search to narrow the guide.
+description, poster, and recording options above the guide. When you have several sources,
+choose one in the source list. Open **Filters** to use categories, channel groups, favorites,
+recently played channels, or search. Close the filters to leave more room for the guide.
 Category filters and **NEW**, **LIVE**, **PREMIERE**, and **FINALE** labels depend on your guide's metadata.
 
 Select the star next to a channel to add it to **Favorites**. **Recently played** shows the
@@ -96,7 +97,7 @@ Watching a channel automatically starts a temporary recording. Playback uses thi
 you can pause, rewind within the available buffer, and change playback quality. You can only rewind
 as far as the point when you started watching. Choose **Go live** to return to the live edge.
 
-Closing the full player keeps the channel playing in the guide's artwork area. Expand it to
+Closing the full player keeps the channel playing as the hero's artwork. Choose **Expand player** to
 return to the full player, or choose **Stop playback** to stop it. Changing channels or leaving
 Live TV stops that channel's temporary recording and removes its buffer.
 
@@ -146,6 +147,7 @@ during a recording, capture resumes when possible and the recording reports a po
 - **No broadcast schedule received:** verify that the stream is unfiltered and includes guide
   tables. Some tuner and IPTV streams contain only audio and video.
 - **Playback fails:** check reception, source credentials, and the FFmpeg path in Settings.
+- **Playback stutters:** try a lower quality in the player, and check network speed and reception.
 - **Recording conflicts:** cancel an overlapping timer or increase the stream allowance only
   if the source has additional available tuners or permits more IPTV streams.
 - **Recording fails:** check source availability, filesystem permissions, and free disk space.

@@ -202,6 +202,10 @@ pub async fn get_guide(
             {
                 program.metadata.image =
                     Some(format!("/api/v1/live-tv/programs/{}/artwork", program.id));
+                program.metadata.poster = Some(format!(
+                    "/api/v1/live-tv/programs/{}/artwork?kind=poster",
+                    program.id
+                ));
             }
         }
         Ok::<_, diesel::result::Error>(GuideResponse {
@@ -217,13 +221,14 @@ pub async fn get_guide(
 }
 
 /// Fetch program artwork without exposing the tuner server's session or PIN.
-#[get("/api/v1/live-tv/programs/<id>/artwork")]
+#[get("/api/v1/live-tv/programs/<id>/artwork?<kind>")]
 pub async fn program_artwork(
     _user: UserGuard,
     db: DbConn,
     id: i32,
+    kind: Option<&str>,
 ) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
-    artwork_response(tv::nextpvr_artwork(&db, id).await)
+    artwork_response(tv::nextpvr_artwork(&db, id, kind == Some("poster")).await)
 }
 
 /// Fetch a channel icon without exposing the tuner server's session or PIN.

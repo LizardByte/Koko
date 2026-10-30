@@ -33,3 +33,12 @@ test('changing the media source replaces the decoder element even with the same 
   assert.notEqual(document.querySelector('video'),previous);
   assert.equal(document.querySelector('video').getAttribute('src'),'/buffer/two');
 });
+
+test('a pending patch restore does not undo subsequent keyboard or pointer scrolling',async()=>{
+  root.innerHTML='<div class="table-shell" id="guide"></div>';
+  const guide=document.querySelector('#guide'); guide.scrollTop=100;
+  setElementHtml(root,'<div class="table-shell" id="guide"><button>Next row</button></div>');
+  guide.scrollTop=300;
+  await new Promise(resolve=>requestAnimationFrame(resolve));
+  assert.equal(guide.scrollTop,300);
+});

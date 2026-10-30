@@ -274,12 +274,60 @@ pub(crate) async fn play_channel(
     open_pipeline(pipeline(&source, &channel, false).await?, Some(lease)).await
 }
 
+#[derive(Default, Clone, Copy)]
+pub(super) struct BufferCodecs {
+    video_copy: bool,
+}
+
+fn buffer_codecs_from_json(value: &serde_json::Value) -> BufferCodecs {
+    let streams = value["streams"].as_array();
+    let video = streams.and_then(|s| s.iter().find(|s| s["codec_type"] == "video"));
+    BufferCodecs {
+        video_copy: video.is_some_and(|s| {
+            s["codec_name"] == "h264"
+                && s["pix_fmt"] == "yuv420p"
+                && s["field_order"] == "progressive"
+        }),
+    }
+}
+
+pub(super) async fn buffer_codecs(path: &std::path::Path) -> BufferCodecs {
+    let mut command = Command::new(crate::config::current_settings().ffmpeg.ffprobe_path);
+    command
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,pix_fmt,field_order,channels",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), command.output()).await {
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout)
+            .map(|value| buffer_codecs_from_json(&value))
+            .unwrap_or_default(),
+        _ => BufferCodecs::default(),
+    }
+}
+
 pub(super) async fn play_buffer(
     url: &str,
     index: usize,
     offset_ms: u64,
     quality: &str,
+    codecs: BufferCodecs,
 ) -> Result<LiveStream, String> {
+    log::debug!(
+        "TV buffer playback: segment={index}, offset_ms={offset_ms}, quality={quality}, \
+         compatible_video={}",
+        codecs.video_copy
+    );
     let target = match quality {
         "original" => None,
         "4k" => Some((3840, 2160, 24808)),
@@ -318,15 +366,29 @@ pub(super) async fn play_buffer(
     if let Some(filter) = arguments.iter().position(|s| s == "-vf") {
         arguments[filter + 1] = target
             .map_or_else(
-                || "yadif,scale=trunc(iw/2)*2:trunc(ih/2)*2".into(),
+                || "yadif=deint=interlaced,scale=trunc(iw/2)*2:trunc(ih/2)*2".into(),
                 |(width, height, _)| {
                     format!(
-                        "yadif,scale=w='min({width},iw)':h='min({height},ih)':\
+                        "yadif=deint=interlaced,scale=w='min({width},iw)':h='min({height},ih)':\
                          force_original_aspect_ratio=decrease:force_divisible_by=2"
                     )
                 },
             )
             .into();
+    }
+    // Keep audio conversion so fragmented MP4 has AAC decoder configuration in
+    // its initialization segment, even when the transport stream has no extradata.
+    if quality == "original" && codecs.video_copy && offset_ms == 0 {
+        for option in [
+            "-vf", "-preset", "-tune", "-crf", "-pix_fmt",
+        ] {
+            if let Some(index) = arguments.iter().position(|s| s == option) {
+                arguments.drain(index..index + 2);
+            }
+        }
+        if let Some(index) = arguments.iter().position(|s| s == "-c:v") {
+            arguments[index + 1] = "copy".into();
+        }
     }
     if let Some((_, _, bitrate)) = target {
         let output = arguments.len() - 1;
@@ -512,4 +574,29 @@ pub(crate) async fn play_recording(
         return Err("The recording file is missing".into());
     }
     open(&path.to_string_lossy(), None, true).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_browser_compatible_progressive_video_uses_original_passthrough() {
+        let compatible = serde_json::json!({"streams":[
+            {"codec_type":"video", "codec_name":"h264", "pix_fmt":"yuv420p",
+             "field_order":"progressive"},
+            {"codec_type":"audio", "codec_name":"aac", "channels":2}
+        ]});
+        let result = buffer_codecs_from_json(&compatible);
+        assert!(result.video_copy);
+        for (field, value) in [
+            ("codec_name", "mpeg2video"),
+            ("field_order", "tt"),
+            ("pix_fmt", "yuv420p10le"),
+        ] {
+            let mut value_json = compatible.clone();
+            value_json["streams"][0][field] = value.into();
+            assert!(!buffer_codecs_from_json(&value_json).video_copy);
+        }
+        assert!(!buffer_codecs_from_json(&serde_json::json!({})).video_copy);
+    }
 }

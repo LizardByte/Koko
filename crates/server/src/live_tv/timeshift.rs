@@ -74,6 +74,7 @@ struct Session {
     title: String,
     directory: PathBuf,
     files: super::buffer_files::FileServer,
+    codecs: tokio::sync::OnceCell<stream::BufferCodecs>,
     database: String,
     last_access: Mutex<Instant>,
     stats: Mutex<Stats>,
@@ -537,6 +538,7 @@ pub(crate) async fn start(
         title: channel.name,
         directory,
         files,
+        codecs: tokio::sync::OnceCell::new(),
         database: database.into(),
         last_access: Mutex::new(Instant::now()),
         stats: Mutex::new(Stats::default()),
@@ -553,7 +555,9 @@ pub(crate) async fn start(
             if let Some(error) = info.error {
                 return Err(error);
             }
-            if info.end_ms > 0 {
+            if info.end_ms.saturating_sub(info.start_ms) >= 6000
+                || (info.finished && info.end_ms > info.start_ms)
+            {
                 return Ok(());
             }
             if info.finished {
@@ -635,12 +639,12 @@ pub(crate) async fn play(
     *session.last_access.lock().unwrap() = Instant::now();
     let current = info(&session, true);
     let position = start_ms
-        .unwrap_or(current.end_ms.saturating_sub(4000))
+        .unwrap_or(current.end_ms.saturating_sub(6000))
         .clamp(
             current.start_ms,
             current.end_ms.saturating_sub(250).max(current.start_ms),
         );
-    let (index, offset) = {
+    let (index, offset, segment_path) = {
         let stats = session.stats.lock().unwrap();
         let origin = stats.origin_ms.unwrap_or(0);
         let index = stats
@@ -652,9 +656,14 @@ pub(crate) async fn play(
         (
             index,
             position.saturating_sub(segment.timestamp_ms.saturating_sub(origin).max(0) as u64),
+            session.directory.join(&segment.name),
         )
     };
-    stream::play_buffer(&session.files.url, index, offset, quality).await
+    let codecs = session
+        .codecs
+        .get_or_init(|| stream::buffer_codecs(&segment_path))
+        .await;
+    stream::play_buffer(&session.files.url, index, offset, quality, *codecs).await
 }
 
 pub(crate) async fn keep(

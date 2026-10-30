@@ -67,6 +67,7 @@ pub(crate) struct ProgramMetadata {
     pub description: Option<String>,
     pub categories: Vec<String>,
     pub image: Option<String>,
+    pub poster: Option<String>,
     pub rating: Option<String>,
     pub episode: Option<String>,
     pub episode_id: Option<String>,

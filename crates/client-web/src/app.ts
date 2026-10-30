@@ -491,7 +491,7 @@ function render(preserveScroll = true): void {
         </div>
       </div>
       ${renderNavigationHint()}
-      ${renderPlayerOverlay()}
+      ${state.activeTvPlayback ? '' : renderPlayerOverlay()}
     </div>
   `, preserveScroll);
 

@@ -6,6 +6,7 @@ import { stat } from 'node:fs/promises';
 
 test('IPTV imports its guide, plays live video, releases the tuner, and saves a timed recording', async ({ page }, testInfo) => {
   test.setTimeout(240000);
+  page.setDefaultTimeout(15000);
   const children = new Set();
   let activeStreams = 0;
   let sourceId;
@@ -30,12 +31,19 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
       activeStreams += 1;
       const ffmpeg = spawn(process.env.KOKO_E2E_GENERATOR_FFMPEG ?? process.env.KOKO_E2E_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-re',
         '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
-        '-c:v', 'mpeg4', '-q:v', '5', '-g', '25', '-c:a', 'aac', '-f', 'mpegts', ...(request.url === '/stream.ts' ? [] : ['-t', '2']), 'pipe:1'],
+        '-c:v','mpeg4','-q:v','5', '-g', '25', '-c:a', 'aac', '-f', 'mpegts', ...(request.url === '/stream.ts' ? [] : ['-t', '2']), 'pipe:1'],
       { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       children.add(ffmpeg);
+      let encoder;
+      if (request.url === '/stream.ts') {
+        // The fixture generator has lavfi; Koko's bundled FFmpeg supplies libx264.
+        encoder=spawn(process.env.KOKO_E2E_FFMPEG,['-hide_banner','-loglevel','error','-i','pipe:0','-c:v','libx264','-preset','ultrafast','-tune','zerolatency','-g','25','-pix_fmt','yuv420p','-c:a','copy','-f','mpegts','pipe:1'],{windowsHide:true,stdio:['pipe','pipe','ignore']});
+        children.add(encoder); encoder.stdin.on('error',()=>undefined);
+        ffmpeg.stdout.pipe(encoder.stdin); encoder.once('error',()=>response.destroy());
+      }
       response.setHeader('Content-Type', 'video/mp2t');
-      ffmpeg.stdout.pipe(response);
-      response.once('close', () => { activeStreams -= 1; ffmpeg.kill(); children.delete(ffmpeg); });
+      (encoder ?? ffmpeg).stdout.pipe(response);
+      response.once('close', () => { activeStreams -= 1; ffmpeg.kill(); children.delete(ffmpeg); encoder?.kill(); children.delete(encoder); });
       ffmpeg.once('error', () => response.destroy());
     } else { response.statusCode = 404; response.end(); }
   });
@@ -48,6 +56,8 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect(page.locator('#login-form')).toHaveCount(0);
     const token = await page.evaluate(() => localStorage.getItem('koko-client-web-auth-token'));
     headers = { Authorization: `Bearer ${token}` };
+    const initialStorage = await page.request.put('/api/v1/live-tv/dvr/settings',{headers,data:{recording_dir:testInfo.outputPath('initial-capture')}});
+    expect(initialStorage.ok()).toBeTruthy();
     const base = `http://127.0.0.1:${fixture.address().port}`;
     const created = await page.request.post('/api/v1/live-tv/sources', { headers, data: {
       name: 'Local IPTV test', kind: 'm3u', capacity: 1,
@@ -68,6 +78,7 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect(page.locator('.live-tv-programs')).toHaveCount(0);
     await page.getByRole('button',{name:'Add Live Test TV to favorites',exact:true}).click();
     await expect(page.getByRole('button',{name:'Remove Live Test TV from favorites',exact:true})).toHaveAttribute('aria-pressed','true');
+    await page.getByRole('button',{name:'Filters',exact:true}).click();
     await page.locator('[data-tv-channel-view="favorites"]').click();
     await expect(page.locator('.tv-guide-row')).toHaveCount(1);
     await page.locator('[data-tv-channel-view="all"]').click();
@@ -101,6 +112,21 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect.poll(()=>activeStreams).toBe(0);
     await page.locator(`[data-tv-play="${channel.id}"]`).first().click();
     await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.2),{timeout:45000}).toBeTruthy();
+    const viewport = await page.locator('.media-player-overlay').boundingBox();
+    expect(viewport.x).toBe(0); expect(viewport.y).toBe(0); expect(viewport.height).toBe(900);
+    await page.getByRole('button',{name:'Pause',exact:true}).click();
+    await page.getByRole('button',{name:'Play',exact:true}).click();
+    await page.mouse.move(5,5);
+    await expect(page.locator('.media-player-shell')).toHaveClass(/is-controls-hidden/);
+    const steady = await page.locator('#media-player').evaluate(async video=>{
+      let waits=0; const onWait=()=>{waits++;}; video.addEventListener('waiting',onWait);
+      const start=video.currentTime;
+      await new Promise(resolve=>setTimeout(resolve,12000));
+      video.removeEventListener('waiting',onWait);
+      return {elapsed:video.currentTime-start,waits};
+    });
+    expect(steady.elapsed).toBeGreaterThan(10); expect(steady.waits).toBeLessThanOrEqual(1);
+    await page.locator('.media-player-shell').hover();
     expect(activeStreams).toBe(1);
     const video = await page.locator('#media-player').elementHandle();
     const originalSource = await video.getAttribute('src');
@@ -112,6 +138,9 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await page.getByRole('button', { name:'Close player',exact:true }).click();
     expect(await video.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
     await expect(page.locator('.tv-preview-player')).toBeVisible();
+    await expect(page.locator('#tv-guide-hero #tv-hero-media .tv-preview-player #media-player')).toHaveCount(1);
+    await expect(page.locator('.tv-preview-player .player-controls')).toHaveCount(0);
+    await expect(page.locator('.tv-preview-player')).toHaveCSS('position','absolute');
     const watchButton = page.locator('#tv-guide-hero [data-tv-play]');
     await expect(watchButton).toContainText('Watch channel live');
     await expect(watchButton).not.toHaveCSS('color','rgba(0, 0, 0, 0)');
@@ -125,8 +154,10 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect(page.locator('#media-player')).toHaveAttribute('src',new RegExp(`sessions/${bufferId}/stream.*quality=720p`));
     await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2 && node.currentTime>0.1),{timeout:20000}).toBeTruthy();
     expect(activeStreams).toBe(1);
+    const beforeSeek = await page.locator('#media-player').evaluate(video=>Number(new URL(video.src).searchParams.get('start_ms'))+video.currentTime*1000);
     await page.getByRole('button',{name:'Back 10 seconds',exact:true}).click();
-    await expect(page.locator('#media-player')).toHaveAttribute('src',/start_ms=0/);
+    const seekPosition = await page.locator('#media-player').evaluate(video=>Number(new URL(video.src).searchParams.get('start_ms')));
+    expect(Math.abs(seekPosition-Math.max(0,beforeSeek-10000))).toBeLessThan(1500);
     await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:20000}).toBeTruthy();
     await page.getByRole('button', {name:'Close player',exact:true}).click();
     await page.getByRole('button', {name:'Stop playback',exact:true}).click();
@@ -294,16 +325,21 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
 test('the guide aligns all channels to one timeline with a program hero, source rail, and categories', async ({page},testInfo) => {
   const start = Math.floor(Date.now()/1800000)*1800;
   const channel = (id,source_id,name,number) => ({id,source_id,name,number,source_key:String(id),guide_key:String(id),group_name:'',enabled:true,available:true});
-  const channels = [channel(101,10,'Local News','9.1'),channel(102,10,'Sports Network','13.6'),channel(201,20,'Cable Movies','1')];
+  const channels = [channel(101,10,'Local News','9.1'),channel(102,10,'Sports Network','13.6'),channel(201,20,'Cable Movies','1'),...Array.from({length:20},(_,i)=>channel(300+i,10,`News ${i+1}`,String(20+i)))];
+  channels[0].logo='/api/v1/live-tv/channels/101/artwork';
   const cover='https://zpmc.tmsimg.com/assets/p13159645_b_v13_aa.jpg?w=165';
+  const poster='https://zpmc.tmsimg.com/assets/poster_b_v13_aa.jpg?w=165';
+  const logo='https://zpmc.tmsimg.com/h3/NowShowing/45738/station.png?w=55';
   const programs = [
-    {id:1,source_id:10,guide_key:'101',title:'Afternoon News',starts_at:start-600,ends_at:start+1800,metadata:{description:'The stories that matter in your community, with headlines, weather, and local reporting.',categories:['News'],image:cover,is_new:true}},
+    {id:1,source_id:10,guide_key:'101',title:'Afternoon News',starts_at:start-600,ends_at:start+1800,metadata:{description:'The stories that matter in your community, with headlines, weather, and local reporting.',categories:['News'],image:cover,poster,is_new:true}},
     {id:2,source_id:10,guide_key:'101',title:'The Classic Film',starts_at:start+1800,ends_at:start+7200,metadata:{description:'A feature-length movie with interviews from the cast.',categories:['Movie / drama'],is_premiere:true}},
     {id:3,source_id:10,guide_key:'102',title:'World of Sports',starts_at:start-600,ends_at:start+7200,metadata:{description:'Live coverage and analysis.',categories:['Sports event'],is_live:true}},
     {id:4,source_id:20,guide_key:'201',title:'Cable Movie Premiere',starts_at:start-600,ends_at:start+7200,metadata:{description:'A film from your cable lineup.',categories:['Movies'],is_premiere:true}},
+    ...Array.from({length:20},(_,i)=>({id:1000+i,source_id:10,guide_key:String(300+i),title:`News program ${i+1}`,starts_at:start,ends_at:start+21600,metadata:{categories:['News']}})),
   ];
   await page.route('**/api/v1/live-tv/channels',route=>route.fulfill({json:channels}));
-  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs,stations:[],sources:[{id:10,name:'Antenna',kind:'hdhomerun'},{id:20,name:'Cable',kind:'nextpvr'}],preferences:{favorites:[],recent:[]}}}));
+  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs,stations:[{source_id:10,guide_key:'101',name:'Local News',number:'9.1',aliases:[],logo}],sources:[{id:10,name:'Antenna',kind:'hdhomerun'},{id:20,name:'Cable',kind:'nextpvr'}],preferences:{favorites:[],recent:[]}}}));
+  await page.route('**/api/v1/live-tv/channels/101/artwork',route=>route.fulfill({status:404}));
   await page.route('https://zpmc.tmsimg.com/**',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g"><stop stop-color="#15394f"/><stop offset="1" stop-color="#244b43"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><text x="60" y="290" fill="#c7f5e0" font-size="70" font-family="sans-serif">Koko Live TV</text></svg>'}));
   await page.goto('/');
   await page.getByLabel('Username',{exact:true}).fill('playback-admin');
@@ -317,7 +353,12 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   await expect(page.locator('.home-pinned-header > .home-feature')).toHaveCount(1);
   await expect(page.locator('#tv-guide-hero .tv-badge-new')).toHaveText('NEW');
   await expect(page.locator('#tv-guide-hero .tv-badge-live')).toHaveCount(0);
-  await expect(page.locator('.tv-guide-row')).toHaveCount(2);
+  await expect(page.locator('.tv-guide-row')).toHaveCount(22);
+  await expect(page.locator('#tv-filter-panel')).toBeHidden();
+  await expect(page.locator('#toggle-tv-filters')).toHaveAttribute('aria-expanded','false');
+  await expect(page.locator('#tv-guide-hero .home-feature-poster')).toHaveAttribute('src',/poster_b_v13_aa.jpg\?w=960/);
+  await expect.poll(()=>page.locator('#tv-guide-hero .tv-hero-channel-logo').evaluate(image=>image.naturalWidth)).toBeGreaterThan(0);
+  await expect(page.locator('#tv-guide-hero .tv-hero-channel-logo')).toHaveAttribute('src',/w=320/);
   await expect(page.locator('#tv-guide-scroll')).toHaveCount(1);
   const alignment = await page.locator('#tv-guide-scroll').evaluate(scroll => {
     const header=scroll.querySelector('.tv-guide-tick'), program=scroll.querySelector('.tv-guide-program'), channel=scroll.querySelector('.tv-guide-channel');
@@ -328,6 +369,21 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   expect(alignment.header).toBe(240); expect(alignment.program).toBe(240); expect(alignment.channel).toBe(0);
   await page.locator('#tv-guide-scroll').evaluate(scroll=>{scroll.scrollLeft=0;});
   await page.screenshot({path:testInfo.outputPath('live-tv-timeline.png'),fullPage:true});
+  await page.locator('#tv-program-101-1').focus();
+  for(let step=0;step<14;step++) {
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('.tv-guide-scroll :focus')).toBeInViewport();
+  }
+  expect(await page.locator('#tv-guide-scroll').evaluate(scroll=>scroll.scrollTop)).toBeGreaterThan(400);
+  expect(await page.locator('#tv-guide-scroll').evaluate(scroll=>scroll.scrollLeft)).toBe(0);
+  const selectedBounds = await page.locator('.tv-guide-scroll :focus').evaluate(control=>{
+    const guide=control.closest('#tv-guide-scroll'),row=control.getBoundingClientRect(),bounds=guide.getBoundingClientRect();
+    return {top:row.top,bottom:row.bottom,header:bounds.top+48,visibleBottom:Math.min(bounds.bottom,innerHeight)};
+  });
+  expect(selectedBounds.top).toBeGreaterThanOrEqual(selectedBounds.header-2);
+  expect(selectedBounds.bottom).toBeLessThanOrEqual(selectedBounds.visibleBottom+2);
+  await page.getByRole('button',{name:'Filters',exact:true}).click();
+  await expect(page.locator('#tv-filter-panel')).toBeVisible();
   await page.locator('[data-tv-category="Sports"]').click();
   await expect(page.locator('.tv-guide-row')).toHaveCount(1);
   await expect(page.getByRole('heading',{name:'World of Sports',exact:true})).toBeVisible();
@@ -339,6 +395,8 @@ test('the guide aligns all channels to one timeline with a program hero, source 
   await expect(page.locator('.tv-guide-row')).toHaveCount(1);
   await expect(page.getByRole('heading',{name:'Cable Movie Premiere',exact:true})).toBeVisible();
   await expect(page.locator('#tv-guide-hero .tv-badge-premiere')).toHaveText('PREMIERE');
+  await page.getByRole('button',{name:/Filters/}).click();
+  await expect(page.locator('#tv-filter-panel')).toBeHidden();
   await page.setViewportSize({width:390,height:844});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('live-tv-timeline-mobile.png'),fullPage:true});

@@ -111,10 +111,43 @@ function closeResumeOptions(): boolean {
   return true;
 }
 
+function revealGuideTime(guide: HTMLElement, control: HTMLElement): void {
+  if (control.closest('.tv-guide-channel')) return;
+  const bounds = guide.getBoundingClientRect(), rect = control.getBoundingClientRect();
+  const left = bounds.left+(guide.querySelector('.tv-guide-channel')?.getBoundingClientRect().width ?? 0);
+  const intersects = rect.right > left && rect.left < bounds.right;
+  // Long broadcasts may cover the whole viewport; moving down should keep the
+  // current time visible rather than jumping to the far end of that program.
+  if (rect.width > bounds.right-left && intersects) return;
+  if (rect.left < left) guide.scrollLeft += rect.left-left;
+  else if (rect.right > bounds.right) guide.scrollLeft += rect.right-bounds.right;
+}
+
+/** Reveal guide cells inside their shared scroller, allowing for sticky time/channel headings. */
+function revealTvGuideControl(control: HTMLElement): boolean {
+  const guide = control.closest<HTMLElement>('#tv-guide-scroll');
+  if (!guide) return false;
+  const main = guide.closest<HTMLElement>('.main-shell');
+  const header = document.querySelector('.home-pinned-header');
+  const top = (main?.getBoundingClientRect().top ?? 0) + (header?.getBoundingClientRect().height ?? 0);
+  if (main && guide.getBoundingClientRect().top > main.getBoundingClientRect().bottom-136) {
+    main.scrollTop += guide.getBoundingClientRect().top-top-12;
+  }
+  const bounds = guide.getBoundingClientRect(), rect = control.getBoundingClientRect();
+  const timeHeight = guide.querySelector('.tv-guide-time-row')?.getBoundingClientRect().height ?? 48;
+  const visibleTop = Math.max(bounds.top+timeHeight,top);
+  const bottom = Math.min(bounds.bottom, main?.getBoundingClientRect().bottom ?? innerHeight);
+  if (rect.top < visibleTop) guide.scrollTop += rect.top-visibleTop;
+  else if (rect.bottom > bottom) guide.scrollTop += rect.bottom-bottom;
+  revealGuideTime(guide,control);
+  return true;
+}
+
 function focusControl(control: HTMLElement | undefined, revealSection = false): void {
   if (!control) return;
   control.focus({ preventScroll: true });
   const section = control.closest<HTMLElement>(SECTION_SELECTOR);
+  if (revealTvGuideControl(control)) {syncNavigationState(); return;}
   if (revealItemControl(control, section, revealSection)) {
     syncNavigationState();
     return;

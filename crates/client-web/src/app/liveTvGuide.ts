@@ -4,11 +4,20 @@ import { escapeHtml as escape } from './format';
 import { state } from './state';
 import { renderButtonContent, renderIcon } from './ui';
 import { renderFeatureHero } from './featureHero';
+import { renderPlayerOverlay } from './playbackController';
 import type { LiveTvState } from './liveTvActions';
 import { activeGuideSource, channelArtwork, channelPrograms, guideSelection, guideSources, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
 
 function badges(program: TvProgram): string {
   return programBadges(program.metadata).map(tag => `<span class="tv-program-badge tv-badge-${tag.toLowerCase()}">${tag}</span>`).join('');
+}
+
+function channelLogo(channel: TvChannel, data: LiveTvState, hero = false): string {
+  const logo = channelArtwork(channel,data);
+  if (!logo) return '';
+  const key = channel.guide_override ?? channel.guide_key;
+  const fallback = tvImage(data.stations.find(s => s.source_id === channel.source_id && s.guide_key === key)?.logo);
+  return `<img class="${hero ? 'tv-hero-channel-logo' : 'tv-channel-logo'}" data-tv-image data-fallback-src="${escape(fallback)}" src="${escape(logo)}" alt="${hero ? escape(channel.name)+' logo' : ''}" referrerpolicy="no-referrer" loading="lazy" />`;
 }
 
 function recordingChoices(channel: TvChannel, program: TvProgram): string {
@@ -19,11 +28,17 @@ function recordingChoices(channel: TvChannel, program: TvProgram): string {
     <button type="submit" name="mode" value="single">Record program</button><button type="submit" name="mode" value="series" class="secondary-button">Record series</button></form></details>`;
 }
 
+function heroPlaybackActions(preview: boolean): string {
+  if (!preview) return '';
+  return `<button type="button" class="secondary-button home-feature-action" id="expand-tv-player">${renderButtonContent('Expand player','maximize')}</button><button type="button" class="secondary-button home-feature-action" id="close-player" aria-label="Stop playback">${renderButtonContent('Stop playback','x')}</button>`;
+}
+
 /** Display program artwork and descriptions, reserving the artwork area for minimized playback. */
 export function renderTvHero(data: LiveTvState): string {
   const { channel, program } = guideSelection(data);
   const fallbackImage = channel ? channelArtwork(channel,data) : '';
   const image = tvImage(program?.metadata.image) || fallbackImage;
+  const poster = tvImage(program?.metadata.poster) || tvImage(program?.metadata.image);
   const now = Date.now() / 1000;
   const onAir = program && program.starts_at <= now && program.ends_at > now;
   const label = onAir ? 'On air now' : 'Program guide';
@@ -35,11 +50,15 @@ export function renderTvHero(data: LiveTvState): string {
   const subtitle = program?.metadata.subtitle ? `<p class="home-feature-context">${escape(program.metadata.subtitle)}</p>` : '';
   const watch = channel ? `<button type="button" class="secondary-button home-feature-action" data-tv-play="${channel.id}">${renderButtonContent('Watch channel live','play')}</button>` : '';
   const timeMarkup = time ? `<span class="tag">${escape(time)}</span>` : '';
+  const preview = Boolean(state.activeTvPlayback && !state.isPlayerOpen);
+  const playbackActions = heroPlaybackActions(preview);
+  const logo = channel ? channelLogo(channel,data,true) : '';
   return renderFeatureHero({id:'tv-guide-hero',label:'Program details',image,
-    copy:`<p class="eyebrow">${label}${channelLabel}</p><h2>${escape(title)}</h2>${subtitle}
+    poster:poster ? {url:poster,label:`${title} poster`} : undefined,
+    copy:`<div class="tv-hero-channel">${logo}<p class="eyebrow">${label}${channelLabel}</p></div><h2>${escape(title)}</h2>${subtitle}
       <p>${escape(description)}</p><div class="hero-meta-row">${program ? badges(program) : ''}${tags}${timeMarkup}</div>`,
-    actions:`<div class="home-feature-actions">${watch}${program && channel && program.ends_at > now ? recordingChoices(channel,program) : ''}</div>`,
-    media:{id:'tv-hero-media',active:Boolean(state.activeTvPlayback && !state.isPlayerOpen)},
+    actions:`<div class="home-feature-actions">${playbackActions}${watch}${program && channel && program.ends_at > now ? recordingChoices(channel,program) : ''}</div>`,
+    media:{id:'tv-hero-media',active:preview,content:state.activeTvPlayback ? renderPlayerOverlay() : ''},
   });
 }
 
@@ -55,10 +74,10 @@ function programCell(channel: TvChannel, program: TvProgram, data: LiveTvState):
 }
 
 function channelRow(channel: TvChannel, data: LiveTvState): string {
-  const logo = channelArtwork(channel,data), favorite = data.preferences?.favorites.includes(channel.id) === true;
+  const favorite = data.preferences?.favorites.includes(channel.id) === true;
   const programs = channelPrograms(channel, data.programs).map(p => programCell(channel, p, data)).join('');
   return `<div class="tv-guide-row" role="row"><div class="tv-guide-channel" role="rowheader"><button type="button" class="tv-channel-select" data-tv-select-channel="${channel.id}" aria-label="Details for ${escape(channel.name)}">
-    ${logo ? `<img src="${escape(logo)}" alt="" referrerpolicy="no-referrer" loading="lazy" />` : ''}<span><strong>${escape(channel.number)}</strong><span>${escape(channel.name)}</span></span></button>
+    ${channelLogo(channel,data)}<span><strong>${escape(channel.number)}</strong><span>${escape(channel.name)}</span></span></button>
     <div class="tv-channel-actions"><button type="button" data-tv-play="${channel.id}" aria-label="Watch ${escape(channel.name)} live">${renderIcon('play')}</button>
     <button type="button" data-tv-favorite="${channel.id}" aria-pressed="${favorite}" aria-label="${favorite ? 'Remove' : 'Add'} ${escape(channel.name)} ${favorite ? 'from' : 'to'} favorites">${renderIcon('star')}</button></div></div>
     <div class="tv-guide-track" role="cell">${programs || '<span class="tv-guide-no-listings">No listings available · Watch this channel live</span>'}</div></div>`;
@@ -76,10 +95,13 @@ export function renderTvGuide(data: LiveTvState): string {
   const now = (Date.now()/1000 - data.windowStart) / (6*3600) * 100;
   const nowLine = now >= 0 && now < 100 ? `<div class="tv-guide-now" aria-hidden="true" style="left:calc(var(--tv-channel-width) + ${now / 100} * var(--tv-timeline-width))"><span>Now</span></div>` : '';
   const views = [['all','All channels'],['favorites','Favorites'],['recent','Recently played']].map(([key,label]) => `<button type="button" data-tv-channel-view="${key}" aria-pressed="${key === (data.channelView ?? 'all')}">${label}</button>`).join('');
+  const filterCount = [data.query,data.group,data.category && data.category !== 'All programs',data.channelView && data.channelView !== 'all'].filter(Boolean).length;
+  const filterLabel = filterCount ? `Filters · ${filterCount} active` : 'Filters';
   return `<div class="tv-guide-toolbar"><div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-window="-1" aria-label="Earlier programs">${renderIcon('chevron-left')}</button><button type="button" class="secondary-button" data-tv-window="0">Now</button><button type="button" class="secondary-button" data-tv-window="1" aria-label="Later programs">${renderIcon('chevron-right')}</button><strong>${escape(tvTime(data.windowStart,true))}</strong></div>
-    <form id="tv-filter-form"><label><span class="sr-only">Search channels or programs</span><input type="search" name="query" value="${escape(data.query ?? '')}" placeholder="Find channels or programs" /></label>
-    <label><span class="sr-only">Channel group</span><select name="group"><option value="">All channel groups</option>${groups.map(g => `<option ${data.group === g ? 'selected' : ''}>${escape(g)}</option>`).join('')}</select></label><button type="submit" class="secondary-button">Search</button></form></div>
-    <nav class="tv-guide-filters" aria-label="Program categories">${categories}</nav><nav class="tv-guide-views" aria-label="Channel lists">${views}</nav>
+    <button type="button" id="toggle-tv-filters" class="secondary-button browse-filter-toggle" aria-expanded="${Boolean(data.filtersOpen)}" aria-controls="tv-filter-panel">${renderButtonContent(filterLabel,'sliders-horizontal')}</button></div>
+    <div id="tv-filter-panel" ${data.filtersOpen ? '' : 'hidden'}><form id="tv-filter-form"><label><span class="sr-only">Search channels or programs</span><input type="search" name="query" value="${escape(data.query ?? '')}" placeholder="Find channels or programs" /></label>
+    <label><span class="sr-only">Channel group</span><select name="group"><option value="">All channel groups</option>${groups.map(g => `<option ${data.group === g ? 'selected' : ''}>${escape(g)}</option>`).join('')}</select></label><button type="submit" class="secondary-button">Search</button></form>
+    <nav class="tv-guide-filters" aria-label="Program categories">${categories}</nav><nav class="tv-guide-views" aria-label="Channel lists">${views}</nav></div>
     <div class="tv-guide-layout${sources.length > 1 ? ' has-source-rail' : ''}">${sources.length > 1 ? `<nav class="tv-source-rail" aria-label="TV sources">${sourceTabs}</nav>` : ''}
     <div class="tv-guide-board">${channels.length ? `<div id="tv-guide-scroll" class="tv-guide-scroll table-shell" role="region" aria-label="TV program guide" tabindex="0"><div class="tv-guide-grid" role="table" aria-label="${escape(sources.find(s => s.id === source)?.name ?? 'TV')} schedules">
       <div class="tv-guide-time-row" role="row"><div class="tv-guide-corner" role="columnheader">Channels</div><div class="tv-guide-time-track">${ticks}</div></div>${channels.map(c => channelRow(c,selectedData)).join('')}${nowLine}</div></div>`

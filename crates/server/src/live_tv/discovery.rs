@@ -108,6 +108,19 @@ fn nextpvr(
     let mut name = format!("NextPVR ({})", peer.ip());
     let mut port = 8866;
     let mut scheme = "http".to_owned();
+    // Current servers send a NUL-padded address:HTTP-port:PIN-hash announcement.
+    // Only use the HTTP port; never retain or expose the advertised PIN hash.
+    if let Some((_, rest)) = value
+        .split_once(':')
+        .filter(|(address, _)| address.parse::<Ipv4Addr>().is_ok())
+    {
+        port = rest
+            .split(':')
+            .next()?
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p > 0)?;
+    }
     if let Ok(doc) = roxmltree::Document::parse(value) {
         for node in doc.descendants().filter(roxmltree::Node::is_element) {
             match node.tag_name().name().to_ascii_lowercase().as_str() {
@@ -145,6 +158,33 @@ fn nextpvr(
     })
 }
 
+async fn receive_until(
+    socket: &UdpSocket,
+    buffer: &mut [u8],
+    deadline: tokio::time::Instant,
+) -> Result<Option<(usize, SocketAddr)>, String> {
+    loop {
+        match tokio::time::timeout_at(deadline, socket.recv_from(buffer)).await {
+            Ok(Ok(reply)) => return Ok(Some(reply)),
+            // Windows reports ICMP port-unreachable as ConnectionReset on an unconnected
+            // UDP socket. An unanswered localhost probe must not discard LAN replies.
+            Ok(Err(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused
+                ) => {}
+            Ok(Err(_)) => {
+                return Err(
+                    "Unable to receive discovery replies; check the network or enter the address \
+                     manually"
+                        .into(),
+                );
+            }
+            Err(_) => return Ok(None),
+        }
+    }
+}
+
 async fn udp(kind: &str) -> Result<Vec<DiscoveredSource>, String> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
         .await
@@ -177,9 +217,7 @@ async fn udp(kind: &str) -> Result<Vec<DiscoveredSource>, String> {
         // A PVR server on this computer may not receive its own subnet broadcast.
         let _ = socket.send_to(&request, (Ipv4Addr::LOCALHOST, port)).await;
         let end = tokio::time::Instant::now() + Duration::from_millis(1200);
-        while let Ok(Ok((size, peer))) =
-            tokio::time::timeout_at(end, socket.recv_from(&mut buffer)).await
-        {
+        while let Some((size, peer)) = receive_until(&socket, &mut buffer, end).await? {
             let item = if kind == "hdhomerun" {
                 hdhomerun(&buffer[..size], peer)
             } else {
@@ -318,5 +356,55 @@ mod tests {
         .unwrap();
         assert_eq!(found.name, "Living room");
         assert_eq!(found.url, "http://192.168.1.30:8867/");
+    }
+
+    #[test]
+    fn nextpvr_reads_the_real_padded_announcement_and_ignores_the_pin_hash() {
+        let mut reply = b"172.17.0.2:8877:0123456789ABCDEF0123456789ABCDEF".to_vec();
+        reply.resize(128, 0);
+        let found = nextpvr(&reply, "192.168.1.11:16891".parse().unwrap()).unwrap();
+        assert_eq!(found.url, "http://192.168.1.11:8877/");
+        assert_eq!(found.name, "NextPVR (192.168.1.11)");
+        assert!(
+            !serde_json::to_string(&found)
+                .unwrap()
+                .contains("0123456789ABCDEF")
+        );
+    }
+
+    #[rocket::async_test]
+    async fn unanswered_loopback_probe_does_not_discard_a_later_server_reply() {
+        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let server = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let closed = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let closed_address = closed.local_addr().unwrap();
+        drop(closed);
+        socket
+            .send_to(b"DISCOVER_REQUEST", closed_address)
+            .await
+            .unwrap();
+        let address = socket.local_addr().unwrap();
+        let sender = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            server
+                .send_to(
+                    b"127.0.0.1:8867:0123456789ABCDEF0123456789ABCDEF\0",
+                    address,
+                )
+                .await
+                .unwrap();
+        });
+        let mut buffer = [0; 256];
+        let (size, peer) = receive_until(
+            &socket,
+            &mut buffer,
+            tokio::time::Instant::now() + Duration::from_secs(2),
+        )
+        .await
+        .unwrap()
+        .expect("server reply after the unanswered probe");
+        let found = nextpvr(&buffer[..size], peer).unwrap();
+        assert_eq!(found.url, "http://127.0.0.1:8867/");
+        sender.await.unwrap();
     }
 }

@@ -1,5 +1,12 @@
 //! Scalar music metadata and normalized genre rows. No serialized payloads are persisted.
-use super::*;
+use super::{
+    HashMap,
+    MediaItemDetail,
+    MediaItemSummary,
+    MetadataProviderId,
+    MusicMetadata,
+    sql_types,
+};
 use crate::db::schema::{
     music_file_genres as file_genres,
     music_file_metadata as files,

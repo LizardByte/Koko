@@ -11,7 +11,20 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::*;
+use super::{
+    MediaLibraryKind,
+    MetadataProvider,
+    MetadataProviderDescriptor,
+    MetadataProviderFuture,
+    MetadataProviderId,
+    MetadataProviderRole,
+    MetadataSearchResult,
+    MetadataSettings,
+    MusicMatchContext,
+    ProviderMetadataDetails,
+    ProviderMetadataPerson,
+    StoredMetadataSnapshot,
+};
 use crate::media::{
     MusicMetadata,
     valid_mbid,

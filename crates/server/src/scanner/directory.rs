@@ -413,79 +413,81 @@ where
             continue;
         }
 
-        if file_type.is_file() {
-            let kind = classify_file(&entry_path);
-            if !should_include_library_item(&entry_path, kind, &rules.include_kind) {
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let kind = classify_file(&entry_path);
+        if !should_include_library_item(&entry_path, kind, &rules.include_kind) {
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                record_scan_io_error(errors, &entry_path, "reading file metadata", &error);
                 continue;
             }
-
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
+        };
+        let file_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_secs()).ok());
+        let source_root_path = root.to_string_lossy().to_string();
+        let relative_path = normalize_relative_path(root, &entry_path);
+        let media_kind = kind.as_storage_value().to_string();
+        let raw_default_title = entry_path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(ToString::to_string)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback_title_from_relative_path(&relative_path));
+        let default_title = (rules.default_title)(&relative_path, &raw_default_title);
+        let file_hash = if let Some(file_hash) = sink
+            .file_hash(FileHashCandidate {
+                full_path: &entry_path,
+                source_root_path: &source_root_path,
+                relative_path: &relative_path,
+                file_size,
+                modified_at,
+            })
+            .map_err(DirectoryScanError::Handler)?
+        {
+            progress.record_reused_hash();
+            file_hash
+        } else {
+            let file_hash = match hash_file_fingerprint(&entry_path) {
+                Ok(file_hash) => file_hash,
                 Err(error) => {
-                    record_scan_io_error(errors, &entry_path, "reading file metadata", &error);
+                    record_scan_io_error(errors, &entry_path, "hashing file", &error);
                     continue;
                 }
             };
-            let file_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .and_then(|duration| i64::try_from(duration.as_secs()).ok());
-            let source_root_path = root.to_string_lossy().to_string();
-            let relative_path = normalize_relative_path(root, &entry_path);
-            let media_kind = kind.as_storage_value().to_string();
-            let raw_default_title = entry_path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| fallback_title_from_relative_path(&relative_path));
-            let default_title = (rules.default_title)(&relative_path, &raw_default_title);
-            let file_hash = if let Some(file_hash) = sink
-                .file_hash(FileHashCandidate {
-                    full_path: &entry_path,
-                    source_root_path: &source_root_path,
-                    relative_path: &relative_path,
-                    file_size,
-                    modified_at,
-                })
-                .map_err(DirectoryScanError::Handler)?
-            {
-                progress.record_reused_hash();
-                file_hash
-            } else {
-                let file_hash = match hash_file_fingerprint(&entry_path) {
-                    Ok(file_hash) => file_hash,
-                    Err(error) => {
-                        record_scan_io_error(errors, &entry_path, "hashing file", &error);
-                        continue;
-                    }
-                };
-                progress.record_hashed_file();
-                file_hash
-            };
+            progress.record_hashed_file();
+            file_hash
+        };
 
-            sink.file(DiscoveredMediaFile {
-                full_path: entry_path.clone(),
-                source_root_path,
-                relative_path,
-                file_size,
-                modified_at,
-                media_kind,
-                file_hash,
-                default_title,
-            })
-            .map_err(DirectoryScanError::Handler)?;
+        sink.file(DiscoveredMediaFile {
+            full_path: entry_path.clone(),
+            source_root_path,
+            relative_path,
+            file_size,
+            modified_at,
+            media_kind,
+            file_hash,
+            default_title,
+        })
+        .map_err(DirectoryScanError::Handler)?;
 
-            counters.total_files += 1;
-            match kind {
-                FileKind::Video => counters.video_files += 1,
-                FileKind::Audio => counters.audio_files += 1,
-                FileKind::Image => counters.image_files += 1,
-                FileKind::Book => counters.book_files += 1,
-                FileKind::Other => counters.other_files += 1,
-            }
+        counters.total_files += 1;
+        match kind {
+            FileKind::Video => counters.video_files += 1,
+            FileKind::Audio => counters.audio_files += 1,
+            FileKind::Image => counters.image_files += 1,
+            FileKind::Book => counters.book_files += 1,
+            FileKind::Other => counters.other_files += 1,
         }
     }
 
@@ -528,8 +530,8 @@ fn display_name(
 
     Path::new(path)
         .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(ToString::to_string)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Unnamed library".into())
 }
@@ -537,8 +539,8 @@ fn display_name(
 fn classify_file(path: &Path) -> FileKind {
     let extension = path
         .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase);
 
     match extension.as_deref() {
         Some("mkv" | "mp4" | "avi" | "mov" | "wmv" | "m4v" | "webm" | "ts") => FileKind::Video,
@@ -577,7 +579,7 @@ fn should_include_library_item(
 
 fn is_named_theme_asset(path: &Path) -> bool {
     path.file_stem()
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .map(|value| value.eq_ignore_ascii_case("theme"))
         .unwrap_or(false)
 }
@@ -593,8 +595,8 @@ fn normalize_relative_path(
 pub(crate) fn fallback_title_from_relative_path(relative_path: &str) -> String {
     Path::new(relative_path)
         .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_string())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(ToString::to_string)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| relative_path.to_string())
 }

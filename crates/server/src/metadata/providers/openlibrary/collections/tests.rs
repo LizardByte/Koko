@@ -5,6 +5,7 @@ use crate::metadata::providers::audiosilo::tests::{
     mock,
     mock_status,
 };
+use crate::metadata::providers::openlibrary::TEST_API_ROOT;
 use serde_json::json;
 
 fn page(

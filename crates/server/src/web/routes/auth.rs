@@ -54,7 +54,10 @@ pub async fn login(
     cookies: &CookieJar<'_>,
     login_form: Json<LoginForm>,
 ) -> Result<Json<TokenResponse>, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::{
+        username,
+        users,
+    };
 
     let form = login_form.into_inner();
 
@@ -99,6 +102,7 @@ pub fn logout(cookies: &CookieJar<'_>) -> &'static str {
     cookies.remove(
         Cookie::build(crate::auth::MEDIA_AUTH_COOKIE)
             .path("/api/v1")
+            .secure(crate::config::current_settings().server.use_https)
             .build(),
     );
     "Logout Page"

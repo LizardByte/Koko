@@ -1,6 +1,12 @@
 //! Resolve curated collection pages, never a patron's unrelated personal reading lists.
 
-use super::*;
+use super::{
+    Deserialize,
+    Serialize,
+    Value,
+    get,
+    request,
+};
 use std::collections::HashSet;
 
 const INVALID_QUERY: &str = "Invalid curator-authored collection search";

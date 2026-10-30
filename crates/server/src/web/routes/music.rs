@@ -341,11 +341,7 @@ pub async fn radio(
         .await;
         match data {
             Ok(Some(serde_json::Value::Array(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
-                    if let Some(id) = row["recording_mbid"].as_str() {
-                        recordings.insert(id.to_string(), index);
-                    }
-                }
+                recordings = similarity_ranks(&rows, "recording_mbid");
             }
             _ => provider_available = false,
         }
@@ -361,11 +357,7 @@ pub async fn radio(
         .await;
         match data {
             Ok(Some(serde_json::Value::Array(rows))) => {
-                for (index, row) in rows.iter().enumerate() {
-                    if let Some(id) = row["artist_mbid"].as_str() {
-                        artists.insert(id.to_string(), index);
-                    }
-                }
+                artists = similarity_ranks(&rows, "artist_mbid");
             }
             _ => provider_available = false,
         }
@@ -376,6 +368,17 @@ pub async fn radio(
         &artists,
         provider_available,
     )))
+}
+
+/// Preserve provider ordering while ignoring rows without the requested identifier.
+fn similarity_ranks(
+    rows: &[serde_json::Value],
+    key: &str,
+) -> HashMap<String, usize> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| row[key].as_str().map(|id| (id.to_string(), index)))
+        .collect()
 }
 
 fn select_radio(
@@ -496,6 +499,29 @@ pub(crate) mod tests {
         Connection,
         connection::SimpleConnection,
     };
+
+    #[test]
+    fn similarity_ranks_keep_provider_positions_and_last_duplicate() {
+        let rows = serde_json::json!([
+            {"recording_mbid": "first", "artist_mbid": "artist"},
+            {"recording_mbid": 12},
+            null,
+            {"recording_mbid": "second"},
+            {"recording_mbid": "first"}
+        ]);
+        assert_eq!(
+            similarity_ranks(rows.as_array().unwrap(), "recording_mbid"),
+            HashMap::from([
+                ("first".into(), 4),
+                ("second".into(), 3)
+            ])
+        );
+        assert_eq!(
+            similarity_ranks(rows.as_array().unwrap(), "artist_mbid"),
+            HashMap::from([("artist".into(), 0)])
+        );
+        assert!(similarity_ranks(&[], "recording_mbid").is_empty());
+    }
 
     pub(crate) async fn lyrics_database(id: i32) -> (rocket::Rocket<rocket::Ignite>, DbConn) {
         let rocket = rocket::custom(rocket::Config::figment().merge((

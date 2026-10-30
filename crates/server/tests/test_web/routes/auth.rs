@@ -1,5 +1,8 @@
 // lib imports
-use rocket::http::Status;
+use rocket::http::{
+    Cookie,
+    Status,
+};
 use serde_json::json;
 
 // test imports
@@ -81,18 +84,25 @@ async fn test_login_non_existent_user() {
 #[rocket::async_test]
 async fn test_logout_route() {
     let client = create_test_client(Some("auth_routes_logout")).await;
-
-    let response = make_request(
-        Some(&client),
-        "get",
-        "/logout",
-        None,
-        None,
-        Some(Status::Ok),
-        Some(false),
-    )
-    .await;
-    assert_eq!(response.body, "Logout Page");
+    let response = client
+        .get("/logout")
+        .cookie(
+            Cookie::build(("koko_media_auth", "old-token"))
+                .path("/api/v1")
+                .build(),
+        )
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+    let cookie = response.cookies().get("koko_media_auth").unwrap();
+    assert_eq!(cookie.value(), "");
+    assert_eq!(cookie.path(), Some("/api/v1"));
+    assert_eq!(
+        cookie.secure(),
+        Some(koko::config::current_settings().server.use_https)
+    );
+    assert_eq!(cookie.max_age(), Some(rocket::time::Duration::ZERO));
+    assert_eq!(response.into_string().await.unwrap(), "Logout Page");
 }
 
 #[rocket::async_test]

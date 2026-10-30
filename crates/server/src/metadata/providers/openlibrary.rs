@@ -7,7 +7,19 @@ pub(crate) use authors::guess_author;
 #[cfg(test)]
 mod tests;
 
-use super::*;
+use super::{
+    MediaLibraryKind,
+    MetadataProvider,
+    MetadataProviderDescriptor,
+    MetadataProviderFuture,
+    MetadataProviderId,
+    MetadataProviderRole,
+    MetadataSearchResult,
+    MetadataSettings,
+    ProviderMetadataCollection,
+    ProviderMetadataDetails,
+    StoredMetadataSnapshot,
+};
 use serde::{
     Deserialize,
     Serialize,

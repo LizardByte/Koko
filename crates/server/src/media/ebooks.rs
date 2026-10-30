@@ -1,6 +1,24 @@
 //! Ebook sources, bounded conversion, and independent per-reader positions and bookmarks.
 
-use super::*;
+use super::{
+    ExpressionMethods,
+    HashMap,
+    HashSet,
+    JsonSchema,
+    MediaItemSummary,
+    OptionalExtension,
+    Path,
+    PathBuf,
+    QueryDsl,
+    RunQueryDsl,
+    Serialize,
+    SqliteConnection,
+    load_backing_media_file,
+    load_media_item_hierarchy,
+    load_media_item_row,
+    resolve_media_item_source_path,
+    schemars,
+};
 use crate::db::schema::reading_progress as progress;
 use diesel::QueryResult;
 use serde::Deserialize;

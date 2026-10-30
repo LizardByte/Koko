@@ -666,6 +666,104 @@ async fn automatic_descendants_publish_pending_work_and_count_child_failures() {
     }
 }
 
+/// Check the shelves and metadata attempts produced by each library scanner.
+fn assert_initial_library_scans(
+    conn: &mut diesel::SqliteConnection,
+    ids: &[i32],
+    kinds: &[&str],
+) {
+    use crate::db::schema::media_items::dsl as items;
+    use diesel::{
+        ExpressionMethods,
+        QueryDsl,
+        RunQueryDsl,
+    };
+    for (id, kind) in ids.iter().copied().zip(kinds.iter().copied()) {
+        let scanned = list_media_items(conn, Some(id)).unwrap();
+        assert!(
+            !scanned.is_empty(),
+            "{kind} library must scan automatically"
+        );
+        let home = crate::media::get_media_home(conn, Some(1), Some(id)).unwrap();
+        let continue_title = match kind {
+            "music" => "Continue listening",
+            "books" => "Continue listening",
+            _ => "Continue watching",
+        };
+        assert_eq!(home.shelves[0].title, continue_title);
+        if kind == "music" {
+            assert_eq!(home.shelves[1].items.len(), 1);
+            assert_eq!(home.shelves[1].items[0].item_type, "album");
+        }
+        if kind == "shows" {
+            assert!(scanned.iter().any(|item| item.item_type == "show"));
+            assert!(scanned.iter().any(|item| item.item_type == "episode"));
+        }
+        if kind != "music" && kind != "movies" {
+            continue;
+        }
+        let attempted = items::media_items
+            .filter(items::library_id.eq(id))
+            .filter(items::metadata_match_attempted_at.is_not_null())
+            .count()
+            .get_result::<i64>(conn)
+            .unwrap();
+        assert_eq!(
+            attempted as usize,
+            scanned.len(),
+            "{kind} items must be matched after scanning"
+        );
+        if kind != "music" {
+            continue;
+        }
+        assert_eq!(scanned.len(), 12);
+        assert_eq!(
+            scanned
+                .iter()
+                .filter(|item| item.item_type == "track")
+                .count(),
+            10
+        );
+        assert_eq!(
+            attempted, 12,
+            "every item must be matched, beyond the normal eight-item batch"
+        );
+    }
+}
+
+/// Verify only newly scanned items enter matching, including every new music track.
+async fn assert_new_scanned_items(
+    db: &DbConn,
+    new_items: &[crate::media::MediaItemSummary],
+    first: i32,
+) {
+    let new_ids = new_items.iter().map(|item| item.id).collect::<Vec<_>>();
+    let attempts = db
+        .run(move |conn| existing_scan_metadata(conn, &new_ids).0)
+        .await;
+    for id in [first, first + 1] {
+        let eligible = new_items
+            .iter()
+            .filter(|item| item.library_id == id)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        assert!(!eligible.is_empty());
+        assert!(
+            attempts
+                .iter()
+                .filter(|(id, _)| eligible.contains(id))
+                .all(|(_, attempted)| attempted.is_some_and(|timestamp| timestamp > 123))
+        );
+    }
+    assert_eq!(
+        new_items
+            .iter()
+            .filter(|item| item.library_id == first)
+            .count(),
+        11
+    );
+}
+
 #[tokio::test]
 async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
     use diesel::{
@@ -773,61 +871,8 @@ async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
     );
     drop(scan_guard);
     wait_for_library_scans_and_metadata(&IDS).await;
-    db.run(|conn| {
-        use crate::db::schema::media_items::dsl as items;
-        for (id, kind) in IDS.into_iter().zip(KINDS) {
-            let scanned = list_media_items(conn, Some(id)).unwrap();
-            assert!(
-                !scanned.is_empty(),
-                "{kind} library must scan automatically"
-            );
-            let home = crate::media::get_media_home(conn, Some(1), Some(id)).unwrap();
-            let continue_title = match kind {
-                "music" => "Continue listening",
-                "books" => "Continue listening",
-                _ => "Continue watching",
-            };
-            assert_eq!(home.shelves[0].title, continue_title);
-            if kind == "music" {
-                assert_eq!(home.shelves[1].items.len(), 1);
-                assert_eq!(home.shelves[1].items[0].item_type, "album");
-            }
-            if kind == "shows" {
-                assert!(scanned.iter().any(|item| item.item_type == "show"));
-                assert!(scanned.iter().any(|item| item.item_type == "episode"));
-            }
-            if kind != "music" && kind != "movies" {
-                continue;
-            }
-            let attempted = items::media_items
-                .filter(items::library_id.eq(id))
-                .filter(items::metadata_match_attempted_at.is_not_null())
-                .count()
-                .get_result::<i64>(conn)
-                .unwrap();
-            assert_eq!(
-                attempted as usize,
-                scanned.len(),
-                "{kind} items must be matched after scanning"
-            );
-            if kind != "music" {
-                continue;
-            }
-            assert_eq!(scanned.len(), 12);
-            assert_eq!(
-                scanned
-                    .iter()
-                    .filter(|item| item.item_type == "track")
-                    .count(),
-                10
-            );
-            assert_eq!(
-                attempted, 12,
-                "every item must be matched, beyond the normal eight-item batch"
-            );
-        }
-    })
-    .await;
+    db.run(|conn| assert_initial_library_scans(conn, &IDS, &KINDS))
+        .await;
     assert!(
         !current_system_activities()
             .await
@@ -937,31 +982,7 @@ async fn added_libraries_of_every_kind_queue_scans_and_metadata_work() {
         );
         assert_eq!(!new_items.is_empty(), add_files);
         if add_files {
-            let new_ids = new_items.iter().map(|item| item.id).collect::<Vec<_>>();
-            let attempts = db
-                .run(move |conn| existing_scan_metadata(conn, &new_ids).0)
-                .await;
-            for id in [FIRST, FIRST + 1] {
-                let eligible = new_items
-                    .iter()
-                    .filter(|item| item.library_id == id)
-                    .map(|item| item.id)
-                    .collect::<Vec<_>>();
-                assert!(!eligible.is_empty());
-                assert!(
-                    attempts
-                        .iter()
-                        .filter(|(id, _)| eligible.contains(id))
-                        .all(|(_, attempted)| attempted.is_some_and(|timestamp| timestamp > 123))
-                );
-            }
-            assert_eq!(
-                new_items
-                    .iter()
-                    .filter(|item| item.library_id == FIRST)
-                    .count(),
-                11
-            );
+            assert_new_scanned_items(&db, &new_items, FIRST).await;
         }
     }
     drop(db);

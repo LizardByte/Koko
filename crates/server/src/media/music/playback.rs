@@ -1,5 +1,12 @@
 //! Album resume selection uses the latest listened track, including completed tracks.
-use super::super::*;
+use super::super::{
+    ContainerPlaybackTargets,
+    MediaItem,
+    MediaPlaybackTarget,
+    SqliteConnection,
+    playable_container_targets,
+    playback_progress_by_item_id,
+};
 
 pub(in crate::media) fn album_playback_targets(
     conn: &mut SqliteConnection,

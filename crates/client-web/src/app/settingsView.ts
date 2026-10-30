@@ -9,6 +9,7 @@ import { canManageUsers, renderUserManagement } from './auth';
 import { providerAttributionLogo, providerDisplayName, libraryProviderOptions } from './providers';
 import { persistedLibraryForSettings } from './selectors';
 import { state } from './state';
+import { renderLiveTvSettings } from './liveTvSetup';
 import type { AppIconName, SettingsSection } from './types';
 import { renderButtonContent, renderIcon, renderPageNavbar } from './ui';
 
@@ -20,6 +21,7 @@ export function activeSettingsSection(): SettingsSection {
 const SETTINGS_SECTIONS: Array<{ id: SettingsSection; label: string; description: string; icon: AppIconName }> = [
   { id: 'general', label: 'General', description: 'Server, storage and media tools', icon: 'settings' },
   { id: 'libraries', label: 'Libraries', description: 'Media folders, scanning and access', icon: 'layers' },
+  { id: 'live-tv', label: 'Live TV', description: 'Tuners, IPTV, program guides and DVR', icon: 'tv' },
   { id: 'providers', label: 'Metadata providers', description: 'Credentials and metadata sources', icon: 'link-2' },
   { id: 'scheduled', label: 'Scheduled tasks', description: 'Automated refresh and maintenance', icon: 'refresh-cw' },
   { id: 'users', label: 'Users', description: 'Accounts and permissions', icon: 'user-plus' },
@@ -724,6 +726,7 @@ function renderAddLibraryForm(): string {
 }
 
 function renderSettingsSectionContent(section: SettingsSection, settings: SettingsSnapshot | undefined): string {
+  if (section === 'live-tv') return renderLiveTvSettings();
   if (section === 'logs') {
     return '<div id="log-viewer-panel-root">' + renderLogViewer() + '</div>';
   }

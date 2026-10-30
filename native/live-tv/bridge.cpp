@@ -81,7 +81,7 @@ namespace {
     };
 }
 
-KOKO_EXPORT unsigned koko_tv_abi() { return 1; }
+KOKO_EXPORT unsigned koko_tv_abi() { return 2; }
 KOKO_EXPORT void koko_tv_free(char* value) { delete[] value; }
 
 KOKO_EXPORT char* koko_tv_devices() noexcept {
@@ -89,7 +89,7 @@ KOKO_EXPORT char* koko_tv_devices() noexcept {
         ts::COM com(NULLREP);
         ts::DuckContext duck(&NULLREP);
         ts::TunerPtrVector tuners;
-        if (!ts::TunerBase::GetAllTuners(duck, tuners)) return nullptr;
+        ts::TunerBase::GetAllTuners(duck, tuners);
         ts::xml::Document doc(NULLREP);
         auto root = doc.initialize(u"tuners");
         for (const auto& tuner : tuners) {
@@ -103,6 +103,17 @@ KOKO_EXPORT char* koko_tv_devices() noexcept {
 #endif
             node->setAttribute(u"name", tuner->deviceName());
             node->setAttribute(u"info", tuner->deviceInfo());
+        }
+        return copy(doc.toString());
+    } catch (...) { return nullptr; }
+}
+
+KOKO_EXPORT char* koko_tv_regions() noexcept {
+    try {
+        ts::xml::Document doc(NULLREP);
+        auto root = doc.initialize(u"regions");
+        for (const auto& region : ts::HFBand::GetAllRegions(NULLREP)) {
+            root->addElement(u"region")->setAttribute(u"name", region);
         }
         return copy(doc.toString());
     } catch (...) { return nullptr; }

@@ -66,6 +66,23 @@ pub async fn discover_tuners(_admin: AdminGuard) -> Result<Json<Vec<tv::tsduck::
     tv::tsduck::devices().await.map(Json).map_err(error)
 }
 
+/// Enumerate supported tuner frequency regions without requiring attached hardware.
+#[openapi(tag = "Live TV")]
+#[get("/api/v1/live-tv/tuners/regions")]
+pub async fn tuner_regions(_admin: AdminGuard) -> Result<Json<Vec<String>>, Error> {
+    tv::tsduck::regions().await.map(Json).map_err(error)
+}
+
+/// Search source-specific LAN advertisements from the Koko server.
+#[openapi(tag = "Live TV")]
+#[get("/api/v1/live-tv/discover/<kind>")]
+pub async fn discover_sources(
+    _admin: AdminGuard,
+    kind: &str,
+) -> Result<Json<Vec<tv::discovery::DiscoveredSource>>, Error> {
+    tv::discovery::discover(kind).await.map(Json).map_err(error)
+}
+
 /// Queue a fresh local tuner channel scan, preserving existing channels and recording timers.
 #[openapi(tag = "Live TV")]
 #[post("/api/v1/live-tv/sources/<id>/scan")]

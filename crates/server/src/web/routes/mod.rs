@@ -33,6 +33,8 @@ pub fn api_routes() -> Vec<rocket::Route> {
         live_tv::get_guide,
         live_tv::guide_providers,
         live_tv::discover_tuners,
+        live_tv::tuner_regions,
+        live_tv::discover_sources,
         live_tv::scan_tuner,
         live_tv::get_sources,
         live_tv::add_source,

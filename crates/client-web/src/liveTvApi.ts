@@ -25,14 +25,20 @@ export interface TvSource { id: number; name: string; kind: string; enabled: boo
 export interface TvSourceConfig {
   url: string; pin: string; xmltv_url: string; guide_kind: string;
   adapter?: number; frontend?: number; zap_path?: string; multiplex_urls?: string[];
-  gracenote?: TvGuideSelection; refresh_hours?: number;
+  zap2it?: TvGuideSelection; refresh_hours?: number;
   native_device?: string; delivery_system?: string; region?: string; tuning_options?: string;
 }
 /** Discover driver-backed tuners attached to the Koko server. */
 export function discoverTvTuners(): Promise<{ id: string; name: string; info: string }[]> { return requestJson('GET', '/api/v1/live-tv/tuners'); }
+/** Frequency regions provided by Koko's bundled tuner support. */
+export function getTvTunerRegions(): Promise<string[]> { return requestJson('GET', '/api/v1/live-tv/tuners/regions'); }
+/** A tuner or server advertised on the Koko server's local network. */
+export interface TvDiscoveredSource { name: string; url: string; capacity: number }
+/** Search local advertisements for the selected source type. */
+export function discoverTvSources(kind: string): Promise<TvDiscoveredSource[]> { return requestJson('GET', `/api/v1/live-tv/discover/${encodeURIComponent(kind)}`, undefined, 20000); }
 /** Scan a local tuner's terrestrial channels again. */
 export function rescanTvTuner(id: number): Promise<void> { return requestJson('POST', `/api/v1/live-tv/sources/${id}/scan`); }
-/** Selected Gracenote lineup and country/postal lookup context. */
+/** Selected Zap2It lineup and country/postal lookup context. */
 export interface TvGuideSelection { country: string; postal_code: string; lineup_id: string; headend_id: string; device: string; timezone: string; days: number }
 /** A postal-code guide provider, including OTA, cable, or satellite. */
 export interface TvGuideProvider { type: string; device: string; lineupId: string; name: string; location: string; timezone: string; headendId: string }

@@ -280,9 +280,14 @@ jobs:
 
       - name: Bundle native TV library
         if: matrix.run == 'build'
-        run: >-
-          python3 packaging/live_tv.py --target "${{ matrix.target }}"
-          --destination "target/${{ matrix.target }}/release/live-tv"
+        run: |
+          out_dir="$(jq -ber '
+            select(.reason == "build-script-executed" and (.package_id | contains("#koko@"))) | .out_dir
+          ' "${RUNNER_TEMP}/cargo-build.json")"
+          package_dir="$(cat "${out_dir}/native-tv-root.txt")"
+          destination="target/${{ matrix.target }}/release/live-tv"
+          mkdir -p "${destination}"
+          cp -R "${package_dir}/." "${destination}/"
 
       - name: Bundle shared FFmpeg tools
         if: matrix.run == 'build'

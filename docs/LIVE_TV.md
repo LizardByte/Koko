@@ -1,7 +1,7 @@
 # Live TV and recordings
 
 Open **Live TV** in the sidebar to browse channels and programs or manage your recordings.
-An administrator must add a source under **Live TV → Setup** first.
+An administrator must add a source under **Settings → Live TV** first.
 
 ## Supported sources
 
@@ -22,6 +22,13 @@ Tvheadend are optional alternatives.
 Koko needs access to the source from the server, even when you use the web app on another device.
 Encrypted or copy-protected channels are not supported.
 
+Choose a source type to see its connection settings. HDHomeRun and NextPVR can be discovered
+on the local network; Tvheadend can be discovered when its service announcements are enabled.
+Discovery runs from the Koko server. You can always enter the address manually if discovery
+finds nothing, including when the source is on another subnet. For local tuners, choose a
+discovered device or enter its driver name/path, then select a supported frequency region.
+When no tuner is attached, **Find local tuners** reports that none were found.
+
 Set **Simultaneous streams** to the number of tuners or streams your source permits.
 Each live viewer and active recording uses one stream. A direct Linux DVB source uses one
 adapter/frontend and allows one stream; add another source for a separate tuner.
@@ -37,7 +44,7 @@ Choose the guide source when adding a TV source:
 
 - **Automatic** uses HDHomeRun's guide, the NextPVR/Tvheadend guide, or broadcast guide
   reception for a local tuner.
-- **Gracenote (formerly Zap2It)** finds OTA, cable, and satellite lineups by ZIP/postal code.
+- **Zap2It** finds OTA, cable, and satellite lineups by ZIP/postal code.
 - **Over-the-air (DVB EIT / ATSC PSIP)** receives schedules from the broadcast itself.
 - **XMLTV URL** downloads a guide from a URL you supply, including gzip-compressed feeds.
 
@@ -49,10 +56,10 @@ HDHomeRun currently supplies two days of guide data without a separate guide acc
 fourteen days with its DVR guide subscription. Availability depends on the device and region.
 See the [HDHomeRun guide documentation](https://github.com/Silicondust/documentation/wiki/XMLTV-Guide-Data).
 
-For Gracenote, select **USA** or **CAN**, enter your ZIP/postal code, and choose **Find providers**.
+For Zap2It, select **USA** or **CAN**, enter your ZIP/postal code, and choose **Find providers**.
 Select your provider and guide horizon, then save the source. Listings update initially and
 daily afterward. Set **Refresh interval (hours)** to change this; zero uses the provider default.
-Gracenote's public listings service may change or be unavailable; use XMLTV or broadcast guides
+Zap2It's public listings service may change or be unavailable; use XMLTV or broadcast guides
 if it cannot supply your listings.
 
 For broadcast guide reception, local tuner sources use their

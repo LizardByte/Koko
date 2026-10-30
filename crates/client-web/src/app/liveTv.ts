@@ -1,5 +1,5 @@
-/** Renders the Live TV guide, program details, personal DVR, and source setup. */
-import type { TvChannel, TvProgram, TvRecording, TvSource } from '../liveTvApi';
+/** Renders the Live TV guide, program details, and shared or private recordings. */
+import type { TvChannel, TvProgram, TvRecording } from '../liveTvApi';
 import { escapeHtml as escape } from './format';
 import { state } from './state';
 import { renderIcon } from './ui';
@@ -37,13 +37,11 @@ export function renderLiveTvPage(): string {
   const admin = state.bootstrap?.current_user?.admin === true;
   const tab = data.tab ?? 'guide';
   const tabs = [{ key: 'guide', label: 'Guide' }, { key: 'recordings', label: 'Recordings' }];
-  if (admin) tabs.push({ key: 'setup', label: 'Setup' });
   let content = renderGuide(data);
   if (tab === 'recordings') content = renderRecordings(data);
-  if (tab === 'setup' && admin) content = renderSetup(data);
   return `<section class="live-tv-page" data-nav-section="live-tv" data-nav-label="Live TV">
     <header class="live-tv-header"><div><p class="eyebrow">Television</p><h1>Live TV</h1><p>Live channels, your guide, and recordings.</p></div>
-      <button type="button" class="secondary-button" data-tv-refresh>${renderIcon('refresh-cw')} Refresh</button></header>
+      <div class="live-tv-actions">${admin ? '<button type="button" class="secondary-button" data-settings-section-path="/settings/live-tv">Live TV settings</button>' : ''}<button type="button" class="secondary-button" data-tv-refresh>${renderIcon('refresh-cw')} Refresh</button></div></header>
     <nav class="live-tv-tabs" aria-label="Live TV sections">${tabs.map(t => `<button type="button" data-tv-tab="${t.key}" aria-pressed="${tab === t.key}">${t.label}</button>`).join('')}</nav>
     ${data.error ? `<p class="live-tv-error" role="alert">${escape(data.error)}</p>` : ''}
     ${data.message ? `<p role="status">${escape(data.message)}</p>` : ''}
@@ -91,7 +89,7 @@ function renderGuide(data: LiveTvState): string {
     <strong>${escape(tvTime(data.windowStart, true))}</strong><button type="button" class="secondary-button" data-tv-window="1" aria-label="Later programs">→</button>
     <form id="tv-filter-form"><label>Channel<input type="search" name="query" value="${escape(data.query ?? '')}" placeholder="Search channels" /></label>
       <label>Group<select name="group"><option value="">All groups</option>${groups.map(g => `<option ${data.group === g ? 'selected' : ''}>${escape(g)}</option>`).join('')}</select></label><button type="submit" class="secondary-button">Filter</button></form></div>
-    ${rows || '<p>No channels available. Add a TV source in Setup, or ask the server administrator to configure one.</p>'}`;
+    ${rows || '<p>No channels available. Add a TV source in Settings → Live TV, or ask the server administrator to configure one.</p>'}`;
 }
 
 function renderRecording(recording: TvRecording, data: LiveTvState): string {
@@ -128,68 +126,4 @@ function renderManualRecording(data: LiveTvState): string {
       <label>Channel<select name="channel" required>${data.channels.filter(c => c.enabled && c.available).map(c => `<option value="${c.id}">${escape(c.number)} ${escape(c.name)}</option>`).join('')}</select></label>
       <label>Recording title<input name="title" required maxlength="500" /></label><label>Starts<input name="start" type="datetime-local" required /></label><label>Ends<input name="end" type="datetime-local" required /></label>
       <label>Before (minutes)<input name="before" type="number" min="0" max="60" value="0" /></label><label>After (minutes)<input name="after" type="number" min="0" max="60" value="0" /></label><label><input type="checkbox" name="private" /> Private (only my account)</label><button type="submit">Schedule recording</button></form></details>`;
-}
-
-function renderSource(source: TvSource): string {
-  const scan = source.kind === 'native' ? `<button type="button" class="secondary-button" data-tv-source-scan="${source.id}">Rescan channels</button>` : '';
-  return `<article class="live-tv-source"><h3>${escape(source.name)}</h3><p>${escape(source.kind)} · ${source.enabled ? 'Enabled' : 'Disabled'}</p>
-    ${source.last_error ? `<p class="live-tv-error">${escape(source.last_error)}</p>` : '<p>Channels and guide refresh automatically.</p>'}
-    <form data-tv-source-update="${source.id}" class="live-tv-inline-form"><label><input type="checkbox" name="enabled" ${source.enabled ? 'checked' : ''} /> Enabled</label>
-      <label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source.capacity}" required /></label><button type="submit" class="secondary-button">Save</button></form>
-    <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-refresh="${source.id}">Refresh channels and guide</button>${scan}
-      <label class="live-tv-upload">Import XMLTV<input type="file" accept=".xml,.xmltv,text/xml,application/xml" data-tv-guide-upload="${source.id}" /></label></div>
-    <details class="live-tv-panel"><summary>Replace connection settings</summary><p>Saved credentials are hidden. Enter the complete connection and guide settings again to replace them.</p>${renderAddSource(source)}</details></article>`;
-}
-
-function renderChannelMapping(channel: TvChannel, data: LiveTvState): string {
-  const stations = data.stations.filter(s => s.source_id === channel.source_id);
-  const options = stations.map(s => {
-    const label = `${s.number} ${s.name} (${s.guide_key})`;
-    return `<option value="${escape(s.guide_key)}" ${channel.guide_override === s.guide_key ? 'selected' : ''}>${escape(label)}</option>`;
-  }).join('');
-  return `<form data-tv-channel-update="${channel.id}" class="live-tv-channel-mapping"><strong>${escape(channel.number)} ${escape(channel.name)}</strong>
-    <label><input type="checkbox" name="enabled" ${channel.enabled ? 'checked' : ''} /> Enabled</label>
-    <label>Guide station<select name="guide"><option value="">Automatic (${escape(channel.guide_key || 'unmapped')})</option>${options}</select></label>
-    ${channel.available ? '' : '<span>Missing from source</span>'}<button type="submit" class="secondary-button">Save</button></form>`;
-}
-
-function renderSetup(data: LiveTvState): string {
-  return `<h2>TV sources</h2><p>Add HDHomeRun, an IPTV M3U playlist, or a local Hauppauge or other tuner directly. NextPVR and Tvheadend are also available as optional sources.</p>
-    <div class="live-tv-source-list">${data.sources.map(renderSource).join('')}</div>
-    <details class="live-tv-panel" ${data.sources.length ? '' : 'open'}><summary>Add a TV source</summary>${renderAddSource()}</details>
-    <details class="live-tv-panel"><summary>Channel visibility and guide mapping</summary><p>Choose a guide station when the automatic match is missing or incorrect.</p>${data.channels.map(c => renderChannelMapping(c, data)).join('')}</details>
-    ${renderDvrSettings(data)}`;
-}
-
-function renderDvrSettings(data: LiveTvState): string {
-  const settings = data.dvrSettings; if (!settings) return '';
-  const permissions = settings.users.map(user => `<form data-tv-permission="${user.user_id}" class="live-tv-inline-form"><strong>${escape(user.username)}</strong><label><input type="checkbox" name="can_record" ${user.can_record ? 'checked' : ''} /> Allow recording</label><button type="submit">Save permission</button></form>`).join('');
-  return `<details class="live-tv-panel"><summary>DVR storage and recording permissions</summary>
-    <form id="tv-dvr-settings" class="live-tv-form"><label>DVR save folder<input name="recording_dir" value="${escape(settings.settings.recording_dir)}" placeholder="Default: Koko data folder/live-tv/recordings" /></label><p>Use an absolute folder path on the server. This applies to new captures; existing recordings keep their locations.</p><button type="submit">Save DVR folder</button></form>
-    <p>Recordings are shared by default. Anyone can watch shared recordings; the account that scheduled a recording manages it.</p>
-    ${permissions}</details>`;
-}
-
-function renderAddSource(source?: TvSource): string {
-  const identity = source ? `data-tv-replace-source="${source.id}"` : 'id="tv-source-form"';
-  const options = [['hdhomerun', 'HDHomeRun'], ['m3u', 'IPTV (M3U)'], ['native', 'Local tuner (Windows BDA / Linux DVB)'], ['nextpvr', 'NextPVR'], ['tvheadend', 'Tvheadend'], ['dvb', 'Linux DVB channel file (v4l-utils)']]
-    .filter(([id]) => !source || source.kind === id).map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
-  return `<form ${identity} class="live-tv-form"><label>Name<input name="name" value="${escape(source?.name ?? '')}" required maxlength="200" placeholder="Living room TV" /></label>
-    <label>Source type<select name="kind">${options}</select></label>
-    <label>Device/playlist URL or DVB channel file path<input name="url" placeholder="http://192.168.1.20 (not needed for a local tuner)" /></label>
-    <details class="live-tv-guide-account"><summary>Local tuner</summary><button type="button" data-tv-discover-tuners>Find local tuners</button><p role="status" data-tv-tuner-status></p><label>Tuner<select name="native_device"><option value="">Default tuner</option></select></label><label>Delivery system<select name="delivery_system"><option>ATSC</option><option>DVB-T</option><option>DVB-T2</option><option>ISDB-T</option></select></label><label>Frequency region<input name="region" value="north-america" placeholder="north-america, europe, japan…" /></label><label>Additional tuning options<input name="tuning_options" placeholder="Optional, for example --bandwidth 8-MHz" /></label><p>Install the manufacturer's tuner driver. Koko scans terrestrial channels when the source is added; this can take several minutes. Each tuner uses one source and one simultaneous stream.</p></details>
-    <label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source?.capacity ?? 1}" required /></label>
-    <label>NextPVR PIN<input name="pin" type="password" autocomplete="off" /></label>
-    <label>Guide source<select name="guide_kind"><option value="automatic">Automatic</option><option value="gracenote">Gracenote (formerly Zap2It)</option><option value="xmltv">XMLTV URL</option><option value="broadcast">Over-the-air (DVB EIT / ATSC PSIP)</option></select></label>
-    <details class="live-tv-guide-account"><summary>Gracenote lineup</summary><label>Country<select name="guide_country"><option value="USA">United States</option><option value="CAN">Canada</option></select></label><label>ZIP / postal code<input name="guide_postal" maxlength="10" /></label><button type="button" data-tv-provider-search>Find providers</button><p role="status" data-tv-provider-status></p><label>Provider<select name="gracenote_provider"></select></label><label>Guide days<input name="guide_days" type="number" min="1" max="14" value="14" /></label></details>
-    <label>Refresh interval (hours)<input name="refresh_hours" type="number" min="0" max="168" value="0" /></label><p>Zero uses the provider default: daily for Gracenote. Channels and guide update when the source is added.</p>
-    <p class="live-tv-form-help">Automatic uses the guide from HDHomeRun, NextPVR, or Tvheadend. For IPTV, enter an XMLTV URL or import an XMLTV file after adding the source. HDHomeRun includes a short guide without a separate guide account.</p>
-    <label>XMLTV URL<input name="xmltv_url" type="url" placeholder="https://provider.example/guide.xml" /></label>
-    <details class="live-tv-guide-account"><summary>Broadcast guide and Linux tuner settings</summary>
-      <p>Koko includes broadcast guide decoding. Network tuners need unfiltered multiplex URLs; for HDHomeRun, use physical RF channel or frequency URLs. Guide scans wait while recordings are due or running.</p>
-      <label>Unfiltered multiplex URLs (one per line)<textarea name="multiplex_urls" rows="3" placeholder="http://192.168.1.20:5004/auto/ch473000000"></textarea></label>
-      <p>Direct Linux tuners also require v4l-utils, device permissions, and a channel file generated by dvbv5-scan.</p>
-      <label>DVB adapter<input name="adapter" type="number" min="0" max="63" value="0" /></label><label>DVB frontend<input name="frontend" type="number" min="0" max="63" value="0" /></label>
-      <label>dvbv5-zap path<input name="zap_path" placeholder="dvbv5-zap" /></label></details>
-    <button type="submit">${source ? 'Save connection settings' : 'Add source'}</button></form>`;
 }

@@ -45,8 +45,9 @@ pub(crate) struct SourceConfig {
     pub frontend: u32,
     pub zap_path: String,
     pub multiplex_urls: Vec<String>,
-    pub gracenote: super::gracenote::Selection,
-    /// Zero selects the provider's recommended interval; Gracenote defaults to daily.
+    #[serde(alias = "gracenote")]
+    pub zap2it: super::gracenote::Selection,
+    /// Zero selects the provider's recommended interval; Zap2It defaults to daily.
     pub refresh_hours: u32,
     pub native_device: String,
     pub delivery_system: String,
@@ -182,7 +183,7 @@ fn validate(input: &mut SourceInput) -> Result<(), String> {
     }
     if !matches!(
         input.config.guide_kind.as_str(),
-        "" | "automatic" | "xmltv" | "broadcast" | "gracenote"
+        "" | "automatic" | "xmltv" | "broadcast" | "gracenote" | "zap2it" | "upload"
     ) {
         return Err("Select a supported guide source".into());
     }
@@ -198,8 +199,8 @@ fn validate(input: &mut SourceInput) -> Result<(), String> {
     if input.config.refresh_hours > 168 {
         return Err("Choose a refresh interval from 1 to 168 hours, or zero for automatic".into());
     }
-    if input.config.guide_kind == "gracenote" {
-        super::gracenote::validate(&input.config.gracenote)?;
+    if matches!(input.config.guide_kind.as_str(), "gracenote" | "zap2it") {
+        super::gracenote::validate(&input.config.zap2it)?;
     }
     Ok(())
 }
@@ -212,9 +213,9 @@ async fn resolve_native_device(
     if input.kind != "native" {
         return Ok(());
     }
-    let devices = super::tsduck::devices().await?;
     if input.config.native_device.is_empty() {
-        input.config.native_device = devices
+        input.config.native_device = super::tsduck::devices()
+            .await?
             .first()
             .ok_or("No local tuners were found; check the driver and device permissions")?
             .id
@@ -231,9 +232,7 @@ async fn resolve_native_device(
         }
     };
     let selected = identity(&input.config.native_device);
-    if !devices.iter().any(|d| identity(&d.id) == selected) {
-        return Err("The selected tuner is unavailable; find local tuners again".into());
-    }
+    // A manually entered driver name/path remains usable when enumeration cannot find it.
     let sources = db.run(storage::sources).await.map_err(super::db_error)?;
     if sources
         .iter()
@@ -373,14 +372,9 @@ async fn automatic_guide(
             formats::parse_guide(&text(url).await?)
         }
         "nextpvr" => nextpvr::guide(config).await.map(from_programs),
-        "tvheadend" => formats::parse_guide(
-            &text(
-                formats::http_url(&config.url)?
-                    .join("/xmltv/channels")
-                    .map_err(|_| "Invalid Tvheadend URL")?,
-            )
-            .await?,
-        ),
+        "tvheadend" => {
+            formats::parse_guide(&text(formats::endpoint(&config.url, "xmltv/channels")?).await?)
+        }
         _ if !config.xmltv_url.is_empty() => {
             formats::parse_guide(&text(formats::http_url(&config.xmltv_url)?).await?)
         }
@@ -444,7 +438,7 @@ pub(crate) async fn refresh(
             rand::random_range(20 * 3600..28 * 3600)
         } else if settings.refresh_hours > 0 {
             i64::from(settings.refresh_hours) * 3600
-        } else if settings.guide_kind == "gracenote" {
+        } else if matches!(settings.guide_kind.as_str(), "gracenote" | "zap2it") {
             24 * 3600
         } else {
             6 * 3600
@@ -476,9 +470,7 @@ async fn refresh_inner(
         "dvb" => super::native::channels(&config).await?,
         "native" => super::tsduck::channels(source, &config).await?,
         "tvheadend" => {
-            let url = formats::http_url(&config.url)?
-                .join("/playlist/channels.m3u")
-                .map_err(|_| "Invalid Tvheadend URL")?;
+            let url = formats::endpoint(&config.url, "playlist/channels.m3u")?;
             formats::m3u(&text(url.clone()).await?, url.as_str())?
         }
         _ => formats::m3u(&text(formats::http_url(&config.url)?).await?, &config.url)?,
@@ -488,7 +480,7 @@ async fn refresh_inner(
         .await
         .map_err(super::db_error)?;
     let guide = match config.guide_kind.as_str() {
-        "gracenote" => Some(super::gracenote::guide(&config.gracenote).await?),
+        "gracenote" | "zap2it" => Some(super::gracenote::guide(&config.zap2it).await?),
         "xmltv" => Some(formats::parse_guide(
             &text(formats::http_url(&config.xmltv_url)?).await?,
         )?),

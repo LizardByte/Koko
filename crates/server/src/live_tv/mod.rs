@@ -1,6 +1,7 @@
 //! Live television sources, guide data, and shared or private DVR schedules.
 
 mod broadcast;
+pub(crate) mod discovery;
 mod dvr;
 mod formats;
 pub(crate) mod gracenote;

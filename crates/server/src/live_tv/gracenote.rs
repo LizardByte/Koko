@@ -1,4 +1,4 @@
-//! Postal-code provider discovery and bounded six-hour paging of Gracenote's public TV grid.
+//! Postal-code provider discovery and bounded six-hour paging of Zap2It's public TV grid.
 
 use super::formats::{
     Guide,
@@ -6,10 +6,7 @@ use super::formats::{
     ProgramMetadata,
     Station,
 };
-use super::sources::{
-    client,
-    json,
-};
+use super::sources::client;
 use reqwest::Url;
 use rocket_okapi::okapi::schemars::{
     self,
@@ -27,6 +24,58 @@ use std::collections::{
 
 const BASE: &str = "https://tvlistings.gracenote.com";
 const PAGE_SECONDS: i64 = 6 * 3600;
+
+async fn request(
+    client: &reqwest::Client,
+    url: Url,
+) -> Result<Value, String> {
+    let mut response = client
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            concat!(
+                "Mozilla/5.0 (compatible; Koko/",
+                env!("CARGO_PKG_VERSION"),
+                "; +https://github.com/LizardByte/Koko)"
+            ),
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::REFERER,
+            "https://tvlistings.gracenote.com/",
+        )
+        .send()
+        .await
+        .map_err(|_| {
+            "Unable to reach Zap2It; check the server's network connection and try again"
+        })?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Zap2It could not load listings (HTTP {}). Try again later or use an XMLTV guide",
+            response.status().as_u16()
+        ));
+    }
+    let limit = 32 * 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err("The Zap2It response is too large".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "The Zap2It transfer was interrupted; try again")?
+    {
+        if body.len() + chunk.len() > limit {
+            return Err("The Zap2It response is too large".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body)
+        .map_err(|_| "Zap2It returned an unsupported response; try again later".into())
+}
 
 #[derive(Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
@@ -91,7 +140,7 @@ pub(crate) fn validate(selection: &Selection) -> Result<(), String> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
         {
-            return Err("Search for and select a Gracenote lineup".into());
+            return Err("Search for and select a Zap2It lineup".into());
         }
     }
     if selection.device.len() > 20 || selection.timezone.len() > 100 || selection.days > 14 {
@@ -116,14 +165,14 @@ pub(crate) async fn providers(
         "cha",
         "en",
     ]);
-    let value = json(client()?.get(url)).await?;
+    let value = request(&client()?, url).await?;
     serde_json::from_value(
         value
             .get("Providers")
             .cloned()
-            .ok_or("Gracenote returned no provider list")?,
+            .ok_or("Zap2It returned no provider list")?,
     )
-    .map_err(|_| "Gracenote returned an unsupported provider response".into())
+    .map_err(|_| "Zap2It returned an unsupported provider response".into())
 }
 
 pub(super) fn page_url(
@@ -188,7 +237,7 @@ fn image(value: &str) -> Option<String> {
 pub(super) fn parse(value: &Value) -> Result<Guide, String> {
     let rows = value["channels"]
         .as_array()
-        .ok_or("Gracenote returned an unsupported grid response")?;
+        .ok_or("Zap2It returned an unsupported grid response")?;
     if rows.len() > 20_000 {
         return Err("The lineup exceeds 20,000 stations".into());
     }
@@ -280,7 +329,7 @@ pub(super) async fn guide(selection: &Selection) -> Result<Guide, String> {
     let mut pages = HashSet::new();
     let mut time = start;
     while time < end {
-        let page = parse(&json(client.get(page_url(selection, time)?)).await?)?;
+        let page = parse(&request(&client, page_url(selection, time)?).await?)?;
         // An ignored time parameter must not repeatedly download the same grid for fourteen days.
         let signature = page.programs.iter().map(|p| p.starts_at).max();
         if let Some(signature) = signature {
@@ -305,14 +354,14 @@ pub(super) async fn guide(selection: &Selection) -> Result<Guide, String> {
         }
         if programs.len() > 250_000 {
             return Err(
-                "The Gracenote guide exceeds 250,000 programs; choose fewer guide days".into(),
+                "The Zap2It guide exceeds 250,000 programs; choose fewer guide days".into(),
             );
         }
         time += PAGE_SECONDS;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     if programs.is_empty() {
-        return Err("Gracenote returned no programs for this lineup".into());
+        return Err("Zap2It returned no programs for this lineup".into());
     }
     Ok(Guide {
         stations: stations.into_values().collect(),

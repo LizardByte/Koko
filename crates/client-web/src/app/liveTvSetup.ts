@@ -65,8 +65,8 @@ function renderConnection(kind: string): string {
   const port = ({ nextpvr: ':8866', tvheadend: ':9981' } as Record<string, string>)[kind] ?? '';
   const pin = kind === 'nextpvr' ? '<label>NextPVR PIN<input name="pin" type="password" autocomplete="off" required /></label>' : '';
   return `<fieldset class="live-tv-source-discovery"><legend>${escape(label)} connection</legend>
-    <button type="button" data-tv-discover-source="${escape(kind)}">Find ${escape(label)}</button><p role="status" data-tv-discovery-status></p>
-    <label>Discovered sources<select data-tv-discovered-source><option value="">Choose a discovered source</option></select></label>
+    <div class="live-tv-discovery-toolbar"><button type="button" data-tv-discover-source="${escape(kind)}">Find ${escape(label)}</button><p role="status" data-tv-discovery-status></p></div>
+    <div class="live-tv-discovery-results" data-tv-discovery-results role="radiogroup" aria-label="Discovered ${escape(label)} sources" hidden></div>
     <label>${escape(label)} address<input name="url" type="url" required placeholder="http://192.168.1.20${port}" /></label>
     <p>Discovery searches from the Koko server. You can also enter the address manually, including a custom port or HTTPS.</p></fieldset>${pin}`;
 }
@@ -74,9 +74,9 @@ function renderConnection(kind: string): string {
 function renderLocalTuner(): string {
   const regions = state.liveTv?.regions ?? [];
   const options = regions.length ? regions.map(region => `<option value="${escape(region)}" ${region.toLowerCase() === 'north-america' ? 'selected' : ''}>${escape(region)}</option>`).join('') : '<option value="">Loading frequency regions…</option>';
-  return `<fieldset class="live-tv-source-discovery"><legend>Local tuner</legend><button type="button" data-tv-discover-tuners>Find local tuners</button><p role="status" data-tv-tuner-status></p>
-    <label>Tuner<select name="native_device"><option value="">Default tuner</option></select></label>
-    <label>Or enter the tuner location manually<input name="native_device_manual" placeholder="Windows tuner name or /dev/dvb/adapter0" /></label></fieldset>
+  return `<fieldset class="live-tv-source-discovery"><legend>Local tuner</legend><div class="live-tv-discovery-toolbar"><button type="button" data-tv-discover-tuners>Find local tuners</button><p role="status" data-tv-tuner-status></p></div>
+    <div class="live-tv-discovery-results" data-tv-discovery-results role="radiogroup" aria-label="Discovered local tuners" hidden></div>
+    <label>Tuner location<input name="native_device" required placeholder="Windows tuner name or /dev/dvb/adapter0" /></label><p class="live-tv-form-help">Select a discovered tuner above, or enter its location manually.</p></fieldset>
     <label>Delivery system<select name="delivery_system"><option>ATSC</option><option>DVB-T</option><option>DVB-T2</option><option>ISDB-T</option></select></label>
     <label>Frequency region<select name="region" data-tv-frequency-region ${regions.length ? '' : 'disabled'} required>${options}</select></label><p role="status" data-tv-regions-status></p>
     <details class="live-tv-guide-account"><summary>Advanced tuning</summary><label>Additional tuning options<input name="tuning_options" placeholder="Optional, for example --bandwidth 8-MHz" /></label></details>

@@ -4,6 +4,7 @@ import type { AppRoute, AppState } from './types';
 import { state } from './state';
 import { closeActivePlaybackSession } from './playbackController';
 import { stopMusic } from './audioPlayer';
+import { bindTvDiscovery } from './liveTvDiscovery';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -55,7 +56,7 @@ function sourceConfig(form: FormData): api.TvSourceConfig {
   if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (!zap2it || zap2it.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
   return { url: value(form, 'url'), pin: value(form, 'pin'), xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'),
     zap2it: zap2it ? { ...zap2it, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),
-    native_device: value(form, 'native_device_manual') || value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
+    native_device: value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
     adapter: Number(value(form, 'adapter')), frontend: Number(value(form, 'frontend')), zap_path: value(form, 'zap_path'),
     multiplex_urls: value(form, 'multiplex_urls').split(/\r?\n/).map(s => s.trim()).filter(Boolean) };
 }
@@ -160,33 +161,6 @@ function bindGuideChoices(signal: AbortSignal): void {
     });
     update(); select.addEventListener('change', update, { signal });
   });
-  document.querySelectorAll<HTMLSelectElement>('select[name="native_device"]').forEach(select => select.addEventListener('change', () => {
-    const manual = select.closest('form')?.querySelector<HTMLInputElement>('[name="native_device_manual"]');
-    if (manual && select.value) manual.value = '';
-  }, { signal }));
-}
-
-function bindNetworkDiscovery(signal: AbortSignal): void {
-  document.querySelectorAll<HTMLSelectElement>('[data-tv-discovered-source]').forEach(select => select.addEventListener('change', () => {
-    if (!select.value) return;
-    const item = JSON.parse(select.value) as api.TvDiscoveredSource;
-    const form = select.closest('form');
-    const address = form?.querySelector<HTMLInputElement>('[name="url"]'); const name = form?.querySelector<HTMLInputElement>('[name="name"]'); const capacity = form?.querySelector<HTMLInputElement>('[name="capacity"]');
-    if (address) address.value = item.url;
-    if (name && !name.value) name.value = item.name;
-    if (capacity) capacity.value = String(item.capacity);
-  }, { signal }));
-  document.querySelectorAll<HTMLButtonElement>('[data-tv-discover-source]').forEach(button => button.addEventListener('click', () => {
-    const form = button.closest('form'); const select = form?.querySelector<HTMLSelectElement>('[data-tv-discovered-source]'); const status = form?.querySelector<HTMLElement>('[data-tv-discovery-status]');
-    if (!select || !status) return;
-    button.disabled = true; status.textContent = 'Searching the local network…';
-    void api.discoverTvSources(button.dataset.tvDiscoverSource ?? '').then(sources => {
-      if (signal.aborted) return;
-      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose a discovered source'; select.replaceChildren(placeholder);
-      for (const item of sources) { const option = document.createElement('option'); option.value = JSON.stringify(item); option.textContent = `${item.name} · ${item.url}`; select.append(option); }
-      status.textContent = sources.length ? 'Select a source, or enter its address manually.' : 'No sources found. Check that discovery is enabled and Koko can reach the local network, or enter the address manually.';
-    }).catch((error: unknown) => { if (!signal.aborted) status.textContent = error instanceof Error ? error.message : 'Discovery failed. Enter the address manually.'; }).finally(() => { button.disabled = false; });
-  }, { signal }));
 }
 
 function loadTunerRegions(signal: AbortSignal): void {
@@ -243,19 +217,8 @@ function bindSetup(signal: AbortSignal, run: Run, context: Context): void {
     if (state.liveTv) state.liveTv.setupAdding = (event.currentTarget as HTMLDetailsElement).open;
   }, { signal });
   bindGuideChoices(signal);
-  bindNetworkDiscovery(signal);
+  bindTvDiscovery(signal);
   loadTunerRegions(signal);
-  document.querySelectorAll<HTMLButtonElement>('[data-tv-discover-tuners]').forEach(button => button.addEventListener('click', () => {
-    const form = button.closest('form'); const select = form?.querySelector<HTMLSelectElement>('[name="native_device"]'); const status = form?.querySelector<HTMLElement>('[data-tv-tuner-status]');
-    if (!select || !status) return;
-    button.disabled = true; status.textContent = 'Finding tuners…';
-    void api.discoverTvTuners().then(devices => {
-      if (signal.aborted) return;
-      select.replaceChildren();
-      for (const device of devices) { const option = document.createElement('option'); option.value = device.id; option.textContent = device.info ? `${device.name} · ${device.info}` : device.name; select.append(option); }
-      status.textContent = devices.length ? 'Select a tuner. Adding the source scans its channels.' : 'No tuners found. Check the driver and server device permissions.';
-    }).catch((error: unknown) => { if (!signal.aborted) status.textContent = error instanceof Error ? error.message : 'Tuner discovery failed.'; }).finally(() => { button.disabled = false; });
-  }, { signal }));
   document.querySelector<HTMLFormElement>('#tv-dvr-settings')?.addEventListener('submit', event => {
     event.preventDefault(); const input = new FormData(event.currentTarget as HTMLFormElement);
     void run(() => api.setTvDvrSettings(value(input, 'recording_dir')));

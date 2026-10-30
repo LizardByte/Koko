@@ -133,6 +133,15 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
   await form.locator('[data-tv-discovered-source]').selectOption({label:'Discovered tuner · http://192.0.2.10/'});
   await expect(form.locator('[name="url"]')).toHaveValue('http://192.0.2.10/');
   await expect(form.locator('[name="capacity"]')).toHaveValue('4');
+  if (process.env.KOKO_E2E_NEXT_PVR_URL) {
+    const expected = new URL(process.env.KOKO_E2E_NEXT_PVR_URL).href;
+    await page.locator('#tv-source-kind').selectOption('nextpvr');
+    await form.getByRole('button', { name:'Find NextPVR', exact:true }).click();
+    const option = form.locator('[data-tv-discovered-source] option').filter({ hasText:expected });
+    await expect(option).toHaveCount(1);
+    await form.locator('[data-tv-discovered-source]').selectOption({ label:await option.textContent() });
+    await expect(form.getByLabel('NextPVR address')).toHaveValue(expected);
+  }
   await page.locator('#tv-source-kind').selectOption('m3u');
   await expect(form.getByLabel('IPTV playlist URL')).toBeVisible();
   await expect(form.locator('[name="pin"], [name="native_device"]')).toHaveCount(0);

@@ -23,7 +23,6 @@ import { escapeHtml, formatDuration, formatMediaTime } from './format';
 import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
 import * as tvApi from '../liveTvApi';
-import { positionTvPreview } from './tvPlaybackPreview';
 import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
 import { renderButtonContent, renderIcon, subtitleLanguage } from './ui';
 import { buildYouTubeWatchUrl, extractYouTubeVideoId, loadYouTubeIframeApi } from './youtube';
@@ -383,19 +382,22 @@ function renderMediaPlayerOverlay(): string {
   const view = currentPlayerView();
   if (!view) return '';
   const preview = Boolean(view.tv && !state.isPlayerOpen);
-  const closeLabel = preview ? 'Stop playback' : 'Close player';
+  const closeLabel = 'Close player';
   const label = view.tv ? 'Live TV' : 'Now playing';
   const media = view.source ? renderMediaElementMarkup(view.isAudio,view.source,view.poster,view.tracks) : '';
   const mediaMarkup = state.playbackSettings?.paused ? media.replace(' autoplay','') : media;
-  const expand = preview ? `<button id="expand-tv-player" class="player-icon-button" type="button" title="Expand player" aria-label="Expand player">${renderIcon('maximize','player-control-icon')}</button>` : '';
+  if (preview) return `<div id="media-player-overlay" class="player-overlay media-player-overlay tv-preview-player">
+    <div id="media-player-shell" class="player-shell media-player-shell video-player-shell ${state.playbackProblem ? 'has-media-error' : ''}">
+      ${mediaMarkup}<div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div>
+    </div></div>`;
   const quality = !view.isAudio && (!view.tv || view.tv.buffer) ? renderPlaybackQuality(state.activePlaybackQuality ?? 'original') : '';
   const seek = playerSeekEnabled(view);
   return `<div id="media-player-overlay" class="player-overlay media-player-overlay ${preview ? 'tv-preview-player' : ''}">
-    <div class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
+    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
       ${mediaMarkup}<div class="player-loading-indicator" aria-live="polite"><span class="loading-spinner player-loading-spinner" aria-hidden="true"></span></div>
       <div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div><div class="player-idle-hit-area" aria-hidden="true"></div>
       <div class="player-top-controls player-controls"><div class="player-title-block"><span class="eyebrow">${label}</span>${renderPlayerTitleMarkup(view.logo,view.title)}</div>
-        <div class="player-top-actions">${renderTranscodeBadge(view.audioOverride)}${renderTvKeepControls(view)}${expand}<button id="close-player" class="player-icon-button" type="button" title="${closeLabel}" aria-label="${closeLabel}">${renderIcon('x','player-control-icon')}</button></div></div>
+        <div class="player-top-actions">${renderTranscodeBadge(view.audioOverride)}${renderTvKeepControls(view)}<button id="close-player" class="player-icon-button" type="button" title="${closeLabel}" aria-label="${closeLabel}">${renderIcon('x','player-control-icon')}</button></div></div>
       <div class="player-bottom-controls player-controls">${seek ? '<input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />' : ''}
         <div class="player-control-row"><div class="player-control-cluster player-time-cluster">${renderPlayerTime(view)}</div>
           <div class="player-control-cluster player-transport-cluster">${seek ? renderPlayerSeek(-10) : ''}<button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause','player-control-icon')}</button>${seek ? renderPlayerSeek(10) : ''}</div>
@@ -662,7 +664,7 @@ async function openTvBuffer(tv: NonNullable<typeof state.activeTvPlayback>, owne
     if (request !== playbackRequest || state.activeTvPlayback !== tv) return;
     const buffer = await tvApi.startTvBuffer(tv.id);
     if (request !== playbackRequest || state.activeTvPlayback !== tv || owner !== state.bootstrap?.current_user?.id) { await tvApi.closeTvBuffer(buffer.session_id); return; }
-    tv.buffer = buffer; tv.startMs = Math.max(buffer.start_ms,buffer.end_ms-4000);
+    tv.buffer = buffer; tv.startMs = Math.max(buffer.start_ms,buffer.end_ms-6000);
     tv.url = tvApi.tvBufferStreamUrl(buffer.session_id,tv.startMs,'original',request);
     if (state.liveTv?.owner === owner) {
       const preferences = state.liveTv.preferences ?? {favorites:[],recent:[]};
@@ -1333,7 +1335,7 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
     } finally { if (current() && !tv.buffer?.recording_id) keep.disabled = false; }
   };
   keep?.addEventListener('click',save);
-  const goLive = () => { if (tv.buffer) { state.playbackSettings = undefined; seekTvBuffer(tv.buffer.end_ms-4000); } };
+  const goLive = () => { if (tv.buffer) { state.playbackSettings = undefined; seekTvBuffer(tv.buffer.end_ms-6000); } };
   const live = document.querySelector('#player-go-live');
   live?.addEventListener('click',goLive);
   const timer = globalThis.setInterval(() => {
@@ -1362,7 +1364,7 @@ export function bindPlayerProgress(): void {
   const playbackItem = state.activePlaybackItem ?? state.selectedItem;
   const tv = state.activeTvPlayback;
   if (!player || (!playbackItem && !tv)) {
-    cleanupMediaBinding = positionTvPreview();
+    cleanupMediaBinding = undefined;
     return;
   }
 
@@ -1396,12 +1398,11 @@ export function bindPlayerProgress(): void {
   const mediaInitialization = initialization;
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
+  let keepFocusedControlsVisible = false;
   let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0 || mediaInitialization.seekApplied;
   let stallHandle: number | undefined;
-  const cleanupPreview = positionTvPreview();
   const cleanupTvBuffer = bindTvBufferControls(player);
   mediaInitialization.cleanup = () => {
-    cleanupPreview();
     cleanupTvBuffer();
     if (controlsHideHandle !== undefined) globalThis.clearTimeout(controlsHideHandle);
     if (stallHandle !== undefined) globalThis.clearTimeout(stallHandle);
@@ -1514,7 +1515,8 @@ export function bindPlayerProgress(): void {
     }
   };
 
-  const showControls = (): void => {
+  const showControls = (event?: Event): void => {
+    if (event && ['mousemove','mousedown','touchstart','pointermove'].includes(event.type)) keepFocusedControlsVisible = false;
     shell?.classList.add('is-controls-visible');
     shell?.classList.remove('is-controls-hidden');
     document.body.style.cursor = '';
@@ -1522,7 +1524,9 @@ export function bindPlayerProgress(): void {
       globalThis.clearTimeout(controlsHideHandle);
     }
     controlsHideHandle = globalThis.setTimeout(() => {
-      if (!player.paused && !isScrubbing && !state.playbackProblem && document.activeElement?.closest('.player-controls') === null) {
+      const focusedControl = document.activeElement?.closest('.player-controls');
+      if (!player.paused && !isScrubbing && !state.playbackProblem && !(keepFocusedControlsVisible && focusedControl)) {
+        if (document.activeElement?.closest('.player-controls')) shell?.focus({preventScroll:true});
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');
         if (!state.activeTvPlayback || state.isPlayerOpen) document.body.style.cursor = 'none';
@@ -1575,6 +1579,7 @@ export function bindPlayerProgress(): void {
     shell?.addEventListener(eventName, showControls, {signal:mediaSignal,  passive: true });
   });
   shell?.addEventListener('keydown', (event) => {
+    keepFocusedControlsVisible = true;
     if (event.target instanceof HTMLInputElement) {
       return;
     }

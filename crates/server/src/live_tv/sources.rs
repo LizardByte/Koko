@@ -67,6 +67,7 @@ pub(crate) struct SourceInput {
 pub(crate) async fn nextpvr_artwork(
     db: &crate::db::DbConn,
     id: i32,
+    poster: bool,
 ) -> Result<(String, Vec<u8>), String> {
     use crate::db::schema::live_tv_programs as programs;
     use diesel::prelude::*;
@@ -80,7 +81,7 @@ pub(crate) async fn nextpvr_artwork(
         })
         .await
         .map_err(super::db_error)?;
-    nextpvr_image(source, "name", title).await
+    nextpvr_image(source, "name", title, poster).await
 }
 
 pub(crate) async fn nextpvr_channel_artwork(
@@ -100,13 +101,14 @@ pub(crate) async fn nextpvr_channel_artwork(
         })
         .await
         .map_err(super::db_error)?;
-    nextpvr_image(source, "channel_id", key).await
+    nextpvr_image(source, "channel_id", key, false).await
 }
 
 async fn nextpvr_image(
     source: Source,
     parameter: &str,
     value: String,
+    poster: bool,
 ) -> Result<(String, Vec<u8>), String> {
     if source.kind != "nextpvr" || !source.enabled {
         return Err("Artwork is unavailable".into());
@@ -121,7 +123,7 @@ async fn nextpvr_image(
         )
         .append_pair("sid", &sid)
         .append_pair(parameter, &value)
-        .append_pair("prefer", "landscape");
+        .append_pair("prefer", if poster { "poster" } else { "landscape" });
     let mut response = client()?
         .get(url)
         .send()
@@ -129,21 +131,6 @@ async fn nextpvr_image(
         .map_err(|_| "Artwork is unavailable")?;
     if !response.status().is_success() {
         return Err("Artwork is unavailable".into());
-    }
-    let mime = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .to_owned();
-    if !matches!(
-        mime.as_str(),
-        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
-    ) {
-        return Err("Unsupported artwork format".into());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -156,7 +143,16 @@ async fn nextpvr_image(
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok((mime, bytes))
+    // NextPVR can serve icons as application/octet-stream. Identify the actual
+    // image rather than discarding a valid logo because of its HTTP header.
+    let mime = match image::guess_format(&bytes) {
+        Ok(image::ImageFormat::Jpeg) => "image/jpeg",
+        Ok(image::ImageFormat::Png) => "image/png",
+        Ok(image::ImageFormat::WebP) => "image/webp",
+        Ok(image::ImageFormat::Gif) => "image/gif",
+        _ => return Err("Unsupported artwork format".into()),
+    };
+    Ok((mime.into(), bytes))
 }
 
 pub(super) fn client() -> Result<Client, String> {
@@ -622,5 +618,82 @@ pub(super) fn keepalive(
         nextpvr::keepalive(&config(source)?, url).map(Some)
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod artwork_tests {
+    use super::*;
+    #[rocket::async_test]
+    async fn nextpvr_artwork_accepts_binary_mime_and_requests_portrait_art_separately() {
+        use std::io::{
+            Read,
+            Write,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 3)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let expected = png.clone();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..6 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = [0; 8192];
+                let count = socket.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let first = request.lines().next().unwrap().to_owned();
+                let bytes =
+                    if first.contains("channel.icon") || first.contains("channel.show.artwork") {
+                        png.clone()
+                    } else {
+                        br#"<rsp stat="ok"><sid>fixture</sid><salt>salt</salt></rsp>"#.to_vec()
+                    };
+                requests.push(first);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                )
+                .unwrap();
+                socket.write_all(&bytes).unwrap();
+            }
+            requests
+        });
+        let config = SourceConfig {
+            url: format!("http://{address}"),
+            pin: format!("{:032x}", rand::random::<u128>()),
+            ..Default::default()
+        };
+        let source = Source {
+            id: 1,
+            name: "NextPVR fixture".into(),
+            kind: "nextpvr".into(),
+            config_json: serde_json::to_string(&config).unwrap(),
+            enabled: true,
+            capacity: 1,
+            next_refresh: i64::MAX,
+            last_error: None,
+        };
+        for (parameter, value, poster) in [
+            ("channel_id", "42", false),
+            ("name", "Local show", true),
+        ] {
+            let (mime, bytes) = nextpvr_image(source.clone(), parameter, value.into(), poster)
+                .await
+                .unwrap();
+            assert_eq!(mime, "image/png");
+            assert_eq!(bytes, expected);
+        }
+        let requests = server.join().unwrap();
+        assert!(requests[2].contains("method=channel.icon"));
+        assert!(requests[5].contains("prefer=poster"));
     }
 }

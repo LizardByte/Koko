@@ -147,14 +147,20 @@ function captureRenderSnapshot(): RenderSnapshot {
 }
 
 function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): void {
+  // Honor navigation that scrolls after the patch but before the restore frame.
+  const afterPatch = new Map<Element, ScrollPosition>();
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach(element => {
+    afterPatch.set(element,{top:element.scrollTop,left:element.scrollLeft});
+  });
   const frame = globalThis.requestAnimationFrame(() => {
     pendingSnapshotRestores.delete(root);
     document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
       if (position) {
-        element.scrollTop = position.top;
-        element.scrollLeft = position.left;
+        const expected = afterPatch.get(element);
+        if (element.scrollTop === expected?.top) element.scrollTop = position.top;
+        if (element.scrollLeft === expected?.left) element.scrollLeft = position.left;
       }
     });
 

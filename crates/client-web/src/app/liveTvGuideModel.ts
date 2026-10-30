@@ -28,7 +28,7 @@ export function tvTime(seconds: number, date = false): string {
 /** Accept remote artwork and the authenticated Koko program-artwork endpoint. */
 export function tvImage(value?: string | null): string {
   if (!value) return '';
-  if (/^\/api\/v1\/live-tv\/(?:programs|channels)\/\d+\/artwork$/.test(value)) return resolveApiUrl(value);
+  if (/^\/api\/v1\/live-tv\/(?:programs|channels)\/\d+\/artwork(?:\?kind=poster)?$/.test(value)) return resolveApiUrl(value);
   try {
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';

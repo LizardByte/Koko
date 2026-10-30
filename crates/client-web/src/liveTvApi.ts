@@ -10,7 +10,7 @@ export interface TvChannel {
 /** Provider metadata retained with both guide programs and recordings. */
 export interface TvMetadata {
   subtitle?: string | null; description?: string | null; categories?: string[]; image?: string | null;
-  rating?: string | null; episode?: string | null; episode_id?: string | null; credits?: string[]; is_new?: boolean | null;
+  rating?: string | null; episode?: string | null; episode_id?: string | null; credits?: string[]; is_new?: boolean | null; poster?: string | null;
   is_live?: boolean | null; is_premiere?: boolean | null; is_finale?: boolean | null;
 }
 /** A scheduled broadcast using UTC seconds. */

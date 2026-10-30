@@ -7,9 +7,9 @@
 .live-tv-tabs button[aria-pressed="false"] { background: var(--surface-raised); color: inherit; }
 .live-tv-guide-controls { margin-bottom: 1rem; }
 .live-tv-guide-controls form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-left: auto; }
-.live-tv-page label { display: flex; flex-direction: column; gap: .4rem; }
-.live-tv-page label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
-.live-tv-page input, .live-tv-page select, .live-tv-page textarea { min-width: 0; padding: .6rem; color: inherit; background: var(--surface-base); border: 1px solid var(--surface-raised); border-radius: 6px; }
+:is(.live-tv-page, .live-tv-settings) label { display: flex; flex-direction: column; gap: .4rem; }
+:is(.live-tv-page, .live-tv-settings) label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+:is(.live-tv-page, .live-tv-settings) input, :is(.live-tv-page, .live-tv-settings) select, :is(.live-tv-page, .live-tv-settings) textarea { min-width: 0; padding: .6rem; color: inherit; background: var(--surface-base); border: 1px solid var(--surface-raised); border-radius: 6px; }
 .live-tv-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); border: 1px solid var(--surface-raised); border-radius: var(--radius-card); margin-bottom: .75rem; overflow: hidden; }
 .live-tv-channel { display: flex; flex-direction: column; gap: .5rem; padding: 1rem; background: var(--surface-panel); }
 .live-tv-channel button { margin-top: auto; }
@@ -53,3 +53,7 @@
   .live-tv-recording { flex-direction: column; align-items: stretch; }
   .live-tv-guide-controls form { margin-left: 0; }
 }
+
+.live-tv-source-discovery { grid-column: 1 / -1; display: grid; gap: .75rem; border: 1px solid var(--surface-raised); border-radius: 8px; padding: 1rem; }
+.live-tv-guide-account[hidden] { display: none; }
+.live-tv-kind-picker { margin: 1rem 0; }

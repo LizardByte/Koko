@@ -122,6 +122,9 @@ async fn live_tv_routes_enforce_setup_roles_and_recording_ownership() {
     for path in [
         "/api/v1/live-tv/sources",
         "/api/v1/live-tv/setup/channels",
+        "/api/v1/live-tv/tuners",
+        "/api/v1/live-tv/tuners/regions",
+        "/api/v1/live-tv/discover/hdhomerun",
     ] {
         assert_eq!(
             client

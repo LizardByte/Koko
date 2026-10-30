@@ -115,3 +115,42 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await new Promise(done => fixture.close(done));
   }
 });
+
+test('Live TV Settings separates setup flows and finds local tuner metadata without hardware', async ({ page }, testInfo) => {
+  test.setTimeout(90000);
+  await page.goto('/');
+  await page.getByLabel('Username', { exact: true }).fill('playback-admin');
+  await page.getByLabel('Password', { exact: true }).fill(process.env.KOKO_E2E_PASSWORD);
+  await page.getByRole('button', { name:'Sign in', exact:true }).click();
+  await expect(page.locator('#login-form')).toHaveCount(0);
+  await page.goto('/settings/live-tv');
+  await expect(page.locator('#tv-source-kind')).toBeAttached();
+  const panel = page.locator('details').filter({ has: page.locator('#tv-source-form') }).last();
+  if (!(await panel.evaluate(node=>node.open))) await panel.locator('summary').first().click();
+  const form = page.locator('#tv-source-form');
+  await page.route('**/api/v1/live-tv/discover/hdhomerun', route => route.fulfill({ json:[{name:'Discovered tuner',url:'http://192.0.2.10/',capacity:4}] }));
+  await form.getByRole('button',{name:'Find HDHomeRun',exact:true}).click();
+  await form.locator('[data-tv-discovered-source]').selectOption({label:'Discovered tuner · http://192.0.2.10/'});
+  await expect(form.locator('[name="url"]')).toHaveValue('http://192.0.2.10/');
+  await expect(form.locator('[name="capacity"]')).toHaveValue('4');
+  await page.locator('#tv-source-kind').selectOption('m3u');
+  await expect(form.getByLabel('IPTV playlist URL')).toBeVisible();
+  await expect(form.locator('[name="pin"], [name="native_device"]')).toHaveCount(0);
+  await form.locator('[name="guide_kind"]').selectOption('zap2it');
+  await form.getByLabel('ZIP / postal code').fill('14850');
+  const token = await page.evaluate(()=>localStorage.getItem('koko-client-web-auth-token'));
+  if (process.env.KOKO_E2E_LIVE_ZAP2IT !== '1') await page.route('**/api/v1/live-tv/guide/providers?**',route=>route.fulfill({json:[{type:'OTA',name:'Local Over the Air',lineupId:'USA-lineupId-DEFAULT',headendId:'lineupId',device:'',timezone:'',location:''}]}));
+  await form.getByRole('button',{name:'Find providers',exact:true}).click();
+  await expect.poll(()=>form.locator('[name="guide_provider"] option').count(),{timeout:30000}).toBeGreaterThan(0);
+  await expect(form.locator('[data-tv-provider-status]')).toContainText('Select your provider');
+  await page.locator('#tv-source-kind').selectOption('native');
+  await expect.poll(()=>form.locator('[name="region"] option').count()).toBeGreaterThan(1);
+  await expect(form.locator('input[name="region"]')).toHaveCount(0);
+  await form.getByRole('button',{name:'Find local tuners',exact:true}).click();
+  await expect(form.locator('[data-tv-tuner-status]')).toContainText(/No tuners found|Select a tuner/);
+  await expect(form.locator('[data-tv-tuner-status]')).not.toContainText('missing');
+  await page.screenshot({path:testInfo.outputPath('live-tv-settings.png'),fullPage:true});
+  const denied = await page.request.get('/api/v1/live-tv/discover/hdhomerun',{headers:{Authorization:'Bearer invalid'}});
+  expect(denied.status()).toBe(401);
+  expect(token).toBeTruthy();
+});

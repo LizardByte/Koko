@@ -26,6 +26,21 @@ def run(*args, **kwargs):
     subprocess.run([str(a) for a in args], check=True, **kwargs)
 
 
+def cmake_program():
+    """Find CMake in PATH or the existing Visual Studio C++ tool installation."""
+    found = shutil.which("cmake")
+    if found:
+        return found
+    if platform.system() == "Windows":
+        vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+        if vswhere.is_file():
+            installation = subprocess.check_output([str(vswhere), "-latest", "-products", "*", "-property", "installationPath"], text=True).strip()
+            bundled = Path(installation) / "Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe"
+            if bundled.is_file():
+                return str(bundled)
+    raise RuntimeError("CMake is required to build Koko's native TV component; install the C++ CMake tools")
+
+
 def download(kind, cache):
     """Verify every cached or downloaded upstream archive before extraction."""
     url, digest = ARCHIVES[kind]
@@ -64,7 +79,8 @@ def build(target, destination, cache, offline_source=None):
     cache.mkdir(parents=True, exist_ok=True)
     source = offline_source.resolve() if offline_source else source_tree(cache)
     build_dir = cache / f"bridge-{VERSION}-{target}"
-    cmake = ["cmake", "-S", root / "native/live-tv", "-B", build_dir]
+    cmake_tool = cmake_program()
+    cmake = [cmake_tool, "-S", root / "native/live-tv", "-B", build_dir]
     if "windows" in target:
         architecture = "Arm64" if target.startswith("aarch64") else "Win64"
         archive = download(architecture, cache)
@@ -73,7 +89,7 @@ def build(target, destination, cache, offline_source=None):
         if not (sdk / f"lib/Release-{architecture}/tsduck.lib").is_file():
             run(sevenzip, "x", archive, f"-o{sdk}", "-y", "include/*", f"lib/Release-{architecture}/*", "bin/*.dll", "bin/*.xml", "bin/*.names")
         run(*cmake, "-A", "ARM64" if architecture == "Arm64" else "x64", f"-DTSDUCK_ROOT={sdk}")
-        run("cmake", "--build", build_dir, "--config", "Release", "--parallel", "2")
+        run(cmake_tool, "--build", build_dir, "--config", "Release", "--parallel", "2")
         copy_runtime(sdk / "bin", destination)
         shutil.copy2(build_dir / "Release/koko_tv.dll", destination / "koko_tv.dll")
         # TSDuck's MSVC SDK needs the redistributable CRT even when Rust links its CRT statically.
@@ -97,7 +113,7 @@ def build(target, destination, cache, offline_source=None):
         # Use generated headers and the public source include directories, with no SDK install.
         runtime = next(p for p in (source / "bin").iterdir() if p.is_dir() and p.name.startswith("release-") and p.name.endswith(f"-koko-{target}") and any(p.glob("libtsduck.*")))
         run(*cmake, f"-DTSDUCK_SOURCE={source}", f"-DTSDUCK_RUNTIME={runtime}", "-DCMAKE_BUILD_TYPE=Release", *([f"-DCMAKE_OSX_ARCHITECTURES={'arm64' if target.startswith('aarch64') else 'x86_64'}"] if "apple" in target else []))
-        run("cmake", "--build", build_dir, "--parallel", "2")
+        run(cmake_tool, "--build", build_dir, "--parallel", "2")
         copy_runtime(runtime, destination)
         for config_dir in (source / "src/libtsduck/config", source / "src/libtscore/config"):
             copy_runtime(config_dir, destination)

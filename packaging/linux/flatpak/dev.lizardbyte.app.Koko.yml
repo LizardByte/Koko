@@ -54,6 +54,7 @@ modules:
         CARGO_HOME: /run/build/koko/cargo
         CARGO_NET_OFFLINE: "true"
         KOKO_SKIP_FFMPEG_DOWNLOAD: "1"
+        KOKO_SKIP_TSDUCK_BUILD: "1"
         LD_LIBRARY_PATH: /app/lib
         LIBRARY_PATH: /app/lib
         npm_config_cache: /run/build/koko/flatpak-node/npm-cache

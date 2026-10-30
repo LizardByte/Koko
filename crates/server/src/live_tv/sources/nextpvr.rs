@@ -21,9 +21,7 @@ fn endpoint(
     method: &str,
     sid: Option<&str>,
 ) -> Result<Url, String> {
-    let mut url = formats::http_url(&config.url)?
-        .join("/service")
-        .map_err(|_| "Invalid NextPVR URL")?;
+    let mut url = formats::endpoint(&config.url, "service")?;
     url.query_pairs_mut().append_pair("method", method);
     if let Some(sid) = sid {
         url.query_pairs_mut().append_pair("sid", sid);
@@ -137,9 +135,7 @@ pub(super) async fn stream_url(
     channel: &str,
 ) -> Result<String, String> {
     let sid = login(config).await?;
-    let mut url = formats::http_url(&config.url)?
-        .join("/live")
-        .map_err(|_| "Invalid NextPVR URL")?;
+    let mut url = formats::endpoint(&config.url, "live")?;
     url.query_pairs_mut()
         .append_pair("channeloid", channel)
         .append_pair("client", &format!("Koko-{sid}"))

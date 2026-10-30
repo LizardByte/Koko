@@ -40,6 +40,7 @@ type Scan = unsafe extern "C" fn(
 struct Api {
     _library: libloading::Library,
     devices: NativeString,
+    regions: NativeString,
     free: Free,
     open: Open,
     read: Read,
@@ -59,10 +60,20 @@ fn library_path() -> Result<PathBuf, String> {
     if let Some(root) = std::env::var_os("KOKO_TSDUCK_ROOT") {
         return Ok(PathBuf::from(root).join(filename));
     }
-    std::env::current_exe()
+    let packaged = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|p| p.join("live-tv").join(filename)))
-        .ok_or_else(|| "Unable to locate Koko's native TV component".into())
+        .and_then(|p| p.parent().map(|p| p.join("live-tv").join(filename)));
+    if let Some(path) = packaged.filter(|p| p.is_file()) {
+        return Ok(path);
+    }
+    let prepared = env!("KOKO_BUILD_TSDUCK_ROOT");
+    if !prepared.is_empty() {
+        return Ok(PathBuf::from(prepared).join(filename));
+    }
+    Err(
+        "Koko's native TV component is unavailable; rebuild Koko with native TV support enabled"
+            .into(),
+    )
 }
 
 fn api() -> Result<Arc<Api>, String> {
@@ -105,12 +116,15 @@ fn api() -> Result<Arc<Api>, String> {
             let abi: unsafe extern "C" fn() -> u32 = *library
                 .get(b"koko_tv_abi\0")
                 .map_err(|_| "Invalid native TV component")?;
-            if abi() != 1 {
+            if abi() != 2 {
                 return Err("The native TV component does not match this Koko version".into());
             }
             let result = Api {
                 devices: *library
                     .get(b"koko_tv_devices\0")
+                    .map_err(|_| "Invalid native TV component")?,
+                regions: *library
+                    .get(b"koko_tv_regions\0")
                     .map_err(|_| "Invalid native TV component")?,
                 free: *library
                     .get(b"koko_tv_free\0")
@@ -189,6 +203,24 @@ pub(crate) async fn devices() -> Result<Vec<Device>, String> {
             info: n.attribute("info").unwrap_or("").into(),
         })
         .collect())
+}
+
+pub(crate) async fn regions() -> Result<Vec<String>, String> {
+    let api = api()?;
+    let value = tokio::task::spawn_blocking(move || unsafe { api.string((api.regions)()) })
+        .await
+        .map_err(|_| "Frequency region lookup stopped")??;
+    let doc =
+        roxmltree::Document::parse(&value).map_err(|_| "Invalid frequency region response")?;
+    let mut regions = doc
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name("region"))
+        .filter_map(|n| n.attribute("name").map(str::to_owned))
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|name| name.to_lowercase());
+    regions.dedup();
+    Ok(regions)
 }
 
 pub(crate) async fn rescan(

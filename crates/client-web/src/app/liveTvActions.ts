@@ -1,6 +1,6 @@
 /** Loads account-scoped Live TV data and binds source, guide, playback, and DVR actions. */
 import * as api from '../liveTvApi';
-import type { AppState } from './types';
+import type { AppRoute, AppState } from './types';
 import { state } from './state';
 import { closeActivePlaybackSession } from './playbackController';
 import { stopMusic } from './audioPlayer';
@@ -9,12 +9,15 @@ import { stopMusic } from './audioPlayer';
 export interface LiveTvState {
   owner: number; channels: api.TvChannel[]; programs: api.TvProgram[]; stations: api.TvStation[];
   recordings: api.TvRecording[]; rules: api.TvSeriesRule[]; sources: api.TvSource[]; conflicts: number[];
-  windowStart: number; tab: 'guide' | 'recordings' | 'setup'; query?: string; group?: string;
+  windowStart: number; tab: 'guide' | 'recordings'; query?: string; group?: string;
   loading: boolean; error?: string; message?: string;
   canRecord?: boolean; dvrSettings?: api.TvDvrSettings;
+  setupKind?: string; setupAdding?: boolean; regions?: string[];
 }
 
-/** Fetch guide and visible DVR data together, rejecting stale account or route responses. */
+/** Identify the administrator's dedicated Live TV settings section. */
+export function isLiveTvSettings(route: AppRoute): boolean { return route.page === 'settings' && route.section === 'live-tv'; }
+
 let loadGeneration = 0;
 type LiveTvApi = Pick<typeof api, 'getTvChannels' | 'getTvGuide' | 'getTvRecordings' | 'getTvRules' | 'getTvSources'> & Partial<Pick<typeof api, 'getTvDvrSettings'>>;
 
@@ -28,11 +31,12 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
   app.liveTv = data;
   data.loading = true;
   const admin = app.bootstrap?.current_user?.admin === true;
+  const setup = admin && isLiveTvSettings(app.route);
   try {
     const [channels, guide, recordings, rules, sources, dvrSettings] = await Promise.all([
-      source.getTvChannels(admin && data.tab === 'setup'), source.getTvGuide(data.windowStart, data.windowStart + 6 * 3600),
-      source.getTvRecordings(), source.getTvRules(), admin ? source.getTvSources() : Promise.resolve([]),
-      admin && data.tab === 'setup' ? source.getTvDvrSettings?.() : undefined,
+      source.getTvChannels(setup), source.getTvGuide(data.windowStart, data.windowStart + 6 * 3600),
+      source.getTvRecordings(), source.getTvRules(), setup ? source.getTvSources() : Promise.resolve([]),
+      setup ? source.getTvDvrSettings?.() : undefined,
     ]);
     if (generation !== loadGeneration || !isCurrent() || app.bootstrap?.current_user?.id !== owner) return;
     app.liveTv = { ...data, channels, programs: guide.programs, stations: guide.stations, recordings: recordings.recordings, conflicts: recordings.conflicts, canRecord: recordings.can_record, dvrSettings, rules, sources, error: undefined, loading: false };
@@ -46,12 +50,12 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
 
 function value(form: FormData, name: string): string { return String(form.get(name) ?? '').trim(); }
 function sourceConfig(form: FormData): api.TvSourceConfig {
-  const selection = value(form, 'gracenote_provider');
-  const gracenote = selection ? JSON.parse(selection) as api.TvGuideSelection : undefined;
-  if (value(form, 'guide_kind') === 'gracenote' && (!gracenote || gracenote.country !== value(form, 'guide_country') || gracenote.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a guide provider for this postal code.');
+  const selection = value(form, 'guide_provider');
+  const zap2it = selection ? JSON.parse(selection) as api.TvGuideSelection : undefined;
+  if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (!zap2it || zap2it.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
   return { url: value(form, 'url'), pin: value(form, 'pin'), xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'),
-    gracenote: gracenote ? { ...gracenote, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),
-    native_device: value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
+    zap2it: zap2it ? { ...zap2it, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),
+    native_device: value(form, 'native_device_manual') || value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
     adapter: Number(value(form, 'adapter')), frontend: Number(value(form, 'frontend')), zap_path: value(form, 'zap_path'),
     multiplex_urls: value(form, 'multiplex_urls').split(/\r?\n/).map(s => s.trim()).filter(Boolean) };
 }
@@ -105,9 +109,10 @@ function play(kind: 'channels' | 'recordings', id: number): void {
 export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   document.querySelectorAll<HTMLElement>('[data-nav-live-tv]').forEach(button => button.addEventListener('click', () => context.navigateTo('/live-tv'), { signal }));
   syncLiveTvAccount();
-  if (state.route.page !== 'live-tv' || state.liveTv?.owner !== state.bootstrap?.current_user?.id) return;
+  const setup = isLiveTvSettings(state.route);
+  if ((!setup && state.route.page !== 'live-tv') || state.liveTv?.owner !== state.bootstrap?.current_user?.id) return;
   const owner = state.liveTv?.owner;
-  const current = () => state.route.page === 'live-tv' && state.bootstrap?.current_user?.id === owner;
+  const current = () => (setup ? isLiveTvSettings(state.route) : state.route.page === 'live-tv') && state.bootstrap?.current_user?.id === owner;
   const reload = async () => { await loadLiveTv(state, current); if (current()) context.render(); };
   const run = async (operation: () => Promise<unknown>, button?: HTMLButtonElement) => {
     if (button) button.disabled = true;
@@ -138,14 +143,69 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   bindPlayback(signal);
   bindRecordingForms(signal, run);
   bindRecordingButtons(signal, run);
-  if (state.bootstrap?.current_user?.admin) bindSetup(signal, run);
+  if (setup && state.bootstrap?.current_user?.admin) bindSetup(signal, run, context);
   const timer = globalThis.setTimeout(() => {
-    if (current() && state.liveTv?.tab !== 'setup' && !(document.activeElement instanceof HTMLInputElement)) void reload();
+    if (current() && !setup && !(document.activeElement instanceof HTMLInputElement)) void reload();
   }, 60000);
   signal.addEventListener('abort', () => globalThis.clearTimeout(timer), { once: true });
 }
 
 type Run = (operation: () => Promise<unknown>, button?: HTMLButtonElement) => Promise<void>;
+
+function bindGuideChoices(signal: AbortSignal): void {
+  document.querySelectorAll<HTMLSelectElement>('select[name="guide_kind"]').forEach(select => {
+    const update = () => select.closest('form')?.querySelectorAll<HTMLFieldSetElement>('[data-tv-guide-option]').forEach(fieldset => {
+      fieldset.hidden = fieldset.dataset.tvGuideOption !== select.value;
+      fieldset.disabled = fieldset.hidden;
+    });
+    update(); select.addEventListener('change', update, { signal });
+  });
+  document.querySelectorAll<HTMLSelectElement>('select[name="native_device"]').forEach(select => select.addEventListener('change', () => {
+    const manual = select.closest('form')?.querySelector<HTMLInputElement>('[name="native_device_manual"]');
+    if (manual && select.value) manual.value = '';
+  }, { signal }));
+}
+
+function bindNetworkDiscovery(signal: AbortSignal): void {
+  document.querySelectorAll<HTMLSelectElement>('[data-tv-discovered-source]').forEach(select => select.addEventListener('change', () => {
+    if (!select.value) return;
+    const item = JSON.parse(select.value) as api.TvDiscoveredSource;
+    const form = select.closest('form');
+    const address = form?.querySelector<HTMLInputElement>('[name="url"]'); const name = form?.querySelector<HTMLInputElement>('[name="name"]'); const capacity = form?.querySelector<HTMLInputElement>('[name="capacity"]');
+    if (address) address.value = item.url;
+    if (name && !name.value) name.value = item.name;
+    if (capacity) capacity.value = String(item.capacity);
+  }, { signal }));
+  document.querySelectorAll<HTMLButtonElement>('[data-tv-discover-source]').forEach(button => button.addEventListener('click', () => {
+    const form = button.closest('form'); const select = form?.querySelector<HTMLSelectElement>('[data-tv-discovered-source]'); const status = form?.querySelector<HTMLElement>('[data-tv-discovery-status]');
+    if (!select || !status) return;
+    button.disabled = true; status.textContent = 'Searching the local network…';
+    void api.discoverTvSources(button.dataset.tvDiscoverSource ?? '').then(sources => {
+      if (signal.aborted) return;
+      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose a discovered source'; select.replaceChildren(placeholder);
+      for (const item of sources) { const option = document.createElement('option'); option.value = JSON.stringify(item); option.textContent = `${item.name} · ${item.url}`; select.append(option); }
+      status.textContent = sources.length ? 'Select a source, or enter its address manually.' : 'No sources found. Check that discovery is enabled and Koko can reach the local network, or enter the address manually.';
+    }).catch((error: unknown) => { if (!signal.aborted) status.textContent = error instanceof Error ? error.message : 'Discovery failed. Enter the address manually.'; }).finally(() => { button.disabled = false; });
+  }, { signal }));
+}
+
+function loadTunerRegions(signal: AbortSignal): void {
+  const selects = [...document.querySelectorAll<HTMLSelectElement>('[data-tv-frequency-region]')];
+  if (!selects.length || state.liveTv?.regions?.length) return;
+  void api.getTvTunerRegions().then(regions => {
+    if (signal.aborted || !state.liveTv) return;
+    state.liveTv.regions = regions;
+    for (const select of selects) {
+      select.replaceChildren();
+      for (const region of regions) { const option = document.createElement('option'); option.value = region; option.textContent = region; option.selected = region.toLowerCase() === 'north-america'; select.append(option); }
+      select.disabled = false;
+    }
+  }).catch((error: unknown) => {
+    if (signal.aborted) return;
+    document.querySelectorAll<HTMLElement>('[data-tv-regions-status]').forEach(status => { status.textContent = error instanceof Error ? error.message : 'Unable to load frequency regions.'; });
+  });
+}
+
 function bindPlayback(signal: AbortSignal): void {
   document.querySelectorAll<HTMLButtonElement>('[data-tv-play]').forEach(button => button.addEventListener('click', () => play('channels', Number(button.dataset.tvPlay)), { signal }));
   document.querySelectorAll<HTMLButtonElement>('[data-tv-recording-play]').forEach(button => button.addEventListener('click', () => play('recordings', Number(button.dataset.tvRecordingPlay)), { signal }));
@@ -174,7 +234,17 @@ function bindRecordingButtons(signal: AbortSignal, run: Run): void {
   ];
   for (const item of actions) document.querySelectorAll<HTMLButtonElement>(item.selector).forEach(button => button.addEventListener('click', () => { void run(() => item.action(Number(button.dataset[item.key])), button); }, { signal }));
 }
-function bindSetup(signal: AbortSignal, run: Run): void {
+function bindSetup(signal: AbortSignal, run: Run, context: Context): void {
+  document.querySelector<HTMLSelectElement>('#tv-source-kind')?.addEventListener('change', event => {
+    if (state.liveTv) { state.liveTv.setupKind = (event.currentTarget as HTMLSelectElement).value; state.liveTv.setupAdding = true; }
+    context.render();
+  }, { signal });
+  document.querySelector<HTMLDetailsElement>('#tv-add-source-panel')?.addEventListener('toggle', event => {
+    if (state.liveTv) state.liveTv.setupAdding = (event.currentTarget as HTMLDetailsElement).open;
+  }, { signal });
+  bindGuideChoices(signal);
+  bindNetworkDiscovery(signal);
+  loadTunerRegions(signal);
   document.querySelectorAll<HTMLButtonElement>('[data-tv-discover-tuners]').forEach(button => button.addEventListener('click', () => {
     const form = button.closest('form'); const select = form?.querySelector<HTMLSelectElement>('[name="native_device"]'); const status = form?.querySelector<HTMLElement>('[data-tv-tuner-status]');
     if (!select || !status) return;
@@ -197,7 +267,7 @@ function bindSetup(signal: AbortSignal, run: Run): void {
   document.querySelectorAll<HTMLButtonElement>('[data-tv-provider-search]').forEach(button => button.addEventListener('click', () => {
     const form = button.closest('form'); if (!form) return;
     const input = new FormData(form); const country = value(input, 'guide_country'); const postal = value(input, 'guide_postal').toUpperCase().replace(/ /g, '');
-    const select = form.querySelector<HTMLSelectElement>('[name="gracenote_provider"]'); const status = form.querySelector<HTMLElement>('[data-tv-provider-status]');
+    const select = form.querySelector<HTMLSelectElement>('[name="guide_provider"]'); const status = form.querySelector<HTMLElement>('[data-tv-provider-status]');
     if (!select || !status) return;
     button.disabled = true; status.textContent = 'Finding providers…'; select.replaceChildren();
     void api.findTvGuideProviders(country, postal).then(providers => {
@@ -221,6 +291,7 @@ function bindSetup(signal: AbortSignal, run: Run): void {
     void run(async () => {
       const result = await api.addTvSource({ name: value(input, 'name'), kind: value(input, 'kind'), capacity: Number(value(input, 'capacity')), config: sourceConfig(input) });
       form.reset();
+      if (state.liveTv) state.liveTv.setupAdding = false;
       if (state.liveTv) state.liveTv.message = result.refresh_error ?? 'TV source added. Channels and guide will refresh in the background.';
     }, (event as SubmitEvent).submitter as HTMLButtonElement | undefined);
   }, { signal });

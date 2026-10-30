@@ -39,7 +39,7 @@ export type AppRoute =
 export type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
 
 /** Settings subsections addressable from navigation and direct URLs. */
-export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
+export type SettingsSection = 'general' | 'libraries' | 'live-tv' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
 
 /** Describes a resolved browse filter used by category, collection, and playlist detail pages. */
 export interface BrowseFilter {

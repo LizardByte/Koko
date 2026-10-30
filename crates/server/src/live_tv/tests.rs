@@ -12,9 +12,47 @@ use diesel::prelude::*;
 
 const XML: &str = include_str!("fixtures/guide.xml");
 
+#[test]
+fn legacy_guide_settings_keep_the_selected_lineup_after_the_zap2it_rename() {
+    let config: SourceConfig = serde_json::from_value(serde_json::json!({
+        "guide_kind": "gracenote",
+        "gracenote": {
+            "country": "USA", "postal_code": "14850",
+            "lineup_id": "USA-lineupId-DEFAULT", "headend_id": "lineupId"
+        }
+    }))
+    .unwrap();
+    assert_eq!(config.zap2it.postal_code, "14850");
+    let serialized = serde_json::to_value(config).unwrap();
+    assert!(serialized.get("gracenote").is_none());
+    assert_eq!(serialized["zap2it"]["lineup_id"], "USA-lineupId-DEFAULT");
+}
+
+#[test]
+fn manual_server_locations_keep_reverse_proxy_paths() {
+    assert_eq!(
+        formats::endpoint("https://example.com/tv", "service")
+            .unwrap()
+            .as_str(),
+        "https://example.com/tv/service"
+    );
+    assert_eq!(
+        formats::endpoint("https://example.com/tv/", "playlist/channels.m3u")
+            .unwrap()
+            .as_str(),
+        "https://example.com/tv/playlist/channels.m3u"
+    );
+}
+
 #[rocket::async_test]
 #[ignore = "Requires KOKO_TEST_TSTABLES pointing to an installed TSDuck executable"]
 async fn broadcast_transport_stream_round_trip() {
+    let regions = tsduck::regions().await.unwrap();
+    assert!(
+        regions
+            .iter()
+            .any(|region| region.eq_ignore_ascii_case("north-america"))
+    );
     let tables = std::path::PathBuf::from(std::env::var("KOKO_TEST_TSTABLES").unwrap());
     let packetizer =
         tables.with_file_name(if cfg!(windows) { "tspacketize.exe" } else { "tspacketize" });

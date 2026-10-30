@@ -99,6 +99,18 @@ pub(super) struct Guide {
     pub stations: Vec<Station>,
 }
 
+pub(super) fn endpoint(
+    base: &str,
+    path: &str,
+) -> Result<reqwest::Url, String> {
+    let mut base = http_url(base)?;
+    if !base.path().ends_with('/') {
+        base.set_path(&format!("{}/", base.path()));
+    }
+    base.join(path.trim_start_matches('/'))
+        .map_err(|_| "Invalid TV server address".into())
+}
+
 pub(super) fn parse_guide(value: &str) -> Result<Guide, String> {
     let programs = xmltv(value)?;
     let doc = roxmltree::Document::parse_with_options(

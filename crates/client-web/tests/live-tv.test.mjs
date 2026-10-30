@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { JSDOM } from 'jsdom';
 
 globalThis.location = { pathname: '/live-tv', origin: 'https://koko.local' };
 globalThis.localStorage = { getItem: () => null };
@@ -10,6 +11,7 @@ const server = await createServer({ root: fileURLToPath(new URL('..', import.met
 after(() => server.close());
 const { channelPrograms, renderLiveTvPage, tvImage } = await server.ssrLoadModule('/src/app/liveTv.ts');
 const { loadLiveTv } = await server.ssrLoadModule('/src/app/liveTvActions.ts');
+const { renderLiveTvSettings } = await server.ssrLoadModule('/src/app/liveTvSetup.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const now = Math.floor(Date.now() / 1000);
@@ -41,12 +43,21 @@ test('a previous account cannot reveal its cached DVR or setup data', () => {
   state.liveTv = data({ tab: 'recordings', recordings: [{ title: 'Private recording' }] });
   assert.doesNotMatch(renderLiveTvPage(), /Private recording/);
 });
-test('setup offers native broadcast guides without a direct Schedules Direct account', () => {
+test('setup lives in Settings and each source has its own connection form', () => {
   state.bootstrap = { current_user: { id: 1, admin: true } };
-  state.liveTv = data({ tab: 'setup' });
-  const html = renderLiveTvPage();
-  assert.match(html, /Windows BDA \/ Linux DVB/); assert.match(html, /DVB EIT \/ ATSC PSIP/); assert.match(html, /NextPVR/); assert.match(html, /Import|XMLTV/);
-  assert.doesNotMatch(html, /Schedules Direct|Find lineups|name="password"/);
+  state.liveTv = data({ setupKind: 'm3u' });
+  assert.doesNotMatch(renderLiveTvPage(), /data-tv-tab="setup"|tv-source-form/);
+  assert.match(renderLiveTvPage(), /settings\/live-tv/);
+  for (const [kind,required,excluded] of [
+    ['m3u','input[name="url"]','[name="native_device"], [name="pin"], [name="adapter"]'],
+    ['nextpvr','input[name="pin"]','[name="native_device"], [name="adapter"]'],
+    ['native','select[name="region"]','[name="url"], [name="pin"], [name="adapter"]'],
+  ]) {
+    state.liveTv.setupKind = kind;
+    const dom = new JSDOM(renderLiveTvSettings()); const form = dom.window.document.querySelector('#tv-source-form');
+    assert.ok(form.querySelector(required)); assert.equal(form.querySelector(excluded),null); dom.window.close();
+  }
+  globalThis.location.pathname = '/settings/live-tv'; assert.deepEqual(parseRoute(), { page:'settings', section:'live-tv' }); globalThis.location.pathname = '/live-tv';
 });
 test('only saved captures offer playback and conflicts stay visible', () => {
   state.bootstrap = { current_user: { id: 1, admin: false } };
@@ -66,13 +77,29 @@ test('DVR controls honor scheduling permission and shared recording ownership', 
   assert.match(html, /Recording is disabled/); assert.doesNotMatch(html, /data-tv-delete="9"|tv-manual-record-form|data-tv-delete-rule="5"/);
 });
 
-test('setup includes Gracenote lineup discovery, DVR storage, and per-user permissions', () => {
+test('setup includes Zap2It lineup discovery, DVR storage, and per-user permissions', () => {
   state.bootstrap = { current_user: { id: 1, admin: true } };
-  state.liveTv = data({ tab: 'setup', dvrSettings: { settings: { recording_dir: 'D:\\TV' }, users: [{ user_id: 2, username: '<viewer>', can_record: false }] } });
-  const html = renderLiveTvPage();
-  assert.match(html, /Gracenote \(formerly Zap2It\)/); assert.match(html, /name="guide_country"/); assert.match(html, /name="refresh_hours"/);
+  state.liveTv = data({ dvrSettings: { settings: { recording_dir: 'D:\\TV' }, users: [{ user_id: 2, username: '<viewer>', can_record: false }] } });
+  const html = renderLiveTvSettings();
+  assert.match(html, /Zap2It/); assert.doesNotMatch(html, /Gracenote/); assert.match(html, /name="guide_country"/); assert.match(html, /name="refresh_hours"/);
   assert.match(html, /DVR save folder/); assert.match(html, /data-tv-permission="2"/); assert.match(html, /&lt;viewer&gt;/);
   assert.doesNotMatch(html, /Install TSDuck/);
+});
+
+test('native frequency regions come from supported options and manual tuner entry remains available', () => {
+  state.bootstrap = { current_user: { id: 1, admin: true } };
+  state.liveTv = data({ setupKind:'native', regions:['Europe','North-America'] });
+  const dom = new JSDOM(renderLiveTvSettings());
+  const select = dom.window.document.querySelector('select[name="region"]');
+  assert.deepEqual([...select.options].map(o=>o.value),['Europe','North-America']);
+  assert.equal(select.value,'North-America'); assert.ok(dom.window.document.querySelector('[name="native_device_manual"]')); dom.window.close();
+});
+
+test('the settings route requests administrator setup data without needing a Live TV setup tab', async () => {
+  const target = app({ route:{page:'settings',section:'live-tv'}, bootstrap:{current_user:{id:1,admin:true}} });
+  let requested = false;
+  await loadLiveTv(target,()=>true,api({getTvChannels:async setup=>{assert.equal(setup,true);return[channel];},getTvSources:async()=>{requested=true;return[];},getTvDvrSettings:async()=>({settings:{recording_dir:''},users:[]})}));
+  assert.ok(requested); assert.ok(target.liveTv.dvrSettings);
 });
 test('non-administrators never request setup endpoints', async () => {
   const target = app();

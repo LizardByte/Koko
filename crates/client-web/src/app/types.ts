@@ -170,6 +170,10 @@ export interface AppState {
   activePlaybackItem?: MediaItemDetail;
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
+  activePlaybackQuality?: import('./playbackOptions').PlaybackQuality;
+  activePlaybackCompatible?: boolean;
+  playbackProblem?: import('./playbackOptions').PlaybackProblem;
+  playbackSettings?: { paused: boolean; volume: number; muted: boolean; subtitle?: string };
   activeAudioStreamIndex?: number;
   isAudioTrackMenuOpen: boolean;
   isTrailerMenuOpen: boolean;

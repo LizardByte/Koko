@@ -172,7 +172,7 @@ pub enum SessionStream {
     Podcast(rocket::response::Redirect),
     Transcode {
         content_type: ContentType,
-        stdout: ChildStdout,
+        stdout: tokio::io::Chain<std::io::Cursor<Vec<u8>>, ChildStdout>,
     },
 }
 
@@ -335,8 +335,18 @@ async fn stop_active_transcode(session_id: &str) -> bool {
 
 async fn replace_active_transcode(
     session_id: String,
+    generation: u64,
     handle: tokio::task::JoinHandle<()>,
-) {
+) -> bool {
+    // Keep deletion and a newer stream request from leaving an orphan process.
+    let sessions = ACTIVE_PLAYBACK_SESSIONS.read().await;
+    if !sessions
+        .get(&session_id)
+        .is_some_and(|record| record.generation == generation)
+    {
+        handle.abort();
+        return false;
+    }
     if let Some(previous_handle) = ACTIVE_TRANSCODE_TASKS
         .lock()
         .await
@@ -344,6 +354,7 @@ async fn replace_active_transcode(
     {
         previous_handle.abort();
     }
+    true
 }
 
 /// Capability summary returned to clients during bootstrap.
@@ -529,6 +540,46 @@ pub struct CreateSessionRequest {
     pub client_profile: crate::media::ClientProfile,
 }
 
+/// A safe, actionable failure for the session owner; internal process output stays in logs.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PlaybackFailure {
+    /// Stable failure category.
+    pub code: String,
+    /// User-facing explanation and next action.
+    pub message: String,
+}
+
+/// Current playback failure, if any, for a session owned by the caller.
+#[derive(Serialize, JsonSchema)]
+pub struct PlaybackSessionStatus {
+    /// Failure reported by the latest conversion process.
+    pub error: Option<PlaybackFailure>,
+}
+
+struct PlaybackSessionRecord {
+    session: crate::media::PlaybackSession,
+    generation: u64,
+    error: Option<PlaybackFailure>,
+}
+
+async fn record_playback_failure(
+    session_id: &str,
+    generation: u64,
+    code: &str,
+    message: &str,
+) {
+    let mut sessions = ACTIVE_PLAYBACK_SESSIONS.write().await;
+    if let Some(record) = sessions
+        .get_mut(session_id)
+        .filter(|record| record.generation == generation)
+    {
+        record.error = Some(PlaybackFailure {
+            code: code.into(),
+            message: message.into(),
+        });
+    }
+}
+
 static NEXT_SYSTEM_ACTIVITY_ID: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(1));
 static ACTIVE_SYSTEM_ACTIVITIES: Lazy<
     tokio::sync::RwLock<HashMap<String, MetadataRefreshActivityRecord>>,
@@ -544,9 +595,8 @@ static ACTIVE_LIBRARY_SCANS: Lazy<tokio::sync::Mutex<HashSet<i32>>> =
     Lazy::new(|| tokio::sync::Mutex::new(HashSet::new()));
 static CATALOG_SCAN_EXECUTION: Lazy<tokio::sync::Mutex<()>> =
     Lazy::new(|| tokio::sync::Mutex::new(()));
-static ACTIVE_PLAYBACK_SESSIONS: Lazy<
-    tokio::sync::RwLock<HashMap<String, crate::media::PlaybackSession>>,
-> = Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
+static ACTIVE_PLAYBACK_SESSIONS: Lazy<tokio::sync::RwLock<HashMap<String, PlaybackSessionRecord>>> =
+    Lazy::new(|| tokio::sync::RwLock::new(HashMap::new()));
 static ACTIVE_TRANSCODE_TASKS: Lazy<
     tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
@@ -4036,6 +4086,10 @@ pub async fn create_session(
         .map_err(|_| Status::InternalServerError)?
         .filter(|index| *index > 0);
 
+    if !decision.can_direct_play && !decision.transcode_required {
+        return Err(Status::UnprocessableEntity);
+    }
+
     let session_id = crate::transcode::next_session_id();
 
     let session = crate::media::PlaybackSession {
@@ -4048,10 +4102,14 @@ pub async fn create_session(
         audio_stream_index,
     };
 
-    ACTIVE_PLAYBACK_SESSIONS
-        .write()
-        .await
-        .insert(session_id, session.clone());
+    ACTIVE_PLAYBACK_SESSIONS.write().await.insert(
+        session_id,
+        PlaybackSessionRecord {
+            session: session.clone(),
+            generation: 0,
+            error: None,
+        },
+    );
 
     Ok(Json(session))
 }
@@ -4069,7 +4127,7 @@ pub async fn delete_session(
     let mut sessions = ACTIVE_PLAYBACK_SESSIONS.write().await;
     if !sessions
         .get(&session_id)
-        .is_some_and(|session| session.user_id == user_id)
+        .is_some_and(|record| record.session.user_id == user_id)
     {
         return Status::NotFound;
     }
@@ -4095,6 +4153,41 @@ pub async fn delete_session(
     }
 }
 
+/// Inspect a session failure without exposing another user's playback or server internals.
+#[openapi(tag = "Media")]
+#[get("/api/v1/sessions/<session_id>/status")]
+pub async fn get_session_status(
+    user_guard: UserGuard,
+    db: DbConn,
+    session_id: String,
+) -> Result<Json<PlaybackSessionStatus>, Status> {
+    let (session, error) = {
+        let sessions = ACTIVE_PLAYBACK_SESSIONS.read().await;
+        let record = sessions.get(&session_id).ok_or(Status::NotFound)?;
+        if record.session.user_id != current_user_id(Some(&user_guard))? {
+            return Err(Status::NotFound);
+        }
+        (record.session.clone(), record.error.clone())
+    };
+    require_item_access(&db, session.item_id, &user_guard).await?;
+    if !session
+        .decision
+        .stream_url
+        .as_deref()
+        .is_some_and(|url| url.starts_with("/api/v1/podcasts/"))
+    {
+        let path = db
+            .run(move |conn| resolve_media_item_source_path(conn, session.item_id))
+            .await
+            .map_err(|_| Status::InternalServerError)?
+            .ok_or(Status::NotFound)?;
+        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Err(Status::NotFound);
+        }
+    }
+    Ok(Json(PlaybackSessionStatus { error }))
+}
+
 /// Stream content for a session (handles transcode or direct play).
 #[rocket::get("/api/v1/sessions/<session_id>/stream?<start_ms>&<audio_stream_index>")]
 pub async fn get_session_stream(
@@ -4109,7 +4202,7 @@ pub async fn get_session_stream(
         .read()
         .await
         .get(&session_id)
-        .cloned()
+        .map(|record| record.session.clone())
         .ok_or(Status::NotFound)?;
     if session.user_id != current_user_id(Some(&user_guard))? {
         return Err(Status::NotFound);
@@ -4204,17 +4297,33 @@ pub async fn get_session_stream(
         audio_stream_index: selected_audio_stream_index,
     };
 
-    stop_active_transcode(&session_id).await;
+    let generation = {
+        let mut sessions = ACTIVE_PLAYBACK_SESSIONS.write().await;
+        let record = sessions.get_mut(&session_id).ok_or(Status::NotFound)?;
+        record.generation += 1;
+        record.error = None;
+        record.generation
+    };
 
     match crate::transcode::spawn_transcode_stdout(&session_id, &spec, &settings.ffmpeg).await {
         Ok(mut child) => {
-            let stdout = child.stdout.take().ok_or(Status::InternalServerError)?;
+            let mut stdout = child.stdout.take().ok_or(Status::InternalServerError)?;
             let stderr = child.stderr.take();
             let transcode_session_id = session_id.clone();
+            let worker_session_id = session_id.clone();
             let handle = tokio::spawn(async move {
                 let mut stderr_text = Vec::new();
                 if let Some(mut stderr) = stderr {
-                    let _ = stderr.read_to_end(&mut stderr_text).await;
+                    // Drain stderr fully so FFmpeg cannot block, retaining only a bounded
+                    // diagnostic.
+                    let mut buffer = [0; 1024];
+                    while let Ok(count) = stderr.read(&mut buffer).await {
+                        if count == 0 {
+                            break;
+                        }
+                        let keep = count.min(4096_usize.saturating_sub(stderr_text.len()));
+                        stderr_text.extend_from_slice(&buffer[..keep]);
+                    }
                 }
                 let status = child.wait().await;
                 if !stderr_text.is_empty() {
@@ -4223,22 +4332,78 @@ pub async fn get_session_stream(
                         String::from_utf8_lossy(&stderr_text).trim()
                     );
                 }
-                if let Ok(status) = status {
-                    if !status.success() {
-                        log::warn!("FFmpeg exited with status: {}", status);
-                    }
+                if !status.is_ok_and(|status| status.success()) {
+                    log::warn!("FFmpeg failed for session {}", worker_session_id);
+                    record_playback_failure(
+                        &worker_session_id,
+                        generation,
+                        "transcode_failed",
+                        "The server could not convert this media. Try Original quality, or ask an \
+                         administrator to check the source file and FFmpeg settings.",
+                    )
+                    .await;
                 }
             });
-            replace_active_transcode(transcode_session_id, handle).await;
+            if !replace_active_transcode(transcode_session_id, generation, handle).await {
+                return Err(Status::NotFound);
+            }
+
+            // An empty successful response can leave Firefox waiting without a media error.
+            // Verify output before committing the HTTP headers, retaining those initial bytes.
+            let mut initial = vec![0; 4096];
+            let first_read = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                stdout.read(&mut initial),
+            )
+            .await;
+            let count = match first_read {
+                Ok(Ok(count)) if count > 0 => count,
+                result => {
+                    let (code, message, status) = if result.is_err() {
+                        (
+                            "transcode_timeout",
+                            "The server took too long to start conversion. Try a lower quality, \
+                             or ask an administrator to check FFmpeg and the server logs.",
+                            Status::GatewayTimeout,
+                        )
+                    } else {
+                        (
+                            "transcode_failed",
+                            "The server could not convert this media. Try Original quality, or \
+                             ask an administrator to check the source file and FFmpeg settings.",
+                            Status::UnprocessableEntity,
+                        )
+                    };
+                    record_playback_failure(&session_id, generation, code, message).await;
+                    // A late failure must not stop a newer stream for the same session.
+                    let sessions = ACTIVE_PLAYBACK_SESSIONS.read().await;
+                    if sessions
+                        .get(&session_id)
+                        .is_some_and(|record| record.generation == generation)
+                    {
+                        stop_active_transcode(&session_id).await;
+                    }
+                    return Err(status);
+                }
+            };
+            initial.truncate(count);
 
             Ok(SessionStream::Transcode {
                 content_type: ContentType::MP4,
-                stdout,
+                stdout: std::io::Cursor::new(initial).chain(stdout),
             })
         }
         Err(e) => {
             log::error!("Failed to spawn transcode: {}", e);
-            Err(Status::InternalServerError)
+            record_playback_failure(
+                &session_id,
+                generation,
+                "transcode_unavailable",
+                "The server could not start FFmpeg. Ask an administrator to check the FFmpeg path \
+                 and permissions in Transcoding settings.",
+            )
+            .await;
+            Err(Status::ServiceUnavailable)
         }
     }
 }

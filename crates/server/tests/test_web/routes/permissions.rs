@@ -67,6 +67,7 @@ const USER_ROUTES: &[(Method, &str)] = &[
     (Method::Post, "/api/v1/sessions"),
     (Method::Delete, "/api/v1/sessions/example"),
     (Method::Get, "/api/v1/sessions/example/stream"),
+    (Method::Get, "/api/v1/sessions/example/status"),
     (Method::Get, "/api/v1/people/1"),
     (Method::Get, "/api/v1/people/1/image"),
     (Method::Get, "/api/v1/user-profile-images/example.png"),
@@ -1278,6 +1279,53 @@ async fn library_grants_filter_items_collections_people_and_counts() {
 #[rocket::async_test]
 async fn playback_sessions_and_live_account_changes_are_enforced() {
     let (client, admin, viewer) = fixture().await;
+    // A catalog-only item cannot start a session until it has a playable backing file.
+    response(
+        &client,
+        Method::Post,
+        "/api/v1/sessions",
+        Some(&viewer),
+        session_request(1),
+        Status::UnprocessableEntity,
+    )
+    .await;
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            use crate::test_utils::schema::{
+                media_file_libraries as membership,
+                media_files as files,
+            };
+            use diesel::{
+                ExpressionMethods,
+                RunQueryDsl,
+            };
+            diesel::insert_into(files::table)
+                .values((
+                    files::id.eq(1),
+                    files::path.eq("/open/sample.mp4"),
+                    files::file_size.eq(1_i64),
+                    files::file_hash.eq("playback-fixture"),
+                    files::media_kind.eq("video"),
+                    files::container.eq("mp4"),
+                    files::video_codec.eq("h264"),
+                    files::audio_codec.eq("aac"),
+                ))
+                .execute(conn)
+                .unwrap();
+            diesel::insert_into(membership::table)
+                .values((
+                    membership::media_file_id.eq(1),
+                    membership::library_id.eq(1),
+                    membership::source_root_path.eq("/open"),
+                    membership::relative_path.eq("sample.mp4"),
+                    membership::media_item_id.eq(1),
+                ))
+                .execute(conn)
+                .unwrap();
+        })
+        .await;
     let session = response(
         &client,
         Method::Post,
@@ -1289,6 +1337,15 @@ async fn playback_sessions_and_live_account_changes_are_enforced() {
     .await;
     let session: Value = serde_json::from_str(&session).unwrap();
     let id = session["session_id"].as_str().unwrap();
+    response(
+        &client,
+        Method::Get,
+        &format!("/api/v1/sessions/{id}/status"),
+        Some(&admin),
+        json!({}),
+        Status::NotFound,
+    )
+    .await;
     response(
         &client,
         Method::Get,
@@ -1312,6 +1369,15 @@ async fn playback_sessions_and_live_account_changes_are_enforced() {
         conn.batch_execute("UPDATE media_libraries SET allowed_user_ids_json = '[3]' WHERE id = 1")
             .unwrap()
     })
+    .await;
+    response(
+        &client,
+        Method::Get,
+        &format!("/api/v1/sessions/{id}/status"),
+        Some(&viewer),
+        json!({}),
+        Status::NotFound,
+    )
     .await;
     response(
         &client,

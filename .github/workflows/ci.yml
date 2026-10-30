@@ -73,6 +73,65 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci-clippy.yml
 
+  playback_e2e:
+    name: Browser Playback (${{ matrix.browser }})
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser:
+          - chromium
+          - firefox
+    env:
+      KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
+      KOKO_E2E_BROWSER: ${{ matrix.browser }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f  # v2.0.0
+        with:
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: crates/client-web/package-lock.json
+
+      - name: Install media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install browser test dependencies
+        working-directory: crates/client-web
+        run: |
+          npm ci --ignore-scripts
+          if [[ "${KOKO_E2E_BROWSER}" == "firefox" ]]; then
+            npx playwright install --with-deps firefox
+          else
+            npx playwright install --with-deps chrome
+          fi
+
+      - name: Test real browser playback
+        working-directory: crates/client-web
+        run: npm run test:e2e
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: playback-browser-diagnostics-${{ matrix.browser }}
+          path: |
+            crates/client-web/playwright-report
+            crates/client-web/test-results
+
   rust:
     name: Rust
     needs: setup_release

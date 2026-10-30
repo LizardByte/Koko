@@ -58,6 +58,7 @@ For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.
 For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
 For podcast discovery, RSS subscriptions, and episode playback, see [Podcasts](./PODCASTS.md).
+For video quality settings and playback troubleshooting, see [Video playback](./PLAYBACK.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.
 

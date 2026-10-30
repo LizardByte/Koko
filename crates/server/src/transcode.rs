@@ -120,17 +120,25 @@ impl TranscodeSpec {
                 args.push("veryfast".into());
                 args.push("-pix_fmt".into());
                 args.push("yuv420p".into());
+                args.push("-force_key_frames".into());
+                args.push("expr:gte(t,n_forced*2)".into());
             }
 
             // Add scale filter if we need resizing
             if self.max_width.unwrap_or(0) > 0 || self.max_height.unwrap_or(0) > 0 {
-                let w = self.max_width.unwrap_or(u32::MAX);
-                let h = self.max_height.unwrap_or(u32::MAX);
+                let w = self
+                    .max_width
+                    .filter(|value| *value > 0)
+                    .unwrap_or(u32::MAX);
+                let h = self
+                    .max_height
+                    .filter(|value| *value > 0)
+                    .unwrap_or(u32::MAX);
                 // Simple scale filter that preserves aspect ratio and doesn't up-scale
                 args.push("-vf".into());
                 args.push(format!(
                     "scale=w='min({w}\\,iw)':h='min({h}\\,ih)':\
-                     force_original_aspect_ratio=decrease"
+                     force_original_aspect_ratio=decrease:force_divisible_by=2"
                 ));
             }
         } else {
@@ -155,9 +163,11 @@ impl TranscodeSpec {
         if let Some(bitrate) = self.max_bitrate_kbps {
             if self.video_codec.is_some() {
                 args.push("-maxrate".into());
-                args.push(format!("{}k", bitrate));
+                // Reserve the AAC audio budget inside the requested total target.
+                let video_bitrate = bitrate.saturating_sub(192).max(1);
+                args.push(format!("{}k", video_bitrate));
                 args.push("-bufsize".into());
-                args.push(format!("{}k", bitrate * 2));
+                args.push(format!("{}k", u64::from(video_bitrate) * 2));
             }
         }
 
@@ -170,6 +180,8 @@ impl TranscodeSpec {
             // Fragmented MP4 can be consumed while FFmpeg is still producing it.
             args.push("-movflags".into());
             args.push("frag_keyframe+empty_moov+default_base_moof".into());
+            args.push("-frag_duration".into());
+            args.push("2000000".into());
             args.push("-avoid_negative_ts".into());
             args.push("make_zero".into());
             args.push("-muxdelay".into());

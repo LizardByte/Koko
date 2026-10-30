@@ -710,6 +710,13 @@ export interface ClientProfile {
   max_bitrate_kbps: number;
   supports_adaptive_streaming: boolean;
   prefer_hls: boolean;
+  /** Request server conversion even when the source codec is supported. */
+  force_transcode?: boolean;
+}
+
+/** Safe conversion diagnostics for a playback session owned by the current user. */
+export interface PlaybackSessionStatus {
+  error?: { code: string; message: string } | null;
 }
 
 export function getWebClientProfile(): ClientProfile {
@@ -1007,6 +1014,7 @@ function useMockApi(): void {
 }
 
 function getMockGetResponse<T>(method: string, url: URL): T {
+  if (/^\/api\/v1\/sessions\/[^/]+\/status$/.test(url.pathname)) return { error: null } as T;
   if (url.pathname === '/api/v1/playlists') return getMockPlaylists(url.searchParams.has('library_id') ? Number(url.searchParams.get('library_id')) : undefined) as T;
   const playlist = /^\/api\/v1\/playlists\/(\d+)$/.exec(url.pathname);
   if (playlist) return getMockPlaylist(Number(playlist[1])) as T;
@@ -1602,6 +1610,23 @@ export function createPlaybackSession(request: CreateSessionRequest): Promise<Pl
 
 export function deletePlaybackSession(sessionId: string): Promise<void> {
   return requestJson<void>('DELETE', `/api/v1/sessions/${sessionId}`);
+}
+
+/** Read the latest conversion failure without attempting to download the media again. */
+export function getPlaybackSessionStatus(sessionId: string): Promise<PlaybackSessionStatus> {
+  return requestJson('GET', `/api/v1/sessions/${sessionId}/status`);
+}
+
+/** Best-effort progress and session cleanup during a document navigation or tab close. */
+export function finishPlaybackOnExit(sessionId: string, itemId: number, progress: PlaybackProgressRequest): void {
+  if (shouldUseMockApi()) return;
+  for (const [method, path, body] of [
+    ['POST', `/api/v1/items/${itemId}/progress`, progress],
+    ['DELETE', `/api/v1/sessions/${sessionId}`, undefined],
+  ] as const) {
+    void fetch(`${getStoredApiBase()}${path}`, { method, headers: requestHeaders(body), credentials: 'include',
+      body: body === undefined ? undefined : JSON.stringify(body), keepalive: true }).catch(() => undefined);
+  }
 }
 
 export function getArtworkUrl(itemId: number, kind: 'poster' | 'backdrop' | 'logo' = 'poster', revision?: number): string {

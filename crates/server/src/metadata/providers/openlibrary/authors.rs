@@ -1,6 +1,15 @@
 //! Author search and profiles use Open Library author identities rather than book work IDs.
 
-use super::*;
+use super::{
+    Deserialize,
+    MetadataProviderId,
+    MetadataSearchResult,
+    ProviderMetadataDetails,
+    Serialize,
+    StoredMetadataSnapshot,
+    Value,
+    get,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]

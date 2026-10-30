@@ -1,6 +1,17 @@
 //! Resolve filename track numbers against positions on the matched album.
 
-use super::*;
+use super::{
+    Deserialize,
+    Entity,
+    MetadataSearchResult,
+    MusicMatchContext,
+    MusicMetadata,
+    ReleaseGroup,
+    album_query,
+    client,
+    matching_name,
+    valid_mbid,
+};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]

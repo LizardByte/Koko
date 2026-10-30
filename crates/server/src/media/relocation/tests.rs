@@ -1,7 +1,33 @@
 //! Relocation regressions exercise the real filesystem scanner and typed catalog state.
 
 use super::*;
+use crate::config::{
+    FfmpegSettings,
+    MediaLibraryKind,
+    MediaLibrarySettings,
+    MetadataProviderId,
+};
 use crate::db::schema::users;
+use crate::media::{
+    CatalogSyncScannerSink,
+    PersistedLibrarySummary,
+    ProbeContext,
+    apply_user_playback_context_to_detail,
+    audiobooks,
+    get_library_files,
+    get_media_item,
+    get_user_playback_progress,
+    list_media_items,
+    load_catalog_file_for_item,
+    replace_library_settings,
+    sync_library_catalog,
+    sync_logical_media_items_for_library,
+    upsert_playback_progress,
+};
+use crate::scanner::{
+    LibraryScanStatus,
+    inspect_library_streaming,
+};
 use diesel::Connection;
 
 struct Fixture(PathBuf);

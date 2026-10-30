@@ -1,6 +1,27 @@
 //! Incremental recommendation scores, independent of account access and page requests.
 
-use super::*;
+use super::{
+    EXCLUDED_FACT_TYPES,
+    EXCLUDED_ITEM_TYPES,
+    ExpressionMethods,
+    Facts,
+    HashMap,
+    HashSet,
+    Identity,
+    MediaItemSummary,
+    QueryDsl,
+    QueryResult,
+    RunQueryDsl,
+    SqliteConnection,
+    cached,
+    inherited,
+    item_rows,
+    lineage,
+    links,
+    list_media_items_by_ids,
+    load_facts,
+    similar,
+};
 use diesel::{
     BoolExpressionMethods,
     Connection,

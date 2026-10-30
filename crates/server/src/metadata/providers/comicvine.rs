@@ -1,6 +1,17 @@
 //! Comic Vine issues and volumes. Exact typed IDs prevent mixing an issue with a series.
 
-use super::*;
+use super::{
+    MediaLibraryKind,
+    MetadataProvider,
+    MetadataProviderDescriptor,
+    MetadataProviderFuture,
+    MetadataProviderId,
+    MetadataProviderRole,
+    MetadataSearchResult,
+    MetadataSettings,
+    ProviderMetadataDetails,
+    StoredMetadataSnapshot,
+};
 use serde_json::Value;
 use std::collections::{
     HashMap,

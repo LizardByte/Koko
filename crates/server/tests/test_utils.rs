@@ -86,11 +86,9 @@ pub async fn create_test_client(prefix: Option<&str>) -> Client {
         .merge(("workers", 2))
         .merge(("databases.sqlite_db.pool_size", 4));
     let rocket = rocket.configure(figment);
-    let client = Client::tracked(rocket)
+    Client::tracked(rocket)
         .await
-        .expect("Failed to create test client");
-
-    client
+        .expect("Failed to create test client")
 }
 
 /// Make an HTTP request to the Rocket application.

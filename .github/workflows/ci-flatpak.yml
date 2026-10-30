@@ -210,17 +210,18 @@ jobs:
       - name: Package Flathub repo archive
         if: matrix.arch == 'x86_64'
         run: |
-          mkdir -p flathub/modules
-          cp "./build/generated-cargo-sources.json" "./flathub/"
-          cp "./build/generated-node-sources.json" "./flathub/"
-          cp "./build/${APP_ID}.yml" "./flathub/"
-          cp "./packaging/linux/flatpak/${APP_ID}.desktop" "./flathub/"
-          cp "./build/${APP_ID}.metainfo.xml" "./flathub/"
-          cp "./packaging/linux/flatpak/README.md" "./flathub/"
-          cp "./packaging/linux/flatpak/flathub.json" "./flathub/"
-          cp -r "./packaging/linux/flatpak/modules/." "./flathub/modules/"
+          readonly flathub_dir="./flathub"
+          mkdir -p "${flathub_dir}/modules"
+          cp "./build/generated-cargo-sources.json" "${flathub_dir}/"
+          cp "./build/generated-node-sources.json" "${flathub_dir}/"
+          cp "./build/${APP_ID}.yml" "${flathub_dir}/"
+          cp "./packaging/linux/flatpak/${APP_ID}.desktop" "${flathub_dir}/"
+          cp "./build/${APP_ID}.metainfo.xml" "${flathub_dir}/"
+          cp "./packaging/linux/flatpak/README.md" "${flathub_dir}/"
+          cp "./packaging/linux/flatpak/flathub.json" "${flathub_dir}/"
+          cp -r "./packaging/linux/flatpak/modules/." "${flathub_dir}/modules/"
           # submodules will need to be handled in the workflow that creates the PR
-          tar -czf ./artifacts/flathub.tar.gz -C ./flathub .
+          tar -czf ./artifacts/flathub.tar.gz -C "${flathub_dir}" .
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2

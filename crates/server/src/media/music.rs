@@ -2,7 +2,21 @@
 
 mod playback;
 mod storage;
-use super::*;
+use super::{
+    CatalogMediaFile,
+    Deserialize,
+    HashMap,
+    JsonSchema,
+    MediaItemDetail,
+    MediaItemSummary,
+    MetadataProviderId,
+    PlannedMediaItem,
+    Serialize,
+    Value,
+    fallback_title_from_relative_path,
+    schemars,
+    sql_types,
+};
 pub(super) use playback::album_playback_targets;
 pub(super) use storage::{
     apply_detail,
@@ -133,14 +147,14 @@ impl MusicMetadata {
             directories.pop();
         }
         let album = tag(&["album"])
-            .or_else(|| directories.last().map(|value| value.to_string()))
+            .or_else(|| directories.last().map(ToString::to_string))
             .unwrap_or_else(|| "Unknown Album".into());
         let artist_directory = directories
             .len()
             .checked_sub(2)
             .and_then(|index| directories.get(index));
         let artist = tag(&["artist"])
-            .or_else(|| artist_directory.map(|value| value.to_string()))
+            .or_else(|| artist_directory.map(ToString::to_string))
             .unwrap_or_else(|| "Unknown Artist".into());
         let album_artist = tag(&["albumartist"]).unwrap_or_else(|| {
             if tag(&["compilation"]).as_deref() == Some("1") {
@@ -217,13 +231,13 @@ fn infer_disc_directory(directories: &[&str]) -> Option<i32> {
         .and_then(|parent| directory.strip_prefix(parent))
         .filter(|suffix| suffix.starts_with(separator))
         .map(|suffix| suffix.trim_start_matches(separator));
-    let number = [
+    let mut names = [
         Some(directory.as_str()),
         suffix,
     ]
     .into_iter()
-    .flatten()
-    .find_map(|name| {
+    .flatten();
+    names.find_map(|name| {
         ["disc", "disk", "cd"].into_iter().find_map(|prefix| {
             name.strip_prefix(prefix)?
                 .trim_start_matches(separator)
@@ -231,8 +245,7 @@ fn infer_disc_directory(directories: &[&str]) -> Option<i32> {
                 .ok()
                 .filter(|number| *number > 0)
         })
-    });
-    number
+    })
 }
 
 pub(super) fn plan_music_file(
@@ -325,6 +338,7 @@ pub(super) fn plan_music_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::media::parse_ffprobe_metadata;
 
     #[test]
     fn album_prefixed_disc_folders_do_not_become_artists() {

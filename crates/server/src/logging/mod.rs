@@ -148,7 +148,7 @@ fn workspace_relative_path(path: &str) -> Option<String> {
     [repo_root, manifest_dir].into_iter().find_map(|prefix| {
         let normalized_prefix = prefix.trim_end_matches('/');
         path.strip_prefix(&format!("{normalized_prefix}/"))
-            .map(|value| value.to_string())
+            .map(ToString::to_string)
             .or_else(|| (path == normalized_prefix).then(String::new))
     })
 }

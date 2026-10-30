@@ -1,6 +1,29 @@
 //! Reconnect relocated library files without tying catalog identity to absolute paths.
 
-use super::*;
+use super::{
+    CatalogMediaFile,
+    ExpressionMethods,
+    HashMap,
+    HashSet,
+    ItemMetadataLink,
+    MediaItem,
+    MediaLibrary,
+    OptionalExtension,
+    Path,
+    PathBuf,
+    PlannedLibraryItems,
+    PlaybackProgress,
+    QueryDsl,
+    RunQueryDsl,
+    SelectableHelper,
+    SqliteConnection,
+    current_timestamp,
+    ebooks,
+    load_catalog_files_for_library,
+    load_media_item_row,
+    music,
+    reusable_scanner_hash,
+};
 use crate::db::schema::{
     audiobook_metadata,
     audiobook_provider_metadata,

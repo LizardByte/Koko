@@ -3,7 +3,18 @@
 #[cfg(test)]
 mod tests;
 
-use super::*;
+use super::{
+    MediaLibraryKind,
+    MetadataProvider,
+    MetadataProviderDescriptor,
+    MetadataProviderFuture,
+    MetadataProviderId,
+    MetadataProviderRole,
+    MetadataSearchResult,
+    MetadataSettings,
+    ProviderMetadataDetails,
+    StoredMetadataSnapshot,
+};
 use crate::media::{
     AudiobookChapter,
     AudiobookMetadata,

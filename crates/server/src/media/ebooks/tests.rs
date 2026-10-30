@@ -1,11 +1,26 @@
 //! Real scanner and typed database regressions for document identity, reading state, and access.
 
 use super::*;
+use crate::config::{
+    FfmpegSettings,
+    MediaLibraryKind,
+    MediaLibrarySettings,
+    MetadataProviderId,
+};
 use crate::db::schema::{
     media_files,
     media_items,
     media_libraries,
     users,
+};
+use crate::media::{
+    apply_user_playback_context_to_detail,
+    get_media_home,
+    get_media_item,
+    list_media_items,
+    list_media_items_for_user_with_preferred_languages,
+    search_media_items_for_user_with_preferred_languages,
+    sync_library_catalog,
 };
 use diesel::Connection;
 

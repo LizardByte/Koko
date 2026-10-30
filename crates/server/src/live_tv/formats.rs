@@ -61,6 +61,7 @@ impl Channel {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
 pub(crate) struct ProgramMetadata {
     pub subtitle: Option<String>,
     pub description: Option<String>,
@@ -71,6 +72,9 @@ pub(crate) struct ProgramMetadata {
     pub episode_id: Option<String>,
     pub credits: Vec<String>,
     pub is_new: Option<bool>,
+    pub is_live: Option<bool>,
+    pub is_premiere: Option<bool>,
+    pub is_finale: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -375,7 +379,13 @@ pub(super) fn xmltv(value: &str) -> Result<Vec<Program>, String> {
                         });
                     }
                 }
-                "new" | "premiere" => metadata.is_new = Some(true),
+                "new" => metadata.is_new = Some(true),
+                "premiere" => {
+                    metadata.is_premiere = Some(true);
+                    metadata.is_new = Some(true);
+                }
+                "live" => metadata.is_live = Some(true),
+                "finale" => metadata.is_finale = Some(true),
                 "previously-shown" => metadata.is_new = Some(false),
                 "credits" => {
                     metadata.credits = child

@@ -1,0 +1,70 @@
+/** Shared TV timeline, program hero, and the minimized shared video player. */
+.tv-record-options { position: relative; }
+.tv-record-options > summary { padding: .7rem 1rem; cursor: pointer; border: 1px solid var(--surface-raised); border-radius: 8px; display: flex; align-items: center; gap: .5rem; }
+.tv-record-options[open] { flex-basis: 100%; }
+.tv-record-options form { padding: 1rem 0; max-width: 600px; }
+.tv-guide-toolbar, .tv-guide-toolbar form, .tv-guide-filters, .tv-guide-views { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.tv-guide-toolbar { justify-content: space-between; margin: 1rem 0; }
+.tv-guide-toolbar form { min-width: 0; }
+.tv-guide-toolbar input { width: 230px; }
+.tv-guide-filters, .tv-guide-views { margin: .75rem 0; }
+.tv-guide-filters button, .tv-guide-views button, .tv-source-rail button { background: var(--surface-panel); color: var(--text-muted); border: 1px solid var(--surface-raised); }
+.tv-guide-filters button[aria-pressed="true"], .tv-guide-views button[aria-pressed="true"], .tv-source-rail button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.tv-guide-layout { display: grid; min-width: 0; }
+.tv-guide-layout.has-source-rail { grid-template-columns: 150px minmax(0, 1fr); gap: 1rem; }
+.tv-source-rail { display: flex; flex-direction: column; gap: .5rem; }
+.tv-source-rail button { padding: 1rem; text-align: left; display: grid; gap: .5rem; overflow-wrap: anywhere; }
+.tv-source-rail small { font-weight: 400; }
+.tv-guide-board { min-width: 0; }
+.tv-guide-scroll { --tv-channel-width: 180px; --tv-timeline-width: 1440px; max-height: 580px; overflow: auto; border: 1px solid var(--surface-raised); border-radius: 10px; scrollbar-gutter: stable; }
+.tv-guide-grid { position: relative; width: calc(var(--tv-channel-width) + var(--tv-timeline-width)); isolation: isolate; }
+.tv-guide-row, .tv-guide-time-row { display: grid; grid-template-columns: var(--tv-channel-width) var(--tv-timeline-width); }
+.tv-guide-time-row { position: sticky; top: 0; z-index: 6; height: 48px; background: var(--surface-base); border-bottom: 1px solid var(--surface-raised); }
+.tv-guide-corner { position: sticky; left: 0; background: var(--surface-base); padding: 1rem; z-index: 7; font-size: .85rem; }
+.tv-guide-time-track { display: grid; grid-template-columns: repeat(12, 1fr); }
+.tv-guide-tick { padding: 1rem .75rem; border-left: 1px solid var(--surface-raised); font-size: .85rem; white-space: nowrap; }
+.tv-guide-channel { position: sticky; left: 0; z-index: 4; min-height: 88px; border-bottom: 1px solid var(--surface-raised); border-right: 1px solid var(--surface-raised); background: var(--surface-panel); padding: .5rem; display: flex; align-items: center; gap: .25rem; }
+.tv-channel-select { flex: 1; min-width: 0; display: flex; align-items: center; gap: .5rem; background: none; color: inherit; padding: .25rem; text-align: left; }
+.tv-channel-select img { width: 40px; max-height: 44px; object-fit: contain; flex: none; }
+.tv-channel-select > span { display: grid; gap: .25rem; min-width: 0; font-size: .8rem; }
+.tv-channel-select > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-channel-actions { display: flex; flex-direction: column; gap: .25rem; }
+.tv-channel-actions button { padding: .25rem; background: none; color: var(--text-muted); }
+.tv-channel-actions button svg { width: 16px; height: 16px; }
+.tv-channel-actions [aria-pressed="true"] { color: var(--accent); }
+.tv-channel-actions [aria-pressed="true"] svg { fill: currentColor; }
+.tv-guide-track { position: relative; height: 88px; background: repeating-linear-gradient(to right, transparent, transparent 119px, var(--surface-raised) 119px, var(--surface-raised) 120px); border-bottom: 1px solid var(--surface-raised); }
+.tv-guide-program { position: absolute; top: 2px; bottom: 2px; display: flex; flex-direction: column; align-items: start; justify-content: start; gap: .35rem; padding: .65rem .75rem; overflow: hidden; text-align: left; background: var(--surface-panel); color: inherit; border: 1px solid var(--surface-raised); border-radius: 4px; }
+.tv-guide-program strong { font-size: .85rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-guide-subtitle { font-size: .75rem; font-weight: 400; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-guide-program.is-on-air { background: color-mix(in srgb, var(--accent) 8%, var(--surface-panel)); }
+.tv-guide-program[aria-pressed="true"], .tv-guide-program:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; }
+.tv-guide-program.is-dimmed { opacity: .4; }
+.tv-guide-badges { display: flex; gap: .25rem; flex-wrap: nowrap; }
+.tv-program-badge { font-size: .65rem; font-weight: 700; border-radius: 3px; padding: .15rem .3rem; background: var(--surface-raised); color: var(--accent); white-space: nowrap; }
+.tv-badge-live { color: #79cfff; }
+.tv-badge-premiere, .tv-badge-finale { color: #ffdb80; }
+.tv-guide-no-listings { display: block; padding: 1.5rem; color: var(--text-muted); font-size: .85rem; }
+.tv-guide-now { position: absolute; top: 0; bottom: 0; z-index: 3; width: 2px; background: #f17c86; pointer-events: none; }
+.tv-guide-now > span { display: block; position: sticky; top: 1px; font-size: .65rem; background: #f17c86; color: #121621; width: max-content; padding: .15rem .25rem; }
+.tv-guide-hint, .tv-guide-empty { color: var(--text-muted); font-size: .85rem; padding: .75rem; }
+.player-overlay.tv-preview-player { inset: auto; z-index: 13; padding: 0; margin: 0; border-radius: var(--radius-card); overflow: hidden; background: #000; }
+.tv-preview-player .player-shell { width: 100%; height: 100%; max-width: none; min-height: 0; border: 0; border-radius: 0; }
+.tv-preview-player .player-title-block h2 { font-size: .85rem; }
+.tv-preview-player .player-title-block .eyebrow { display: none; }
+.tv-preview-player .player-top-controls { padding: .5rem; }
+.tv-preview-player .player-bottom-controls { padding: .4rem; }
+.tv-preview-player .player-icon-button { width: 30px; height: 30px; min-width: 30px; padding: .35rem; }
+.tv-preview-player .player-volume, .tv-preview-player .player-progress, .tv-preview-player [data-player-seek], .tv-preview-player .player-time-cluster { display: none; }
+.tv-preview-player .player-quality, .tv-preview-player .tv-keep-visibility, .tv-preview-player .tv-keep-recording { display: none; }
+.tv-keep-visibility select { background: var(--surface-base); color: inherit; padding: .5rem; border: 1px solid var(--surface-raised); border-radius: 6px; }
+.tv-preview-player .player-control-row { justify-content: space-between; }
+@media (max-width: 850px) {
+  .tv-guide-layout.has-source-rail { grid-template-columns: minmax(0, 1fr); }
+  .tv-source-rail { flex-direction: row; flex-wrap: wrap; }
+  .tv-source-rail button { padding: .5rem .75rem; }
+  .tv-guide-scroll { --tv-channel-width: 140px; }
+  .tv-channel-select img { width: 26px; }
+  .tv-guide-toolbar input { width: 100%; }
+  .tv-guide-toolbar form { width: 100%; }
+}

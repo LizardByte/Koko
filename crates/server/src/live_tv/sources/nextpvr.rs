@@ -87,6 +87,36 @@ fn timestamp(value: Option<String>) -> Option<i64> {
     Some(if parsed > 10_000_000_000 { parsed / 1000 } else { parsed })
 }
 
+fn metadata(node: roxmltree::Node<'_, '_>) -> ProgramMetadata {
+    let significance = child_text(node, "significance")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let episode = child_text(node, "episode").map(|episode| {
+        child_text(node, "season").map_or_else(
+            || format!("Episode {episode}"),
+            |season| format!("S{season}E{episode}"),
+        )
+    });
+    ProgramMetadata {
+        subtitle: child_text(node, "subtitle"),
+        description: child_text(node, "description"),
+        episode_id: child_text(node, "unique_id"),
+        is_new: child_text(node, "firstrun").map(|s| s.eq_ignore_ascii_case("true")),
+        categories: node
+            .descendants()
+            .filter(|n| n.has_tag_name("genre"))
+            .filter_map(|n| n.text())
+            .map(str::to_owned)
+            .collect(),
+        is_live: Some(significance == "live"),
+        is_premiere: Some(significance.contains("premiere")),
+        is_finale: Some(significance.contains("finale")),
+        rating: child_text(node, "rating"),
+        episode,
+        ..Default::default()
+    }
+}
+
 pub(super) async fn guide(config: &SourceConfig) -> Result<Vec<Program>, String> {
     let sid = login(config).await?;
     let channels = parse_channels(&text(endpoint(config, "channel.list", Some(&sid))?).await?)?;
@@ -95,6 +125,7 @@ pub(super) async fn guide(config: &SourceConfig) -> Result<Vec<Program>, String>
         let mut url = endpoint(config, "channel.listings", Some(&sid))?;
         url.query_pairs_mut()
             .append_pair("channel_id", &channel.source_key)
+            .append_pair("genre", "all")
             .append_pair("start", &crate::live_tv::now().to_string())
             .append_pair("end", &(crate::live_tv::now() + 14 * 86400).to_string());
         let response = text(url).await?;
@@ -117,13 +148,7 @@ pub(super) async fn guide(config: &SourceConfig) -> Result<Vec<Program>, String>
                 starts_at: start,
                 ends_at: end,
                 title,
-                metadata: ProgramMetadata {
-                    subtitle: child_text(node, "subtitle"),
-                    description: child_text(node, "description"),
-                    episode_id: child_text(node, "unique_id"),
-                    is_new: child_text(node, "firstrun").map(|s| s == "true"),
-                    ..Default::default()
-                },
+                metadata: metadata(node),
             });
         }
     }
@@ -166,4 +191,34 @@ pub(super) fn keepalive(
             }
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guide_metadata_keeps_genres_and_broadcast_flags_independent() {
+        let doc = roxmltree::Document::parse(
+            "<l><genres><genre>Sports</genre><genre>Football</genre></genres><significance>Live</\
+             significance><firstrun>true</firstrun><season>2</season><episode>3</\
+             episode><rating>TV-PG</rating></l>",
+        )
+        .unwrap();
+        let program = metadata(doc.root_element());
+        assert_eq!(program.categories, ["Sports", "Football"]);
+        assert_eq!(program.is_live, Some(true));
+        assert_eq!(program.is_new, Some(true));
+        assert_eq!(program.is_premiere, Some(false));
+        assert_eq!(program.episode.as_deref(), Some("S2E3"));
+        assert_eq!(program.rating.as_deref(), Some("TV-PG"));
+        let doc = roxmltree::Document::parse(
+            "<l><significance>Season Premiere</significance><firstrun>false</firstrun></l>",
+        )
+        .unwrap();
+        let program = metadata(doc.root_element());
+        assert_eq!(program.is_live, Some(false));
+        assert_eq!(program.is_new, Some(false));
+        assert_eq!(program.is_premiere, Some(true));
+    }
 }

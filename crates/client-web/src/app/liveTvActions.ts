@@ -2,9 +2,10 @@
 import * as api from '../liveTvApi';
 import type { AppRoute, AppState } from './types';
 import { state } from './state';
-import { closeActivePlaybackSession } from './playbackController';
-import { stopMusic } from './audioPlayer';
+import { startTvPlayback, stopTvPlayback } from './playbackController';
 import { bindTvDiscovery } from './liveTvDiscovery';
+import { bindTvGuideActions } from './liveTvGuideActions';
+import { channelPrograms, tvImage } from './liveTvGuideModel';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -14,6 +15,9 @@ export interface LiveTvState {
   loading: boolean; error?: string; message?: string;
   canRecord?: boolean; dvrSettings?: api.TvDvrSettings;
   setupKind?: string; setupAdding?: boolean; regions?: string[];
+  guideSources?: api.TvGuideSource[]; preferences?: api.TvPreferences;
+  sourceId?: number; category?: string; channelView?: 'all' | 'favorites' | 'recent';
+  selectedProgramId?: number; selectedChannelId?: number;
 }
 
 /** Identify the administrator's dedicated Live TV settings section. */
@@ -40,7 +44,7 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
       setup ? source.getTvDvrSettings?.() : undefined,
     ]);
     if (generation !== loadGeneration || !isCurrent() || app.bootstrap?.current_user?.id !== owner) return;
-    app.liveTv = { ...data, channels, programs: guide.programs, stations: guide.stations, recordings: recordings.recordings, conflicts: recordings.conflicts, canRecord: recordings.can_record, dvrSettings, rules, sources, error: undefined, loading: false };
+    app.liveTv = { ...data, channels, programs: guide.programs, stations: guide.stations, guideSources:guide.sources, preferences:guide.preferences, recordings: recordings.recordings, conflicts: recordings.conflicts, canRecord: recordings.can_record, dvrSettings, rules, sources, error: undefined, loading: false };
   } catch (error) {
     if (generation === loadGeneration && isCurrent() && app.bootstrap?.current_user?.id === owner) {
       data.error = error instanceof Error ? error.message : 'Live TV could not be loaded.';
@@ -65,47 +69,25 @@ function padding(form: FormData): { padding_before: number; padding_after: numbe
 }
 
 interface Context { navigateTo: (path: string) => void; render: () => void }
-let player: { owner: number; root: HTMLElement } | undefined;
-
-/** Close native playback on sign-out or account changes. */
+/** Stop TV streams when leaving Live TV or changing accounts, including minimized playback. */
 export function syncLiveTvAccount(): void {
-  if (player && (player.owner !== state.bootstrap?.current_user?.id || state.route.page !== 'live-tv')) closePlayer();
-}
-
-function closePlayer(): void {
-  const video = player?.root.querySelector('video');
-  video?.pause();
-  video?.removeAttribute('src');
-  video?.load();
-  player?.root.remove();
-  player = undefined;
+  const tv = state.activeTvPlayback;
+  if (tv && (tv.owner !== state.bootstrap?.current_user?.id || state.route.page !== 'live-tv')) stopTvPlayback();
 }
 
 function play(kind: 'channels' | 'recordings', id: number): void {
-  const owner = state.bootstrap?.current_user?.id;
-  if (owner === undefined) return;
-  closePlayer(); closeActivePlaybackSession(); stopMusic();
-  const root = document.createElement('dialog');
-  root.className = 'live-tv-player';
-  root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', 'Live TV player');
-  root.innerHTML = '<button type="button" class="secondary-button" aria-label="Close TV player">Close</button><video controls autoplay playsinline></video><p role="alert" hidden></p>';
-  document.body.append(root);
-  root.showModal();
-  player = { owner, root };
-  const video = root.querySelector('video');
-  root.querySelector('button')?.addEventListener('click', closePlayer);
-  root.addEventListener('keydown', event => { if (event.key === 'Escape') closePlayer(); });
-  root.addEventListener('cancel', event => { event.preventDefault(); closePlayer(); });
-  if (video) {
-    video.src = api.tvStreamUrl(kind, id);
-    video.addEventListener('error', () => {
-      const message = root.querySelector('p');
-      if (message) { message.hidden = false; message.textContent = 'Playback could not start. Check source availability, free tuners, and the server FFmpeg settings.'; }
-    });
-  }
-  root.querySelector('button')?.focus();
+  const data = state.liveTv;
+  if (!data || data.owner !== state.bootstrap?.current_user?.id) return;
+  const channel = data.channels.find(c => c.id === id);
+  const recording = data.recordings.find(r => r.id === id);
+  const now = Date.now()/1000;
+  const program = channel && channelPrograms(channel,data.programs).find(p => p.starts_at <= now && p.ends_at > now);
+  const title = kind === 'channels' ? channel?.name : recording?.title;
+  if (!title) return;
+  if (kind === 'channels') { data.selectedChannelId = id; data.selectedProgramId = program?.id; }
+  const image = tvImage(kind === 'channels' ? program?.metadata.image || channel?.logo : recording?.metadata.image);
+  void startTvPlayback({kind,id,title,image,url:api.tvStreamUrl(kind,id)});
 }
-
 /** Bind route controls once per render and cancel listeners when the app replaces its DOM. */
 export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   document.querySelectorAll<HTMLElement>('[data-nav-live-tv]').forEach(button => button.addEventListener('click', () => context.navigateTo('/live-tv'), { signal }));
@@ -134,6 +116,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
     if (!state.liveTv) return;
     const step = Number(button.dataset.tvWindow);
     state.liveTv.windowStart = step ? state.liveTv.windowStart + step * 6 * 3600 : Math.floor(Date.now() / 1800000) * 1800;
+    const scroll = document.querySelector('#tv-guide-scroll'); if (scroll) scroll.scrollLeft = 0;
     void reload();
   }, { signal }));
   document.querySelector<HTMLFormElement>('#tv-filter-form')?.addEventListener('submit', event => {
@@ -142,6 +125,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
     state.liveTv.query = value(form, 'query'); state.liveTv.group = value(form, 'group'); context.render();
   }, { signal });
   bindPlayback(signal);
+  bindTvGuideActions(signal, context, run);
   bindRecordingForms(signal, run);
   bindRecordingButtons(signal, run);
   if (setup && state.bootstrap?.current_user?.admin) bindSetup(signal, run, context);

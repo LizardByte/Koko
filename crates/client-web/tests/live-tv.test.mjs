@@ -14,6 +14,8 @@ const { loadLiveTv } = await server.ssrLoadModule('/src/app/liveTvActions.ts');
 const { renderLiveTvSettings } = await server.ssrLoadModule('/src/app/liveTvSetup.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
+const { programPosition, programBadges, matchesTvCategory, visibleGuideChannels, guideSources } = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
+const { renderPlayerOverlay } = await server.ssrLoadModule('/src/app/playbackController.ts');
 const now = Math.floor(Date.now() / 1000);
 const channel = { id: 1, source_id: 1, source_key: 'source', name: 'Test TV', number: '7.1', group_name: 'News', guide_key: 'station', enabled: true, available: true };
 const program = { id: 1, source_id: 1, guide_key: 'station', title: 'News', starts_at: now - 30, ends_at: now + 3600, metadata: { description: 'Evening news', categories: ['News'], credits: ['Presenter'] } };
@@ -26,6 +28,57 @@ function api(extra = {}) {
 }
 
 test('live television has its own persistent route', () => { assert.deepEqual(parseRoute(), { page: 'live-tv' }); });
+
+test('the guide clips broadcasts to a shared timeline without closing schedule gaps', () => {
+  const clipped = programPosition({...program,starts_at:now-900,ends_at:now+900},now);
+  assert.equal(clipped.left,0); assert.ok(Math.abs(clipped.width-900/21600*100)<0.001);
+  const later = programPosition({...program,starts_at:now+7200,ends_at:now+10800},now);
+  assert.ok(Math.abs(later.left-100/3)<0.001); assert.ok(Math.abs(later.width-100/6)<0.001);
+  assert.equal(programPosition({...program,starts_at:now-900,ends_at:now},now),undefined);
+});
+
+test('live broadcasts, premieres, and new episodes retain separate flags and genre filters', () => {
+  assert.deepEqual(programBadges({is_new:true,is_live:false}),['NEW']);
+  assert.deepEqual(programBadges({is_live:true,is_premiere:true,is_finale:true}),['LIVE','PREMIERE','FINALE']);
+  assert.equal(matchesTvCategory({...program,metadata:{categories:['Sports event']}},'Sports'),true);
+  assert.equal(matchesTvCategory({...program,metadata:{categories:['Movie / drama']}},'Movies'),true);
+  assert.equal(matchesTvCategory({...program,metadata:{categories:['News / Current affairs']}},'News'),true);
+  assert.equal(matchesTvCategory({...program,metadata:{}},'Sports'),false);
+});
+
+test('source navigation and personal channel views retain source identity', () => {
+  const other = {...channel,id:2,source_id:2,name:'Other source'};
+  const model = data({channels:[channel,other],guideSources:[{id:1,name:'Antenna'},{id:2,name:'Cable'}],preferences:{favorites:[2],recent:[2,1]}});
+  assert.deepEqual(guideSources(model).map(s=>s.name),['Antenna','Cable']);
+  assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[1]);
+  model.sourceId=2; model.channelView='favorites';
+  assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[2]);
+  model.sourceId=1; assert.deepEqual(visibleGuideChannels(model),[]);
+});
+
+test('Zap2It logos and cover art request larger sizes while other hosts remain unchanged', () => {
+  assert.equal(tvImage('https://zpmc.tmsimg.com/h3/NowShowing/45738/logo.png?w=55'),'https://zpmc.tmsimg.com/h3/NowShowing/45738/logo.png?w=320');
+  assert.equal(tvImage('https://zpmc.tmsimg.com/assets/cover.jpg?w=165'),'https://zpmc.tmsimg.com/assets/cover.jpg?w=960');
+  assert.equal(tvImage('https://example.com/cover.jpg?w=165'),'https://example.com/cover.jpg?w=165');
+});
+
+test('TV uses the shared video player in both overlay and hero modes without exposing another account', () => {
+  state.bootstrap={current_user:{id:1,admin:true}};
+  state.activeTvPlayback={owner:1,kind:'channels',id:5,title:'Live news',url:'/api/v1/live-tv/sessions/test/stream',buffer:{session_id:'test',start_ms:0,end_ms:12000,can_keep:true}};
+  state.isPlayerOpen=true;
+  let dom=new JSDOM(renderPlayerOverlay());
+  assert.ok(dom.window.document.querySelector('.media-player-shell video#media-player'));
+  assert.ok(dom.window.document.querySelector('#player-quality'));
+  assert.ok(dom.window.document.querySelector('#player-keep-tv'));
+  assert.equal(dom.window.document.querySelector('video').hasAttribute('controls'),false);
+  const source=dom.window.document.querySelector('video').getAttribute('src'); dom.window.close();
+  state.isPlayerOpen=false; dom=new JSDOM(renderPlayerOverlay());
+  assert.ok(dom.window.document.querySelector('.tv-preview-player #media-player'));
+  assert.equal(dom.window.document.querySelector('video').getAttribute('src'),source); dom.window.close();
+  state.bootstrap.current_user.id=2;
+  assert.equal(renderPlayerOverlay(),'');
+  state.activeTvPlayback=undefined;
+});
 test('guide mappings require the correct source and honor explicit overrides', () => {
   const rows = [program, { ...program, id: 2, source_id: 2 }, { ...program, id: 3, guide_key: 'override' }];
   assert.deepEqual(channelPrograms(channel, rows).map(p => p.id), [1]);
@@ -35,6 +88,11 @@ test('broadcast metadata is escaped and active artwork URLs never become image e
   state.bootstrap = { current_user: { id: 1, admin: false } };
   state.liveTv = data({ programs: [{ ...program, title: '<script>bad()</script>', metadata: { description: '<img src=x onerror=bad()>', image: 'javascript:bad()', credits: ['<actor>'] } }] });
   const html = renderLiveTvPage();
+  const dom = new JSDOM(html);
+  assert.ok(dom.window.document.querySelector('.home-pinned-header > .home-feature > .home-feature-copy'));
+  assert.ok(dom.window.document.querySelector('.home-navbar .browse-tabs'));
+  assert.equal(dom.window.document.querySelector('.tv-guide-hero'),null);
+  dom.window.close();
   assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;img/); assert.doesNotMatch(html, /javascript:|<script>|<img src=x/);
   assert.match(html, /Record program/); assert.match(html, /Record series/); assert.doesNotMatch(html, /data-tv-tab="setup"/);
 });

@@ -11,6 +11,7 @@ export interface TvChannel {
 export interface TvMetadata {
   subtitle?: string | null; description?: string | null; categories?: string[]; image?: string | null;
   rating?: string | null; episode?: string | null; episode_id?: string | null; credits?: string[]; is_new?: boolean | null;
+  is_live?: boolean | null; is_premiere?: boolean | null; is_finale?: boolean | null;
 }
 /** A scheduled broadcast using UTC seconds. */
 export interface TvProgram {
@@ -21,6 +22,32 @@ export interface TvProgram {
 export interface TvStation { source_id: number; guide_key: string; name: string; number: string; aliases: string[]; logo?: string | null }
 /** An administrator's configured tuner or playlist and refresh health. */
 export interface TvSource { id: number; name: string; kind: string; enabled: boolean; capacity: number; next_refresh: number; last_error?: string | null }
+/** Public source labels for the guide, without setup details or credentials. */
+export interface TvGuideSource { id: number; name: string; kind: string }
+/** Account-specific channel lists synchronized by the server. */
+export interface TvPreferences { favorites: number[]; recent: number[] }
+/** A private, recording-backed live viewing session and its currently seekable range. */
+export interface TvBufferInfo {
+  session_id: string; channel_id: number; title: string; start_ms: number; end_ms: number;
+  recording_id?: number | null; finished: boolean; error?: string | null; can_keep: boolean;
+}
+/** Tune once and begin a temporary recording before opening the player. */
+export function startTvBuffer(channel_id: number): Promise<TvBufferInfo> { return requestJson('POST','/api/v1/live-tv/sessions',{channel_id},45000); }
+/** Renew the viewing session and read the rolling buffer range. */
+export function getTvBuffer(id: string): Promise<TvBufferInfo> { return requestJson('GET',`/api/v1/live-tv/sessions/${encodeURIComponent(id)}`); }
+/** Stop temporary capture, preserving an explicitly kept DVR recording. */
+export function closeTvBuffer(id: string): Promise<void> { return requestJson('DELETE',`/api/v1/live-tv/sessions/${encodeURIComponent(id)}`); }
+/** Preserve buffered content and continue recording the current program. */
+export function keepTvBuffer(id: string, privateRecording: boolean): Promise<number> { return requestJson('POST',`/api/v1/live-tv/sessions/${encodeURIComponent(id)}/keep`,{private:privateRecording}); }
+/** Resolve a buffer playback URL without exposing upstream credentials. */
+export function tvBufferStreamUrl(id: string, start: number, quality: string, attempt: number): string {
+  return resolveApiUrl(`/api/v1/live-tv/sessions/${encodeURIComponent(id)}/stream?start_ms=${Math.max(0,Math.floor(start))}&quality=${encodeURIComponent(quality)}&attempt=${attempt}`);
+}
+/** Release a buffer when the browser exits, retaining authorization on the keepalive request. */
+export function closeTvBufferOnExit(id: string): void {
+  const token = getStoredAuthToken();
+  if (token) void fetch(resolveApiUrl(`/api/v1/live-tv/sessions/${encodeURIComponent(id)}`), {method:'DELETE',credentials:'include',keepalive:true,headers:{Authorization:`Bearer ${token}`}}).catch(()=>undefined);
+}
 /** Source connection, guide, and optional native tuner settings supplied during setup. */
 export interface TvSourceConfig {
   url: string; pin: string; xmltv_url: string; guide_kind: string;
@@ -72,7 +99,9 @@ export interface TvSchedule {
 /** Read enabled channels or the administrator's complete channel list. */
 export function getTvChannels(setup = false): Promise<TvChannel[]> { return requestJson('GET', `/api/v1/live-tv/${setup ? 'setup/' : ''}channels`); }
 /** Fetch at most seven days of schedules and available guide station mappings. */
-export function getTvGuide(start: number, end: number): Promise<{ programs: TvProgram[]; stations: TvStation[] }> { return requestJson('GET', `/api/v1/live-tv/guide?start=${start}&end=${end}`); }
+export function getTvGuide(start: number, end: number): Promise<{ programs: TvProgram[]; stations: TvStation[]; sources?: TvGuideSource[]; preferences?: TvPreferences }> { return requestJson('GET', `/api/v1/live-tv/guide?start=${start}&end=${end}`); }
+/** Update a channel favorite for the signed-in account. */
+export function setTvFavorite(id: number, favorite: boolean): Promise<void> { return requestJson('PUT', `/api/v1/live-tv/channels/${id}/favorite`, {favorite}); }
 /** Read administrator source health. */
 export function getTvSources(): Promise<TvSource[]> { return requestJson('GET', '/api/v1/live-tv/sources'); }
 /** Read recordings and scheduling conflicts visible to the signed-in account. */

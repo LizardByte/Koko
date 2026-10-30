@@ -2,6 +2,7 @@
 import { renderLiveTvPage } from './app/liveTv';
 import { syncLiveTvAccount } from './app/liveTvActions';
 import './app/liveTv.css';
+import './app/liveTvGuide.css';
 import { renderPodcastPage } from './app/podcasts';
 import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
@@ -443,6 +444,7 @@ function renderNavigationHint(): string {
 }
 
 function render(preserveScroll = true): void {
+  syncLiveTvAccount();
   syncReaderAccount();
   syncAudioPlayer();
   if (!state.isPlayerOpen && !state.activeTrailer) {

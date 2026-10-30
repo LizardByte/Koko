@@ -274,6 +274,87 @@ pub(crate) async fn play_channel(
     open_pipeline(pipeline(&source, &channel, false).await?, Some(lease)).await
 }
 
+pub(super) async fn play_buffer(
+    url: &str,
+    index: usize,
+    offset_ms: u64,
+    quality: &str,
+) -> Result<LiveStream, String> {
+    let target = match quality {
+        "original" => None,
+        "4k" => Some((3840, 2160, 24808)),
+        "1080p" => Some((1920, 1080, 7808)),
+        "720p" => Some((1280, 720, 3808)),
+        "480p" => Some((854, 480, 1308)),
+        _ => return Err("Choose a supported TV playback quality".into()),
+    };
+    let base = command(url, false, false);
+    let mut arguments = base
+        .as_std()
+        .get_args()
+        .map(|s| s.to_os_string())
+        .collect::<Vec<_>>();
+    let input = arguments
+        .iter()
+        .position(|s| s == "-i")
+        .expect("FFmpeg input");
+    arguments.splice(
+        input..input,
+        [
+            "-live_start_index".into(),
+            index.to_string().into(),
+        ],
+    );
+    let output = arguments.len() - 1;
+    if offset_ms > 0 {
+        arguments.splice(
+            output..output,
+            [
+                "-ss".into(),
+                format!("{:.3}", offset_ms as f64 / 1000.0).into(),
+            ],
+        );
+    }
+    if let Some(filter) = arguments.iter().position(|s| s == "-vf") {
+        arguments[filter + 1] = target
+            .map_or_else(
+                || "yadif,scale=trunc(iw/2)*2:trunc(ih/2)*2".into(),
+                |(width, height, _)| {
+                    format!(
+                        "yadif,scale=w='min({width},iw)':h='min({height},ih)':\
+                         force_original_aspect_ratio=decrease:force_divisible_by=2"
+                    )
+                },
+            )
+            .into();
+    }
+    if let Some((_, _, bitrate)) = target {
+        let output = arguments.len() - 1;
+        arguments.splice(
+            output..output,
+            [
+                "-maxrate".into(),
+                format!("{bitrate}k").into(),
+                "-bufsize".into(),
+                format!("{}k", bitrate * 2).into(),
+            ],
+        );
+    }
+    let mut command = Command::new(base.as_std().get_program());
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    let child = command
+        .spawn()
+        .map_err(|_| "Unable to start buffered TV playback; check FFmpeg")?;
+    open_pipeline(make_pipeline(child, None, None, None), None).await
+}
+
 pub(super) struct Pipeline {
     pub child: Child,
     _tuner: Option<Child>,

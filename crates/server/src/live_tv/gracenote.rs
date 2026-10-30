@@ -231,7 +231,24 @@ fn image(value: &str) -> Option<String> {
     } else {
         return None;
     };
-    super::formats::http_url(&url).ok().map(|u| u.to_string())
+    super::formats::http_url(&url).ok().map(|mut url| {
+        if url
+            .host_str()
+            .is_some_and(|h| h == "tmsimg.com" || h.ends_with(".tmsimg.com"))
+        {
+            let width = if url.path().contains("/h3/NowShowing/") { "320" } else { "960" };
+            let pairs = url
+                .query_pairs()
+                .filter(|(key, _)| key != "w")
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect::<Vec<_>>();
+            url.query_pairs_mut()
+                .clear()
+                .extend_pairs(pairs)
+                .append_pair("w", width);
+        }
+        url.to_string()
+    })
 }
 
 pub(super) fn parse(value: &Value) -> Result<Guide, String> {
@@ -303,6 +320,22 @@ pub(super) fn parse(value: &Value) -> Result<Guide, String> {
                     flags
                         .iter()
                         .any(|f| f.as_str().is_some_and(|s| s.eq_ignore_ascii_case("New")))
+                }),
+                is_live: flags.map(|f| {
+                    f.iter()
+                        .any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("Live")))
+                }),
+                is_premiere: flags.map(|f| {
+                    f.iter().any(|v| {
+                        v.as_str()
+                            .is_some_and(|s| s.to_ascii_lowercase().contains("premier"))
+                    })
+                }),
+                is_finale: flags.map(|f| {
+                    f.iter().any(|v| {
+                        v.as_str()
+                            .is_some_and(|s| s.to_ascii_lowercase().contains("finale"))
+                    })
                 }),
                 ..Default::default()
             };

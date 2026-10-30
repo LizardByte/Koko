@@ -145,6 +145,21 @@ pub(crate) struct Source {
     pub last_error: Option<String>,
 }
 
+#[derive(Queryable, Serialize, JsonSchema)]
+pub(crate) struct GuideSource {
+    pub id: i32,
+    pub name: String,
+    pub kind: String,
+}
+
+pub(crate) fn guide_sources(conn: &mut SqliteConnection) -> QueryResult<Vec<GuideSource>> {
+    s::table
+        .filter(s::enabled.eq(true))
+        .select((s::id, s::name, s::kind))
+        .order(s::id)
+        .load(conn)
+}
+
 #[derive(Clone, Queryable, Selectable, Serialize, JsonSchema)]
 #[diesel(table_name = r)]
 pub(crate) struct Recording {

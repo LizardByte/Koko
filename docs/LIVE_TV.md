@@ -32,7 +32,8 @@ discovered device or enter its driver name/path, then select a supported frequen
 When no tuner is attached, **Find local tuners** reports that none were found.
 
 Set **Simultaneous streams** to the number of tuners or streams your source permits.
-Each live viewer and active recording uses one stream. A direct Linux DVB source uses one
+Each live viewer and active recording uses one stream. Keeping the program you are watching
+shares that viewer's stream until you change channel. A direct Linux DVB source uses one
 adapter/frontend and allows one stream; add another source for a separate tuner.
 
 For direct Linux tuners, install the appropriate firmware and allow Koko's service account to
@@ -41,6 +42,14 @@ your region. Enter that output file's path in Koko, together with the adapter an
 numbers. If needed, specify the full path to `dvbv5-zap`.
 
 ## Program guide
+
+The guide aligns channels along one scrollable timeline. Select a program to see its artwork,
+description, and recording options above the guide. When you have several sources, choose one
+in the source list. Use the category filters, channel groups, or search to narrow the guide.
+Category filters and **NEW**, **LIVE**, **PREMIERE**, and **FINALE** labels depend on your guide's metadata.
+
+Select the star next to a channel to add it to **Favorites**. **Recently played** shows the
+channels you have watched, with the most recent first. Both lists belong to your account.
 
 Choose the guide source when adding a TV source:
 
@@ -80,6 +89,28 @@ guide station when its listings are missing or incorrect. You can watch channels
 recordings by time even without guide data.
 
 ## Record programs
+
+### Pause and rewind live TV
+
+Watching a channel automatically starts a temporary recording. Playback uses this buffer, so
+you can pause, rewind within the available buffer, and change playback quality. You can only rewind
+as far as the point when you started watching. Choose **Go live** to return to the live edge.
+
+Closing the full player keeps the channel playing in the guide's artwork area. Expand it to
+return to the full player, or choose **Stop playback** to stop it. Changing channels or leaving
+Live TV stops that channel's temporary recording and removes its buffer.
+
+Choose **Keep recording** in the full player to save the available buffered portion of the
+current program and continue recording until its scheduled end. If listings are missing, it
+records for one hour from when you choose to keep it. Kept recordings continue when you
+change channel or leave Live TV; watching another channel then requires another available
+stream. Use **Stop recording** under **Recordings** to end one early.
+
+Kept recordings are shared by default. Choose **Private** before keeping one to limit access
+to your account. Accounts without recording permission can use temporary playback buffers
+but cannot keep them. Buffers use the configured DVR save folder and need free disk space.
+
+### Schedule recordings
 
 Open a program in the guide and choose **Record program** or **Record series**. You can add
 padding before and after the scheduled time. **New episodes only** requires the guide to

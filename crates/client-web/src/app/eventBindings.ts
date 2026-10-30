@@ -2,6 +2,7 @@
 
 import { clearBrowseSessions } from './browseSession';
 import { bindLiveTvActions } from './liveTvActions';
+import { dismissPlayer } from './playbackController';
 import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
 import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
@@ -751,7 +752,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
   document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
     stopMusic();
-    if (state.isPlayerOpen) closeActivePlaybackSession();
+    if (state.isPlayerOpen || state.activeTvPlayback) closeActivePlaybackSession();
     try {
       await logoutUser();
     } catch (error) {
@@ -1299,8 +1300,11 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
-    closeActivePlaybackSession();
-  });
+    dismissPlayer();
+  }, {signal});
+  document.querySelector<HTMLButtonElement>('#expand-tv-player')?.addEventListener('click', () => {
+    state.isPlayerOpen = true; render();
+  }, {signal});
 
   document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();

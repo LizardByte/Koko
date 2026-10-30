@@ -64,6 +64,101 @@ pub(crate) struct SourceInput {
     pub config: SourceConfig,
 }
 
+pub(crate) async fn nextpvr_artwork(
+    db: &crate::db::DbConn,
+    id: i32,
+) -> Result<(String, Vec<u8>), String> {
+    use crate::db::schema::live_tv_programs as programs;
+    use diesel::prelude::*;
+    let (source, title) = db
+        .run(move |conn| {
+            let (source_id, title) = programs::table
+                .find(id)
+                .select((programs::source_id, programs::title))
+                .first::<(i32, String)>(conn)?;
+            Ok::<_, diesel::result::Error>((storage::source(conn, source_id)?, title))
+        })
+        .await
+        .map_err(super::db_error)?;
+    nextpvr_image(source, "name", title).await
+}
+
+pub(crate) async fn nextpvr_channel_artwork(
+    db: &crate::db::DbConn,
+    id: i32,
+) -> Result<(String, Vec<u8>), String> {
+    use crate::db::schema::live_tv_channels as channels;
+    use diesel::prelude::*;
+    let (source, key) = db
+        .run(move |conn| {
+            let (source_id, key) = channels::table
+                .find(id)
+                .filter(channels::enabled.eq(true).and(channels::available.eq(true)))
+                .select((channels::source_id, channels::source_key))
+                .first::<(i32, String)>(conn)?;
+            Ok::<_, diesel::result::Error>((storage::source(conn, source_id)?, key))
+        })
+        .await
+        .map_err(super::db_error)?;
+    nextpvr_image(source, "channel_id", key).await
+}
+
+async fn nextpvr_image(
+    source: Source,
+    parameter: &str,
+    value: String,
+) -> Result<(String, Vec<u8>), String> {
+    if source.kind != "nextpvr" || !source.enabled {
+        return Err("Artwork is unavailable".into());
+    }
+    let config = config(&source)?;
+    let sid = nextpvr::login(&config).await?;
+    let mut url = formats::endpoint(&config.url, "service")?;
+    url.query_pairs_mut()
+        .append_pair(
+            "method",
+            if parameter == "name" { "channel.show.artwork" } else { "channel.icon" },
+        )
+        .append_pair("sid", &sid)
+        .append_pair(parameter, &value)
+        .append_pair("prefer", "landscape");
+    let mut response = client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| "Artwork is unavailable")?;
+    if !response.status().is_success() {
+        return Err("Artwork is unavailable".into());
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .to_owned();
+    if !matches!(
+        mime.as_str(),
+        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+    ) {
+        return Err("Unsupported artwork format".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Artwork transfer failed")?
+    {
+        if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+            return Err("Artwork exceeds the image size limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok((mime, bytes))
+}
+
 pub(super) fn client() -> Result<Client, String> {
     Client::builder()
         .user_agent(concat!("Koko/", env!("CARGO_PKG_VERSION")))

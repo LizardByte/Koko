@@ -63,6 +63,12 @@ const DOM_PATCH_KEY_ATTRIBUTES = [
   'data-music-open-item',
   'data-player-audio-track-index',
   'data-trailer-seek',
+  'data-tv-source',
+  'data-tv-select-program',
+  'data-tv-select-channel',
+  'data-tv-category',
+  'data-tv-channel-view',
+  'data-tv-favorite',
 ] as const;
 
 function elementSelectorForFocus(element: Element | null): string | undefined {
@@ -171,17 +177,14 @@ function nodesCanPatch(current: Node, next: Node): boolean {
     if (current.tagName !== next.tagName) {
       return false;
     }
+    // An unchanged video stays mounted when minimized; a new source needs a fresh
+    // element so decoders and source-specific event handlers are not carried over.
+    if (current instanceof HTMLMediaElement && next instanceof HTMLMediaElement
+      && current.getAttribute('src') !== next.getAttribute('src')) return false;
     const currentKey = domPatchKey(current);
     const nextKey = domPatchKey(next);
     if (currentKey || nextKey) {
       return currentKey === nextKey;
-    }
-    if (
-      current instanceof HTMLMediaElement
-      && next instanceof HTMLMediaElement
-      && current.getAttribute('src') !== next.getAttribute('src')
-    ) {
-      return false;
     }
   }
   return true;
@@ -309,6 +312,15 @@ function patchChildren(parent: Node, nextParent: ParentNode): void {
     if (keyedCandidate) {
       currentChild.before(keyedCandidate);
       patchNode(keyedCandidate, nextChild);
+      index += 1;
+      continue;
+    }
+
+    // Inserting a hint or loading row before a keyed element must not destroy
+    // that element when it is still present later in the next sibling list.
+    const currentKey = domPatchKey(currentChild);
+    if (currentKey && nextChildren.slice(index + 1).some((node) => domPatchKey(node) === currentKey)) {
+      currentChild.before(nextChild);
       index += 1;
       continue;
     }

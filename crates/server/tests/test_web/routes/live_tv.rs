@@ -146,6 +146,70 @@ async fn live_tv_routes_enforce_setup_roles_and_recording_ownership() {
         .unwrap();
     assert!(!body.contains("token=private"));
     assert!(!body.contains("stream_url"));
+    let favorite = client
+        .put("/api/v1/live-tv/channels/1/favorite")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .header(ContentType::JSON)
+        .body(json!({"favorite":true}).to_string())
+        .dispatch()
+        .await;
+    assert_eq!(favorite.status(), Status::NoContent);
+    for (token, expected) in [
+        (&viewer, json!([1])),
+        (&admin, json!([])),
+    ] {
+        let guide: Value = client
+            .get("/api/v1/live-tv/guide")
+            .header(Header::new("Authorization", format!("Bearer {token}")))
+            .dispatch()
+            .await
+            .into_json()
+            .await
+            .unwrap();
+        assert_eq!(guide["preferences"]["favorites"], expected);
+        assert_eq!(
+            guide["sources"],
+            json!([{"id":1,"name":"IPTV","kind":"m3u"}])
+        );
+        assert!(!guide.to_string().contains("secret-ref"));
+    }
+    // Media cookies may read streams/artwork, but cannot access or modify viewer state.
+    for (method, path, body) in [
+        (
+            rocket::http::Method::Put,
+            "/api/v1/live-tv/channels/1/favorite",
+            json!({"favorite":false}),
+        ),
+        (
+            rocket::http::Method::Post,
+            "/api/v1/live-tv/sessions",
+            json!({"channel_id":1}),
+        ),
+        (
+            rocket::http::Method::Post,
+            "/api/v1/live-tv/sessions/unknown/keep",
+            json!({"private":false}),
+        ),
+        (
+            rocket::http::Method::Delete,
+            "/api/v1/live-tv/sessions/unknown",
+            json!({}),
+        ),
+        (
+            rocket::http::Method::Get,
+            "/api/v1/live-tv/sessions/unknown",
+            json!({}),
+        ),
+    ] {
+        let response = client
+            .req(method, path)
+            .cookie(Cookie::new("koko_media_auth", viewer.clone()))
+            .header(ContentType::JSON)
+            .body(body.to_string())
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Unauthorized, "{method} {path}");
+    }
     let own: Value = client
         .get("/api/v1/live-tv/recordings")
         .header(Header::new("Authorization", format!("Bearer {viewer}")))

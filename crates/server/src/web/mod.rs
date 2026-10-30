@@ -117,6 +117,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         ));
 
     rocket::custom(figment)
+        .manage(crate::live_tv::timeshift::BufferDatabase(db_path))
         .attach(DbConn::fairing())
         .attach(Migrate)
         .attach(ReleaseDatabase)

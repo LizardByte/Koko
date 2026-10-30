@@ -171,6 +171,7 @@ export interface AppState {
   isLoading: boolean;
   isPlayerOpen: boolean;
   activePlaybackItem?: MediaItemDetail;
+  activeTvPlayback?: { owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string; image?: string; buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number };
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
   activePlaybackQuality?: import('./playbackOptions').PlaybackQuality;

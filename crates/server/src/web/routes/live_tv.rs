@@ -131,10 +131,22 @@ pub async fn get_channels(
     _user: UserGuard,
     db: DbConn,
 ) -> Result<Json<Vec<tv::Channel>>, Error> {
-    db.run(|conn| tv::channels(conn, false))
-        .await
-        .map(Json)
-        .map_err(database)
+    db.run(|conn| {
+        let mut channels = tv::channels(conn, false)?;
+        let sources = tv::guide_sources(conn)?;
+        for channel in &mut channels {
+            if sources
+                .iter()
+                .any(|s| s.id == channel.source_id && s.kind == "nextpvr")
+            {
+                channel.logo = Some(format!("/api/v1/live-tv/channels/{}/artwork", channel.id));
+            }
+        }
+        Ok::<_, diesel::result::Error>(channels)
+    })
+    .await
+    .map(Json)
+    .map_err(database)
 }
 
 /// Return disabled and missing channels to administrators for configuration.
@@ -155,17 +167,20 @@ pub async fn get_setup_channels(
 pub struct GuideResponse {
     programs: Vec<tv::Program>,
     stations: Vec<tv::Station>,
+    sources: Vec<tv::GuideSource>,
+    preferences: tv::preferences::Preferences,
 }
 
 /// Return a bounded UTC guide window for all enabled sources.
 #[openapi(tag = "Live TV")]
 #[get("/api/v1/live-tv/guide?<start>&<end>")]
 pub async fn get_guide(
-    _user: UserGuard,
+    user: UserGuard,
     db: DbConn,
     start: Option<i64>,
     end: Option<i64>,
 ) -> Result<Json<GuideResponse>, Error> {
+    let user = owner(&user)?;
     let start = start.unwrap_or_else(tv::now);
     let end = end.unwrap_or_else(|| start.saturating_add(6 * 3600));
     if end <= start
@@ -178,14 +193,165 @@ pub async fn get_guide(
         ));
     }
     db.run(move |conn| {
+        let sources = tv::guide_sources(conn)?;
+        let mut programs = tv::guide(conn, start, end)?;
+        for program in &mut programs {
+            if sources
+                .iter()
+                .any(|s| s.id == program.source_id && s.kind == "nextpvr")
+            {
+                program.metadata.image =
+                    Some(format!("/api/v1/live-tv/programs/{}/artwork", program.id));
+            }
+        }
         Ok::<_, diesel::result::Error>(GuideResponse {
-            programs: tv::guide(conn, start, end)?,
+            programs,
             stations: tv::guide_stations(conn)?,
+            sources,
+            preferences: tv::preferences::load(conn, user)?,
         })
     })
     .await
     .map(Json)
     .map_err(database)
+}
+
+/// Fetch program artwork without exposing the tuner server's session or PIN.
+#[get("/api/v1/live-tv/programs/<id>/artwork")]
+pub async fn program_artwork(
+    _user: UserGuard,
+    db: DbConn,
+    id: i32,
+) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
+    artwork_response(tv::nextpvr_artwork(&db, id).await)
+}
+
+/// Fetch a channel icon without exposing the tuner server's session or PIN.
+#[get("/api/v1/live-tv/channels/<id>/artwork")]
+pub async fn channel_artwork(
+    _user: UserGuard,
+    db: DbConn,
+    id: i32,
+) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
+    artwork_response(tv::nextpvr_channel_artwork(&db, id).await)
+}
+
+fn artwork_response(
+    value: Result<(String, Vec<u8>), String>
+) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
+    let (mime, bytes) = value.map_err(|_| Status::NotFound)?;
+    let content_type = rocket::http::ContentType::parse_flexible(&mime).ok_or(Status::NotFound)?;
+    Ok((content_type, bytes))
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ChannelFavorite {
+    favorite: bool,
+}
+
+/// Add or remove a channel from the signed-in account's favorites.
+#[openapi(tag = "Live TV")]
+#[put(
+    "/api/v1/live-tv/channels/<id>/favorite",
+    format = "json",
+    data = "<body>"
+)]
+pub async fn favorite_channel(
+    user: UserGuard,
+    db: DbConn,
+    id: i32,
+    body: Json<ChannelFavorite>,
+) -> Result<Status, Error> {
+    let user = owner(&user)?;
+    db.run(move |conn| tv::preferences::favorite(conn, user, id, body.favorite))
+        .await
+        .map_err(database)?;
+    Ok(Status::NoContent)
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BufferStart {
+    channel_id: i32,
+}
+#[derive(Deserialize, JsonSchema)]
+pub struct BufferKeep {
+    #[serde(default)]
+    private: bool,
+}
+
+/// Start an automatic temporary recording for seekable live TV playback.
+#[openapi(tag = "Live TV")]
+#[post("/api/v1/live-tv/sessions", format = "json", data = "<body>")]
+pub async fn start_buffer(
+    user: UserGuard,
+    db: DbConn,
+    buffer_database: &rocket::State<tv::timeshift::BufferDatabase>,
+    body: Json<BufferStart>,
+) -> Result<Json<tv::timeshift::BufferInfo>, Error> {
+    let user = owner(&user)?;
+    let info = tv::timeshift::start(&db, &buffer_database.0, user, body.channel_id)
+        .await
+        .map_err(error)?;
+    let id = body.channel_id;
+    db.run(move |conn| tv::preferences::played(conn, user, id))
+        .await
+        .map_err(database)?;
+    Ok(Json(info))
+}
+
+/// Keep an active buffer alive while the full or minimized player is open.
+#[openapi(tag = "Live TV")]
+#[get("/api/v1/live-tv/sessions/<id>")]
+pub async fn buffer_status(
+    user: UserGuard,
+    db: DbConn,
+    id: &str,
+) -> Result<Json<tv::timeshift::BufferInfo>, Error> {
+    tv::timeshift::status(&db, id, owner(&user)?)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+/// Release a viewing session; a kept recording continues to its scheduled end.
+#[openapi(tag = "Live TV")]
+#[delete("/api/v1/live-tv/sessions/<id>")]
+pub async fn close_buffer(
+    user: UserGuard,
+    id: &str,
+) -> Result<Status, Error> {
+    tv::timeshift::close(id, owner(&user)?)
+        .await
+        .map_err(error)?;
+    Ok(Status::NoContent)
+}
+
+/// Save buffered content and the rest of the current show without another tuner.
+#[openapi(tag = "Live TV")]
+#[post("/api/v1/live-tv/sessions/<id>/keep", format = "json", data = "<body>")]
+pub async fn keep_buffer(
+    user: UserGuard,
+    db: DbConn,
+    id: &str,
+    body: Json<BufferKeep>,
+) -> Result<Json<i32>, Error> {
+    tv::timeshift::keep(&db, id, owner(&user)?, body.private)
+        .await
+        .map(Json)
+        .map_err(error)
+}
+
+/// Play captured TV from a buffer position, independently of the ongoing recording.
+#[get("/api/v1/live-tv/sessions/<id>/stream?<start_ms>&<quality>")]
+pub async fn stream_buffer(
+    user: UserGuard,
+    id: &str,
+    start_ms: Option<u64>,
+    quality: Option<&str>,
+) -> Result<tv::LiveStream, Error> {
+    tv::timeshift::play(id, owner(&user)?, start_ms, quality.unwrap_or("original"))
+        .await
+        .map_err(error)
 }
 
 /// Return administrator source health without credentials or upstream addresses.
@@ -572,11 +738,16 @@ pub async fn delete_rule(
 /// Convert and stream an authenticated live channel through Koko.
 #[get("/api/v1/live-tv/channels/<id>/stream")]
 pub async fn stream_channel(
-    _user: UserGuard,
+    user: UserGuard,
     db: DbConn,
     id: i32,
 ) -> Result<tv::LiveStream, Error> {
-    tv::play_channel(&db, id).await.map_err(error)
+    let user = owner(&user)?;
+    let stream = tv::play_channel(&db, id).await.map_err(error)?;
+    db.run(move |conn| tv::preferences::played(conn, user, id))
+        .await
+        .map_err(database)?;
+    Ok(stream)
 }
 
 /// Play a shared recording or one owned by the signed-in account.

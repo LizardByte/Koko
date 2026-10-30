@@ -1318,6 +1318,31 @@ legend {
   justify-content: flex-end;
 }
 
+.home-feature-media {
+  position: absolute;
+  top: 1.4rem;
+  right: 1.4rem;
+  width: min(38%, 440px);
+  aspect-ratio: 16 / 9;
+  pointer-events: none;
+}
+
+.home-feature.has-media-preview .home-feature-copy {
+  max-width: 58%;
+}
+
+@media (max-width: 850px) {
+  .home-feature.has-media-preview .home-feature-copy { max-width: none; }
+  .home-feature-media.is-active {
+    position: relative;
+    top: auto;
+    right: auto;
+    width: min(100%, 480px);
+    grid-row: 1;
+    justify-self: end;
+  }
+}
+
 .search-results-section,
 .search-results-list {
   display: flex;

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 
 test('IPTV imports its guide, plays live video, releases the tuner, and saves a timed recording', async ({ page }, testInfo) => {
-  test.setTimeout(180000);
+  test.setTimeout(240000);
   const children = new Set();
   let activeStreams = 0;
   let sourceId;
@@ -14,7 +14,7 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
   const fixture = createServer((request, response) => {
     const base = `http://127.0.0.1:${fixture.address().port}`;
     if (request.url === '/tv.m3u') {
-      response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="test-tv" tvg-chno="7.1" group-title="News",Live Test TV\n${base}/stream.ts\n#EXTINF:-1 tvg-id="hls-tv" tvg-chno="7.2",HLS Test TV\n${base}/master.m3u8\n`);
+      response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="test-tv" tvg-chno="7.1" group-title="News",Live Test TV\n${base}/stream.ts\n#EXTINF:-1 tvg-id="hls-tv" tvg-chno="7.2",HLS Test TV\n${base}/master.m3u8\n#EXTINF:-1 tvg-id="alternate-tv" tvg-chno="7.3",Alternate TV\n${base}/stream.ts\n`);
     } else if (request.url === '/master.m3u8') {
       response.setHeader('Content-Type', 'application/octet-stream');
       response.write('#EXT');
@@ -62,23 +62,110 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     }, { timeout: 45000 }).toBe('Live Test TV');
     expect(channel).not.toHaveProperty('stream_url');
     await page.goto('/live-tv');
-    await expect(page.getByText('Live Test News', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'Live Test News', exact:true })).toBeVisible();
+    await expect(page.locator('#tv-guide-scroll')).toHaveCount(1);
+    await expect(page.locator('.tv-guide-tick')).toHaveCount(12);
+    await expect(page.locator('.live-tv-programs')).toHaveCount(0);
+    await page.getByRole('button',{name:'Add Live Test TV to favorites',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Remove Live Test TV from favorites',exact:true})).toHaveAttribute('aria-pressed','true');
+    await page.locator('[data-tv-channel-view="favorites"]').click();
+    await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+    await page.locator('[data-tv-channel-view="all"]').click();
     await page.screenshot({ path: testInfo.outputPath('live-tv-guide.png') });
     const channels = await (await page.request.get('/api/v1/live-tv/channels', { headers })).json();
     const hls = channels.find(c => c.source_id === sourceId && c.name === 'HLS Test TV');
-    await page.locator(`[data-tv-play="${hls.id}"]`).click();
-    await expect.poll(() => page.locator('.live-tv-player video').evaluate(video => video.readyState >= 2 && video.currentTime > 0.1)).toBeTruthy();
-    await page.getByRole('button', { name: 'Close TV player' }).click();
+    await page.locator(`[data-tv-play="${hls.id}"]`).first().click();
+    await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.1),{timeout:45000}).toBeTruthy();
+    await page.getByRole('button', { name:'Close player',exact:true }).click();
+    await expect(page.locator('.tv-preview-player #media-player')).toBeAttached();
+    await page.getByRole('button', {name:'Stop playback',exact:true}).click();
     await expect.poll(() => activeStreams).toBe(0);
-    await page.locator(`[data-tv-play="${channel.id}"]`).click();
-    await expect.poll(() => page.locator('.live-tv-player video').evaluate(video => video.readyState >= 2 && video.currentTime > 0.2)).toBeTruthy();
+    // A delayed tune must be closed before a replacement asks the same single tuner.
+    let releaseTune, tuneReady;
+    const pendingTune = new Promise(resolve=>{releaseTune=resolve;});
+    const captured = new Promise(resolve=>{tuneReady=resolve;});
+    await page.route('**/api/v1/live-tv/sessions',async route=>{
+      const response = await route.fetch();
+      tuneReady(); await pendingTune; await route.fulfill({response});
+    },{times:1});
+    await page.locator(`[data-tv-play="${channel.id}"]`).first().click();
+    await captured;
+    await page.getByRole('button',{name:'Close player',exact:true}).click();
+    const alternate = channels.find(c=>c.source_id===sourceId && c.name==='Alternate TV');
+    await page.locator(`[data-tv-play="${alternate.id}"]`).first().click();
+    releaseTune();
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:45000}).toBeTruthy();
     expect(activeStreams).toBe(1);
-    await page.getByRole('button', { name: 'Close TV player' }).click();
+    await page.getByRole('button',{name:'Close player',exact:true}).click();
+    await page.getByRole('button',{name:'Stop playback',exact:true}).click();
+    await expect.poll(()=>activeStreams).toBe(0);
+    await page.locator(`[data-tv-play="${channel.id}"]`).first().click();
+    await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.2),{timeout:45000}).toBeTruthy();
+    expect(activeStreams).toBe(1);
+    const video = await page.locator('#media-player').elementHandle();
+    const originalSource = await video.getAttribute('src');
+    const bufferId = new URL(originalSource,'http://localhost').pathname.split('/').at(-2);
+    const initialBuffer = await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json();
+    await page.getByRole('button',{name:'Pause',exact:true}).click();
+    await expect.poll(async()=> (await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json()).end_ms,{timeout:15000}).toBeGreaterThan(initialBuffer.end_ms);
+    await page.getByRole('button',{name:'Play',exact:true}).click();
+    await page.getByRole('button', { name:'Close player',exact:true }).click();
+    expect(await video.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
+    await expect(page.locator('.tv-preview-player')).toBeVisible();
+    const watchButton = page.locator('#tv-guide-hero [data-tv-play]');
+    await expect(watchButton).toContainText('Watch channel live');
+    await expect(watchButton).not.toHaveCSS('color','rgba(0, 0, 0, 0)');
+    await page.screenshot({path:testInfo.outputPath('live-tv-mini-player.png')});
+    expect(activeStreams).toBe(1);
+    await page.locator('[data-tv-channel-view="recent"]').click();
+    await expect(page.locator('.tv-guide-row')).toHaveCount(3);
+    expect(await video.evaluate(node=>node === document.querySelector('#media-player'))).toBe(true);
+    await page.getByRole('button',{name:'Expand player',exact:true}).click();
+    await page.getByLabel('Playback quality',{exact:true}).selectOption('720p');
+    await expect(page.locator('#media-player')).toHaveAttribute('src',new RegExp(`sessions/${bufferId}/stream.*quality=720p`));
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2 && node.currentTime>0.1),{timeout:20000}).toBeTruthy();
+    expect(activeStreams).toBe(1);
+    await page.getByRole('button',{name:'Back 10 seconds',exact:true}).click();
+    await expect(page.locator('#media-player')).toHaveAttribute('src',/start_ms=0/);
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:20000}).toBeTruthy();
+    await page.getByRole('button', {name:'Close player',exact:true}).click();
+    await page.getByRole('button', {name:'Stop playback',exact:true}).click();
     await expect.poll(() => activeStreams).toBe(0);
+    const closedBuffer = await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers});
+    expect(closedBuffer.ok()).toBe(false);
 
     const recordingDirectory = testInfo.outputPath('dvr-storage');
     const storage = await page.request.put('/api/v1/live-tv/dvr/settings', { headers, data: { recording_dir: recordingDirectory } });
     expect(storage.ok()).toBeTruthy();
+    // Keeping a buffer reuses its tuner, then survives switching and leaving Live TV.
+    const capacity = await page.request.put(`/api/v1/live-tv/sources/${sourceId}`, { headers, data: { enabled:true, capacity:2 } });
+    expect(capacity.ok()).toBeTruthy();
+    await page.locator('[data-tv-channel-view="all"]').click();
+    await page.locator(`[data-tv-play="${channel.id}"]`).first().click();
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:45000}).toBeTruthy();
+    const keepResponse = page.waitForResponse(response=>response.url().endsWith('/keep') && response.request().method()==='POST');
+    await page.getByRole('button',{name:'Keep recording',exact:true}).click();
+    const keptResult = await keepResponse;
+    expect(keptResult.ok()).toBeTruthy();
+    const keptId = await keptResult.json();
+    await expect.poll(async()=> (await stat(testInfo.outputPath('dvr-storage',`recording-${keptId}.ts`)).catch(()=>({size:0}))).size).toBeGreaterThan(0);
+    expect(activeStreams).toBe(1);
+    await page.getByRole('button',{name:'Close player',exact:true}).click();
+    await page.locator(`[data-tv-play="${alternate.id}"]`).first().click();
+    await expect.poll(()=>activeStreams).toBe(2);
+    await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:45000}).toBeTruthy();
+    await page.getByRole('button',{name:'Close player',exact:true}).click();
+    await page.locator('[data-nav-settings]').click();
+    await expect(page.locator('#media-player')).toHaveCount(0);
+    await expect.poll(()=>activeStreams).toBe(1);
+    const keptList = await (await page.request.get('/api/v1/live-tv/recordings',{headers})).json();
+    expect(keptList.recordings.find(recording=>recording.id===keptId)).toMatchObject({state:'recording',shared:true});
+    const cancelled = await page.request.post(`/api/v1/live-tv/recordings/${keptId}/cancel`,{headers});
+    expect(cancelled.ok()).toBeTruthy();
+    await expect.poll(()=>activeStreams,{timeout:15000}).toBe(0);
+    const removedKept = await page.request.delete(`/api/v1/live-tv/recordings/${keptId}`,{headers});
+    expect(removedKept.ok()).toBeTruthy();
+    await page.locator('[data-nav-live-tv]').click();
     const now = Math.floor(Date.now() / 1000);
     const scheduled = await page.request.post('/api/v1/live-tv/recordings', { headers, data: {
       channel_id: channel.id, title: 'Timed IPTV recording', starts_at: now - 1, ends_at: now + 12,
@@ -101,8 +188,9 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await page.getByRole('button', { name: 'Recordings', exact: true }).click();
     await expect(page.getByText('Timed IPTV recording', { exact: true })).toBeVisible();
     await page.locator(`[data-tv-recording-play="${recording.id}"]`).click();
-    await expect.poll(() => page.locator('.live-tv-player video').evaluate(video => video.readyState >= 2 && video.currentTime > 0.1)).toBeTruthy();
-    await page.getByRole('button', { name: 'Close TV player' }).click();
+    await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.1)).toBeTruthy();
+    await page.getByRole('button', {name:'Close player',exact:true}).click();
+    await page.getByRole('button', {name:'Stop playback',exact:true}).click();
     const unauthenticated = await page.request.get('/api/v1/live-tv/recordings', { headers: { Authorization: 'Bearer invalid' } });
     expect(unauthenticated.status()).toBe(401);
     const deleted = await page.request.delete(`/api/v1/live-tv/recordings/${recording.id}`, { headers });
@@ -201,4 +289,57 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
   const denied = await page.request.get('/api/v1/live-tv/discover/hdhomerun',{headers:{Authorization:'Bearer invalid'}});
   expect(denied.status()).toBe(401);
   expect(token).toBeTruthy();
+});
+
+test('the guide aligns all channels to one timeline with a program hero, source rail, and categories', async ({page},testInfo) => {
+  const start = Math.floor(Date.now()/1800000)*1800;
+  const channel = (id,source_id,name,number) => ({id,source_id,name,number,source_key:String(id),guide_key:String(id),group_name:'',enabled:true,available:true});
+  const channels = [channel(101,10,'Local News','9.1'),channel(102,10,'Sports Network','13.6'),channel(201,20,'Cable Movies','1')];
+  const cover='https://zpmc.tmsimg.com/assets/p13159645_b_v13_aa.jpg?w=165';
+  const programs = [
+    {id:1,source_id:10,guide_key:'101',title:'Afternoon News',starts_at:start-600,ends_at:start+1800,metadata:{description:'The stories that matter in your community, with headlines, weather, and local reporting.',categories:['News'],image:cover,is_new:true}},
+    {id:2,source_id:10,guide_key:'101',title:'The Classic Film',starts_at:start+1800,ends_at:start+7200,metadata:{description:'A feature-length movie with interviews from the cast.',categories:['Movie / drama'],is_premiere:true}},
+    {id:3,source_id:10,guide_key:'102',title:'World of Sports',starts_at:start-600,ends_at:start+7200,metadata:{description:'Live coverage and analysis.',categories:['Sports event'],is_live:true}},
+    {id:4,source_id:20,guide_key:'201',title:'Cable Movie Premiere',starts_at:start-600,ends_at:start+7200,metadata:{description:'A film from your cable lineup.',categories:['Movies'],is_premiere:true}},
+  ];
+  await page.route('**/api/v1/live-tv/channels',route=>route.fulfill({json:channels}));
+  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs,stations:[],sources:[{id:10,name:'Antenna',kind:'hdhomerun'},{id:20,name:'Cable',kind:'nextpvr'}],preferences:{favorites:[],recent:[]}}}));
+  await page.route('https://zpmc.tmsimg.com/**',route=>route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g"><stop stop-color="#15394f"/><stop offset="1" stop-color="#244b43"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><text x="60" y="290" fill="#c7f5e0" font-size="70" font-family="sans-serif">Koko Live TV</text></svg>'}));
+  await page.goto('/');
+  await page.getByLabel('Username',{exact:true}).fill('playback-admin');
+  await page.getByLabel('Password',{exact:true}).fill(process.env.KOKO_E2E_PASSWORD);
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await expect(page.locator('#login-form')).toHaveCount(0);
+  await page.goto('/live-tv');
+  await expect(page.getByRole('heading',{name:'Afternoon News',exact:true})).toBeVisible();
+  await expect(page.locator('#tv-guide-hero')).toContainText('The stories that matter');
+  await expect(page.locator('#tv-guide-hero.home-feature')).toHaveAttribute('style',/w=960/);
+  await expect(page.locator('.home-pinned-header > .home-feature')).toHaveCount(1);
+  await expect(page.locator('#tv-guide-hero .tv-badge-new')).toHaveText('NEW');
+  await expect(page.locator('#tv-guide-hero .tv-badge-live')).toHaveCount(0);
+  await expect(page.locator('.tv-guide-row')).toHaveCount(2);
+  await expect(page.locator('#tv-guide-scroll')).toHaveCount(1);
+  const alignment = await page.locator('#tv-guide-scroll').evaluate(scroll => {
+    const header=scroll.querySelector('.tv-guide-tick'), program=scroll.querySelector('.tv-guide-program'), channel=scroll.querySelector('.tv-guide-channel');
+    const before={header:header.getBoundingClientRect().left,program:program.getBoundingClientRect().left,channel:channel.getBoundingClientRect().left};
+    scroll.scrollLeft=240;
+    return {header:before.header-header.getBoundingClientRect().left,program:before.program-program.getBoundingClientRect().left,channel:before.channel-channel.getBoundingClientRect().left};
+  });
+  expect(alignment.header).toBe(240); expect(alignment.program).toBe(240); expect(alignment.channel).toBe(0);
+  await page.locator('#tv-guide-scroll').evaluate(scroll=>{scroll.scrollLeft=0;});
+  await page.screenshot({path:testInfo.outputPath('live-tv-timeline.png'),fullPage:true});
+  await page.locator('[data-tv-category="Sports"]').click();
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.getByRole('heading',{name:'World of Sports',exact:true})).toBeVisible();
+  await expect(page.locator('#tv-guide-hero .tv-badge-live')).toHaveText('LIVE');
+  await page.locator('[data-tv-category="Movies"]').click();
+  await expect(page.locator('.tv-guide-program.is-dimmed')).toHaveCount(1);
+  await expect(page.getByRole('heading',{name:'The Classic Film',exact:true})).toBeVisible();
+  await page.getByRole('navigation',{name:'TV sources',exact:true}).getByRole('button',{name:/Cable/}).click();
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.getByRole('heading',{name:'Cable Movie Premiere',exact:true})).toBeVisible();
+  await expect(page.locator('#tv-guide-hero .tv-badge-premiere')).toHaveText('PREMIERE');
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.screenshot({path:testInfo.outputPath('live-tv-timeline-mobile.png'),fullPage:true});
 });

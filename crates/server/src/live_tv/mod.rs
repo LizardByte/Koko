@@ -1,11 +1,13 @@
 //! Live television sources, guide data, and shared or private DVR schedules.
 
 mod broadcast;
+mod buffer_files;
 pub(crate) mod discovery;
 mod dvr;
 mod formats;
 pub(crate) mod gracenote;
 mod native;
+pub(crate) mod preferences;
 mod proxy;
 pub(crate) mod settings;
 mod sources;
@@ -13,6 +15,7 @@ mod storage;
 mod stream;
 #[cfg(test)]
 mod tests;
+pub(crate) mod timeshift;
 pub(crate) mod tsduck;
 
 pub(crate) use dvr::start_workers;
@@ -26,6 +29,7 @@ pub(crate) use sources::{
     SourceInput,
 };
 pub(crate) use storage::{
+    GuideSource,
     Recording,
     SeriesRule,
     Source,
@@ -38,6 +42,8 @@ pub(crate) use dvr::{
     schedule,
 };
 pub(crate) use sources::{
+    nextpvr_artwork,
+    nextpvr_channel_artwork,
     refresh,
     replace_source,
     save_source,
@@ -46,6 +52,7 @@ pub(crate) use storage::claim_deletion;
 pub(crate) use storage::{
     channels,
     guide,
+    guide_sources,
     guide_stations,
     recordings,
     rules,

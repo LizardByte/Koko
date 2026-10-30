@@ -167,6 +167,45 @@ fn database() -> SqliteConnection {
     }
     conn
 }
+
+#[test]
+fn channel_favorites_and_recent_history_are_private_deduplicated_and_persistent() {
+    let mut conn = database();
+    let channels = storage::channels(&mut conn, false).unwrap();
+    let first = channels[0].id;
+    let second = channels[1].id;
+    preferences::favorite(&mut conn, 1, first, true).unwrap();
+    preferences::favorite(&mut conn, 1, first, true).unwrap();
+    preferences::played(&mut conn, 1, first).unwrap();
+    preferences::played(&mut conn, 1, second).unwrap();
+    preferences::played(&mut conn, 1, first).unwrap();
+    let saved = preferences::load(&mut conn, 1).unwrap();
+    assert_eq!(saved.favorites, vec![first]);
+    assert_eq!(saved.recent, vec![first, second]);
+    let other = preferences::load(&mut conn, 2).unwrap();
+    assert!(other.favorites.is_empty() && other.recent.is_empty());
+    preferences::favorite(&mut conn, 1, first, false).unwrap();
+    assert!(
+        preferences::load(&mut conn, 1)
+            .unwrap()
+            .favorites
+            .is_empty()
+    );
+}
+
+#[test]
+fn xmltv_live_premiere_and_new_flags_remain_distinct() {
+    let xml = concat!(
+        "<tv><programme channel=\"one\" start=\"20261030120000 +0000\" stop=\"20261030130000 \
+         +0000\">",
+        "<title>News</title><live/><new/><premiere/></programme></tv>"
+    );
+    let guide = formats::parse_guide(xml).unwrap();
+    let flags = &guide.programs[0].metadata;
+    assert_eq!(flags.is_live, Some(true));
+    assert_eq!(flags.is_new, Some(true));
+    assert_eq!(flags.is_premiere, Some(true));
+}
 fn timer(
     channel: i32,
     start: i64,
@@ -300,7 +339,7 @@ fn gracenote_maps_station_identity_metadata_and_six_hour_requests() {
     assert_eq!(guide.programs[0].metadata.is_new, Some(true));
     assert_eq!(
         guide.programs[0].metadata.image.as_deref(),
-        Some("https://zpmc.tmsimg.com/assets/p184466_b_v13_ah.jpg")
+        Some("https://zpmc.tmsimg.com/assets/p184466_b_v13_ah.jpg?w=960")
     );
     assert_eq!(
         guide.programs[0].metadata.episode_id.as_deref(),

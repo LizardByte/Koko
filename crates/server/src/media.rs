@@ -12,6 +12,7 @@ pub use audiobooks::{
 pub use lyrics::MusicLyrics;
 pub(crate) mod music;
 pub mod playlists;
+pub mod podcasts;
 pub(crate) mod recommendations;
 mod relocation;
 mod source_files;
@@ -84,7 +85,6 @@ use crate::db::models::{
 use crate::db::schema::media_file_libraries as catalog_memberships;
 use crate::metadata::{
     ArtworkKind,
-    DEFAULT_METADATA_LOCALE,
     LinkedMetadataExtra,
     MetadataCollectionSummary,
     MetadataProvider,
@@ -283,6 +283,8 @@ pub struct MediaItemSummary {
     pub music: Option<Box<MusicMetadata>>,
     /// Local audiobook recording and chapter metadata.
     pub audiobook: Option<Box<AudiobookMetadata>>,
+    /// Publisher metadata for a subscribed podcast, season, or episode.
+    pub podcast: Option<Box<podcasts::PodcastMetadata>>,
     /// Display title for the item.
     pub display_title: String,
     /// Optional card subtitle override for shelf-specific presentation.
@@ -387,6 +389,8 @@ pub struct MediaItemDetail {
     pub music: Option<Box<MusicMetadata>>,
     /// Local audiobook recording and chapter metadata.
     pub audiobook: Option<Box<AudiobookMetadata>>,
+    /// Publisher metadata for a subscribed podcast, season, or episode.
+    pub podcast: Option<Box<podcasts::PodcastMetadata>>,
     /// Saved lyrics for this recording, when they match its current metadata.
     pub lyrics: Option<MusicLyrics>,
     /// Display title for the item.
@@ -868,6 +872,7 @@ pub fn list_library_settings(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let rows = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -973,6 +978,9 @@ pub fn user_can_access_library(
     let Some(user_id) = user_id else {
         return Ok(false);
     };
+    if library.kind == "podcasts" {
+        return podcasts::has_subscription(conn, user_id);
+    }
     let account = users_dsl::users
         .filter(users_dsl::id.eq(user_id))
         .select(users_dsl::admin)
@@ -1014,6 +1022,7 @@ pub fn replace_library_settings(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let existing = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -1062,6 +1071,7 @@ pub fn remove_library_setting(
     use crate::db::schema::media_libraries::dsl as media_libraries_dsl;
 
     let existing = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -1140,10 +1150,8 @@ pub fn get_persisted_library_summaries(
         HashMap::new()
     } else {
         item_metadata_links_dsl::item_metadata_links
-            .filter(
-                item_metadata_links_dsl::media_item_id
-                    .eq_any(item_library_ids.keys().copied().collect::<Vec<_>>()),
-            )
+            .inner_join(media_items_dsl::media_items)
+            .filter(media_items_dsl::deleted_at.is_null())
             .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
             .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
             .select(ItemMetadataLink::as_select())
@@ -1517,55 +1525,21 @@ fn sync_discovered_media_file(
         .map(|file| file.missing_since.is_some() || file.deleted_at.is_some())
         .unwrap_or(false);
 
-    let is_music = library_row.kind == "music" && discovered_file.media_kind == "audio";
-    let existing_id = existing_physical_file
-        .as_ref()
-        .map(|file| file.id)
-        .or_else(|| existing_file.as_ref().map(|file| file.id));
-    let read_music_tags = is_music && library_row.use_embedded_music_tags;
-    let has_music = if read_music_tags {
-        match existing_id {
-            Some(id) => music::has_file(conn, id, &discovered_file.file_hash)?,
-            None => false,
-        }
-    } else {
-        false
-    };
-    let probe_music = read_music_tags && !has_music;
-    let cached_metadata = existing_physical_file
-        .as_ref()
-        .and_then(|file| file.metadata_json.as_deref())
-        .or_else(|| {
-            existing_file
-                .as_ref()
-                .and_then(|file| file.metadata_json.as_deref())
-        });
-    let probe_audiobook = library_row.kind == "books"
-        && discovered_file.media_kind == "audio"
-        && probe_context.enabled
-        && !cached_metadata
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            .is_some_and(|raw| raw.get("chapters").is_some());
-    let mut metadata = if should_refresh_metadata || probe_music || probe_audiobook {
-        extract_metadata(discovered_file, probe_context)
-    } else {
-        existing_physical_file
-            .as_ref()
-            .map(extracted_metadata_from_file_row)
-            .or_else(|| existing_file.as_ref().map(extracted_metadata_from_existing))
-            .unwrap_or_else(|| default_metadata(discovered_file))
-    };
-    let music_tags = if read_music_tags && (should_refresh_metadata || !has_music) {
-        Some(MusicMetadata::from_probe(
-            metadata.metadata_json.as_deref(),
-            &discovered_file.relative_path,
-        ))
-    } else {
-        None
-    };
-    if is_music {
-        metadata.metadata_json = None;
-    }
+    let DiscoveredFileMetadata {
+        metadata,
+        music_tags,
+        probe_music,
+        probe_audiobook,
+        is_music,
+    } = prepare_discovered_file_metadata(
+        conn,
+        library_row,
+        discovered_file,
+        probe_context,
+        existing_physical_file.as_ref(),
+        existing_file.as_ref(),
+        should_refresh_metadata,
+    )?;
     let display_title = Some(discovered_file.default_title.clone());
     let metadata_match_attempted_at = if should_refresh_metadata || should_refresh_title {
         None
@@ -1720,6 +1694,7 @@ fn sync_library_catalog_filtered(
         enabled: detect_binary(&ffmpeg_settings.ffprobe_path).available,
     };
     let existing_library_rows = media_libraries_dsl::media_libraries
+        .filter(media_libraries_dsl::kind.ne("podcasts"))
         .order(media_libraries_dsl::id.asc())
         .select(MediaLibrary::as_select())
         .load::<MediaLibrary>(conn)?;
@@ -1746,8 +1721,8 @@ fn sync_library_catalog_filtered(
         if library_values.name.trim().is_empty() {
             library_values.name = Path::new(&library_values.path)
                 .file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.to_string())
+                .and_then(std::ffi::OsStr::to_str)
+                .map(str::to_string)
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "Unnamed library".into());
         }
@@ -2629,34 +2604,13 @@ fn plan_library_media_items(
     let mut leaf_identity_by_file_id = HashMap::new();
 
     for file in files {
-        if *library_kind == MediaLibraryKind::Books && file.media_kind == "book" {
-            let plans = audiobooks::plan_ebook(file, library_id);
-            leaf_identity_by_file_id.insert(
-                file.library_file_id,
-                plans.last().unwrap().identity_key.clone(),
-            );
-            for plan in plans {
-                upsert_planned_item(&mut items_by_key, plan);
-            }
-            continue;
-        }
-        if *library_kind == MediaLibraryKind::Books && file.media_kind == "audio" {
-            let plans = audiobooks::plan_file(file, library_id);
-            leaf_identity_by_file_id.insert(
-                file.library_file_id,
-                plans.last().unwrap().identity_key.clone(),
-            );
-            for plan in plans {
-                upsert_planned_item(&mut items_by_key, plan);
-            }
-            continue;
-        }
-        if *library_kind == MediaLibraryKind::Music && file.media_kind == "audio" {
-            let plans = music::plan_music_file(
-                file,
-                library_id,
-                if use_embedded_music_tags { source_music.get(&file.id) } else { None },
-            );
+        if let Some(plans) = specialized_file_plans(
+            file,
+            library_kind,
+            library_id,
+            source_music,
+            use_embedded_music_tags,
+        ) {
             leaf_identity_by_file_id.insert(
                 file.library_file_id,
                 plans.last().unwrap().identity_key.clone(),
@@ -2988,20 +2942,7 @@ fn summarize_media_item_rows(
     rows: Vec<MediaItem>,
     preferred_languages: &[String],
 ) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
-    let metadata_links = preferred_metadata_links_by_item_id(
-        conn,
-        &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        preferred_languages,
-    )?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut summary = to_media_item_summary(row);
-        let summary_id = summary.id;
-        apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
-        items.push(summary);
-    }
-    music::apply_summaries(conn, &mut items)?;
-    audiobooks::apply_summaries(conn, &mut items)?;
+    let mut items = summarize_rows_with_metadata(conn, rows, preferred_languages)?;
     apply_available_season_counts_from_summaries(&mut items);
 
     Ok(items)
@@ -3018,6 +2959,8 @@ pub fn list_media_items_for_user_with_preferred_languages(
         list_media_items_with_preferred_languages(conn, library_id, preferred_languages)?;
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
+    podcasts::filter_visible(conn, user_id, &mut items)?;
+    podcasts::apply_preferences(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3085,13 +3028,11 @@ fn list_automatic_metadata_candidates_with_options(
             continue;
         }
 
-        let Some(library) = libraries_by_id.get(&row.library_id) else {
+        let Some(library_settings) =
+            automatic_metadata_library(&libraries_by_id, row.library_id, library_id)
+        else {
             continue;
         };
-        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
-            continue;
-        }
-        let library_settings = media_library_settings_from_row(library.clone());
         if library_settings.kind != MediaLibraryKind::Movies {
             continue;
         }
@@ -3104,7 +3045,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_type: "movie".into(),
             music: None,
             audiobook: None,
-            library_id: library.id,
+            library_id: row.library_id,
             relative_path: row.relative_path.clone(),
             display_title: row
                 .display_title
@@ -3162,21 +3103,7 @@ fn list_automatic_metadata_candidates_with_options(
         .into_iter()
         .collect::<HashSet<_>>();
     for row in hierarchy_rows {
-        let mut ancestor = row.parent_id;
-        let mut seen = HashSet::new();
-        let mut blocked = false;
-        while let Some(id) = ancestor {
-            // Author profiles are independent of metadata for their works and recordings.
-            if parents.get(&id).is_some_and(|(_, author)| *author) {
-                break;
-            }
-            if !seen.insert(id) || unlinked.contains(&id) {
-                blocked = true;
-                break;
-            }
-            ancestor = parents.get(&id).and_then(|(parent, _)| *parent);
-        }
-        if blocked {
+        if metadata_ancestor_blocks_matching(row.parent_id, &parents, &unlinked) {
             continue;
         }
         let unconfirmed_recording = include_previously_attempted
@@ -3190,13 +3117,11 @@ fn list_automatic_metadata_candidates_with_options(
             continue;
         }
 
-        let Some(library) = libraries_by_id.get(&row.library_id) else {
+        let Some(mut library_settings) =
+            automatic_metadata_library(&libraries_by_id, row.library_id, library_id)
+        else {
             continue;
         };
-        if library_id.is_some_and(|requested_library_id| requested_library_id != library.id) {
-            continue;
-        }
-        let mut library_settings = media_library_settings_from_row(library.clone());
         if linked_item_ids.contains(&row.id) {
             // Adding LibriVox can identify an existing work-only match without retrying
             // another commercial work match first or replacing a confirmed narration.
@@ -3224,7 +3149,7 @@ fn list_automatic_metadata_candidates_with_options(
             item_type: row.item_type.clone(),
             music: music_items.get(&row.id).map(|(music, _)| music.clone()),
             audiobook: audiobook_items.get(&row.id).cloned().map(Box::new),
-            library_id: library.id,
+            library_id: row.library_id,
             relative_path: row.relative_path.unwrap_or_default(),
             display_title: row.display_title,
             modified_at: row.modified_at,
@@ -3320,64 +3245,15 @@ pub fn get_media_item_with_preferred_languages(
         detail.available_season_count = Some(available_season_count_for_show(conn, detail.id)?);
     }
     detail.hierarchy = load_media_item_hierarchy(conn, &item, preferred_languages)?;
-    detail.children =
-        list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?;
+    detail.children = if item.item_type == "podcast_season" {
+        podcasts::episode_page(conn, item.id, 0, 50, preferred_languages)?.items
+    } else {
+        list_media_item_children_with_preferred_languages(conn, item.id, preferred_languages)?
+    };
 
     let metadata_links =
         prioritized_metadata_links_for_item(conn, item_id, item.library_id, preferred_languages)?;
-    if !metadata_links.is_empty() {
-        let primary_link = metadata_links
-            .iter()
-            .find(|link| link.relation_kind == "primary");
-        if let Some(title) = primary_link
-            .and_then(|link| link.title.as_deref())
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-        {
-            detail.display_title = title.to_string();
-        }
-        let presentation = presentation_from_metadata_links(conn, &metadata_links)?;
-        detail.tagline = presentation.tagline;
-        detail.overview = presentation.overview;
-        detail.genres = presentation.genres;
-        detail.release_year = presentation.release_year;
-        if presentation.logo_url.is_some() {
-            detail.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item_id));
-        }
-        detail.rating = presentation.rating;
-        if let Some(link) = metadata_links.iter().find(|link| {
-            link.rating
-                .and_then(crate::metadata::ratings::validate)
-                .is_some()
-        }) {
-            detail.rating_provider_id = Some(link.provider_id.clone());
-            detail.rating_source_item_type = Some(detail.item_type.clone());
-        }
-        detail.content_rating = presentation.content_rating;
-        detail.linked_media_type = presentation.media_type;
-        detail.has_metadata = primary_link.is_some_and(|link| link.last_refreshed_at.is_some());
-        if let Some(link) = primary_link {
-            detail.metadata_refresh_state = Some(link.refresh_state.clone());
-            detail.metadata_refresh_error = link.refresh_error.clone();
-        }
-        detail.artwork_updated_at = metadata_links
-            .iter()
-            .filter_map(|link| link.updated_at)
-            .max();
-        detail.trailer_title = presentation.trailer_title;
-        detail.trailer_url = presentation.trailer_url;
-        detail.theme_song_url = presentation.theme_song_url;
-        detail.extras = metadata_extras_from_metadata_links(conn, &metadata_links)?
-            .into_iter()
-            .map(MediaItemExtra::from)
-            .collect();
-        if presentation.poster_available {
-            detail.poster_url = Some(format!("/api/v1/items/{}/artwork?kind=poster", item_id));
-        }
-        if presentation.backdrop_available {
-            detail.backdrop_url = Some(format!("/api/v1/items/{}/artwork?kind=backdrop", item_id));
-        }
-    }
+    apply_linked_detail_metadata(conn, &mut detail, &metadata_links)?;
 
     if let Some(source_path) = resolve_item_asset_source_path(conn, item_id)? {
         let assets = discover_item_assets(item_id, &source_path, data_dir);
@@ -3399,8 +3275,8 @@ pub fn get_media_item_with_preferred_languages(
                 label: subtitle_label_from_path(&source_path, subtitle_path),
                 format: subtitle_path
                     .extension()
-                    .and_then(|value| value.to_str())
-                    .map(|value| value.to_ascii_uppercase())
+                    .and_then(std::ffi::OsStr::to_str)
+                    .map(str::to_ascii_uppercase)
                     .unwrap_or_else(|| "Subtitle".into()),
                 url: format!("/api/v1/items/{}/subtitles/{}", item_id, index),
             })
@@ -3438,6 +3314,7 @@ pub fn get_media_item_with_preferred_languages(
 
     music::apply_detail(conn, &mut detail)?;
     audiobooks::apply_detail(conn, &mut detail)?;
+    podcasts::apply_detail(conn, &mut detail)?;
     detail.lyrics = lyrics::for_item(conn, &detail)?;
     Ok(Some(detail))
 }
@@ -3532,6 +3409,8 @@ pub fn search_media_items_for_user_with_preferred_languages(
         search_media_items_with_preferred_languages(conn, query, library_id, preferred_languages)?;
     let visible_libraries = accessible_library_ids(conn, user_id)?;
     items.retain(|item| visible_libraries.contains(&item.library_id));
+    podcasts::filter_visible(conn, user_id, &mut items)?;
+    podcasts::apply_preferences(conn, user_id, &mut items)?;
     apply_user_playback_progress_to_summaries(conn, user_id, &mut items)?;
     Ok(items)
 }
@@ -3559,6 +3438,8 @@ pub fn get_media_home_with_preferred_languages(
         preferred_languages,
     )?;
 
+    podcasts::filter_home(conn, user_id, library_id, &mut items)?;
+
     let excluded_libraries = if library_id.is_none() {
         use crate::db::schema::media_libraries::dsl as libraries;
         libraries::media_libraries
@@ -3584,7 +3465,7 @@ pub fn get_media_home_with_preferred_languages(
         None
     };
     let continue_title = match library_kind.as_deref() {
-        Some("music") => "Continue listening",
+        Some("music" | "podcasts") => "Continue listening",
         Some("books") if items.iter().any(|item| item.item_type == "audiobook") => {
             "Continue listening"
         }
@@ -3677,6 +3558,10 @@ pub fn get_playback_decision(
     let Some(item) = item else {
         return Ok(None);
     };
+
+    if let Some(decision) = podcasts::playback(conn, item_id)? {
+        return Ok(Some(decision));
+    }
 
     let backing_file = load_backing_media_file(conn, item_id)?;
 
@@ -4487,17 +4372,19 @@ fn playback_progress_by_item_id(
         return Ok(HashMap::new());
     }
 
-    Ok(playback_progress_dsl::playback_progress
-        .filter(playback_progress_dsl::user_id.eq(user_id))
-        .filter(playback_progress_dsl::media_item_id.eq_any(item_ids))
-        .select(PlaybackProgress::as_select())
-        .load::<PlaybackProgress>(conn)?
-        .into_iter()
-        .map(|progress| (progress.media_item_id, progress))
-        .collect())
+    let mut result = HashMap::new();
+    for chunk in item_ids.chunks(500) {
+        let rows = playback_progress_dsl::playback_progress
+            .filter(playback_progress_dsl::user_id.eq(user_id))
+            .filter(playback_progress_dsl::media_item_id.eq_any(chunk))
+            .select(PlaybackProgress::as_select())
+            .load::<PlaybackProgress>(conn)?;
+        result.extend(rows.into_iter().map(|row| (row.media_item_id, row)));
+    }
+    Ok(result)
 }
 
-fn apply_user_playback_progress_to_summaries(
+pub(crate) fn apply_user_playback_progress_to_summaries(
     conn: &mut SqliteConnection,
     user_id: Option<i32>,
     items: &mut [MediaItemSummary],
@@ -4582,6 +4469,8 @@ pub fn apply_user_playback_context_to_detail(
     let targets = container_playback_targets(conn, user_id, &item)?;
     detail.playback_target = targets.primary;
     detail.restart_playback_target = targets.restart;
+
+    podcasts::apply_user_context(conn, user_id, detail)?;
 
     Ok(())
 }
@@ -5004,99 +4893,52 @@ fn get_continue_watching_items(
         let Some(row) = load_media_item_row(conn, progress.media_item_id)? else {
             continue;
         };
-
-        if matches!(row.item_type.as_str(), "track" | "audiobook_part") {
-            if radio_items.contains(&row.id) {
-                continue;
-            }
-            let Some(album) = row
-                .parent_id
-                .and_then(|id| visible_items_by_id.get(&id))
-                .filter(|album| {
-                    matches!(album.item_type.as_str(), "album" | "audiobook")
-                        && album.missing_since.is_none()
-                })
-            else {
-                continue;
-            };
-            if !seen_continue_keys.insert(album.id) {
-                continue;
-            }
-            let Some(album_row) = load_media_item_row(conn, album.id)? else {
-                continue;
-            };
-            if progress.position_ms <= 0 && !progress.completed {
-                continue;
-            }
-            if music::album_playback_targets(conn, Some(user_id), &album_row)?
-                .primary
-                .is_some()
-                && (library_id.is_none() || Some(album.library_id) == library_id)
-            {
-                let mut album = album.clone();
-                album.last_played_at = progress.updated_at;
-                items.push(album);
-            }
-            continue;
-        }
-
-        if row.item_type == "episode" {
-            let Some(episode) = visible_items_by_id.get(&row.id) else {
-                continue;
-            };
-            let Some(show_id) = root_show_item_id(episode, &visible_items_by_id) else {
-                continue;
-            };
-            let Some(show) = visible_items_by_id.get(&show_id) else {
-                continue;
-            };
-            if show.playback_completed
-                || (show.playback_position_ms.unwrap_or_default() <= 0
-                    && show.watch_count == 0
-                    && show.last_watched_at.is_none())
-                || !seen_continue_keys.insert(show.id)
-            {
-                continue;
-            }
-            let mut target = if progress.completed {
-                let Some(show_row) = load_media_item_row(conn, show.id)? else {
+        let target = match row.item_type.as_str() {
+            "track" | "audiobook_part" => continue_album_target(
+                conn,
+                user_id,
+                &row,
+                &progress,
+                &visible_items_by_id,
+                &radio_items,
+                &mut seen_continue_keys,
+            )?,
+            "podcast_episode" => continue_podcast_target(
+                conn,
+                user_id,
+                &row,
+                &progress,
+                &visible_items_by_id,
+                &mut seen_continue_keys,
+            )?,
+            "episode" => continue_show_target(
+                conn,
+                user_id,
+                &row,
+                &progress,
+                &visible_items_by_id,
+                &mut seen_continue_keys,
+            )?,
+            _ => {
+                if progress.completed {
+                    continue;
+                }
+                let Some(mut item) = visible_items_by_id.get(&row.id).cloned() else {
                     continue;
                 };
-                let Some(target) =
-                    container_playback_targets(conn, Some(user_id), &show_row)?.primary
-                else {
+                apply_playback_progress_to_summary(&mut item, &progress);
+                if library_id.is_some_and(|id| item.library_id != id)
+                    || !seen_continue_keys.insert(item.id)
+                {
                     continue;
-                };
-                let Some(target_item) = visible_items_by_id.get(&target.item_id) else {
-                    continue;
-                };
-                target_item.clone()
-            } else {
-                let mut target = episode.clone();
-                apply_playback_progress_to_summary(&mut target, &progress);
-                target
-            };
-            target.last_played_at = progress.updated_at;
-            apply_continue_watching_episode_presentation(&mut target, show, &visible_items_by_id);
-
-            if library_id.is_none() || Some(target.library_id) == library_id {
-                items.push(target);
+                }
+                Some(item)
             }
-            continue;
-        }
-
-        if progress.completed {
-            continue;
-        }
-
-        let Some(mut item) = visible_items_by_id.get(&row.id).cloned() else {
-            continue;
         };
-        apply_playback_progress_to_summary(&mut item, &progress);
-        if (library_id.is_none() || Some(item.library_id) == library_id)
-            && seen_continue_keys.insert(item.id)
+        if let Some(target) =
+            target.filter(|item| library_id.is_none() || Some(item.library_id) == library_id)
         {
-            items.push(item);
+            items.push(target);
         }
     }
 
@@ -5146,6 +4988,18 @@ fn sort_recently_added(items: &[MediaItemSummary]) -> Vec<MediaItemSummary> {
     leaf_items.sort_by_key(|item| std::cmp::Reverse(item.modified_at));
 
     for item in leaf_items {
+        if let Some(podcast) = item
+            .podcast
+            .as_ref()
+            .filter(|_| item.item_type == "podcast_episode")
+        {
+            if items_by_id.contains_key(&podcast.podcast_id) {
+                let modified = album_groups.entry(podcast.podcast_id).or_default();
+                *modified = (*modified).max(item.modified_at);
+                continue;
+            }
+        }
+
         if matches!(item.item_type.as_str(), "track" | "audiobook_part") {
             if let Some(album) = item.parent_id.and_then(|id| items_by_id.get(&id)) {
                 if matches!(album.item_type.as_str(), "album" | "audiobook") {
@@ -5282,6 +5136,9 @@ fn recommended_representative_item(
     item: &MediaItemSummary,
     items_by_id: &HashMap<i32, MediaItemSummary>,
 ) -> Option<MediaItemSummary> {
+    if let Some(podcast) = &item.podcast {
+        return items_by_id.get(&podcast.podcast_id).cloned();
+    }
     if item.item_type == "audiobook_part" {
         return item.parent_id.and_then(|id| items_by_id.get(&id)).cloned();
     }
@@ -5410,8 +5267,8 @@ fn can_client_direct_play(
 ) -> bool {
     let extension = Path::new(&file.relative_path)
         .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase);
 
     let is_supported_container = if let Some(container) = file.container.as_deref() {
         profile
@@ -5460,8 +5317,8 @@ fn can_client_direct_play(
 fn detect_mime_type(file: &CatalogMediaFile) -> Option<String> {
     let extension = Path::new(&file.relative_path)
         .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase());
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase);
 
     match extension.as_deref() {
         Some("mp4" | "m4v") => Some("video/mp4".into()),
@@ -5969,6 +5826,7 @@ fn to_media_item_summary(item: MediaItem) -> MediaItemSummary {
         parent_id: item.parent_id,
         music: None,
         audiobook: None,
+        podcast: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
         display_subtitle: None,
@@ -6126,6 +5984,7 @@ fn get_media_item_summary_without_metadata(
     let mut summary = to_media_item_summary(row);
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    podcasts::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     apply_available_season_count(conn, &mut summary)?;
     Ok(Some(summary))
 }
@@ -6151,6 +6010,7 @@ fn media_item_summary_with_preferred_languages(
     apply_primary_metadata_link(&mut summary, link.as_ref());
     music::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
     audiobooks::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
+    podcasts::apply_summaries(conn, std::slice::from_mut(&mut summary))?;
 
     Ok(summary)
 }
@@ -6229,90 +6089,95 @@ fn preferred_metadata_links_by_item_id(
         return Ok(HashMap::new());
     }
 
-    let rows = item_metadata_links_dsl::item_metadata_links
-        .filter(item_metadata_links_dsl::media_item_id.eq_any(item_ids))
-        .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
-        .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
-        .order((
-            item_metadata_links_dsl::media_item_id.asc(),
-            item_metadata_links_dsl::updated_at.desc(),
-            item_metadata_links_dsl::id.desc(),
-        ))
-        .select((
-            item_metadata_links_dsl::media_item_id,
-            item_metadata_links_dsl::title,
-            item_metadata_links_dsl::overview,
-            item_metadata_links_dsl::genres_json,
-            item_metadata_links_dsl::release_year,
-            item_metadata_links_dsl::logo_url,
-            item_metadata_links_dsl::cached_logo_path,
-            item_metadata_links_dsl::backdrop_url,
-            item_metadata_links_dsl::cached_backdrop_path,
-            item_metadata_links_dsl::refresh_state,
-            item_metadata_links_dsl::refresh_error,
-            item_metadata_links_dsl::last_refreshed_at,
-            item_metadata_links_dsl::updated_at,
-            item_metadata_links_dsl::locale_key,
-            item_metadata_links_dsl::provider_id,
-            item_metadata_links_dsl::rating,
-        ))
-        .load::<(
-            i32,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            String,
-            String,
-            Option<i16>,
-        )>(conn)?
-        .into_iter()
-        .map(
-            |(
-                media_item_id,
-                title,
-                overview,
-                genres_json,
-                release_year,
-                logo_url,
-                cached_logo_path,
-                backdrop_url,
-                cached_backdrop_path,
-                refresh_state,
-                refresh_error,
-                last_refreshed_at,
-                updated_at,
-                locale_key,
-                provider_id,
-                rating,
-            )| SummaryMetadataLink {
-                media_item_id,
-                provider_id,
-                rating,
-                title,
-                overview,
-                genres_json,
-                release_year,
-                logo_url,
-                cached_logo_path,
-                backdrop_url,
-                cached_backdrop_path,
-                refresh_state,
-                refresh_error,
-                last_refreshed_at,
-                updated_at,
-                locale_key,
-            },
-        )
-        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for chunk in item_ids.chunks(500) {
+        rows.extend(
+            item_metadata_links_dsl::item_metadata_links
+                .filter(item_metadata_links_dsl::media_item_id.eq_any(chunk))
+                .filter(item_metadata_links_dsl::relation_kind.eq("primary"))
+                .filter(item_metadata_links_dsl::match_state.ne("unlinked"))
+                .order((
+                    item_metadata_links_dsl::media_item_id.asc(),
+                    item_metadata_links_dsl::updated_at.desc(),
+                    item_metadata_links_dsl::id.desc(),
+                ))
+                .select((
+                    item_metadata_links_dsl::media_item_id,
+                    item_metadata_links_dsl::title,
+                    item_metadata_links_dsl::overview,
+                    item_metadata_links_dsl::genres_json,
+                    item_metadata_links_dsl::release_year,
+                    item_metadata_links_dsl::logo_url,
+                    item_metadata_links_dsl::cached_logo_path,
+                    item_metadata_links_dsl::backdrop_url,
+                    item_metadata_links_dsl::cached_backdrop_path,
+                    item_metadata_links_dsl::refresh_state,
+                    item_metadata_links_dsl::refresh_error,
+                    item_metadata_links_dsl::last_refreshed_at,
+                    item_metadata_links_dsl::updated_at,
+                    item_metadata_links_dsl::locale_key,
+                    item_metadata_links_dsl::provider_id,
+                    item_metadata_links_dsl::rating,
+                ))
+                .load::<(
+                    i32,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    Option<i32>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    String,
+                    Option<String>,
+                    Option<i64>,
+                    Option<i64>,
+                    String,
+                    String,
+                    Option<i16>,
+                )>(conn)?
+                .into_iter()
+                .map(
+                    |(
+                        media_item_id,
+                        title,
+                        overview,
+                        genres_json,
+                        release_year,
+                        logo_url,
+                        cached_logo_path,
+                        backdrop_url,
+                        cached_backdrop_path,
+                        refresh_state,
+                        refresh_error,
+                        last_refreshed_at,
+                        updated_at,
+                        locale_key,
+                        provider_id,
+                        rating,
+                    )| SummaryMetadataLink {
+                        media_item_id,
+                        provider_id,
+                        rating,
+                        title,
+                        overview,
+                        genres_json,
+                        release_year,
+                        logo_url,
+                        cached_logo_path,
+                        backdrop_url,
+                        cached_backdrop_path,
+                        refresh_state,
+                        refresh_error,
+                        last_refreshed_at,
+                        updated_at,
+                        locale_key,
+                    },
+                )
+                .collect::<Vec<_>>(),
+        );
+    }
 
     let language_rank = preferred_languages
         .iter()
@@ -6484,26 +6349,6 @@ fn media_library_metadata_provider_order(
         .unwrap_or_else(|| vec![MetadataProviderId::Tmdb]))
 }
 
-fn metadata_language_priority(preferred_languages: &[String]) -> HashMap<String, usize> {
-    let mut languages = preferred_languages
-        .iter()
-        .map(|language| normalize_locale_key(language))
-        .filter(|language| !language.is_empty())
-        .collect::<Vec<_>>();
-    if !languages
-        .iter()
-        .any(|language| language == DEFAULT_METADATA_LOCALE)
-    {
-        languages.push(DEFAULT_METADATA_LOCALE.to_string());
-    }
-
-    languages
-        .into_iter()
-        .enumerate()
-        .map(|(index, language)| (language, index))
-        .collect()
-}
-
 fn prioritized_metadata_links_for_item(
     conn: &mut SqliteConnection,
     item_id: i32,
@@ -6519,7 +6364,7 @@ fn prioritized_metadata_links_for_item(
         .map(|(index, provider)| (provider.as_storage_value().to_string(), index))
         .collect::<HashMap<_, _>>();
     let fallback_provider_rank = provider_rank.len();
-    let language_rank = metadata_language_priority(preferred_languages);
+    let language_rank = crate::metadata::preferred_language_rank(preferred_languages);
     let fallback_language_rank = language_rank.len();
 
     let mut rows = item_metadata_links_dsl::item_metadata_links
@@ -6657,6 +6502,7 @@ fn to_media_item_detail(
         parent_id: item.parent_id,
         music: None,
         audiobook: None,
+        podcast: None,
         lyrics: None,
         item_type: item.item_type.clone(),
         display_title: item.display_title,
@@ -6793,21 +6639,7 @@ pub fn list_media_item_children_with_preferred_languages(
         .select(MediaItem::as_select())
         .load::<MediaItem>(conn)?;
 
-    let metadata_links = preferred_metadata_links_by_item_id(
-        conn,
-        &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        preferred_languages,
-    )?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut summary = to_media_item_summary(row);
-        let summary_id = summary.id;
-        apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
-        items.push(summary);
-    }
-
-    music::apply_summaries(conn, &mut items)?;
-    audiobooks::apply_summaries(conn, &mut items)?;
+    let mut items = summarize_rows_with_metadata(conn, rows, preferred_languages)?;
     items.sort_by_key(|item| {
         (
             item.music
@@ -6896,8 +6728,8 @@ fn discover_item_assets(
     let source_dir = source_path.parent().unwrap_or_else(|| Path::new(""));
     let source_stem = source_path
         .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
 
     let asset_directories = [
@@ -7070,8 +6902,8 @@ fn collect_subtitle_assets(
 
             let stem = path
                 .file_stem()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_ascii_lowercase())
+                .and_then(std::ffi::OsStr::to_str)
+                .map(str::to_ascii_lowercase)
                 .unwrap_or_default();
             if stem != source_stem && !stem.starts_with(&format!("{}.", source_stem)) {
                 continue;
@@ -7094,12 +6926,12 @@ fn subtitle_label_from_path(
 ) -> String {
     let source_stem = source_path
         .file_stem()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     let subtitle_stem = subtitle_path
         .file_stem()
-        .and_then(|value| value.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default();
     let normalized_subtitle_stem = subtitle_stem.to_ascii_lowercase();
 
@@ -7111,8 +6943,8 @@ fn subtitle_label_from_path(
 
     subtitle_path
         .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_uppercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_uppercase)
         .unwrap_or_else(|| "Subtitle".into())
 }
 
@@ -7124,6 +6956,329 @@ fn is_subtitle_extension(path: &Path) -> bool {
             .as_deref(),
         Some("srt" | "vtt" | "ass" | "ssa" | "sub")
     )
+}
+
+struct DiscoveredFileMetadata {
+    metadata: ExtractedMetadata,
+    music_tags: Option<(MusicMetadata, String)>,
+    probe_music: bool,
+    probe_audiobook: bool,
+    is_music: bool,
+}
+
+fn prepare_discovered_file_metadata(
+    conn: &mut SqliteConnection,
+    library_row: &MediaLibrary,
+    discovered_file: &DiscoveredMediaFile,
+    probe_context: ProbeContext<'_>,
+    existing_physical_file: Option<&MediaFile>,
+    existing_file: Option<&CatalogMediaFile>,
+    should_refresh_metadata: bool,
+) -> Result<DiscoveredFileMetadata, diesel::result::Error> {
+    let is_music = library_row.kind == "music" && discovered_file.media_kind == "audio";
+    let existing_id = existing_physical_file
+        .map(|file| file.id)
+        .or_else(|| existing_file.map(|file| file.id));
+    let read_music_tags = is_music && library_row.use_embedded_music_tags;
+    let has_music = if read_music_tags {
+        match existing_id {
+            Some(id) => music::has_file(conn, id, &discovered_file.file_hash)?,
+            None => false,
+        }
+    } else {
+        false
+    };
+    let probe_music = read_music_tags && !has_music;
+    let cached_metadata = existing_physical_file
+        .and_then(|file| file.metadata_json.as_deref())
+        .or_else(|| existing_file.and_then(|file| file.metadata_json.as_deref()));
+    let probe_audiobook = library_row.kind == "books"
+        && discovered_file.media_kind == "audio"
+        && probe_context.enabled
+        && !cached_metadata
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .is_some_and(|raw| raw.get("chapters").is_some());
+    let mut metadata = if should_refresh_metadata || probe_music || probe_audiobook {
+        extract_metadata(discovered_file, probe_context)
+    } else {
+        existing_physical_file
+            .map(extracted_metadata_from_file_row)
+            .or_else(|| existing_file.map(extracted_metadata_from_existing))
+            .unwrap_or_else(|| default_metadata(discovered_file))
+    };
+    let music_tags = if read_music_tags && (should_refresh_metadata || !has_music) {
+        Some(MusicMetadata::from_probe(
+            metadata.metadata_json.as_deref(),
+            &discovered_file.relative_path,
+        ))
+    } else {
+        None
+    };
+    if is_music {
+        metadata.metadata_json = None;
+    }
+    Ok(DiscoveredFileMetadata {
+        metadata,
+        music_tags,
+        probe_music,
+        probe_audiobook,
+        is_music,
+    })
+}
+
+fn specialized_file_plans(
+    file: &CatalogMediaFile,
+    kind: &MediaLibraryKind,
+    library_id: i32,
+    source_music: &HashMap<i32, (MusicMetadata, String)>,
+    use_embedded_music_tags: bool,
+) -> Option<Vec<PlannedMediaItem>> {
+    match (kind, file.media_kind.as_str()) {
+        (MediaLibraryKind::Books, "book") => Some(audiobooks::plan_ebook(file, library_id)),
+        (MediaLibraryKind::Books, "audio") => Some(audiobooks::plan_file(file, library_id)),
+        (MediaLibraryKind::Music, "audio") => Some(music::plan_music_file(
+            file,
+            library_id,
+            if use_embedded_music_tags { source_music.get(&file.id) } else { None },
+        )),
+        _ => None,
+    }
+}
+
+fn metadata_ancestor_blocks_matching(
+    mut ancestor: Option<i32>,
+    parents: &HashMap<i32, (Option<i32>, bool)>,
+    unlinked: &HashSet<i32>,
+) -> bool {
+    let mut seen = HashSet::new();
+    while let Some(id) = ancestor {
+        // Author matching is independent of the works and recordings below it.
+        if parents.get(&id).is_some_and(|(_, author)| *author) {
+            return false;
+        }
+        if !seen.insert(id) || unlinked.contains(&id) {
+            return true;
+        }
+        ancestor = parents.get(&id).and_then(|(parent, _)| *parent);
+    }
+    false
+}
+
+fn apply_linked_detail_metadata(
+    conn: &mut SqliteConnection,
+    detail: &mut MediaItemDetail,
+    metadata_links: &[ItemMetadataLink],
+) -> Result<(), diesel::result::Error> {
+    let item_id = detail.id;
+    if !metadata_links.is_empty() {
+        let primary_link = metadata_links
+            .iter()
+            .find(|link| link.relation_kind == "primary");
+        if let Some(title) = primary_link
+            .and_then(|link| link.title.as_deref())
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
+            detail.display_title = title.to_string();
+        }
+        let presentation = presentation_from_metadata_links(conn, metadata_links)?;
+        detail.tagline = presentation.tagline;
+        detail.overview = presentation.overview;
+        detail.genres = presentation.genres;
+        detail.release_year = presentation.release_year;
+        if presentation.logo_url.is_some() {
+            detail.logo_url = Some(format!("/api/v1/items/{}/artwork?kind=logo", item_id));
+        }
+        detail.rating = presentation.rating;
+        if let Some(link) = metadata_links.iter().find(|link| {
+            link.rating
+                .and_then(crate::metadata::ratings::validate)
+                .is_some()
+        }) {
+            detail.rating_provider_id = Some(link.provider_id.clone());
+            detail.rating_source_item_type = Some(detail.item_type.clone());
+        }
+        detail.content_rating = presentation.content_rating;
+        detail.linked_media_type = presentation.media_type;
+        detail.has_metadata = primary_link.is_some_and(|link| link.last_refreshed_at.is_some());
+        if let Some(link) = primary_link {
+            detail.metadata_refresh_state = Some(link.refresh_state.clone());
+            detail.metadata_refresh_error = link.refresh_error.clone();
+        }
+        detail.artwork_updated_at = metadata_links
+            .iter()
+            .filter_map(|link| link.updated_at)
+            .max();
+        detail.trailer_title = presentation.trailer_title;
+        detail.trailer_url = presentation.trailer_url;
+        detail.theme_song_url = presentation.theme_song_url;
+        detail.extras = metadata_extras_from_metadata_links(conn, metadata_links)?
+            .into_iter()
+            .map(MediaItemExtra::from)
+            .collect();
+        if presentation.poster_available {
+            detail.poster_url = Some(format!("/api/v1/items/{}/artwork?kind=poster", item_id));
+        }
+        if presentation.backdrop_available {
+            detail.backdrop_url = Some(format!("/api/v1/items/{}/artwork?kind=backdrop", item_id));
+        }
+    }
+
+    Ok(())
+}
+
+fn continue_album_target(
+    conn: &mut SqliteConnection,
+    user_id: i32,
+    row: &MediaItem,
+    progress: &PlaybackProgress,
+    visible: &HashMap<i32, MediaItemSummary>,
+    radio_items: &HashSet<i32>,
+    seen: &mut HashSet<i32>,
+) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
+    if radio_items.contains(&row.id) {
+        return Ok(None);
+    }
+    let Some(album) = row
+        .parent_id
+        .and_then(|id| visible.get(&id))
+        .filter(|album| {
+            matches!(album.item_type.as_str(), "album" | "audiobook")
+                && album.missing_since.is_none()
+        })
+    else {
+        return Ok(None);
+    };
+    if !seen.insert(album.id) {
+        return Ok(None);
+    }
+    let Some(album_row) = load_media_item_row(conn, album.id)? else {
+        return Ok(None);
+    };
+    if progress.position_ms <= 0 && !progress.completed {
+        return Ok(None);
+    }
+    if music::album_playback_targets(conn, Some(user_id), &album_row)?
+        .primary
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let mut album = album.clone();
+    album.last_played_at = progress.updated_at;
+    Ok(Some(album))
+}
+
+fn continue_podcast_target(
+    conn: &mut SqliteConnection,
+    user_id: i32,
+    row: &MediaItem,
+    progress: &PlaybackProgress,
+    visible: &HashMap<i32, MediaItemSummary>,
+    seen: &mut HashSet<i32>,
+) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
+    let Some(episode) = visible.get(&row.id) else {
+        return Ok(None);
+    };
+    let Some(root) = episode.podcast.as_ref().map(|value| value.podcast_id) else {
+        return Ok(None);
+    };
+    let Some(show) = visible.get(&root) else {
+        return Ok(None);
+    };
+    if (progress.position_ms <= 0 && !progress.completed) || !seen.insert(root) {
+        return Ok(None);
+    }
+    let target = podcasts::continuation(conn, user_id, root)?.map(|mut target| {
+        target.last_played_at = progress.updated_at;
+        target.display_subtitle = Some(target.display_title.clone());
+        target.display_title = show.display_title.clone();
+        target.artwork_item_id = Some(root);
+        target
+    });
+    Ok(target)
+}
+
+fn continue_show_target(
+    conn: &mut SqliteConnection,
+    user_id: i32,
+    row: &MediaItem,
+    progress: &PlaybackProgress,
+    visible: &HashMap<i32, MediaItemSummary>,
+    seen: &mut HashSet<i32>,
+) -> Result<Option<MediaItemSummary>, diesel::result::Error> {
+    let Some(episode) = visible.get(&row.id) else {
+        return Ok(None);
+    };
+    let Some(show_id) = root_show_item_id(episode, visible) else {
+        return Ok(None);
+    };
+    let Some(show) = visible.get(&show_id) else {
+        return Ok(None);
+    };
+    if show.playback_completed
+        || (show.playback_position_ms.unwrap_or_default() <= 0
+            && show.watch_count == 0
+            && show.last_watched_at.is_none())
+        || !seen.insert(show.id)
+    {
+        return Ok(None);
+    }
+    let mut target = if progress.completed {
+        let Some(show_row) = load_media_item_row(conn, show.id)? else {
+            return Ok(None);
+        };
+        let Some(target) = container_playback_targets(conn, Some(user_id), &show_row)?.primary
+        else {
+            return Ok(None);
+        };
+        let Some(target_item) = visible.get(&target.item_id) else {
+            return Ok(None);
+        };
+        target_item.clone()
+    } else {
+        let mut target = episode.clone();
+        apply_playback_progress_to_summary(&mut target, progress);
+        target
+    };
+    target.last_played_at = progress.updated_at;
+    apply_continue_watching_episode_presentation(&mut target, show, visible);
+    Ok(Some(target))
+}
+
+fn summarize_rows_with_metadata(
+    conn: &mut SqliteConnection,
+    rows: Vec<MediaItem>,
+    preferred_languages: &[String],
+) -> Result<Vec<MediaItemSummary>, diesel::result::Error> {
+    let metadata_links = preferred_metadata_links_by_item_id(
+        conn,
+        &rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+        preferred_languages,
+    )?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut summary = to_media_item_summary(row);
+        let summary_id = summary.id;
+        apply_primary_metadata_link(&mut summary, metadata_links.get(&summary_id));
+        items.push(summary);
+    }
+    music::apply_summaries(conn, &mut items)?;
+    audiobooks::apply_summaries(conn, &mut items)?;
+    podcasts::apply_summaries(conn, &mut items)?;
+    Ok(items)
+}
+
+fn automatic_metadata_library(
+    libraries: &HashMap<i32, MediaLibrary>,
+    library_id: i32,
+    requested: Option<i32>,
+) -> Option<MediaLibrarySettings> {
+    let library = libraries.get(&library_id)?;
+    if requested.is_some_and(|id| id != library.id) {
+        return None;
+    }
+    Some(media_library_settings_from_row(library.clone()))
 }
 
 #[cfg(test)]
@@ -7198,6 +7353,7 @@ mod tests {
             reading_progress: None,
             music: None,
             audiobook: None,
+            podcast: None,
             id,
             library_id: 1,
             parent_id,

@@ -515,3 +515,49 @@ joinable!(reading_progress -> media_items (media_item_id));
 joinable!(reading_progress -> users (user_id));
 allow_tables_to_appear_in_same_query!(reading_progress, media_items);
 allow_tables_to_appear_in_same_query!(reading_progress, users);
+
+table! {
+    podcast_feeds (media_item_id) {
+        media_item_id -> Integer,
+        feed_url -> Text,
+        checked_at -> BigInt,
+        last_error -> Nullable<Text>,
+    }
+}
+table! {
+    podcast_feed_aliases (feed_url) {
+        feed_url -> Text,
+        podcast_id -> Integer,
+    }
+}
+table! {
+    podcast_subscriptions (user_id, podcast_id) {
+        user_id -> Integer,
+        podcast_id -> Integer,
+        added_at -> BigInt,
+    }
+}
+table! {
+    podcast_items (media_item_id) {
+        media_item_id -> Integer,
+        podcast_id -> Integer,
+        metadata_json -> Text,
+        enclosure_url -> Nullable<Text>,
+        mime_type -> Nullable<Text>,
+    }
+}
+joinable!(podcast_feeds -> media_items (media_item_id));
+joinable!(podcast_feed_aliases -> podcast_feeds (podcast_id));
+joinable!(podcast_subscriptions -> podcast_feeds (podcast_id));
+joinable!(podcast_subscriptions -> users (user_id));
+joinable!(podcast_items -> podcast_feeds (podcast_id));
+joinable!(podcast_items -> media_items (media_item_id));
+allow_tables_to_appear_in_same_query!(
+    podcast_feeds,
+    podcast_feed_aliases,
+    podcast_subscriptions,
+    podcast_items
+);
+allow_tables_to_appear_in_same_query!(podcast_items, media_items);
+allow_tables_to_appear_in_same_query!(podcast_feeds, media_items);
+allow_tables_to_appear_in_same_query!(podcast_subscriptions, users);

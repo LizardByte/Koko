@@ -4,7 +4,7 @@ import { getArtworkUrl, type MediaItemSummary } from '../api';
 
 /** Share the same album cover with the dock and OS/browser media controls. */
 export function musicMediaMetadata(item: MediaItemSummary): MediaMetadataInit {
-  return { title:item.audiobook?.title || item.display_title, artist:item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '', album:item.audiobook?.title ?? item.music?.album ?? '',
+  return { title:item.audiobook?.title || item.display_title, artist:item.podcast?.author ?? item.audiobook?.author ?? item.music?.artist ?? item.display_subtitle ?? '', album:item.audiobook?.title ?? item.music?.album ?? '',
     artwork:[{src:new URL(getArtworkUrl(item.artwork_item_id ?? item.parent_id ?? item.id,'poster',item.artwork_updated_at),location.origin).href}] };
 }
 
@@ -36,4 +36,12 @@ export function revealPanelEntry(container:HTMLElement|undefined|null,entry:HTML
   if(!container || !entry)return;
   const parent=container.getBoundingClientRect(),row=entry.getBoundingClientRect();
   container.scrollTop+=row.top-parent.top-container.clientHeight/2+row.height/2;
+}
+
+
+/** Direct-file timelines use decoded media duration; transcoded segments retain the full runtime. */
+export function measuredAudioDuration(catalogMs: number | null | undefined, decodedSeconds: number | undefined, baseMs = 0, transcoded = false): number {
+  const measured = Number.isFinite(decodedSeconds) && decodedSeconds! > 0 ? Math.round(decodedSeconds! * 1000) + baseMs : undefined;
+  if (transcoded) return catalogMs ?? measured ?? 0;
+  return measured ?? catalogMs ?? 0;
 }

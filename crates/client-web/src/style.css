@@ -3343,6 +3343,11 @@ img[src$="/librivox.png"] { filter: invert(1); }
   background: transparent;
 }
 
+[data-podcast-enabled-settings]:not([hidden]) {
+  display: grid;
+  gap: 1.1rem;
+}
+
 .settings-workspace h3,
 .settings-group-heading p,
 .settings-workspace .section-heading p {

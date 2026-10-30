@@ -30,6 +30,8 @@ function normalizePath(pathname: string): string {
 export function parseRoute(): AppRoute {
   const normalizedPath = normalizePath(globalThis.location.pathname);
 
+  if (normalizedPath === '/podcasts') return { page: 'podcasts' };
+
   const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|users|dashboard|logs))?$/.exec(normalizedPath);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };

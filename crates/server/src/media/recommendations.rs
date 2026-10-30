@@ -3,7 +3,16 @@
 mod cache;
 pub(crate) use cache::refresh;
 
-use super::*;
+use super::{
+    MediaItem,
+    MediaItemSummary,
+    accessible_library_ids,
+    apply_user_playback_progress_to_summaries,
+    list_media_items_by_ids,
+    load_media_item_row,
+    media_item_summary_with_preferred_languages,
+    valid_mbid,
+};
 use crate::db::schema::{
     item_metadata_external_ids as external,
     item_metadata_links as links,
@@ -14,13 +23,25 @@ use crate::db::schema::{
     metadata_collection_items as members,
 };
 use crate::metadata::similarities::Identity;
+use diesel::prelude::*;
 use diesel::{
     JoinOnDsl,
     QueryResult,
 };
+use std::collections::{
+    HashMap,
+    HashSet,
+};
 
 const LIMIT: usize = 12;
-const EXCLUDED_ITEM_TYPES: [&str; 3] = ["season", "episode", "track"];
+const EXCLUDED_ITEM_TYPES: [&str; 6] = [
+    "season",
+    "episode",
+    "track",
+    "podcast",
+    "podcast_season",
+    "podcast_episode",
+];
 // Track genres still contribute to album and artist fallback facts, without ranking tracks.
 const EXCLUDED_FACT_TYPES: [&str; 2] = ["season", "episode"];
 

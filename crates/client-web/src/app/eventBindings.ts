@@ -1,6 +1,8 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
+import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
+import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
 import { queueMusicItem, startMusicRadio, playMusicPlaylist, resumeMusicQueue, stopMusic, toggleCurrentMusic } from './audioPlayer';
 import { bindSongMenus } from './audioPlayerSupport';
@@ -58,7 +60,7 @@ import {
   selectedItemDefaultMetadataYear,
   selectedItemExtras,
 } from './itemPersonView';
-import { buildSettingsFromForm } from './settingsView';
+import { buildSettingsFromForm, buildPodcastUserSettingsFromForm } from './settingsView';
 import { setButtonBusy } from './ui';
 import {
   addLibrary,
@@ -83,6 +85,7 @@ import {
   searchItems,
   setStoredAuthToken,
   updateSettings,
+  setPodcastUserSettings,
   updateUser,
   type CreateUserRequest,
   type LoginRequest,
@@ -292,9 +295,13 @@ function bindHomeFeatureAction(): void {
 function refreshHomeFeatureElement(backdropUrl: string | undefined): void {
   const root = document.querySelector<HTMLElement>('.home-feature');
   if (root) {
-    root.outerHTML = renderHomeFeature();
+    root.outerHTML = state.route.page === 'podcasts' ? renderPodcastFeature() : renderHomeFeature();
     createIcons({ icons });
     bindHomeFeatureAction();
+    const feature = document.querySelector<HTMLElement>('.home-feature');
+    if (state.route.page === 'podcasts' && feature && activeBindingContext) {
+      bindPodcastAddActions(feature, activeBindingContext, renderEventController?.signal);
+    }
   }
   updatePageBackdrop(backdropUrl);
 }
@@ -307,6 +314,10 @@ function activatePreviewItem(itemId: number): void {
   }
   state.homePreviewItemId = itemId;
   state.homePreviewCollectionId = undefined;
+  if (state.route.page === 'podcasts') {
+    refreshHomeFeatureElement(undefined);
+    return;
+  }
   const highlightedItem = homePreviewCandidates().find((item) => item.id === itemId);
   const previewItem = highlightedItem ? showPreviewItemForHighlight(highlightedItem) : undefined;
   refreshHomeFeatureElement(pageBackdropUrlForItem(previewItem));
@@ -380,7 +391,8 @@ function bindMediaCardInteractions(root: ParentNode): void {
 
 function homeShelfForRow(row: HTMLElement): MediaShelf | undefined {
   const shelfId = row.dataset.lazyShelfId;
-  return shelfId ? state.home?.shelves.find((shelf) => shelf.id === shelfId) : undefined;
+  const home = state.route.page === 'podcasts' ? state.podcasts?.home : state.home;
+  return shelfId ? home?.shelves.find((shelf) => shelf.id === shelfId) : undefined;
 }
 
 
@@ -392,7 +404,7 @@ function appendLazyShelfItems(row: HTMLElement): boolean {
   }
 
   const renderedCount = Number(row.dataset.lazyRenderedCount ?? row.children.length);
-  const entries = homeShelfEntries(shelf);
+  const entries = homeShelfEntries(shelf, state.route.page === 'podcasts' ? state.podcasts?.home : state.home);
   if (!Number.isFinite(renderedCount) || renderedCount >= entries.length) {
     row.dataset.lazyComplete = 'true';
     return false;
@@ -623,6 +635,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     state.error = error instanceof Error ? error.message : 'The audiobook could not start.'; context.render();
   });
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
+  bindPodcastActions(signal, context);
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();
@@ -639,7 +652,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
     image.addEventListener('error', showFallback);
     if (image.complete && image.naturalWidth === 0) showFallback();
   });
-  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void refreshData(); });
+  document.querySelector<HTMLButtonElement>('[data-retry-page]')?.addEventListener('click', () => { void retryPodcastAction().then(retried => { if (!retried) return refreshData(); }); });
   document.querySelector<HTMLFormElement>('#mobile-library-form')?.addEventListener('submit', (event) => event.preventDefault());
   document.querySelector<HTMLSelectElement>('#mobile-library-picker')?.addEventListener('change', (event) => {
     navigateTo((event.currentTarget as HTMLSelectElement).value);
@@ -682,7 +695,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   document.querySelector<HTMLDetailsElement>('#item-management')?.addEventListener('toggle', (event) => {
     state.itemManagementOpen = (event.currentTarget as HTMLDetailsElement).open;
-    if (state.itemManagementOpen) void loadItemSources(render);
+    if (state.itemManagementOpen && !state.selectedItem?.podcast) void loadItemSources(render);
   });
   document.querySelectorAll<HTMLButtonElement>('[data-item-sources-page]').forEach((button) => {
     button.addEventListener('click', () => { void loadItemSources(render, Number(button.dataset.itemSourcesPage)); });
@@ -1293,16 +1306,25 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
       return;
     }
 
-    const nextSettings = buildSettingsFromForm(new FormData(form));
-    if (!nextSettings) {
-      return;
-    }
-
+    const owner = state.bootstrap?.current_user?.id;
+    const formData = new FormData(form);
+    const nextSettings = buildSettingsFromForm(formData);
+    const personal = buildPodcastUserSettingsFromForm(formData);
+    if (!nextSettings && !personal) return;
     try {
-      state.settingsResponse = await updateSettings(nextSettings);
+      if (nextSettings) {
+        const response = await updateSettings(nextSettings);
+        if (state.bootstrap?.current_user?.id !== owner) return;
+        state.settingsResponse = response;
+      }
+      if (personal) await setPodcastUserSettings(personal);
+      if (state.bootstrap?.current_user?.id !== owner) return;
+      clearBrowseSessions();
+      state.home = undefined; state.libraryItems = []; state.homePreviewItemId = undefined;
       form.reset();
       await refreshData();
     } catch (error) {
+      if (state.bootstrap?.current_user?.id !== owner) return;
       state.error = error instanceof Error ? error.message : 'Failed to save settings.';
       render();
     }
@@ -1473,6 +1495,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
   document.querySelectorAll<HTMLElement>('[data-preview-item-id]').forEach(bindPreviewItemElement);
   document.querySelectorAll<HTMLElement>('[data-preview-collection-id]').forEach(bindPreviewCollectionElement);
+  bindPodcastDirectoryPreviews(document, () => refreshHomeFeatureElement(undefined));
   bindHomeFeatureAction();
   document.querySelector<HTMLButtonElement>('#scan-active-library')?.addEventListener('click', async () => {
     const button = document.querySelector<HTMLButtonElement>('#scan-active-library');

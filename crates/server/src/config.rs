@@ -33,6 +33,7 @@ const MEDIA_SETTINGS_KEY: &str = "media";
 const SERVER_SETTINGS_KEY: &str = "server";
 const FFMPEG_SETTINGS_KEY: &str = "ffmpeg";
 const SCHEDULED_TASKS_SETTINGS_KEY: &str = "scheduled_tasks";
+const PODCAST_SETTINGS_KEY: &str = "podcasts";
 
 /// General settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -184,102 +185,6 @@ fn media_tool_path_in(
     .find(|binary| binary.is_file())
     .map(|binary| binary.to_string_lossy().into_owned())
     .unwrap_or_else(|| name.to_owned())
-}
-
-#[cfg(test)]
-mod bundled_media_tool_tests {
-    use super::media_tool_path_in;
-
-    #[test]
-    fn local_cargo_build_resolves_the_prepared_tools() {
-        if let Some(root) = option_env!("KOKO_BUILD_FFMPEG_ROOT").filter(|root| !root.is_empty()) {
-            for name in ["ffmpeg", "ffprobe"] {
-                let expected = std::path::Path::new(root)
-                    .join("bin")
-                    .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-                assert!(expected.is_file());
-                assert_eq!(
-                    super::default_media_tool_path(name),
-                    expected.to_string_lossy()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn resolves_bundled_tools_without_using_the_working_directory() {
-        let directory =
-            std::env::temp_dir().join(format!("koko-media-tools-{}", std::process::id()));
-        let bin = directory.join("ffmpeg").join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let binary = bin.join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(&binary, b"fixture").unwrap();
-        assert_eq!(
-            media_tool_path_in(&directory, "ffprobe"),
-            binary.to_string_lossy()
-        );
-        assert_eq!(media_tool_path_in(&directory, "ffmpeg"), "ffmpeg");
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn resolves_tools_in_macos_bundle_layout() {
-        let root =
-            std::env::temp_dir().join(format!("koko-macos-media-tools-{}", std::process::id()));
-        let directory = root.join("Koko.app").join("Contents").join("MacOS");
-        std::fs::create_dir_all(&directory).unwrap();
-        for name in ["ffmpeg", "ffprobe"] {
-            let binary = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-            std::fs::write(&binary, b"fixture").unwrap();
-            assert_eq!(
-                media_tool_path_in(&directory, name),
-                binary.to_string_lossy()
-            );
-        }
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    fn in_memory_database() -> diesel::SqliteConnection {
-        use diesel::Connection;
-        let mut connection = diesel::SqliteConnection::establish(":memory:").unwrap();
-        crate::db::run_pending_sqlite_migrations(&mut connection).unwrap();
-        connection
-    }
-
-    #[test]
-    fn cleared_media_tool_paths_use_defaults_before_save() {
-        use diesel::prelude::*;
-        let mut connection = in_memory_database();
-        let settings = super::Settings {
-            ffmpeg: super::FfmpegSettings {
-                ffmpeg_path: String::new(),
-                ffprobe_path: " \t".into(),
-            },
-            ..Default::default()
-        };
-        super::save_database_settings(&mut connection, &settings).unwrap();
-        let saved: String = super::app_settings::table
-            .filter(super::app_settings::key.eq(super::FFMPEG_SETTINGS_KEY))
-            .select(super::app_settings::value)
-            .first(&mut connection)
-            .unwrap();
-        let saved: super::FfmpegSettings = serde_json::from_str(&saved).unwrap();
-        assert_eq!(saved, super::FfmpegSettings::default());
-    }
-
-    #[test]
-    fn custom_media_tool_paths_are_preserved() {
-        let custom = super::FfmpegSettings {
-            ffmpeg_path: "C:/Custom media tools/ffmpeg.exe".into(),
-            ffprobe_path: "custom-ffprobe".into(),
-        };
-        let mut settings = super::Settings {
-            ffmpeg: custom.clone(),
-            ..Default::default()
-        };
-        super::normalize_settings(&mut settings);
-        assert_eq!(settings.ffmpeg, custom);
-    }
 }
 
 fn default_metadata_language() -> String {
@@ -826,6 +731,9 @@ pub struct Settings {
     /// General settings.
     #[serde(default)]
     pub general: GeneralSettings,
+    /// Podcast episode storage and automatic downloads.
+    #[serde(default)]
+    pub podcasts: PodcastSettings,
     /// Media settings.
     #[serde(default)]
     pub media: MediaSettings,
@@ -844,6 +752,28 @@ pub struct Settings {
     /// Scheduled task settings.
     #[serde(default)]
     pub scheduled_tasks: ScheduledTasksSettings,
+}
+
+/// Storage policy for shared local podcast episodes.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(default)]
+pub struct PodcastSettings {
+    /// Enable podcast discovery, subscriptions, downloads, and playback.
+    pub enabled: bool,
+    /// Directory for new downloads; empty selects the podcasts folder under the data directory.
+    pub download_dir: String,
+    /// Download episodes discovered after the initial subscription automatically.
+    pub download_new_episodes: bool,
+}
+
+impl Default for PodcastSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            download_dir: String::new(),
+            download_new_episodes: true,
+        }
+    }
 }
 
 /// Optional server-side ebook conversion settings. Originals are always read-only.
@@ -1393,6 +1323,11 @@ pub fn save_database_settings(
         SCHEDULED_TASKS_SETTINGS_KEY,
         runtime_setting_value(&normalized.scheduled_tasks)?,
     )?;
+    upsert_runtime_setting(
+        conn,
+        PODCAST_SETTINGS_KEY,
+        runtime_setting_value(&normalized.podcasts)?,
+    )?;
     Ok(())
 }
 
@@ -1428,6 +1363,11 @@ pub fn seed_database_settings(
         SCHEDULED_TASKS_SETTINGS_KEY,
         runtime_setting_value(&normalized.scheduled_tasks)?,
     )?;
+    insert_runtime_setting_if_missing(
+        conn,
+        PODCAST_SETTINGS_KEY,
+        runtime_setting_value(&normalized.podcasts)?,
+    )?;
     Ok(())
 }
 
@@ -1443,6 +1383,7 @@ pub fn load_database_settings(
             SERVER_SETTINGS_KEY,
             FFMPEG_SETTINGS_KEY,
             SCHEDULED_TASKS_SETTINGS_KEY,
+            PODCAST_SETTINGS_KEY,
         ]))
         .select(AppSetting::as_select())
         .load::<AppSetting>(conn)
@@ -1468,6 +1409,9 @@ pub fn load_database_settings(
             SCHEDULED_TASKS_SETTINGS_KEY => {
                 settings.scheduled_tasks =
                     parse_runtime_setting(&row.value, SCHEDULED_TASKS_SETTINGS_KEY)?;
+            }
+            PODCAST_SETTINGS_KEY => {
+                settings.podcasts = parse_runtime_setting(&row.value, PODCAST_SETTINGS_KEY)?;
             }
             _ => {}
         }
@@ -1539,4 +1483,120 @@ pub fn replace_current_settings(settings: Settings) {
     let mut normalized = settings;
     normalize_settings(&mut normalized);
     *CURRENT_SETTINGS.write().unwrap() = normalized;
+}
+
+#[cfg(test)]
+mod bundled_media_tool_tests {
+    use super::media_tool_path_in;
+
+    #[test]
+    fn local_cargo_build_resolves_the_prepared_tools() {
+        if let Some(root) = option_env!("KOKO_BUILD_FFMPEG_ROOT").filter(|root| !root.is_empty()) {
+            for name in ["ffmpeg", "ffprobe"] {
+                let expected = std::path::Path::new(root)
+                    .join("bin")
+                    .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+                assert!(expected.is_file());
+                assert_eq!(
+                    super::default_media_tool_path(name),
+                    expected.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolves_bundled_tools_without_using_the_working_directory() {
+        let directory =
+            std::env::temp_dir().join(format!("koko-media-tools-{}", std::process::id()));
+        let bin = directory.join("ffmpeg").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let binary = bin.join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&binary, b"fixture").unwrap();
+        assert_eq!(
+            media_tool_path_in(&directory, "ffprobe"),
+            binary.to_string_lossy()
+        );
+        assert_eq!(media_tool_path_in(&directory, "ffmpeg"), "ffmpeg");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn resolves_tools_in_macos_bundle_layout() {
+        let root =
+            std::env::temp_dir().join(format!("koko-macos-media-tools-{}", std::process::id()));
+        let directory = root.join("Koko.app").join("Contents").join("MacOS");
+        std::fs::create_dir_all(&directory).unwrap();
+        for name in ["ffmpeg", "ffprobe"] {
+            let binary = directory.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+            std::fs::write(&binary, b"fixture").unwrap();
+            assert_eq!(
+                media_tool_path_in(&directory, name),
+                binary.to_string_lossy()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn in_memory_database() -> diesel::SqliteConnection {
+        use diesel::Connection;
+        let mut connection = diesel::SqliteConnection::establish(":memory:").unwrap();
+        crate::db::run_pending_sqlite_migrations(&mut connection).unwrap();
+        connection
+    }
+
+    #[test]
+    fn cleared_media_tool_paths_use_defaults_before_save() {
+        use diesel::prelude::*;
+        let mut connection = in_memory_database();
+        let settings = super::Settings {
+            ffmpeg: super::FfmpegSettings {
+                ffmpeg_path: String::new(),
+                ffprobe_path: " \t".into(),
+            },
+            ..Default::default()
+        };
+        super::save_database_settings(&mut connection, &settings).unwrap();
+        let saved: String = super::app_settings::table
+            .filter(super::app_settings::key.eq(super::FFMPEG_SETTINGS_KEY))
+            .select(super::app_settings::value)
+            .first(&mut connection)
+            .unwrap();
+        let saved: super::FfmpegSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(saved, super::FfmpegSettings::default());
+    }
+
+    #[test]
+    fn podcast_download_settings_round_trip_and_default_for_existing_databases() {
+        let mut conn = in_memory_database();
+        let settings = super::Settings {
+            podcasts: super::PodcastSettings {
+                enabled: false,
+                download_dir: "D:/Podcasts".into(),
+                download_new_episodes: false,
+            },
+            ..Default::default()
+        };
+        super::save_database_settings(&mut conn, &settings).unwrap();
+        let loaded = super::load_database_settings(&mut conn, &super::Settings::default()).unwrap();
+        assert_eq!(loaded.podcasts, settings.podcasts);
+        let old: super::Settings = serde_json::from_str("{}").unwrap();
+        assert!(old.podcasts.enabled);
+        assert!(old.podcasts.download_new_episodes);
+        assert!(old.podcasts.download_dir.is_empty());
+    }
+
+    #[test]
+    fn custom_media_tool_paths_are_preserved() {
+        let custom = super::FfmpegSettings {
+            ffmpeg_path: "C:/Custom media tools/ffmpeg.exe".into(),
+            ffprobe_path: "custom-ffprobe".into(),
+        };
+        let mut settings = super::Settings {
+            ffmpeg: custom.clone(),
+            ..Default::default()
+        };
+        super::normalize_settings(&mut settings);
+        assert_eq!(settings.ffmpeg, custom);
+    }
 }

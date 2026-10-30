@@ -6,6 +6,8 @@ import {
   deleteMockMissingItems,
   getMockCapabilities,
   getMockBootstrap,
+  getMockPodcastUserSettings,
+  setMockPodcastUserSettings,
   getMockHome,
   getMockPlaylists,
   getMockPlaylist,
@@ -134,6 +136,10 @@ export interface BootstrapUser {
 
 export interface AppBootstrapResponse {
   has_users: boolean;
+  /** Server-wide podcast availability, controlled by administrators. */
+  podcasts_enabled?: boolean;
+  /** Presentation preferences for the signed-in account only. */
+  podcast_settings?: PodcastUserSettings;
   current_user?: BootstrapUser;
 }
 
@@ -240,6 +246,81 @@ export interface MusicMetadata {
   musicbrainz_recording_id?: string | null;
 }
 
+/** Chronological playback preference for one podcast subscription. */
+export type PodcastPlaybackOrder = 'oldest_first' | 'newest_first';
+/** Publisher metadata and the current account's podcast preferences. */
+export interface PodcastMetadata {
+  podcast_id: number;
+  playback_order?: PodcastPlaybackOrder;
+  season_kind?: 'number' | 'year' | null;
+  season_year?: number | null;
+  download?: { state: 'queued' | 'downloading' | 'ready' | 'failed'; size_bytes?: number | null; error?: string | null } | null;
+  feed_url?: string | null;
+  author?: string | null;
+  description?: string | null;
+  artwork_url?: string | null;
+  website_url?: string | null;
+  language?: string | null;
+  categories: string[];
+  explicit?: boolean | null;
+  copyright?: string | null;
+  show_type?: string | null;
+  episode_type?: string | null;
+  published_at?: number | null;
+  guid?: string | null;
+  transcripts: { url: string; mime_type?: string | null; language?: string | null }[];
+  chapters_url?: string | null;
+  people: string[];
+  last_error?: string | null;
+  checked_at?: number | null;
+}
+/** A directory result; browsing it does not create a subscription. */
+export interface DirectoryPodcast {
+  id: string;
+  title: string;
+  author?: string | null;
+  /** Directory-provided description, when available without a separate lookup. */
+  description?: string | null;
+  genres?: string[];
+  episode_count?: number | null;
+  artwork_url?: string | null;
+  apple_url?: string | null;
+  feed_url: string;
+}
+/** Browse popular podcasts or search Apple's public directory. */
+export function discoverPodcasts(country = 'us', query = ''): Promise<DirectoryPodcast[]> {
+  return requestJson('GET', `/api/v1/podcasts/discover?${new URLSearchParams({ country, query })}`);
+}
+/** Server-provided country or territory with a lowercase ISO alpha-2 code and English name. */
+export interface Country { code: string; name: string }
+/** Fetch the server's ordered ISO country choices, shared by every client. */
+export function getCountries(): Promise<Country[]> { return requestJson('GET', '/api/v1/countries'); }
+/** Fetch every episode in the account's saved playback order, including real seasons. */
+export function getPodcastEpisodes(id: number): Promise<MediaItemSummary[]> { return requestJson('GET', `/api/v1/podcasts/${id}/episodes`); }
+/** Persist a chronological queue order for this account and podcast only. */
+export function setPodcastPlaybackOrder(id: number, playback_order: PodcastPlaybackOrder): Promise<void> { return requestJson('PUT', `/api/v1/podcasts/${id}/preferences`, { playback_order }); }
+/** A bounded newest-first page from one podcast season. */
+export interface PodcastEpisodePage { items: MediaItemSummary[]; total: number; offset: number; has_more: boolean }
+/** Load this account's podcast recommendations and listening shelves. */
+export function getPodcastHome(): Promise<MediaHome> { return requestJson('GET', '/api/v1/podcasts/home'); }
+/** Fetch the next visible season page without loading the entire back catalog. */
+export function getPodcastSeasonEpisodes(id: number, offset: number): Promise<PodcastEpisodePage> { return requestJson('GET', `/api/v1/podcasts/seasons/${id}/episodes?${new URLSearchParams({ offset: String(offset), limit: '50' })}`); }
+/** Account-specific podcast presentation preferences. */
+export interface PodcastUserSettings { show_on_home: boolean; show_in_sidebar: boolean }
+/** Load personal Home visibility independently of global download settings. */
+export function getPodcastUserSettings(): Promise<PodcastUserSettings> { return requestJson('GET', '/api/v1/podcasts/settings'); }
+/** Save personal Home visibility without changing another account's library. */
+export function setPodcastUserSettings(settings: PodcastUserSettings): Promise<void> { return requestJson('PUT', '/api/v1/podcasts/settings', settings); }
+/** List the current account's subscribed shows. */
+export function getPodcasts(): Promise<MediaItemSummary[]> { return requestJson('GET', '/api/v1/podcasts'); }
+/** Subscribe to a directory result or manually entered RSS feed. */
+export function addPodcast(feedUrl: string): Promise<{ item_id: number }> { return requestJson('POST', '/api/v1/podcasts', { feed_url: feedUrl }, 90000); }
+/** Remove only the current account's subscription. */
+export function removePodcast(id: number): Promise<void> { return requestJson('DELETE', `/api/v1/podcasts/${id}`); }
+/** Check a subscribed show for new episodes immediately. */
+export function refreshPodcast(id: number): Promise<void> { return requestJson('POST', `/api/v1/podcasts/${id}/refresh`, undefined, 90000); }
+
+/** A library card with account-specific progress and metadata for its media type. */
 export interface MediaItemSummary {
   /** Independent account reading state; a reset may retain the discovered page count. */
   reading_progress?: { fraction: number; completed: boolean; started?: boolean; page_count?: number | null } | null;
@@ -249,6 +330,7 @@ export interface MediaItemSummary {
   item_type: string;
   music?: MusicMetadata | null;
   audiobook?: AudiobookMetadata | null;
+  podcast?: PodcastMetadata | null;
   display_title: string;
   display_subtitle?: string | null;
   artwork_item_id?: number | null;
@@ -776,6 +858,7 @@ export interface SettingsSnapshot {
   general: {
     data_dir: string;
   };
+  podcasts?: { enabled: boolean; download_dir: string; download_new_episodes: boolean };
   media: {
     libraries: MediaLibrarySettings[];
     missing_item_auto_delete_days?: number | null;
@@ -936,8 +1019,12 @@ function getMockGetResponse<T>(method: string, url: URL): T {
     return getMockItems().filter((item) => item.id !== seed.id && item.item_type === seed.item_type && !item.missing_since).slice(0, 12) as T;
   }
   switch (url.pathname) {
+    case '/api/v1/countries':
+      return [{ code: 'ca', name: 'Canada' }, { code: 'gb', name: 'United Kingdom' }, { code: 'us', name: 'United States of America' }] as T;
     case '/api/v1/system/capabilities':
       return getMockCapabilities() as T;
+    case '/api/v1/podcasts/settings':
+      return getMockPodcastUserSettings() as T;
     case '/api/v1/bootstrap':
       return getMockBootstrap() as T;
     case '/api/v1/users':
@@ -1033,6 +1120,7 @@ function getMockDynamicGetResponse<T>(method: string, url: URL): T {
 }
 
 function getMockPutResponse<T>(method: string, url: URL, body?: unknown): T {
+  if (url.pathname === '/api/v1/podcasts/settings') { setMockPodcastUserSettings(body as PodcastUserSettings); return undefined as T; }
   const queue = /^\/api\/v1\/playlists\/(\d+)\/(queue|name)$/.exec(url.pathname);
   if (queue) return updateMockQueue(Number(queue[1]),queue[2],body as MusicQueueState & {name:string}) as T;
   if (url.pathname === '/api/v1/settings') {
@@ -1180,9 +1268,9 @@ function requestHeaders(body?: unknown): Record<string, string> {
   return headers;
 }
 
-async function fetchJsonResponse(method: string, path: string, body?: unknown): Promise<Response> {
+async function fetchJsonResponse(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
   const abortController = new AbortController();
-  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS);
+  const timeoutHandle = globalThis.setTimeout(() => abortController.abort(), timeoutMs ?? (path.endsWith('/radio') ? 30000 : REQUEST_TIMEOUT_MS));
   return fetch(`${getStoredApiBase()}${path}`, {
     method,
     headers: requestHeaders(body),
@@ -1241,13 +1329,13 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return undefined as T;
 }
 
-async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function requestJson<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   if (shouldUseMockApi()) {
     return getMockJsonFallback<T>(method, path, body);
   }
 
   try {
-    const response = await fetchJsonResponse(method, path, body);
+    const response = await fetchJsonResponse(method, path, body, timeoutMs);
     if (!response.ok) {
       return handleErrorResponse<T>(method, path, body, response);
     }

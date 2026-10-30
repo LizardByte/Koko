@@ -58,6 +58,7 @@ export function canManuallyLinkMetadata(item?: MediaItemSummary): boolean {
 }
 
 export function backNavigationTarget(): { label: string; path: string } {
+  if (state.selectedItem?.item_type === 'podcast') return { label: 'Back to podcasts', path: '/podcasts' };
   const hierarchy = state.selectedItem?.hierarchy ?? [];
   const parent = hierarchy[hierarchy.length - 1];
   if (parent) {

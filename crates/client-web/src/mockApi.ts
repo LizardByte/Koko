@@ -3,6 +3,7 @@
 import kokoLogoUrl from '../../../assets/Koko.png';
 import type {
   AppBootstrapResponse,
+  PodcastUserSettings,
   BootstrapUser,
   CreateUserRequest,
   ItemMetadataMatch,
@@ -1010,10 +1011,25 @@ export function getMockCapabilities(): ServerCapabilities {
   };
 }
 
+const podcastPreferences = new Map<number, PodcastUserSettings>();
+
+/** Return only the active mock account's podcast visibility preferences. */
+export function getMockPodcastUserSettings(): PodcastUserSettings {
+  return { show_on_home: true, show_in_sidebar: true, ...podcastPreferences.get(activeMockUserId() ?? -1) };
+}
+
+/** Persist personal podcast visibility independently from mock server settings. */
+export function setMockPodcastUserSettings(value: PodcastUserSettings): void {
+  podcastPreferences.set(activeMockUserId() ?? -1, { ...value });
+}
+
+/** Include server availability and only the active mock account's podcast preferences. */
 export function getMockBootstrap(): AppBootstrapResponse {
   const currentUser = users.find((user) => user.id === activeMockUserId());
   return {
     has_users: users.length > 0,
+    podcasts_enabled: settings.podcasts?.enabled !== false,
+    podcast_settings: currentUser ? getMockPodcastUserSettings() : undefined,
     current_user: currentUser ? toUserSummary(currentUser) : undefined,
   };
 }

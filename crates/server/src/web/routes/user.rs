@@ -97,6 +97,10 @@ pub struct UserSummary {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct BootstrapResponse {
     pub has_users: bool,
+    /// Whether the administrator enables podcast features on this server.
+    pub podcasts_enabled: bool,
+    /// Only the signed-in account's podcast presentation preferences.
+    pub podcast_settings: Option<crate::media::podcasts::PodcastUserSettings>,
     pub current_user: Option<UserSummary>,
 }
 
@@ -106,7 +110,10 @@ pub async fn get_bootstrap(
     user_guard: Option<UserGuard>,
     db: DbConn,
 ) -> Result<Json<BootstrapResponse>, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::{
+        id,
+        users,
+    };
 
     let has_users = db
         .run(|conn| users.count().get_result::<i64>(conn))
@@ -134,8 +141,21 @@ pub async fn get_bootstrap(
         None
     };
 
+    let podcast_settings = if let Some(user) = current_user.as_ref() {
+        let user_id = user.id;
+        Some(
+            db.run(move |conn| crate::media::podcasts::user_settings(conn, user_id))
+                .await
+                .map_err(|_| Status::InternalServerError)?,
+        )
+    } else {
+        None
+    };
+
     Ok(Json(BootstrapResponse {
         has_users,
+        podcasts_enabled: current_settings().podcasts.enabled,
+        podcast_settings,
         current_user,
     }))
 }
@@ -146,7 +166,10 @@ pub async fn list_users(
     _admin_guard: AdminGuard,
     db: DbConn,
 ) -> Result<Json<Vec<UserSummary>>, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::{
+        username,
+        users,
+    };
 
     let users_list = db
         .run(|conn| {
@@ -287,7 +310,7 @@ pub async fn create_user(
     db: DbConn,
     user_form: Json<CreateUserForm>,
 ) -> Result<&'static str, Status> {
-    use crate::db::schema::users::dsl::*;
+    use crate::db::schema::users::dsl::users;
 
     // Check if this is the first user (no authentication required)
     let existing_count = db

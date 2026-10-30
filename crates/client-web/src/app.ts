@@ -1,4 +1,5 @@
 /** Coordinates app startup, route-level data loading, and shell rendering. */
+import { renderPodcastPage } from './app/podcasts';
 import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
 import {
@@ -333,6 +334,8 @@ function renderCurrentPage(): string {
       return renderPersonPage();
     case 'settings':
       return renderSettingsPage();
+    case 'podcasts':
+      return renderPodcastPage();
     default:
       return renderHomePage();
   }
@@ -342,6 +345,10 @@ function renderRail(): string {
   const activeLibraryIdValue = activeLibraryId();
   const collapsed = isRailCollapsed();
   const user = currentUser();
+  const podcastActive = state.route.page === 'podcasts';
+  const podcastActiveClass = podcastActive ? 'active' : '';
+  const podcastSelected = podcastActive ? 'selected' : '';
+  const showPodcasts = state.bootstrap?.podcasts_enabled !== false && state.bootstrap?.podcast_settings?.show_in_sidebar !== false;
   const userRoleLabel = user?.admin ? 'Administrator' : 'Signed in';
   const settingsActiveClass = state.route.page === 'settings' ? 'active' : '';
   const userCardMarkup = user
@@ -371,7 +378,7 @@ function renderRail(): string {
             ${renderIcon('house')}
             <span class="rail-label">Home</span>
           </button>
-          ${state.libraries
+          ${state.libraries.filter(library => library.path !== 'koko://podcasts')
             .map((library) => `
               <button class="rail-button ${activeLibraryIdValue === library.id ? 'active' : ''}" type="button" data-nav-library-id="${library.id}" title="${escapeHtml(library.name)}">
                 ${renderIcon(selectedLibraryIcon(library.kind))}
@@ -382,14 +389,15 @@ function renderRail(): string {
               </button>
             `)
             .join('')}
+          ${showPodcasts ? `<button class="rail-button ${podcastActiveClass}" type="button" data-nav-podcasts title="Podcasts">${renderIcon('mic-2')}<span class="rail-label">Podcasts</span></button>` : ''}
         </nav>
       </div>
       <div class="library-rail-bottom">
         ${userCardMarkup}
-        ${canManageServer() ? `<button class="rail-button rail-settings ${settingsActiveClass}" type="button" data-nav-settings title="Settings">
+        <button class="rail-button rail-settings ${settingsActiveClass}" type="button" data-nav-settings title="Settings">
           ${renderIcon('settings')}
           <span class="rail-label">Settings</span>
-        </button>` : ''}
+        </button>
         <button class="rail-button" type="button" data-sign-out title="Sign out">
           ${renderIcon('log-out')}
           <span class="rail-label">Sign out</span>
@@ -402,9 +410,10 @@ function renderRail(): string {
         <label for="mobile-library-picker" class="sr-only">Library</label>
         <select id="mobile-library-picker">
           <option value="/" ${activeLibraryIdValue === undefined ? 'selected' : ''}>Home</option>
-          ${state.libraries.map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
+          ${state.libraries.filter(library => library.path !== 'koko://podcasts').map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
+          ${showPodcasts ? `<option value="/podcasts" ${podcastSelected}>Podcasts</option>` : ''}
         </select>
-        ${canManageServer() ? `<button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>` : ''}
+        <button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>
         <button type="button" class="secondary-button icon-button" data-mobile-sign-out title="Sign out" aria-label="Sign out">${renderIcon('log-out')}</button>
       </form>
     </header>

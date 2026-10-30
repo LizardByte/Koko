@@ -68,23 +68,47 @@ pub(super) async fn normalize(
     }
     let status = response.status().code;
     let mut body = String::new();
-    if matches!(status, 400 | 422) {
+    let podcast_error = status == 502 && path.starts_with("/api/v1/podcasts");
+    if matches!(status, 400 | 422) || podcast_error {
         let _ = AsyncReadExt::take(response.body_mut(), 1024)
             .read_to_string(&mut body)
             .await;
     }
     let payload = ApiError {
         status,
-        message: message(status, &body),
+        message: podcast_message(podcast_error, &body).unwrap_or_else(|| message(status, &body)),
     };
     let json = serde_json::to_string(&payload).expect("API error contains only scalar fields");
     response.set_header(ContentType::JSON);
     response.set_sized_body(json.len(), std::io::Cursor::new(json));
 }
 
+fn podcast_message(
+    allowed: bool,
+    body: &str,
+) -> Option<String> {
+    if !allowed {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    (value.get("kind")?.as_str()? == "podcast_operation").then(|| validation_message(body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_explicit_podcast_operation_errors_keep_their_public_detail() {
+        let body = r#"{"kind":"podcast_operation","message":"Podcast response is too large"}"#;
+        assert_eq!(
+            podcast_message(true, body).as_deref(),
+            Some("Podcast response is too large")
+        );
+        assert!(podcast_message(false, body).is_none());
+        assert!(podcast_message(true, r#"{"message":"SQL internal failure"}"#).is_none());
+        assert!(podcast_message(true, "<html>proxy failure</html>").is_none());
+    }
 
     #[test]
     fn errors_hide_internal_responses_and_preserve_concise_validation() {

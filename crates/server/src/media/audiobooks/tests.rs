@@ -6,6 +6,7 @@ use crate::db::schema::{
     media_items,
     users,
 };
+use crate::media::*;
 use diesel::{
     Connection,
     TextExpressionMethods,

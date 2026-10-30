@@ -29,15 +29,20 @@ beforeEach(() => {
   });
 });
 
-test('ordinary users have no scan, refresh, settings, or metadata management controls', () => {
+test('ordinary users can edit personal settings without server or metadata management controls', () => {
   const home = renderHomePage();
   assert.doesNotMatch(home, /id="(?:scan-active-library|refresh-active-library-metadata)"/);
-  for (const section of ['general', 'libraries', 'providers', 'scheduled', 'users', 'dashboard', 'logs']) {
+  for (const section of ['libraries', 'providers', 'scheduled', 'users', 'dashboard', 'logs']) {
     state.route = { page: 'settings', section };
     const html = renderSettingsPage();
     assert.match(html, /Administrator access is required/);
-    assert.doesNotMatch(html, /settings-form|settings-nav-link|data-settings-create|user-edit-form/);
+    assert.doesNotMatch(html, /settings-form|data-settings-create|user-edit-form/);
+    assert.doesNotMatch(html, /href="\/settings\/(?:libraries|providers|users|logs)"/);
   }
+  state.route = { page: 'settings', section: 'general' };
+  const personal = renderSettingsPage();
+  assert.match(personal, /Show podcasts on Home|Show podcasts in sidebar/);
+  assert.doesNotMatch(personal, /name="(?:podcasts_enabled|podcast_download_dir|address|data_dir)"/);
   const summary = mock.getMockItems(1).find((item) => item.item_type === 'movie');
   state.selectedItem = mock.getMockItem(summary.id);
   state.route = { page: 'item', itemId: summary.id };

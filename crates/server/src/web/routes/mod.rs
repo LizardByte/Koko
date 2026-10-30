@@ -3,12 +3,14 @@
 // modules
 pub mod auth;
 pub mod common;
+pub mod countries;
 pub mod dependencies;
 pub mod ebooks;
 pub mod media;
 mod metadata_jobs;
 pub mod music;
 pub mod playlists;
+pub mod podcasts;
 pub mod settings;
 pub mod user;
 
@@ -26,11 +28,23 @@ pub fn api_routes() -> Vec<rocket::Route> {
         ebooks::document,
         ebooks::progress,
         dependencies::get_dependencies,
+        countries::get_countries,
         media::get_server_capabilities,
         media::get_system_activities,
         media::get_metadata_providers,
         media::get_metadata_locales,
         media::get_home,
+        podcasts::discover,
+        podcasts::home,
+        podcasts::get_user_settings,
+        podcasts::set_user_settings,
+        podcasts::season_episodes,
+        podcasts::list,
+        podcasts::episodes,
+        podcasts::preferences,
+        podcasts::add,
+        podcasts::remove,
+        podcasts::refresh,
         playlists::list,
         playlists::get,
         playlists::create,
@@ -87,6 +101,7 @@ pub fn spa_routes() -> Vec<rocket::Route> {
         media::get_person_image,
         media::get_item_theme,
         media::get_item_subtitle,
+        podcasts::stream,
         media::stream_item,
         media::get_session_stream
     ]

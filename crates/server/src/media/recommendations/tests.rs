@@ -7,6 +7,7 @@ use crate::db::schema::{
     media_libraries as libraries,
     users,
 };
+use crate::media::*;
 use crate::metadata::{
     StoredMetadataSnapshot,
     upsert_item_metadata_snapshot,
@@ -574,6 +575,14 @@ fn profile_saved_catalog_requests() {
         .first::<i32>(&mut conn)
         .unwrap();
     let languages = ["en-US".into()];
+    let start = Instant::now();
+    let home =
+        get_media_home_with_preferred_languages(&mut conn, Some(admin), None, &languages).unwrap();
+    println!(
+        "all_libraries home_ms={:.2} shelves={}",
+        start.elapsed().as_secs_f64() * 1000.0,
+        home.shelves.len()
+    );
     let library_ids = if let Ok(ids) = std::env::var("KOKO_PERF_LIBRARIES") {
         ids.split(',')
             .map(|id| id.trim().parse::<i32>().expect("numeric library IDs"))

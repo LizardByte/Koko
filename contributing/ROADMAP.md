@@ -189,6 +189,7 @@ These run across multiple stages:
 - MusicBrainz provides artist, album, and track metadata for music libraries, using embedded identifiers when available and conservative searches otherwise. Release covers come from the Cover Art Archive.
 - Music uses a persistent bottom player with editable queues, shuffle/repeat, private server playlists, on-demand LRCLIB lyrics, and ListenBrainz radio mixes limited to accessible local songs.
 - Users can enable providers, set their priority order per library, and select library metadata languages. Local NFO remains planned.
+- [x] Add podcast discovery, private RSS subscriptions, numbered or year seasons, server episode downloads, publisher metadata, automatic feed checks, per-podcast playback order, and per-user listening progress. See [Podcasts](../docs/PODCASTS.md).
 - [x] Add audiobook scanning, chapter navigation, narration details, playback speed controls, and per-user listening progress. See [Audiobooks](../docs/BOOKS.md#chapters-and-listening).
 - [x] Enable Comic Vine, Open Library, LibexDB, LibriVox, and AudioSilo by default for new Books libraries, in that priority order.
 - [x] Integrate Open Library written-work matching for books and audiobooks, while retaining separate recording identities and progress.

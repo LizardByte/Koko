@@ -31,6 +31,7 @@ export type AppRoute =
   | { page: 'browse-detail'; kind: 'category' | 'collection' | 'playlist'; key: string; libraryId?: number }
   | { page: 'item'; itemId: number }
   | { page: 'person'; personId: number }
+  | { page: 'podcasts' }
   | { page: 'settings'; section?: SettingsSection };
 
 /** Top-level tabs shown on the home browsing surface. */
@@ -112,6 +113,12 @@ export interface AppState {
   capabilities?: ServerCapabilities;
   libraries: MediaLibrary[];
   home?: MediaHome;
+  /** Discovery and subscription data belong to the account that requested them. */
+  podcasts?: { owner: number; items: MediaItemSummary[]; directory: import('../api').DirectoryPodcast[]; country: string; countries?: import('../api').Country[]; countriesError?: string; query: string; home?: MediaHome; tab?: 'recommended' | 'library' | 'discover'; previewDirectoryId?: string; addFeedOpen?: boolean; loading: boolean; error?: string; busy?: boolean };
+  /** Retry only the failed podcast action belonging to the current account and visible error. */
+  podcastRetry?: { owner: number; message: string; route: AppRoute; run: () => Promise<void> };
+  /** In-flight season paging is scoped to the selected item and account. */
+  podcastEpisodeLoading?: { itemId: number; owner: number; loading: boolean; error?: string };
   playlists?: MusicPlaylistDetail[];
   selectedPlaylist?: MusicPlaylistDetail;
   libraryItems: MediaItemSummary[];
@@ -234,6 +241,9 @@ export type AppIconName =
   | 'repeat-1'
   | 'shuffle'
   | 'list-music'
+  | 'download'
+  | 'hard-drive-download'
+  | 'cloud-download'
   | 'mic-2'
   | 'radio'
   | 'rotate-ccw'

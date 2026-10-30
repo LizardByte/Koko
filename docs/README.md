@@ -52,11 +52,12 @@ After adding files, scan their library so they can appear here. To update sugges
 item's metadata from its management controls, or ask your server administrator. The row stays hidden
 when no similar items are available.
 
-For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
-For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
-For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
 For book and audiobook folders, supported formats, reading and listening controls, and metadata sources,
 see [Books, audiobooks, and comics](./BOOKS.md).
+For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
+For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
+For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).
+For podcast discovery, RSS subscriptions, and episode playback, see [Podcasts](./PODCASTS.md).
 
 The file must be named `settings.yml` and be placed in the following location, depending on your OS.
 

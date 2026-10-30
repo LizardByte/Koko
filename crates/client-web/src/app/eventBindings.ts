@@ -1,6 +1,7 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
+import { bindLiveTvActions } from './liveTvActions';
 import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
 import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
@@ -636,6 +637,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
   bindPodcastActions(signal, context);
+  bindLiveTvActions(signal, context);
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();

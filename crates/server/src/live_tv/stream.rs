@@ -1,0 +1,434 @@
+//! Browser-compatible live streams and bounded tuner leases released on disconnect.
+
+use super::{
+    Channel,
+    Source,
+    sources,
+    storage,
+};
+use crate::db::DbConn;
+use once_cell::sync::Lazy;
+use rocket::{
+    Request,
+    http::ContentType,
+    response::{
+        self,
+        Responder,
+        Response,
+    },
+};
+use std::{
+    collections::HashMap,
+    io,
+    pin::Pin,
+    process::Stdio,
+    sync::Mutex,
+    task::{
+        Context,
+        Poll,
+    },
+};
+use tokio::{
+    io::{
+        AsyncRead,
+        AsyncReadExt,
+        ReadBuf,
+    },
+    process::{
+        Child,
+        ChildStdout,
+        Command,
+    },
+};
+
+static LEASES: Lazy<Mutex<HashMap<i32, i32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub(super) struct Lease(i32);
+impl Drop for Lease {
+    fn drop(&mut self) {
+        if let Ok(mut leases) = LEASES.lock() {
+            if let Some(count) = leases.get_mut(&self.0) {
+                *count -= 1;
+                if *count == 0 {
+                    leases.remove(&self.0);
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn lease(source: &Source) -> Result<Lease, String> {
+    let mut leases = LEASES.lock().map_err(|_| "Unable to reserve a tuner")?;
+    let count = leases.entry(source.id).or_default();
+    if *count >= source.capacity {
+        return Err(
+            "All tuners or allowed IPTV streams are busy. Stop another stream or recording and \
+             try again"
+                .into(),
+        );
+    }
+    *count += 1;
+    Ok(Lease(source.id))
+}
+
+pub(super) async fn input(
+    db: &DbConn,
+    id: i32,
+) -> Result<(Source, Channel, Lease), String> {
+    let (source, channel) = db
+        .run(move |conn| {
+            let channel = storage::channel(conn, id)?;
+            let source = storage::source(conn, channel.source_id)?;
+            Ok::<_, diesel::result::Error>((source, channel))
+        })
+        .await
+        .map_err(super::db_error)?;
+    if !source.enabled || !channel.enabled || !channel.available {
+        return Err("This channel is disabled or unavailable".into());
+    }
+    let lease = match lease(&source) {
+        Ok(lease) => lease,
+        Err(error) => {
+            if !super::broadcast::preempt(source.id) {
+                return Err(error);
+            }
+            let wait = async {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    if let Ok(lease) = lease(&source) {
+                        break lease;
+                    }
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                .await
+                .map_err(|_| error)?
+        }
+    };
+    Ok((source, channel, lease))
+}
+
+pub(super) fn command(
+    url: &str,
+    record: bool,
+    local: bool,
+) -> Command {
+    command_for_service(url, record, local, None)
+}
+
+fn command_for_service(
+    url: &str,
+    record: bool,
+    local: bool,
+    service: Option<&str>,
+) -> Command {
+    let mut command = Command::new(crate::config::current_settings().ffmpeg.ffmpeg_path);
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+    ]);
+    if !local {
+        command.args([
+            "-rw_timeout",
+            "15000000",
+            "-protocol_whitelist",
+            "http,https,tcp,tls,crypto,udp,rtp",
+        ]);
+    }
+    command.args(["-i", url]);
+    if let Some(service) = service {
+        command.args([
+            "-map",
+            &format!("0:p:{service}:v:0?"),
+            "-map",
+            &format!("0:p:{service}:a:0?"),
+        ]);
+    } else {
+        command.args([
+            "-map", "0:v:0?", "-map", "0:a:0?",
+        ]);
+    }
+    if record {
+        command.args([
+            "-c", "copy", "-f", "mpegts", "pipe:1",
+        ]);
+    } else {
+        command.args([
+            "-vf",
+            "yadif,scale=w='min(1920,iw)':h=-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration",
+            "1000000",
+            "-f",
+            "mp4",
+            "pipe:1",
+        ]);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    command
+}
+
+struct Reader {
+    inner: tokio::io::Chain<std::io::Cursor<Vec<u8>>, ChildStdout>,
+    _pipeline: Pipeline,
+    _lease: Option<Lease>,
+}
+impl AsyncRead for Reader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+pub(crate) struct LiveStream(Reader);
+impl<'r> Responder<'r, 'static> for LiveStream {
+    fn respond_to(
+        self,
+        _: &'r Request<'_>,
+    ) -> response::Result<'static> {
+        Response::build()
+            .header(ContentType::MP4)
+            .raw_header("Cache-Control", "no-store")
+            .raw_header("X-Content-Type-Options", "nosniff")
+            .streamed_body(self.0)
+            .ok()
+    }
+}
+
+async fn open(
+    url: &str,
+    lease: Option<Lease>,
+    local: bool,
+) -> Result<LiveStream, String> {
+    let child = command(url, false, local)
+        .spawn()
+        .map_err(|_| "Unable to start FFmpeg; check the FFmpeg path in Settings")?;
+    open_pipeline(make_pipeline(child, None, None, None), lease).await
+}
+
+async fn open_pipeline(
+    mut pipeline: Pipeline,
+    lease: Option<Lease>,
+) -> Result<LiveStream, String> {
+    let mut stdout = pipeline
+        .child
+        .stdout
+        .take()
+        .ok_or("FFmpeg did not open a video stream")?;
+    let mut prefix = vec![0; 4096];
+    let length = tokio::time::timeout(std::time::Duration::from_secs(25), stdout.read(&mut prefix))
+        .await
+        .map_err(|_| {
+            "The channel did not start in time; check tuner reception and source availability"
+        })?
+        .map_err(|_| "The video stream could not start")?;
+    if length == 0 {
+        tokio::task::yield_now().await;
+        pipeline.report_error();
+        return Err(
+            "The source could not be played; check the channel, tuner, and FFmpeg installation"
+                .into(),
+        );
+    }
+    prefix.truncate(length);
+    Ok(LiveStream(Reader {
+        inner: std::io::Cursor::new(prefix).chain(stdout),
+        _pipeline: pipeline,
+        _lease: lease,
+    }))
+}
+
+pub(crate) async fn play_channel(
+    db: &DbConn,
+    id: i32,
+) -> Result<LiveStream, String> {
+    let (source, channel, lease) = input(db, id).await?;
+    open_pipeline(pipeline(&source, &channel, false).await?, Some(lease)).await
+}
+
+pub(super) struct Pipeline {
+    pub child: Child,
+    _tuner: Option<Child>,
+    _bridge: Option<tokio::task::JoinHandle<()>>,
+    _proxy: Option<super::proxy::Proxy>,
+    log: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    log_reader: tokio::task::JoinHandle<()>,
+}
+impl Drop for Pipeline {
+    fn drop(&mut self) {
+        if let Some(bridge) = &self._bridge {
+            bridge.abort();
+        }
+        self.log_reader.abort();
+    }
+}
+
+impl Pipeline {
+    fn report_error(&self) {
+        if let Ok(data) = self.log.lock() {
+            let message = String::from_utf8_lossy(&data);
+            static URL: Lazy<regex::Regex> =
+                Lazy::new(|| regex::Regex::new(r"https?://[^\s]+").unwrap());
+            log::warn!(
+                "Live TV FFmpeg failed: {}",
+                URL.replace_all(message.trim(), "[stream]")
+            );
+        }
+    }
+}
+
+fn make_pipeline(
+    mut child: Child,
+    tuner: Option<Child>,
+    bridge: Option<tokio::task::JoinHandle<()>>,
+    proxy: Option<super::proxy::Proxy>,
+) -> Pipeline {
+    let mut stderr = child.stderr.take();
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let output = log.clone();
+    let log_reader = tokio::spawn(async move {
+        let Some(ref mut stderr) = stderr else {
+            return;
+        };
+        let mut chunk = [0; 1024];
+        while let Ok(size) = stderr.read(&mut chunk).await {
+            if size == 0 {
+                break;
+            }
+            if let Ok(mut data) = output.lock() {
+                data.extend_from_slice(&chunk[..size]);
+                let excess = data.len().saturating_sub(8192);
+                data.drain(..excess);
+            }
+        }
+    });
+    Pipeline {
+        child,
+        _tuner: tuner,
+        _bridge: bridge,
+        _proxy: proxy,
+        log,
+        log_reader,
+    }
+}
+
+pub(super) async fn pipeline(
+    source: &Source,
+    channel: &Channel,
+    record: bool,
+) -> Result<Pipeline, String> {
+    if source.kind == "native" {
+        let config = sources::config(source)?;
+        let mut input = super::tsduck::tune(&config, channel).await?;
+        let service = channel
+            .source_key
+            .rsplit(':')
+            .next()
+            .ok_or("Invalid tuner service")?;
+        let mut child = command_for_service("pipe:0", record, true, Some(service))
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|_| "Unable to start FFmpeg")?;
+        let mut sink = child
+            .stdin
+            .take()
+            .ok_or("Unable to open the tuner video stream")?;
+        let bridge = tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut input, &mut sink).await;
+        });
+        return Ok(make_pipeline(child, None, Some(bridge), None));
+    }
+    if source.kind == "dvb" {
+        let config = sources::config(source)?;
+        let mut tuner = super::native::tune(&config, channel, false)?;
+        let mut input = tuner.stdout.take().ok_or("Unable to read the DVB tuner")?;
+        let mut child = command("pipe:0", record, true)
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|_| "Unable to start FFmpeg")?;
+        let mut sink = child
+            .stdin
+            .take()
+            .ok_or("Unable to open the tuner video stream")?;
+        let bridge = tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut input, &mut sink).await;
+        });
+        Ok(make_pipeline(child, Some(tuner), Some(bridge), None))
+    } else {
+        let upstream = sources::stream_url(source, channel).await?;
+        let (proxy, url) = super::proxy::start(&upstream).await?;
+        let child = command(&url, record, false)
+            .spawn()
+            .map_err(|_| "Unable to start FFmpeg; check its path in Settings")?;
+        let keepalive = sources::keepalive(source, &upstream)?;
+        Ok(make_pipeline(child, None, keepalive, Some(proxy)))
+    }
+}
+
+pub(super) fn recording_path(id: i32) -> std::path::PathBuf {
+    std::path::Path::new(&crate::config::current_settings().general.data_dir)
+        .join("live-tv")
+        .join("recordings")
+        .join(format!("recording-{id}.ts"))
+}
+
+pub(crate) async fn play_recording(
+    db: &DbConn,
+    id: i32,
+    user: i32,
+) -> Result<LiveStream, String> {
+    use crate::db::schema::live_tv_recordings as r;
+    use diesel::prelude::*;
+    let allowed = db
+        .run(move |conn| {
+            r::table
+                .find(id)
+                .filter(r::user_id.eq(user).or(r::shared.eq(true)))
+                .filter(r::state.eq_any([
+                    "completed",
+                    "interrupted",
+                    "failed",
+                    "cancelled",
+                ]))
+                .select(r::file_name)
+                .first::<Option<String>>(conn)
+        })
+        .await
+        .map_err(|_| "Recording not found")?;
+    let Some(saved) = allowed else {
+        return Err("This recording has no saved video".into());
+    };
+    let path = super::settings::saved_path(id, &saved);
+    if !path.is_file() {
+        return Err("The recording file is missing".into());
+    }
+    open(&path.to_string_lossy(), None, true).await
+}

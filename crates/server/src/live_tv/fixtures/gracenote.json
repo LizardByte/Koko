@@ -1,0 +1,28 @@
+{
+  "channels": [{
+    "channelId": "17043",
+    "id": "170430",
+    "callSign": "WJXX",
+    "channelNo": "2",
+    "thumbnail": "//example.com/logo.png",
+    "events": [{
+      "startTime": "2026-10-30T15:00:00Z",
+      "endTime": "2026-10-30T16:00:00Z",
+      "flag": ["New"],
+      "rating": "TV-14",
+      "thumbnail": "p184466_b_v13_ah",
+      "program": {
+        "title": "The View",
+        "tmsId": "EP002253956808",
+        "shortDesc": "A description",
+        "season": "30",
+        "episode": "39"
+      }
+    }, {
+      "startTime": "2026-10-30T16:00:00Z",
+      "endTime": "2026-10-30T17:00:00Z",
+      "flag": [],
+      "program": { "title": "Daily News", "tmsId": "SH12345", "isGeneric": "1" }
+    }]
+  }]
+}

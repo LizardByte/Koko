@@ -2,6 +2,7 @@ mod auth;
 mod common;
 mod countries;
 mod dependencies;
+mod live_tv;
 mod media;
 mod permissions;
 mod podcasts;

@@ -1,0 +1,28 @@
+{
+  "name": "tsduck",
+  "buildsystem": "simple",
+  "build-options": {
+    "env": {
+      "NODEKTEC": "1", "NODTAPI": "1", "NOHIDES": "1", "NOVATEK": "1",
+      "NOCURL": "1", "NOPCSC": "1", "NOOPENSSL": "1", "NOZLIB": "1",
+      "NOSRT": "1", "NORIST": "1", "NOJAVA": "1", "NOPYTHON": "1",
+      "NOEDITLINE": "1", "NOGITHUB": "1", "NODOC": "1", "NOTEST": "1", "NOSTATIC": "1",
+      "SYSPREFIX": "/app", "USRLIBDIR": "/app/lib"
+    }
+  },
+  "build-commands": [
+    "make -C src/libtscore -j4",
+    "make -C src/libtsduck -j4",
+    "make -C src/libtscore install-tools install-devel",
+    "make -C src/libtsduck install-tools install-devel",
+    "install -Dm0644 LICENSE.txt /app/share/licenses/tsduck/LICENSE.txt",
+    "install -Dm0644 OTHERS.txt /app/share/licenses/tsduck/OTHERS.txt"
+  ],
+  "sources": [
+    {
+      "type": "archive",
+      "url": "https://github.com/tsduck/tsduck/archive/refs/tags/v3.45-4798.tar.gz",
+      "sha256": "a35845430fff1385cf1cda9645bbfd0ec887ed440137fc6c26863c624c24eb63"
+    }
+  ]
+}

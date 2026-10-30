@@ -32,6 +32,7 @@ export type AppRoute =
   | { page: 'item'; itemId: number }
   | { page: 'person'; personId: number }
   | { page: 'podcasts' }
+  | { page: 'live-tv' }
   | { page: 'settings'; section?: SettingsSection };
 
 /** Top-level tabs shown on the home browsing surface. */
@@ -105,6 +106,8 @@ declare global {
 
 /** Mutable state for the browser client between render passes. */
 export interface AppState {
+  /** Live channels and personal DVR data are scoped to the current account. */
+  liveTv?: import('./liveTvActions').LiveTvState;
   apiBase: string;
   apiMode: ApiMode;
   route: AppRoute;

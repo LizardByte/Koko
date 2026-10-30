@@ -24,7 +24,9 @@ Encrypted or copy-protected channels are not supported.
 
 Choose a source type to see its connection settings. HDHomeRun and NextPVR can be discovered
 on the local network; Tvheadend can be discovered when its service announcements are enabled.
-Discovery runs from the Koko server. You can always enter the address manually if discovery
+Discovery runs from the Koko server. Select a device's card to fill in its connection settings.
+The selected card is highlighted; editing its address or tuner location clears the selection.
+You can always enter the address manually if discovery
 finds nothing, including when the source is on another subnet. For local tuners, choose a
 discovered device or enter its driver name/path, then select a supported frequency region.
 When no tuner is attached, **Find local tuners** reports that none were found.

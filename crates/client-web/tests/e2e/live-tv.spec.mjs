@@ -128,19 +128,48 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
   const panel = page.locator('details').filter({ has: page.locator('#tv-source-form') }).last();
   if (!(await panel.evaluate(node=>node.open))) await panel.locator('summary').first().click();
   const form = page.locator('#tv-source-form');
-  await page.route('**/api/v1/live-tv/discover/hdhomerun', route => route.fulfill({ json:[{name:'Discovered tuner',url:'http://192.0.2.10/',capacity:4}] }));
+  await page.route('**/api/v1/live-tv/discover/hdhomerun', route => route.fulfill({ json:[
+    {name:'Living room HDHomeRun',url:'http://192.0.2.10/',capacity:4},
+    {name:'Office HDHomeRun',url:'http://192.0.2.11/',capacity:2},
+  ] }));
   await form.getByRole('button',{name:'Find HDHomeRun',exact:true}).click();
-  await form.locator('[data-tv-discovered-source]').selectOption({label:'Discovered tuner · http://192.0.2.10/'});
+  const livingRoom = form.getByRole('radio', { name:/Living room HDHomeRun/ });
+  const office = form.getByRole('radio', { name:/Office HDHomeRun/ });
+  await expect(form.getByRole('radio')).toHaveCount(2);
+  await livingRoom.check();
   await expect(form.locator('[name="url"]')).toHaveValue('http://192.0.2.10/');
   await expect(form.locator('[name="capacity"]')).toHaveValue('4');
+  await expect(form.locator('[name="name"]')).toHaveValue('Living room HDHomeRun');
+  await form.locator('.live-tv-source-discovery').scrollIntoViewIfNeeded();
+  await form.locator('.live-tv-source-discovery').screenshot({ path:testInfo.outputPath('live-tv-discovery-cards.png') });
+  await page.setViewportSize({ width:390, height:844 });
+  await form.locator('.live-tv-discovery-results').scrollIntoViewIfNeeded();
+  const cards = await form.locator('.live-tv-discovery-card').evaluateAll(nodes => nodes.map(node => {
+    const rect = node.getBoundingClientRect(); return {left:rect.left, right:rect.right, top:rect.top, bottom:rect.bottom};
+  }));
+  expect(cards[0].left).toBeGreaterThanOrEqual(0);
+  expect(cards[0].right).toBeLessThanOrEqual(390);
+  expect(cards[1].top).toBeGreaterThanOrEqual(cards[0].bottom);
+  await page.screenshot({ path:testInfo.outputPath('live-tv-discovery-cards-mobile.png'), fullPage:true });
+  await page.setViewportSize({ width:1440, height:900 });
+  await livingRoom.focus(); await livingRoom.press('ArrowRight');
+  await expect(office).toBeChecked();
+  await expect(form.locator('[name="url"]')).toHaveValue('http://192.0.2.11/');
+  await expect(form.locator('[name="capacity"]')).toHaveValue('2');
+  await expect(form.locator('[name="name"]')).toHaveValue('Office HDHomeRun');
+  await form.locator('[name="name"]').fill('Antenna'); await livingRoom.check();
+  await expect(form.locator('[name="name"]')).toHaveValue('Antenna');
+  await form.locator('[name="url"]').fill('http://192.0.2.99/');
+  await expect(form.locator('input[type="radio"]:checked')).toHaveCount(0);
   if (process.env.KOKO_E2E_NEXT_PVR_URL) {
     const expected = new URL(process.env.KOKO_E2E_NEXT_PVR_URL).href;
     await page.locator('#tv-source-kind').selectOption('nextpvr');
     await form.getByRole('button', { name:'Find NextPVR', exact:true }).click();
-    const option = form.locator('[data-tv-discovered-source] option').filter({ hasText:expected });
-    await expect(option).toHaveCount(1);
-    await form.locator('[data-tv-discovered-source]').selectOption({ label:await option.textContent() });
+    const card = form.locator('.live-tv-discovery-card').filter({ hasText:expected });
+    await expect(card).toHaveCount(1);
+    await card.getByRole('radio').check();
     await expect(form.getByLabel('NextPVR address')).toHaveValue(expected);
+    await form.locator('.live-tv-source-discovery').screenshot({ path:testInfo.outputPath('live-tv-nextpvr-cards.png') });
   }
   await page.locator('#tv-source-kind').selectOption('m3u');
   await expect(form.getByLabel('IPTV playlist URL')).toBeVisible();
@@ -156,9 +185,19 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
   await expect.poll(()=>form.locator('[name="region"] option').count()).toBeGreaterThan(1);
   await expect(form.locator('input[name="region"]')).toHaveCount(0);
   await form.getByRole('button',{name:'Find local tuners',exact:true}).click();
-  await expect(form.locator('[data-tv-tuner-status]')).toContainText(/No tuners found|Select a tuner/);
+  await expect(form.locator('[data-tv-tuner-status]')).toContainText(/No tuners found|tuners? found\./);
   await expect(form.locator('[data-tv-tuner-status]')).not.toContainText('missing');
+  await page.route('**/api/v1/live-tv/tuners', route => route.fulfill({ json:[
+    {id:'/dev/dvb/adapter0',name:'Hauppauge test tuner',info:'DVB-T2'},
+    {id:'/dev/dvb/adapter1',name:'Second test tuner',info:'DVB-T2'},
+  ] }));
+  await form.getByRole('button',{name:'Find local tuners',exact:true}).click();
+  await form.getByRole('radio', {name:/Hauppauge test tuner/}).check();
+  await expect(form.getByLabel('Tuner location', {exact:true})).toHaveValue('/dev/dvb/adapter0');
+  await expect(form.locator('select[name="native_device"]')).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath('live-tv-settings.png'),fullPage:true});
+  await form.getByLabel('Tuner location', {exact:true}).fill('/dev/dvb/manual');
+  await expect(form.locator('input[type="radio"]:checked')).toHaveCount(0);
   const denied = await page.request.get('/api/v1/live-tv/discover/hdhomerun',{headers:{Authorization:'Bearer invalid'}});
   expect(denied.status()).toBe(401);
   expect(token).toBeTruthy();

@@ -92,7 +92,7 @@ test('native frequency regions come from supported options and manual tuner entr
   const dom = new JSDOM(renderLiveTvSettings());
   const select = dom.window.document.querySelector('select[name="region"]');
   assert.deepEqual([...select.options].map(o=>o.value),['Europe','North-America']);
-  assert.equal(select.value,'North-America'); assert.ok(dom.window.document.querySelector('[name="native_device_manual"]')); dom.window.close();
+  assert.equal(select.value,'North-America'); assert.ok(dom.window.document.querySelector('input[name="native_device"]')); dom.window.close();
 });
 
 test('the settings route requests administrator setup data without needing a Live TV setup tab', async () => {

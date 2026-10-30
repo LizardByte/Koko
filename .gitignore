@@ -43,6 +43,8 @@ test_data/
 # web client
 crates/client-web/node_modules/
 crates/client-web/dist/
+crates/client-web/test-results/
+crates/client-web/playwright-report/
 
 # dev temp files
 .dev/

@@ -91,3 +91,31 @@ Run the frontend behavior tests:
 ```cmd
 npm test
 ```
+
+## Real-browser playback tests
+
+Install Node.js 26, the repository's Rust toolchain, and FFmpeg with the `libx264` and AAC
+encoders. The fixture generator also needs the `lavfi` input device. Install Chrome, or run
+`npx playwright install --with-deps chrome` from this directory.
+
+Run `npm run test:e2e`. This builds the production web bundle and a server with
+`--no-default-features`, generates original video/audio/subtitle fixtures, and starts Koko with
+a temporary configuration and database. The suite exercises actual HTML media decoding and
+server FFmpeg conversion. Test failures retain screenshots, traces, and an HTML report.
+
+Set `KOKO_E2E_BROWSER=firefox` and run `npx playwright install --with-deps firefox` to test Firefox.
+
+Optional environment variables:
+
+| Variable                    | Purpose                                                     |
+|-----------------------------|-------------------------------------------------------------|
+| `KOKO_E2E_BROWSER`          | Browser engine, `chromium` (default) or `firefox`.          |
+| `KOKO_E2E_CHANNEL`          | Chromium browser channel; defaults to `chrome`.             |
+| `KOKO_E2E_FFMPEG`           | FFmpeg executable used by the server and encoder fixture.   |
+| `KOKO_E2E_FFPROBE`          | ffprobe executable used to scan fixtures.                   |
+| `KOKO_E2E_GENERATOR_FFMPEG` | Separate FFmpeg with `lavfi` for generated source media.    |
+| `KOKO_E2E_PORT`             | Server port, default `19192`; readiness uses the next port. |
+| `KOKO_E2E_SERVER`           | Existing server executable to use instead of building one.  |
+
+Use a browser channel with H.264/AAC support. Ordinary component tests remain available through
+`npm test` and are separate from this server-backed suite.

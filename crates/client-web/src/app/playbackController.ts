@@ -11,9 +11,12 @@ import {
   getItem,
   getSessionStreamUrl,
   getWebClientProfile,
+  getPlaybackSessionStatus,
+  finishPlaybackOnExit,
   resolveApiUrl,
   updatePlaybackProgress,
 } from '../api';
+import { PLAYBACK_QUALITIES, mediaPlaybackProblem, playbackDeliveryDetail, playbackDeliveryLabel, playbackProfile, playbackRequestProblem, renderPlaybackProblem, renderPlaybackQuality, type PlaybackQuality, type PlaybackProblem } from './playbackOptions';
 import { YOUTUBE_PLAYER_STATE, YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID } from './constants';
 import { escapeHtml, formatDuration, formatMediaTime } from './format';
 import { currentThemeSongTarget } from './mediaTargets';
@@ -26,6 +29,11 @@ type RenderCallback = (preserveScroll?: boolean) => void;
 type RefreshDataCallback = (showLoading?: boolean) => Promise<void>;
 
 let playbackRequest = 0;
+const compatiblePlaybackSources = new Set<string>();
+const reportedPlaybackErrors = new WeakMap<HTMLMediaElement, string | null>();
+const initializedMediaSources = new WeakMap<HTMLMediaElement, {
+  source: string; seekApplied: boolean; settingsApplied: boolean; started: boolean; cleanup?: () => void;
+}>();
 
 let renderApp: RenderCallback = () => undefined;
 let refreshAppData: RefreshDataCallback = () => Promise.resolve();
@@ -34,6 +42,7 @@ let refreshAppData: RefreshDataCallback = () => Promise.resolve();
 export function configurePlaybackController(callbacks: { render: RenderCallback; refreshData: RefreshDataCallback }): void {
   renderApp = callbacks.render;
   refreshAppData = callbacks.refreshData;
+  globalThis.addEventListener('pagehide', finishActivePlaybackOnExit);
 }
 
 function render(preserveScroll = true): void {
@@ -249,18 +258,20 @@ function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string): st
     : `<h2>${escapeHtml(title)}</h2>`;
 }
 
-function renderTranscodeBadge(isRemuxingForAudio: boolean): string {
+function renderTranscodeBadge(isAudioStreamOverride: boolean): string {
   const session = state.activePlaybackSession;
   if (!session) {
     return '';
   }
 
-  const transcodeReason = isRemuxingForAudio
-    ? 'Using a non-default audio track requires a remuxed stream.'
+  const transcodeReason = isAudioStreamOverride
+    ? 'Using this audio track requires a converted stream.'
     : session.decision.reason;
-  return session.decision.transcode_required || isRemuxingForAudio
-    ? `<span class="player-badge is-transcoding" title="${escapeHtml(transcodeReason)}">Transcoding</span>`
-    : `<span class="player-badge is-direct" title="${escapeHtml(session.decision.reason)}">Direct Play</span>`;
+  const label = playbackDeliveryLabel(session.decision, isAudioStreamOverride);
+  const detail = playbackDeliveryDetail(session.decision, isAudioStreamOverride);
+  const tooltip = `${detail}\n${transcodeReason}`;
+  const className = label === 'Direct Play' ? 'is-direct' : 'is-transcoding';
+  return `<span class="player-badge ${className}" title="${escapeHtml(tooltip)}">${label}</span>`;
 }
 
 function selectedAudioStreamIndexForPlayback(session: PlaybackSession): number | undefined {
@@ -299,36 +310,44 @@ function renderPictureInPictureButton(isAudio: boolean): string {
     : `<button id="player-pip" class="player-icon-button" type="button" title="Picture in picture" aria-label="Picture in picture">${renderIcon('picture-in-picture', 'player-control-icon')}</button>`;
 }
 
+function renderSubtitleSelection(item: MediaItemDetail): string {
+  if (!item.subtitle_tracks.length) return '';
+  const selected = state.playbackSettings?.subtitle;
+  const options = item.subtitle_tracks.map((track, index) =>
+    `<option value="${index}" ${track.label === selected ? 'selected' : ''}>${escapeHtml(track.label)}</option>`).join('');
+  return `<label class="player-quality">Subtitles <select id="player-subtitles" aria-label="Subtitles"><option value="-1">Off</option>${options}</select></label>`;
+}
+
 function renderMediaPlayerOverlay(): string {
   const playbackItem = state.activePlaybackItem ?? state.selectedItem;
   const playbackSession = state.activePlaybackSession;
-  if (!state.isPlayerOpen || !playbackItem || !playbackSession) {
+  if (!state.isPlayerOpen || !playbackItem) {
     return '';
   }
 
   const isAudio = playbackItem.media_kind === 'audio';
-  const selectedAudioStreamIndex = selectedAudioStreamIndexForPlayback(playbackSession);
+  const selectedAudioStreamIndex = playbackSession ? selectedAudioStreamIndexForPlayback(playbackSession) : state.activeAudioStreamIndex;
   const posterUrl = playbackPosterUrl(playbackItem);
   const backdropUrl = playbackBackdropUrl(playbackItem, posterUrl);
   const logoUrl = playbackItem.logo_url ? resolveApiUrl(playbackItem.logo_url) : undefined;
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
-  const isRemuxingForAudio = isAudioStreamOverride && !playbackSession.decision.transcode_required;
-  const source = getSessionStreamUrl(playbackSession.session_id, mediaStreamStartMs(playbackSession, isRemuxingForAudio), selectedAudioStreamIndex);
+  const isRemuxingForAudio = isAudioStreamOverride && !playbackSession?.decision.transcode_required;
+  const source = playbackSession ? getSessionStreamUrl(playbackSession.session_id, mediaStreamStartMs(playbackSession, isRemuxingForAudio), selectedAudioStreamIndex) : '';
   const audioTracks = playbackItem.audio_tracks ?? [];
   const activeAudioTrack = activeAudioTrackForSelection(audioTracks, selectedAudioStreamIndex);
-  const mediaElementMarkup = renderMediaElementMarkup(isAudio, source, posterUrl, renderSubtitleTrackMarkup(playbackItem, isAudio));
+  const mediaMarkup = source ? renderMediaElementMarkup(isAudio, source, posterUrl, renderSubtitleTrackMarkup(playbackItem, isAudio)) : '';
+  const mediaElementMarkup = state.playbackSettings?.paused ? mediaMarkup.replace(' autoplay', '') : mediaMarkup;
   const audioTrackMenuMarkup = renderAudioTrackMenuMarkup(isAudio, audioTracks, activeAudioTrack);
 
   return `
     <div class="player-overlay media-player-overlay">
-      <div class="player-shell media-player-shell ${mediaPlayerShellClass(isAudio)} is-controls-visible" tabindex="-1" ${playerBackdropStyle(backdropUrl)}>
+      <div class="player-shell media-player-shell ${mediaPlayerShellClass(isAudio)} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(backdropUrl)}>
         ${mediaElementMarkup}
         <div class="player-loading-indicator" aria-live="polite">
           <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
         </div>
         <div class="player-error-indicator" aria-live="polite">
-          <strong>Playback could not start</strong>
-          <span>Try another audio track or start playback again.</span>
+          ${renderPlaybackProblem(state.playbackProblem)}
         </div>
         <div class="player-idle-hit-area" aria-hidden="true"></div>
         <div class="player-top-controls player-controls">
@@ -337,7 +356,7 @@ function renderMediaPlayerOverlay(): string {
             ${renderPlayerTitleMarkup(logoUrl, playbackItem.display_title)}
           </div>
           <div class="player-top-actions">
-            ${renderTranscodeBadge(isRemuxingForAudio)}
+            ${renderTranscodeBadge(isAudioStreamOverride)}
             <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
           </div>
         </div>
@@ -356,6 +375,8 @@ function renderMediaPlayerOverlay(): string {
               <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
               <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
               ${audioTrackMenuMarkup}
+              ${isAudio ? '' : renderPlaybackQuality(state.activePlaybackQuality ?? 'original')}
+              ${isAudio ? '' : renderSubtitleSelection(playbackItem)}
               ${renderPictureInPictureButton(isAudio)}
               <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
             </div>
@@ -589,6 +610,7 @@ export function syncThemeSongPlayer(): void {
 
 /** Stops any active browser playback session and clears playback state. */
 export function closeActivePlaybackSession(): void {
+  saveActivePlaybackProgress();
   state.isPlayerOpen = false;
   document.body.style.cursor = '';
   playbackRequest += 1;
@@ -598,6 +620,8 @@ export function closeActivePlaybackSession(): void {
   state.activePlaybackStartMs = 0;
   state.activeAudioStreamIndex = undefined;
   state.isAudioTrackMenuOpen = false;
+  state.playbackProblem = undefined;
+  state.playbackSettings = undefined;
   render();
   if (sessionToClose) {
     deletePlaybackSession(sessionToClose.session_id)
@@ -614,13 +638,24 @@ export function closeActivePlaybackSession(): void {
 
 /** Starts a browser playback session for an already-loaded media item. */
 async function startMediaPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
+  saveActivePlaybackProgress();
+  state.activePlaybackQuality = 'original';
+  state.activePlaybackCompatible = false;
+  state.playbackSettings = undefined;
+  state.activeAudioStreamIndex = undefined;
+  await replaceMediaPlayback(item, startMs);
+}
+
+async function replaceMediaPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
   const request = ++playbackRequest;
+  const account = state.bootstrap?.current_user?.id;
+  state.activePlaybackCompatible ||= compatiblePlaybackSources.has(playbackSourceKey(item.id));
   const previousSession = state.activePlaybackSession;
   state.activePlaybackSession = undefined;
   state.activePlaybackItem = item;
   state.activePlaybackStartMs = Math.max(0, startMs);
   state.isPlayerOpen = true;
-  state.activeAudioStreamIndex = undefined;
+  state.playbackProblem = undefined;
   state.isAudioTrackMenuOpen = false;
   render();
 
@@ -630,16 +665,134 @@ async function startMediaPlayback(item: MediaItemDetail, startMs: number): Promi
     });
   }
 
-  const session = await createPlaybackSession({
-    item_id: item.id,
-    client_profile: getWebClientProfile(),
-  });
-  if (request !== playbackRequest) {
-    await deletePlaybackSession(session.session_id);
-    return;
+  try {
+    const session = await createPlaybackSession({
+      item_id: item.id,
+      client_profile: playbackProfile(getWebClientProfile(), state.activePlaybackQuality ?? 'original', state.activePlaybackCompatible ?? false),
+    });
+    if (request !== playbackRequest || account !== state.bootstrap?.current_user?.id) {
+      await deletePlaybackSession(session.session_id);
+      return;
+    }
+    state.activePlaybackSession = session;
+  } catch (error) {
+    if (request !== playbackRequest || account !== state.bootstrap?.current_user?.id) return;
+    state.playbackProblem = playbackRequestProblem(error);
   }
-  state.activePlaybackSession = session;
   render();
+}
+
+function activePlaybackPositionMs(player = document.querySelector<HTMLMediaElement>('#media-player')): number {
+  if (!player) return state.activePlaybackStartMs;
+  const offset = Number(player.dataset.playbackOffsetMs ?? 0);
+  const position = offset + Math.max(0, player.currentTime || 0) * 1000;
+  // Keep a requested resume target if the stream failed before loading metadata.
+  return Math.floor(player.readyState === 0 ? Math.max(position, state.activePlaybackStartMs) : position);
+}
+
+function activeProgressRequest(): { position_ms: number; duration_ms?: number; completed: boolean } {
+  const player = document.querySelector<HTMLMediaElement>('#media-player');
+  return { position_ms: activePlaybackPositionMs(player), duration_ms: state.activePlaybackItem?.duration_ms,
+    completed: Boolean(player?.ended && !state.playbackProblem) };
+}
+
+function saveActivePlaybackProgress(): void {
+  if (!state.activePlaybackSession || !state.activePlaybackItem) return;
+  const progress = activeProgressRequest();
+  document.querySelector<HTMLMediaElement>('#media-player')?.pause();
+  void updatePlaybackProgress(state.activePlaybackItem.id, progress).catch((error) => console.warn('Failed to save playback position', error));
+}
+
+function finishActivePlaybackOnExit(): void {
+  if (state.activePlaybackSession && state.activePlaybackItem) {
+    finishPlaybackOnExit(state.activePlaybackSession.session_id, state.activePlaybackItem.id, activeProgressRequest());
+  }
+}
+
+/** Recreates a session at the source position; automatic recovery can preserve the intended pause state. */
+export async function restartMediaPlayback(quality?: PlaybackQuality, compatible?: boolean, paused?: boolean): Promise<void> {
+  const item = state.activePlaybackItem;
+  if (!state.isPlayerOpen || !item) return;
+  const player = document.querySelector<HTMLMediaElement>('#media-player');
+  const position = activePlaybackPositionMs(player);
+  if (player) {
+    rememberPlaybackSettings(player);
+  }
+  if (paused !== undefined && state.playbackSettings) state.playbackSettings.paused = paused;
+  saveActivePlaybackProgress();
+  if (quality) {
+    state.activePlaybackQuality = quality;
+    state.activePlaybackCompatible = false;
+  }
+  if (compatible !== undefined) state.activePlaybackCompatible = compatible;
+  await replaceMediaPlayback(item, position);
+}
+
+function playbackSourceKey(itemId: number): string {
+  return `${state.apiBase}\n${state.bootstrap?.current_user?.id}\n${itemId}`;
+}
+
+function rememberPlaybackSettings(player: HTMLMediaElement): void {
+  state.playbackSettings = { paused: player.paused && !state.playbackProblem, volume: player.volume, muted: player.muted,
+    subtitle: Array.from(player.textTracks).find((track) => track.mode === 'showing')?.label };
+}
+
+function showPlaybackProblem(problem: PlaybackProblem): void {
+  state.playbackProblem = problem;
+  const shell = document.querySelector<HTMLElement>('.media-player-shell');
+  shell?.classList.remove('is-media-loading', 'is-controls-hidden');
+  shell?.classList.add('has-media-error', 'is-controls-visible');
+  const indicator = shell?.querySelector<HTMLElement>('.player-error-indicator');
+  if (indicator) indicator.innerHTML = renderPlaybackProblem(problem);
+}
+
+async function reportMediaError(player: HTMLMediaElement, code = player.error?.code ?? 0): Promise<void> {
+  const session = state.activePlaybackSession;
+  const request = playbackRequest;
+  const source = player.getAttribute('src');
+  const isCurrent = (): boolean => request === playbackRequest && state.isPlayerOpen
+    && player.isConnected && document.querySelector('#media-player') === player && player.getAttribute('src') === source;
+  if (!session || !isCurrent() || reportedPlaybackErrors.get(player) === source) return;
+  reportedPlaybackErrors.set(player, source);
+  const copiedVideo = !session.decision.video_transcode_required
+    && (state.activeAudioStreamIndex ?? session.audio_stream_index ?? 0) === 0;
+  const canRecover = (code === 3 || code === 4) && copiedVideo && !state.activePlaybackCompatible;
+  if (!canRecover) showPlaybackProblem(mediaPlaybackProblem(code, state.activePlaybackCompatible ?? false));
+  try {
+    const status = await getPlaybackSessionStatus(session.session_id);
+    if (!isCurrent()) return;
+    if (canRecover && !status.error) {
+      const paused = state.playbackSettings?.paused ?? false;
+      // Capability queries can succeed even when the browser cannot create the actual decoder.
+      state.playbackProblem = mediaPlaybackProblem(code, false);
+      await restartMediaPlayback(undefined, true, paused);
+      return;
+    }
+    showPlaybackProblem(mediaPlaybackProblem(code, state.activePlaybackCompatible ?? false, status));
+  } catch (error) {
+    if (isCurrent()) showPlaybackProblem(playbackRequestProblem(error));
+  }
+}
+
+function bindPlaybackRecovery(): void {
+  document.querySelector('.media-player-shell .player-error-indicator')?.addEventListener('click', (event) => {
+    const target = (event.target as Element).closest('button');
+    if (target?.hasAttribute('data-player-retry')) void restartMediaPlayback();
+    if (target?.hasAttribute('data-player-compatible')) void restartMediaPlayback(undefined, true);
+    if (target?.hasAttribute('data-player-sign-in')) globalThis.location.reload();
+  });
+  document.querySelector<HTMLSelectElement>('#player-quality')?.addEventListener('change', (event) => {
+    const quality = (event.target as HTMLSelectElement).value;
+    const selected = PLAYBACK_QUALITIES.find((entry) => entry.id === quality);
+    if (selected) void restartMediaPlayback(selected.id);
+  });
+  document.querySelector<HTMLSelectElement>('#player-subtitles')?.addEventListener('change', (event) => {
+    const selected = Number((event.target as HTMLSelectElement).value);
+    const player = document.querySelector<HTMLMediaElement>('#media-player');
+    if (!player) return;
+    for (const [index, track] of Array.from(player.textTracks).entries()) track.mode = index === selected ? 'showing' : 'disabled';
+    rememberPlaybackSettings(player);
+  });
 }
 
 /** Start an album in disc/track order, optionally beginning at a selected track. */
@@ -927,7 +1080,7 @@ export function bindTrailerPlayer(): void {
     shell.addEventListener(eventName, showControls, { passive: true });
   });
   shell.addEventListener('keydown', (event) => {
-    if (event.target instanceof HTMLInputElement) {
+    if (event.target instanceof Element && event.target.closest('input, select, button')) {
       return;
     }
     if (event.key === ' ' || event.key === 'k') {
@@ -1057,6 +1210,7 @@ export function bindTrailerPlayer(): void {
 
 /** Binds controls for the browser playback overlay in the current DOM tree. */
 export function bindPlayerProgress(): void {
+  bindPlaybackRecovery();
   const player = document.querySelector<HTMLMediaElement>('#media-player');
   const playbackItem = state.activePlaybackItem ?? state.selectedItem;
   if (!player || !playbackItem) {
@@ -1082,9 +1236,39 @@ export function bindPlayerProgress(): void {
   const requestedPlaybackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
   const playbackBaseOffsetSeconds = isTranscoding ? requestedPlaybackStartSeconds : 0;
   const initialDirectSeekSeconds = isTranscoding ? 0 : requestedPlaybackStartSeconds;
+  player.dataset.playbackOffsetMs = String(playbackBaseOffsetSeconds * 1000);
+  const source = player.getAttribute('src') ?? '';
+  let initialization = initializedMediaSources.get(player);
+  initialization?.cleanup?.();
+  if (initialization?.source !== source) {
+    initialization = { source, seekApplied: false, settingsApplied: false, started: false };
+    initializedMediaSources.set(player, initialization);
+  }
+  const mediaInitialization = initialization;
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
-  let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0;
+  let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0 || mediaInitialization.seekApplied;
+  let stallHandle: number | undefined;
+  mediaInitialization.cleanup = () => {
+    if (controlsHideHandle !== undefined) globalThis.clearTimeout(controlsHideHandle);
+    if (stallHandle !== undefined) globalThis.clearTimeout(stallHandle);
+  };
+
+  const trackPlaybackStall = (loading: boolean): void => {
+    if (!loading || player.paused || state.playbackProblem) {
+      if (stallHandle !== undefined) globalThis.clearTimeout(stallHandle);
+      stallHandle = undefined;
+      return;
+    }
+    if (stallHandle !== undefined) return;
+    const source = player.getAttribute('src');
+    stallHandle = globalThis.setTimeout(() => {
+      if (player.isConnected && player.getAttribute('src') === source && !player.paused
+        && player.readyState < player.HAVE_FUTURE_DATA && !state.playbackProblem) {
+        void reportMediaError(player, 2);
+      }
+    }, 20000);
+  };
 
   const playbackDurationSeconds = (): number => {
     if (sourceDurationSeconds > 0) {
@@ -1099,16 +1283,12 @@ export function bindPlayerProgress(): void {
   const setPlayerLoading = (loading: boolean): void => {
     const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
     shell?.classList.toggle('is-media-loading', shouldShowLoading);
-    shell?.classList.remove('has-media-error');
+    trackPlaybackStall(shouldShowLoading);
+    if (!state.playbackProblem) shell?.classList.remove('has-media-error');
   };
 
   const refreshPlayerLoading = (): void => {
     setPlayerLoading(!player.paused && player.readyState < player.HAVE_FUTURE_DATA);
-  };
-
-  const setPlayerError = (): void => {
-    shell?.classList.remove('is-media-loading');
-    shell?.classList.add('has-media-error');
   };
 
   const updatePlayButtons = (): void => {
@@ -1168,6 +1348,7 @@ export function bindPlayerProgress(): void {
     try {
       player.currentTime = targetPosition;
       hasAppliedInitialDirectSeek = true;
+      mediaInitialization.seekApplied = true;
       updateTimeline();
     } catch (error) {
       console.warn('Failed to seek direct-play item to resume position', error);
@@ -1182,7 +1363,7 @@ export function bindPlayerProgress(): void {
       globalThis.clearTimeout(controlsHideHandle);
     }
     controlsHideHandle = globalThis.setTimeout(() => {
-      if (!player.paused && !isScrubbing) {
+      if (!player.paused && !isScrubbing && !state.playbackProblem && document.activeElement?.closest('.player-controls') === null) {
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');
         document.body.style.cursor = 'none';
@@ -1192,8 +1373,10 @@ export function bindPlayerProgress(): void {
 
   const seekBy = (seconds: number): void => {
     const currentPosition = playbackBaseOffsetSeconds + player.currentTime;
-    const targetPosition = Math.max(0, currentPosition + seconds);
+    const limit = sourceDurationSeconds > 0 ? Math.max(0, sourceDurationSeconds - 0.25) : Number.POSITIVE_INFINITY;
+    const targetPosition = Math.min(limit, Math.max(0, currentPosition + seconds));
     if (isTranscoding) {
+      rememberPlaybackSettings(player);
       state.activePlaybackStartMs = Math.floor(targetPosition * 1000);
       render(false);
       return;
@@ -1208,6 +1391,8 @@ export function bindPlayerProgress(): void {
   const seekWithEscalation = createEscalatingSeekHandler(seekBy);
 
   const togglePlayback = (): void => {
+    rememberPlaybackSettings(player);
+    state.playbackSettings!.paused = !player.paused;
     if (player.paused) {
       void player.play();
     } else {
@@ -1308,6 +1493,7 @@ export function bindPlayerProgress(): void {
         return;
       }
       state.activeAudioStreamIndex = nextAudioTrackIndex;
+      rememberPlaybackSettings(player);
       state.activePlaybackStartMs = Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000);
       setAudioTrackMenuOpen(false);
       render(false);
@@ -1360,8 +1546,9 @@ export function bindPlayerProgress(): void {
   progress?.addEventListener('change', () => {
     const duration = playbackDurationSeconds();
     if (duration > 0) {
-      const targetPosition = (Number(progress.value) / 1000) * duration;
+      const targetPosition = Math.min(Math.max(0, duration - 0.25), (Number(progress.value) / 1000) * duration);
       if (isTranscoding) {
+        rememberPlaybackSettings(player);
         state.activePlaybackStartMs = Math.floor(targetPosition * 1000);
         render(false);
         return;
@@ -1382,29 +1569,37 @@ export function bindPlayerProgress(): void {
     applyInitialDirectSeek();
     setPlayerLoading(false);
   });
-  player.addEventListener('playing', () => setPlayerLoading(false));
+  player.addEventListener('playing', () => {
+    setPlayerLoading(false);
+    if (state.activePlaybackCompatible && state.activePlaybackItem?.id === playbackItem.id) {
+      compatiblePlaybackSources.add(playbackSourceKey(playbackItem.id));
+    }
+  });
   player.addEventListener('error', () => {
-    setPlayerError();
+    void reportMediaError(player);
     console.error('Media playback failed', player.error);
   });
   player.addEventListener('loadedmetadata', () => {
     applyInitialDirectSeek();
+    applyPlaybackSettings();
     updateTimeline();
   });
   player.addEventListener('play', () => {
     updatePlayButtons();
+    refreshPlayerLoading();
     showControls();
   });
   player.addEventListener('pause', () => {
     updatePlayButtons();
+    refreshPlayerLoading();
     showControls();
   });
   player.addEventListener('volumechange', updateMuteButton);
   player.addEventListener('timeupdate', () => {
-    setPlayerLoading(false);
+    refreshPlayerLoading();
     updateTimeline();
     const currentSeconds = Math.floor(player.currentTime);
-    if (currentSeconds === lastSentSeconds || currentSeconds % 15 !== 0) {
+    if (lastSentSeconds >= 0 && Math.abs(currentSeconds - lastSentSeconds) < 15) {
       return;
     }
 
@@ -1413,17 +1608,21 @@ export function bindPlayerProgress(): void {
       position_ms: Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000),
       duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: false,
-    });
+    }).catch((error) => console.warn('Failed to save playback position', error));
   });
 
   player.addEventListener('ended', () => {
+    if (sourceDurationSeconds > playbackBaseOffsetSeconds + player.currentTime + 2) {
+      void reportMediaError(player);
+      return;
+    }
     updatePlayButtons();
     showControls();
     void updatePlaybackProgress(playbackItem.id, {
       position_ms: playbackItem.duration_ms ?? Math.floor((playbackBaseOffsetSeconds + (Number.isFinite(player.duration) ? player.duration : 0)) * 1000),
       duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: true,
-    });
+    }).catch((error) => console.warn('Failed to save completed playback', error));
   });
 
   updatePlayButtons();
@@ -1432,10 +1631,29 @@ export function bindPlayerProgress(): void {
   updateTimeline();
   setPlayerLoading(player.readyState < player.HAVE_FUTURE_DATA);
   showControls();
-  void player.play().catch((error) => {
+  if (state.playbackSettings) {
+    player.volume = state.playbackSettings.volume;
+    player.muted = state.playbackSettings.muted;
+  }
+  const applyPlaybackSettings = (): void => {
+    if (mediaInitialization.settingsApplied) return;
+    mediaInitialization.settingsApplied = true;
+    const saved = state.playbackSettings;
+    if (!saved) return;
+    player.volume = saved.volume;
+    player.muted = saved.muted;
+    for (const track of Array.from(player.textTracks)) track.mode = track.label === saved.subtitle ? 'showing' : 'disabled';
+    if (saved.paused) player.pause();
+  };
+  if (player.readyState >= player.HAVE_METADATA) applyPlaybackSettings();
+  const shouldStart = !mediaInitialization.started;
+  mediaInitialization.started = true;
+  if (state.playbackSettings?.paused || !shouldStart) return;
+  void player.play().catch((error: unknown) => {
     console.warn('Autoplay after opening player was blocked or failed', error);
     updatePlayButtons();
     setPlayerLoading(false);
     showControls();
+    if (error instanceof DOMException && error.name === 'NotSupportedError') void reportMediaError(player);
   });
 }

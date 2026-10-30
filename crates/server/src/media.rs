@@ -657,6 +657,9 @@ pub struct ClientProfile {
     pub supports_adaptive_streaming: bool,
     /// Whether the client prefers HLS over raw progressive download.
     pub prefer_hls: bool,
+    /// Explicitly re-encode supported streams when recovering from a decoder failure.
+    #[serde(default)]
+    pub force_transcode: bool,
 }
 
 /// Direct-play versus transcode decision for one media item.
@@ -3608,26 +3611,17 @@ pub fn get_playback_decision(
             max_bitrate_kbps: 0,
             supports_adaptive_streaming: false,
             prefer_hls: false,
+            force_transcode: false,
         };
         let p = profile.unwrap_or(&default_profile);
 
         let can_direct_play = item.playable && can_client_direct_play(&row, p);
         let mime_type = detect_mime_type(&row);
 
-        let video_codec =
-            if row.media_kind == "audio" { "" } else { row.video_codec.as_deref().unwrap_or("") };
-        let audio_codec = row.audio_codec.as_deref().unwrap_or("");
-        let video_transcode_required = !video_codec.is_empty()
-            && !p
-                .supported_video_codecs
-                .iter()
-                .any(|c| codec_matches(video_codec, c));
-        let audio_transcode_required = (row.media_kind == "audio" && !can_direct_play)
-            || !audio_codec.is_empty()
-                && !p
-                    .supported_audio_codecs
-                    .iter()
-                    .any(|c| codec_matches(audio_codec, c));
+        let exceeds_quality_limits = row.media_kind != "audio"
+            && (!within_resolution_limits(&row, p) || !within_bitrate_limit(&row, p));
+        let (video_transcode_required, audio_transcode_required) =
+            playback_codec_requirements(&row, p, can_direct_play, exceeds_quality_limits);
 
         // Target codecs when transcoding is required
         let transcode_video_codec =
@@ -3640,7 +3634,11 @@ pub fn get_playback_decision(
             item_id,
             can_direct_play,
             transcode_required: item.playable && !can_direct_play,
-            reason: if can_direct_play {
+            reason: if p.force_transcode {
+                "Compatible playback was requested by the client.".into()
+            } else if exceeds_quality_limits {
+                "Transcoding to the selected resolution or bitrate limit.".into()
+            } else if can_direct_play {
                 "Client direct play is supported for this item.".into()
             } else {
                 "A transcode path will be required for playback.".into()
@@ -5308,10 +5306,54 @@ fn can_client_direct_play(
         true // No audio track -> skip check
     };
 
-    is_supported_container
+    !profile.force_transcode
+        && is_supported_container
         && is_supported_video
         && is_supported_audio
-        && (file.media_kind == "audio" || within_resolution_limits(file, profile))
+        && (file.media_kind == "audio"
+            || (within_resolution_limits(file, profile) && within_bitrate_limit(file, profile)))
+}
+
+/// Determine which tracks require encoding while leaving compatible tracks untouched.
+fn playback_codec_requirements(
+    file: &CatalogMediaFile,
+    profile: &ClientProfile,
+    can_direct_play: bool,
+    exceeds_quality_limits: bool,
+) -> (bool, bool) {
+    let video_codec =
+        if file.media_kind == "audio" { "" } else { file.video_codec.as_deref().unwrap_or("") };
+    let audio_codec = file.audio_codec.as_deref().unwrap_or("");
+    let video_required = file.media_kind != "audio"
+        && (profile.force_transcode
+            || exceeds_quality_limits
+            || !video_codec.is_empty()
+                && !profile
+                    .supported_video_codecs
+                    .iter()
+                    .any(|codec| codec_matches(video_codec, codec)));
+    let audio_required = profile.force_transcode
+        || exceeds_quality_limits
+        || (file.media_kind == "audio" && !can_direct_play)
+        || !audio_codec.is_empty()
+            && !profile
+                .supported_audio_codecs
+                .iter()
+                .any(|codec| codec_matches(audio_codec, codec));
+    (video_required, audio_required)
+}
+
+fn within_bitrate_limit(
+    file: &CatalogMediaFile,
+    profile: &ClientProfile,
+) -> bool {
+    if profile.max_bitrate_kbps == 0 {
+        return true;
+    }
+    // Unknown bitrates cannot establish that the original meets a bandwidth cap.
+    file.bit_rate
+        .filter(|rate| *rate > 0)
+        .is_some_and(|rate| rate <= i64::from(profile.max_bitrate_kbps) * 1000)
 }
 
 fn detect_mime_type(file: &CatalogMediaFile) -> Option<String> {

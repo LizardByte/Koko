@@ -73,6 +73,7 @@ pub fn api_routes() -> Vec<rocket::Route> {
         media::get_item_playback,
         media::create_session,
         media::delete_session,
+        media::get_session_status,
         media::search_items,
         media::update_item_progress,
         settings::get_settings,

@@ -2744,6 +2744,45 @@ img[src$="/librivox.png"] { filter: invert(1); }
   color: #b8c7df;
 }
 
+.media-player-shell .player-error-indicator {
+  inset: 18% 5% 25%;
+  z-index: 4;
+  align-content: center;
+  justify-items: center;
+  padding: 1rem;
+  background: rgba(10, 14, 24, 0.9);
+  border-radius: var(--radius-control);
+}
+
+.media-player-shell .player-error-indicator span {
+  max-width: 60ch;
+}
+
+.player-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  pointer-events: auto;
+}
+
+.player-quality {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.player-quality select {
+  width: auto;
+  max-width: 12rem;
+  padding: 0.5rem;
+  background: #0a0e18;
+  color: #fff;
+}
+
 .has-media-error .player-error-indicator {
   display: grid;
 }

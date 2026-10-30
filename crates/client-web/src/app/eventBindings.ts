@@ -749,6 +749,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
   document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
     stopMusic();
+    if (state.isPlayerOpen) closeActivePlaybackSession();
     try {
       await logoutUser();
     } catch (error) {

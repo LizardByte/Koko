@@ -91,9 +91,9 @@
 .tv-player-channel-logo img { width: 100%; max-height: 100%; object-fit: contain; }
 .media-player-shell.has-tv-guide video { width: calc(100% - min(430px,36vw)); }
 .has-tv-guide .player-top-controls, .has-tv-guide .player-bottom-controls { right: min(430px,36vw); }
-.has-tv-guide .player-control-row { grid-template-columns: auto minmax(0,1fr); gap: .65rem; }
+.has-tv-guide .player-control-row { grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: .65rem; }
 .has-tv-guide .player-time-cluster { justify-content: flex-start; }
-.has-tv-guide .player-transport-cluster { justify-content: flex-end; }
+.has-tv-guide .player-transport-cluster { justify-content: center; }
 .has-tv-guide .player-tool-cluster { grid-column: 1 / -1; justify-content: center; flex-wrap: wrap; }
 .tv-preview-player .player-control-row { justify-content: space-between; }
 @media (max-width: 850px) {

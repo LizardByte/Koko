@@ -81,7 +81,17 @@ pub(crate) async fn nextpvr_artwork(
         })
         .await
         .map_err(super::db_error)?;
+    if !uses_nextpvr_artwork(&source) {
+        return Err("Program artwork is unavailable from the selected guide".into());
+    }
     nextpvr_image(source, "name", title, poster).await
+}
+
+/// Only NextPVR's own automatic guide may supply title-based program artwork.
+pub(crate) fn uses_nextpvr_artwork(source: &Source) -> bool {
+    source.enabled
+        && source.kind == "nextpvr"
+        && config(source).is_ok_and(|config| matches!(config.guide_kind.as_str(), "" | "automatic"))
 }
 
 pub(crate) async fn nextpvr_channel_artwork(

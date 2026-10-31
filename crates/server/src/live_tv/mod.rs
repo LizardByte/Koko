@@ -47,6 +47,7 @@ pub(crate) use sources::{
     refresh,
     replace_source,
     save_source,
+    uses_nextpvr_artwork,
 };
 pub(crate) use storage::claim_deletion;
 pub(crate) use storage::{

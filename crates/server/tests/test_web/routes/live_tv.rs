@@ -5,6 +5,7 @@ use crate::test_utils::{
     login_user,
     schema::{
         live_tv_channels as c,
+        live_tv_programs as p,
         live_tv_recordings as r,
         live_tv_sources as s,
         users,
@@ -22,6 +23,91 @@ use serde_json::{
     Value,
     json,
 };
+
+#[rocket::async_test]
+async fn live_tv_program_artwork_respects_the_selected_guide() {
+    let (client, admin) = create_admin_test_client(Some("live_tv_artwork_provider")).await;
+    let now = chrono::Utc::now().timestamp();
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(move |conn| {
+            for (id, guide, artwork) in [
+                (1, "zap2it", true),
+                (2, "gracenote", true),
+                (3, "xmltv", true),
+                (4, "upload", true),
+                (5, "broadcast", true),
+                (6, "automatic", false),
+                (7, "", false),
+                (8, "automatic", true),
+                (9, "zap2it", false),
+            ] {
+                diesel::insert_into(s::table)
+                    .values((
+                        s::id.eq(id),
+                        s::name.eq(format!("Guide {id}")),
+                        s::kind.eq("nextpvr"),
+                        s::config_json.eq(json!({"guide_kind":guide}).to_string()),
+                        s::capacity.eq(1),
+                        s::next_refresh.eq(i64::MAX),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+                let metadata = if artwork {
+                    json!({"image":"https://example.com/episode.jpg","poster":"https://example.com/series.jpg"})
+                } else {
+                    json!({})
+                };
+                diesel::insert_into(p::table)
+                    .values((
+                        p::id.eq(id),
+                        p::source_id.eq(id),
+                        p::guide_key.eq("station"),
+                        p::title.eq("Last Man Standing"),
+                        p::starts_at.eq(now-30),
+                        p::ends_at.eq(now+3600),
+                        p::metadata_json.eq(metadata.to_string()),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+            }
+        })
+        .await;
+    let response = client
+        .get("/api/v1/live-tv/guide")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+    let response: Value = response.into_json().await.unwrap();
+    for program in response["programs"].as_array().unwrap() {
+        let id = program["id"].as_i64().unwrap();
+        if matches!(id, 6 | 7) {
+            assert_eq!(
+                program["metadata"]["image"],
+                format!("/api/v1/live-tv/programs/{id}/artwork")
+            );
+            assert_eq!(
+                program["metadata"]["poster"],
+                format!("/api/v1/live-tv/programs/{id}/artwork?kind=poster")
+            );
+        } else if id == 9 {
+            assert!(program["metadata"]["image"].is_null());
+            assert!(program["metadata"]["poster"].is_null());
+        } else {
+            assert_eq!(
+                program["metadata"]["image"],
+                "https://example.com/episode.jpg"
+            );
+            assert_eq!(
+                program["metadata"]["poster"],
+                "https://example.com/series.jpg"
+            );
+        }
+    }
+    assert_eq!(response["programs"].as_array().unwrap().len(), 9);
+}
 
 #[rocket::async_test]
 async fn live_tv_routes_enforce_setup_roles_and_recording_ownership() {

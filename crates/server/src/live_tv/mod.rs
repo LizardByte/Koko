@@ -1,5 +1,6 @@
 //! Live television sources, guide data, and shared or private DVR schedules.
 
+pub(crate) mod artwork;
 mod broadcast;
 mod buffer_files;
 pub(crate) mod discovery;
@@ -9,6 +10,7 @@ pub(crate) mod gracenote;
 mod native;
 pub(crate) mod preferences;
 mod proxy;
+mod retention;
 pub(crate) mod settings;
 mod sources;
 mod storage;

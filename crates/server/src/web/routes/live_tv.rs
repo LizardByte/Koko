@@ -194,7 +194,8 @@ pub async fn get_guide(
     }
     db.run(move |conn| {
         let sources = tv::guide_sources(conn)?;
-        let nextpvr_artwork_sources: std::collections::HashSet<_> = tv::list_sources(conn)?
+        let configured_sources = tv::list_sources(conn)?;
+        let nextpvr_artwork_sources: std::collections::HashSet<_> = configured_sources
             .iter()
             .filter(|source| tv::uses_nextpvr_artwork(source))
             .map(|source| source.id)
@@ -213,6 +214,11 @@ pub async fn get_guide(
                 });
             }
         }
+        tv::artwork::decorate(
+            &mut programs,
+            &configured_sources,
+            &crate::config::current_settings().metadata,
+        );
         Ok::<_, diesel::result::Error>(GuideResponse {
             programs,
             stations: tv::guide_stations(conn)?,
@@ -225,15 +231,31 @@ pub async fn get_guide(
     .map_err(database)
 }
 
-/// Fetch program artwork without exposing the tuner server's session or PIN.
+/// Artwork is either a provider image redirect or an authenticated tuner image.
+#[derive(rocket::Responder)]
+pub enum ProgramArtwork {
+    Remote(rocket::response::Redirect),
+    Tuner((rocket::http::ContentType, Vec<u8>)),
+}
+
+/// Fetch program artwork without exposing provider credentials or the tuner server's PIN.
 #[get("/api/v1/live-tv/programs/<id>/artwork?<kind>")]
 pub async fn program_artwork(
     _user: UserGuard,
     db: DbConn,
     id: i32,
     kind: Option<&str>,
-) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
-    artwork_response(tv::nextpvr_artwork(&db, id, kind == Some("poster")).await)
+) -> Result<ProgramArtwork, Status> {
+    let poster = kind == Some("poster");
+    if let Some(url) = tv::artwork::image_url(&db, id, poster)
+        .await
+        .map_err(|_| Status::NotFound)?
+    {
+        return Ok(ProgramArtwork::Remote(
+            rocket::response::Redirect::temporary(url),
+        ));
+    }
+    artwork_response(tv::nextpvr_artwork(&db, id, poster).await).map(ProgramArtwork::Tuner)
 }
 
 /// Fetch a channel icon without exposing the tuner server's session or PIN.

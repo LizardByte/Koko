@@ -178,6 +178,26 @@ test('setup includes Zap2It lineup discovery, DVR storage, and per-user permissi
   assert.doesNotMatch(html, /Install TSDuck/);
 });
 
+test('program artwork settings are separate from guide selection and retain provider attribution', () => {
+  state.bootstrap = { current_user: { id: 1, admin: true } };
+  state.liveTv = data({ setupKind: 'nextpvr' });
+  const settings = new JSDOM(renderLiveTvSettings());
+  const form = settings.window.document.querySelector('#tv-source-form');
+  assert.equal(form.querySelector('[name="guide_kind"]').value, 'automatic');
+  const artwork = form.querySelector('[name="artwork_provider"]');
+  assert.deepEqual([...artwork.options].map(option => option.value), ['automatic', 'guide', 'tmdb', 'tvdb']);
+  artwork.value = 'guide';
+  assert.equal(form.querySelector('[name="guide_kind"]').value, 'automatic');
+  settings.window.close();
+  state.liveTv.programs = [{ ...program, metadata: { ...program.metadata, artwork_sources: ['tmdb', 'tvdb'] } }];
+  const guide = new JSDOM(renderLiveTvPage());
+  const attribution = guide.window.document.querySelector('.tv-artwork-attribution');
+  assert.ok(attribution);
+  assert.match(attribution.innerHTML, /themoviedb|tmdb/i);
+  assert.match(attribution.innerHTML, /thetvdb|tvdb/i);
+  guide.window.close();
+});
+
 test('native frequency regions come from supported options and manual tuner entry remains available', () => {
   state.bootstrap = { current_user: { id: 1, admin: true } };
   state.liveTv = data({ setupKind:'native', regions:['Europe','North-America'] });

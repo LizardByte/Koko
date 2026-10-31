@@ -12,6 +12,7 @@ export interface TvMetadata {
   subtitle?: string | null; description?: string | null; categories?: string[]; image?: string | null;
   rating?: string | null; episode?: string | null; episode_id?: string | null; credits?: string[]; is_new?: boolean | null; poster?: string | null;
   is_live?: boolean | null; is_premiere?: boolean | null; is_finale?: boolean | null;
+  year?: number | null; series_id?: string | null; artwork_sources?: string[];
 }
 /** A scheduled broadcast using UTC seconds. */
 export interface TvProgram {
@@ -51,6 +52,7 @@ export function closeTvBufferOnExit(id: string): void {
 /** Source connection, guide, and optional native tuner settings supplied during setup. */
 export interface TvSourceConfig {
   url: string; pin: string; xmltv_url: string; guide_kind: string;
+  artwork_provider?: string;
   adapter?: number; frontend?: number; zap_path?: string; multiplex_urls?: string[];
   zap2it?: TvGuideSelection; refresh_hours?: number;
   native_device?: string; delivery_system?: string; region?: string; tuning_options?: string;

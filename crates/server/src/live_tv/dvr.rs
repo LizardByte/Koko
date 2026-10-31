@@ -337,6 +337,22 @@ pub(crate) fn start_workers(
             }
         }
         let mut workers = tokio::task::JoinSet::new();
+        let maintenance_db = db.clone();
+        workers.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                if let Err(error) = maintenance_db
+                    .run(|conn| {
+                        super::retention::prune(conn, super::now())?;
+                        super::artwork::prune(conn, super::now())
+                    })
+                    .await
+                {
+                    log::warn!("Unable to remove expired TV listings: {error}");
+                }
+            }
+        });
         let refresh_db = db.clone();
         workers.spawn(async move {
             let mut refreshes = tokio::task::JoinSet::new();

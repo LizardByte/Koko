@@ -5,6 +5,8 @@
 .tv-record-options form { padding: 1rem 0; max-width: 600px; }
 .tv-guide-toolbar, #tv-filter-form, .tv-guide-filters, .tv-guide-views { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
 .tv-hero-channel { display: flex; align-items: center; gap: .75rem; }
+.tv-artwork-attribution { display: flex; align-items: center; gap: .5rem; font-size: .75rem; color: var(--text-muted); margin-top: .5rem; }
+.tv-artwork-attribution img { max-width: 70px; max-height: 22px; }
 .tv-hero-channel-logo { width: 52px; max-height: 40px; object-fit: contain; flex: none; }
 .home-feature img[hidden] { display: none; }
 .tv-guide-toolbar { justify-content: space-between; margin: 1rem 0; }

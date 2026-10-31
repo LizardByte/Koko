@@ -337,6 +337,11 @@ test('Live TV Settings separates setup flows and finds local tuner metadata with
   const panel = page.locator('details').filter({ has: page.locator('#tv-source-form') }).last();
   if (!(await panel.evaluate(node=>node.open))) await panel.locator('summary').first().click();
   const form = page.locator('#tv-source-form');
+  await expect(form.getByRole('combobox', {name:'Program artwork',exact:true})).toHaveValue('automatic');
+  await form.getByRole('combobox', {name:'Program artwork',exact:true}).selectOption('guide');
+  await expect(form.getByRole('combobox', {name:'Guide source',exact:true})).toHaveValue('automatic');
+  await form.getByRole('combobox', {name:'Program artwork',exact:true}).selectOption('tvdb');
+  await expect(form.getByRole('combobox', {name:'Guide source',exact:true})).toHaveValue('automatic');
   await page.route('**/api/v1/live-tv/discover/hdhomerun', route => route.fulfill({ json:[
     {name:'Living room HDHomeRun',url:'http://192.0.2.10/',capacity:4},
     {name:'Office HDHomeRun',url:'http://192.0.2.11/',capacity:2},

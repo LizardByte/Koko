@@ -130,7 +130,7 @@ fn owner(user: &UserGuard) -> Result<i32, Error> {
 pub async fn get_channels(
     _user: UserGuard,
     db: DbConn,
-) -> Result<Json<Vec<tv::Channel>>, Error> {
+) -> Result<Json<Vec<tv::providers::PublicChannel>>, Error> {
     db.run(|conn| {
         let mut channels = tv::channels(conn, false)?;
         let sources = tv::guide_sources(conn)?;
@@ -142,7 +142,7 @@ pub async fn get_channels(
                 channel.logo = Some(format!("/api/v1/live-tv/channels/{}/artwork", channel.id));
             }
         }
-        Ok::<_, diesel::result::Error>(channels)
+        tv::providers::decorate(conn, channels, false)
     })
     .await
     .map(Json)
@@ -155,11 +155,14 @@ pub async fn get_channels(
 pub async fn get_setup_channels(
     _admin: AdminGuard,
     db: DbConn,
-) -> Result<Json<Vec<tv::Channel>>, Error> {
-    db.run(|conn| tv::channels(conn, true))
-        .await
-        .map(Json)
-        .map_err(database)
+) -> Result<Json<Vec<tv::providers::PublicChannel>>, Error> {
+    db.run(|conn| {
+        let channels = tv::channels(conn, true)?;
+        tv::providers::decorate(conn, channels, true)
+    })
+    .await
+    .map(Json)
+    .map_err(database)
 }
 
 /// Program guide and station identities used for channel mapping.
@@ -169,6 +172,8 @@ pub struct GuideResponse {
     stations: Vec<tv::Station>,
     sources: Vec<tv::GuideSource>,
     preferences: tv::preferences::Preferences,
+    source_groups: Vec<tv::setup::SourceGroup>,
+    providers: Vec<tv::providers::ProviderSummary>,
 }
 
 /// Return a bounded UTC guide window for all enabled sources.
@@ -224,6 +229,8 @@ pub async fn get_guide(
             stations: tv::guide_stations(conn)?,
             sources,
             preferences: tv::preferences::load(conn, user)?,
+            source_groups: tv::setup::groups(conn)?,
+            providers: tv::providers::all_summaries(conn)?,
         })
     })
     .await
@@ -392,8 +399,43 @@ pub async fn stream_buffer(
 pub async fn get_sources(
     _admin: AdminGuard,
     db: DbConn,
-) -> Result<Json<Vec<tv::Source>>, Error> {
-    db.run(tv::list_sources).await.map(Json).map_err(database)
+) -> Result<Json<Vec<tv::setup::SourceSummary>>, Error> {
+    db.run(tv::setup::sources).await.map(Json).map_err(database)
+}
+
+/// Read administrator connection fields, retaining a masked PIN on subsequent edits.
+#[openapi(tag = "Live TV")]
+#[get("/api/v1/live-tv/sources/<id>/connection")]
+pub async fn get_source_connection(
+    _admin: AdminGuard,
+    db: DbConn,
+    id: i32,
+) -> Result<Json<tv::SourceConnection>, Error> {
+    tv::connection(&db, id).await.map(Json).map_err(error)
+}
+
+/// Read shared guide source groups without exposing connection credentials.
+#[openapi(tag = "Live TV")]
+#[get("/api/v1/live-tv/source-groups")]
+pub async fn get_source_groups(
+    _admin: AdminGuard,
+    db: DbConn,
+) -> Result<Json<Vec<tv::setup::SourceGroup>>, Error> {
+    db.run(tv::setup::groups).await.map(Json).map_err(database)
+}
+
+/// Group independent source connections into shared guide lineups.
+#[openapi(tag = "Live TV")]
+#[put("/api/v1/live-tv/source-groups", format = "json", data = "<body>")]
+pub async fn set_source_groups(
+    _admin: AdminGuard,
+    db: DbConn,
+    body: Json<Vec<tv::setup::SourceGroup>>,
+) -> Result<Status, Error> {
+    db.run(move |conn| tv::setup::save_groups(conn, body.into_inner()))
+        .await
+        .map_err(error)?;
+    Ok(Status::NoContent)
 }
 
 /// Source creation result; refresh errors preserve the configured source for correction.
@@ -420,6 +462,31 @@ pub async fn add_source(
     }))
 }
 
+/// Remove a connection and its future timers while keeping saved DVR recordings and files.
+#[openapi(tag = "Live TV")]
+#[delete("/api/v1/live-tv/sources/<id>")]
+pub async fn remove_source(
+    _admin: AdminGuard,
+    db: DbConn,
+    id: i32,
+) -> Result<Status, Error> {
+    tv::removal::remove(&db, id)
+        .await
+        .map_err(|failure| match failure {
+            tv::removal::RemoveError::Database(value) => database(value),
+            tv::removal::RemoveError::Busy => rocket::response::status::Custom(
+                Status::Conflict,
+                Json(TvError {
+                    kind: "live_tv_operation",
+                    message: "Stop playback and active recordings from this source before \
+                              removing it"
+                        .into(),
+                }),
+            ),
+        })?;
+    Ok(Status::NoContent)
+}
+
 /// Replace connection settings without discarding channel IDs, mappings, or DVR schedules.
 #[openapi(tag = "Live TV")]
 #[put(
@@ -437,6 +504,84 @@ pub async fn replace_source(
         .await
         .map_err(error)?;
     Ok(Status::NoContent)
+}
+
+/// Queue channel and guide refresh without making the browser wait for a tuner scan.
+#[openapi(tag = "Live TV")]
+#[put(
+    "/api/v1/live-tv/sources/<id>/providers/<provider>",
+    format = "json",
+    data = "<body>"
+)]
+pub async fn set_provider(
+    _admin: AdminGuard,
+    db: DbConn,
+    id: i32,
+    provider: String,
+    body: Json<tv::providers::ProviderUpdate>,
+) -> Result<Status, Error> {
+    db.run(move |conn| tv::providers::update(conn, id, &provider, body.into_inner()))
+        .await
+        .map_err(error)?;
+    Ok(Status::NoContent)
+}
+
+/// Upload an image for a source or provider; binary images are decoded and resized before storage.
+#[put("/api/v1/live-tv/sources/<id>/image?<provider>", data = "<data>")]
+pub async fn upload_source_image(
+    _admin: AdminGuard,
+    db: DbConn,
+    id: i32,
+    provider: Option<String>,
+    data: rocket::Data<'_>,
+) -> Result<Status, Error> {
+    use rocket::data::ToByteUnit;
+    let bytes = data
+        .open(5.mebibytes())
+        .into_bytes()
+        .await
+        .map_err(|_| error("Unable to read the image".into()))?;
+    if !bytes.is_complete() {
+        return Err(error("Choose an image smaller than 5 MiB".into()));
+    }
+    let bytes = bytes.into_inner();
+    let image = rocket::tokio::task::spawn_blocking(move || tv::providers::prepare_image(&bytes))
+        .await
+        .map_err(|_| error("Unable to process the image".into()))?
+        .map_err(error)?;
+    db.run(move |conn| tv::providers::set_image(conn, id, provider.as_deref(), Some(image)))
+        .await
+        .map_err(error)?;
+    Ok(Status::NoContent)
+}
+
+/// Restore the bundled icon for a source or provider.
+#[delete("/api/v1/live-tv/sources/<id>/image?<provider>")]
+pub async fn remove_source_image(
+    _admin: AdminGuard,
+    db: DbConn,
+    id: i32,
+    provider: Option<String>,
+) -> Result<Status, Error> {
+    db.run(move |conn| tv::providers::set_image(conn, id, provider.as_deref(), None))
+        .await
+        .map_err(error)?;
+    Ok(Status::NoContent)
+}
+
+/// Read normalized source/provider artwork using the same authenticated image flow as channel
+/// icons.
+#[get("/api/v1/live-tv/sources/<id>/image?<provider>")]
+pub async fn source_image(
+    _user: UserGuard,
+    db: DbConn,
+    id: i32,
+    provider: Option<String>,
+) -> Result<(rocket::http::ContentType, Vec<u8>), Status> {
+    db.run(move |conn| tv::providers::image(conn, id, provider.as_deref()))
+        .await
+        .map(|data| (rocket::http::ContentType::PNG, data))
+        .map_err(|_| Status::NotFound)
 }
 
 /// Queue channel and guide refresh without making the browser wait for a tuner scan.
@@ -482,7 +627,13 @@ pub async fn set_source(
         return Err(error("The stream limit must be between 1 and 64".into()));
     }
     let kind = db
-        .run(move |conn| s::table.find(id).select(s::kind).first::<String>(conn))
+        .run(move |conn| {
+            s::table
+                .find(id)
+                .filter(s::kind.ne("removed"))
+                .select(s::kind)
+                .first::<String>(conn)
+        })
         .await
         .map_err(database)?;
     if matches!(kind.as_str(), "dvb" | "native") {
@@ -490,7 +641,7 @@ pub async fn set_source(
     }
     let count = db
         .run(move |conn| {
-            diesel::update(s::table.find(id))
+            diesel::update(s::table.find(id).filter(s::kind.ne("removed")))
                 .set((s::enabled.eq(body.enabled), s::capacity.eq(body.capacity)))
                 .execute(conn)
         })
@@ -803,15 +954,15 @@ pub async fn upload_guide(
     data: rocket::Data<'_>,
 ) -> Result<Status, Error> {
     use rocket::data::ToByteUnit;
-    let value = data
-        .open(64.mebibytes())
-        .into_string()
+    use tokio::io::AsyncWriteExt;
+    let mut file = tv::feeds::temporary().map_err(error)?;
+    tokio::io::copy(&mut data.open(u64::MAX.bytes()), &mut file)
         .await
         .map_err(|_| error("Unable to read the XMLTV upload".into()))?;
-    if !value.is_complete() {
-        return Err(error("The XMLTV upload exceeds 64 MiB".into()));
-    }
-    tv::import_guide(&db, id, value.into_inner())
+    file.flush()
+        .await
+        .map_err(|_| error("Unable to save the XMLTV upload; check temporary disk space".into()))?;
+    tv::import_guide(&db, id, file.into_std().await)
         .await
         .map_err(error)?;
     Ok(Status::NoContent)

@@ -2,7 +2,7 @@
 import type { AppState } from './types';
 import { createGamepadNavigationReader, type GamepadNavigationAction } from './gamepadNavigation';
 import { findSpatialTarget, type NavigationDirection } from './spatialNavigation';
-import { rememberTvGuideFocus, rememberTvGuidePointer, restoreTvGuideFocus, tvGuideNavigationTarget, tvGuideNavigationTime } from './tvGuideNavigation';
+import { rememberTvGuideFocus, rememberTvGuidePointer, restoreTvGuideFocus, tvGuideNavigationTarget, tvGuideNavigationTime, tvGuideJumpTarget } from './tvGuideNavigation';
 import { TV_WINDOW_SECONDS } from './tvGuideTime';
 
 const SECTION_SELECTOR = '[data-nav-section]';
@@ -351,6 +351,8 @@ function handleNavigationKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   if (handleSearchKey(event, target) || handleSectionTab(event, target)) return;
   if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+  const jump = target ? tvGuideJumpTarget(target,event.key) : undefined;
+  if (jump) {focusControl(jump.target);event.preventDefault();return;}
   const directions: Record<string, NavigationDirection> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
   if (directions[event.key] && navigationSections().length) {
     moveFocus(directions[event.key]);

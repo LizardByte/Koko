@@ -1,5 +1,209 @@
 //! Live TV setup permissions and personal DVR ownership must also hold at the HTTP boundary.
 
+#[rocket::async_test]
+async fn iptv_provider_visibility_and_icons_enforce_roles_and_media_cookie_boundaries() {
+    use crate::test_utils::schema::app_settings as a;
+    let (client, admin) = create_admin_test_client(Some("iptv_provider_images")).await;
+    let password = format!("fixture-{:032x}", rand::random::<u128>());
+    let hash = bcrypt::hash(&password, 4).unwrap();
+    DbConn::get_one(client.rocket()).await.unwrap().run(move |conn| {
+        diesel::insert_into(users::table)
+            .values((users::id.eq(2),users::username.eq("provider-viewer"),
+                users::password.eq(hash),users::admin.eq(false)))
+            .execute(conn).unwrap();
+        diesel::insert_into(s::table).values((s::id.eq(1),s::name.eq("IPTV"),s::kind.eq("m3u"),s::config_json.eq(json!({"provider_grouping":true,"url":"http://example.com/tv.m3u"}).to_string()),s::capacity.eq(2),s::next_refresh.eq(i64::MAX))).execute(conn).unwrap();
+        for id in [1,2] {
+            diesel::insert_into(c::table).values((c::id.eq(id),c::source_id.eq(1),
+                c::source_key.eq(format!("channel-{id}")),c::name.eq(format!("Channel {id}")),
+                c::number.eq(id.to_string()),c::group_name.eq("Sports"),
+                c::stream_url.eq("http://example.com/stream"),
+                c::guide_key.eq(format!("guide-{id}")),
+                c::logo.eq(format!("http://example.com/logo-{id}.png"))))
+                .execute(conn).unwrap();
+        }
+        diesel::insert_into(a::table).values((a::key.eq("live_tv_metadata:1"),a::value.eq(json!({"channels":{"channel-1":{"provider":"espn","identity":"espn.espn1","bridge":true},"channel-2":{"provider":"sling","identity":"sling.sports","bridge":true}}}).to_string()),a::updated_at.eq(0))).execute(conn).unwrap();
+    }).await;
+    let viewer = login_user(&client, "provider-viewer", &password, Some(Status::Ok))
+        .await
+        .unwrap();
+    let body = json!({"name":"My Sports","enabled":false,"icon_channel_id":1,"remove_icon":false});
+    let response = client
+        .put("/api/v1/live-tv/sources/1/providers/espn")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .header(ContentType::JSON)
+        .body(body.to_string())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Forbidden);
+    let response = client
+        .put("/api/v1/live-tv/sources/1/providers/espn")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .header(ContentType::JSON)
+        .body(body.to_string())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NoContent);
+    let channels: Value = client
+        .get("/api/v1/live-tv/channels")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .dispatch()
+        .await
+        .into_json()
+        .await
+        .unwrap();
+    assert_eq!(channels.as_array().unwrap().len(), 1);
+    assert_eq!(channels[0]["provider_id"], "sling");
+    assert!(channels[0].get("stream_url").is_none());
+    let guide: Value = client
+        .get("/api/v1/live-tv/guide")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .dispatch()
+        .await
+        .into_json()
+        .await
+        .unwrap();
+    let espn = guide["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "espn")
+        .unwrap();
+    assert_eq!(espn["name"], "My Sports");
+    assert_eq!(espn["image_url"], "http://example.com/logo-1.png");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 3)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let response = client
+        .put("/api/v1/live-tv/sources/1/image")
+        .cookie(Cookie::new("koko_media_auth", admin.clone()))
+        .body(png.get_ref().clone())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+    let response = client
+        .put("/api/v1/live-tv/sources/1/image")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .body(png.get_ref().clone())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Forbidden);
+    for path in [
+        "/api/v1/live-tv/sources/1/image",
+        "/api/v1/live-tv/sources/1/image?provider=espn",
+    ] {
+        let response = client
+            .put(path)
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .body(png.get_ref().clone())
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::NoContent);
+        let response = client
+            .get(path)
+            .cookie(Cookie::new("koko_media_auth", viewer.clone()))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type(), Some(ContentType::PNG));
+        let response = client
+            .get(path)
+            .cookie(Cookie::new("koko_media_auth", "invalid"))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Unauthorized);
+        let response = client
+            .delete(path)
+            .cookie(Cookie::new("koko_media_auth", admin.clone()))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Unauthorized);
+        let response = client
+            .delete(path)
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::NoContent);
+        let response = client
+            .get(path)
+            .cookie(Cookie::new("koko_media_auth", viewer.clone()))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::NotFound);
+    }
+    let invalid = json!({"name":"ESPN","enabled":true,"icon_channel_id":2,"remove_icon":false});
+    let response = client
+        .put("/api/v1/live-tv/sources/1/providers/espn")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .header(ContentType::JSON)
+        .body(invalid.to_string())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::BadRequest);
+
+    let response = client
+        .delete("/api/v1/live-tv/sources/1")
+        .header(Header::new("Authorization", format!("Bearer {viewer}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Forbidden);
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            diesel::insert_into(r::table)
+                .values((
+                    r::id.eq(991),
+                    r::user_id.eq(1),
+                    r::channel_id.eq(1),
+                    r::title.eq("Active capture"),
+                    r::starts_at.eq(100_i64),
+                    r::ends_at.eq(200_i64),
+                    r::padding_before.eq(0),
+                    r::padding_after.eq(0),
+                    r::state.eq("recording"),
+                    r::metadata_json.eq("{}"),
+                ))
+                .execute(conn)
+                .unwrap();
+        })
+        .await;
+    let response = client
+        .delete("/api/v1/live-tv/sources/1")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Conflict);
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            diesel::delete(r::table.find(991)).execute(conn).unwrap();
+        })
+        .await;
+    for (path, status) in [
+        ("/api/v1/live-tv/sources/1", Status::NoContent),
+        ("/api/v1/live-tv/sources/1", Status::NotFound),
+        ("/api/v1/live-tv/sources/999", Status::NotFound),
+    ] {
+        let response = client
+            .delete(path)
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), status);
+    }
+    let sources: Value = client
+        .get("/api/v1/live-tv/sources")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json()
+        .await
+        .unwrap();
+    assert_eq!(sources, json!([]));
+}
+
 use crate::test_utils::{
     create_admin_test_client,
     login_user,
@@ -23,6 +227,204 @@ use serde_json::{
     Value,
     json,
 };
+
+#[rocket::async_test]
+async fn live_tv_connection_editing_retains_saved_pin_and_groups_sources_without_merging_them() {
+    let (client, admin) = create_admin_test_client(Some("live_tv_source_editing")).await;
+    let pin = format!("{:032x}", rand::random::<u128>());
+    let original = pin.clone();
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(move |conn| {
+            for id in [1, 2] {
+                diesel::insert_into(s::table)
+                    .values((
+                        s::id.eq(id),
+                        s::name.eq(format!("Source {id}")),
+                        s::kind.eq("nextpvr"),
+                        s::config_json.eq(json!({"url":"http://tv.local:8866","pin":pin,
+                    "guide_kind":"automatic","refresh_hours":12})
+                        .to_string()),
+                        s::capacity.eq(id),
+                        s::enabled.eq(false),
+                        s::next_refresh.eq(i64::MAX),
+                    ))
+                    .execute(conn)
+                    .unwrap();
+            }
+        })
+        .await;
+    let response = client
+        .get("/api/v1/live-tv/sources/1/connection")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+    let mut connection: Value = response.into_json().await.unwrap();
+    assert_eq!(
+        connection["source"]["config"]["url"],
+        "http://tv.local:8866"
+    );
+    assert_eq!(connection["source"]["config"]["refresh_hours"], 12);
+    assert_eq!(connection["source"]["config"]["pin"], "");
+    assert_eq!(connection["has_pin"], true);
+    connection["source"]["config"]["preserve_pin"] = json!(true);
+    connection["source"]["config"]["url"] = json!("http://edited.local:8866");
+    let response = client
+        .put("/api/v1/live-tv/sources/1/connection")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .header(ContentType::JSON)
+        .body(connection["source"].to_string())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NoContent);
+    let config = DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            s::table
+                .find(1)
+                .select(s::config_json)
+                .first::<String>(conn)
+                .unwrap()
+        })
+        .await;
+    let config: Value = serde_json::from_str(&config).unwrap();
+    assert_eq!(config["pin"], original);
+    assert_eq!(config["url"], "http://edited.local:8866");
+    let groups = json!([{"id":"combined","name":"FastChannels","source_ids":[1,2]}]);
+    let response = client
+        .put("/api/v1/live-tv/source-groups")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .header(ContentType::JSON)
+        .body(groups.to_string())
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NoContent);
+    let guide: Value = client
+        .get("/api/v1/live-tv/guide")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json()
+        .await
+        .unwrap();
+    assert_eq!(guide["source_groups"], groups);
+    let sources: Value = client
+        .get("/api/v1/live-tv/sources")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await
+        .into_json()
+        .await
+        .unwrap();
+    assert_eq!(sources.as_array().unwrap().len(), 2);
+    assert_eq!(sources[0]["capacity"], 1);
+    assert_eq!(sources[1]["capacity"], 2);
+    assert!(!sources.to_string().contains(&original));
+    assert!(!guide.to_string().contains(&original));
+    for path in [
+        "/api/v1/live-tv/sources/1/connection",
+        "/api/v1/live-tv/source-groups",
+    ] {
+        assert_eq!(
+            client
+                .get(path)
+                .header(Header::new("Authorization", "Bearer invalid"))
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
+    }
+}
+
+#[rocket::async_test]
+async fn live_tv_large_xmltv_uploads_support_gzip_and_preserve_data_on_invalid_input() {
+    use std::io::Write;
+    let (client, admin) = create_admin_test_client(Some("live_tv_large_upload")).await;
+    DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            diesel::insert_into(s::table)
+                .values((
+                    s::id.eq(1),
+                    s::name.eq("IPTV"),
+                    s::kind.eq("m3u"),
+                    s::config_json.eq("{}"),
+                    s::capacity.eq(1),
+                    s::next_refresh.eq(i64::MAX),
+                ))
+                .execute(conn)
+                .unwrap();
+        })
+        .await;
+    let now = chrono::Utc::now();
+    let xml = format!(
+        "<channel id='station'><display-name>TV</display-name></channel><programme \
+         channel='station' start='{} +0000' stop='{} +0000'><title>Large \
+         upload</title></programme></tv>",
+        now.format("%Y%m%d%H%M%S"),
+        (now + chrono::Duration::hours(1)).format("%Y%m%d%H%M%S")
+    );
+    let padding = format!("<!--{}-->", "x".repeat(1017));
+    let mut body = String::from("<tv>");
+    for _ in 0..65 * 1024 {
+        body.push_str(&padding);
+    }
+    body.push_str(&xml);
+    assert!(body.len() > 64 * 1024 * 1024);
+    let response = client
+        .post("/api/v1/live-tv/sources/1/xmltv")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .header(ContentType::XML)
+        .body(body)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NoContent);
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    write!(encoder, "<tv>{xml}").unwrap();
+    let compressed = encoder.finish().unwrap();
+    let response = client
+        .post("/api/v1/live-tv/sources/1/xmltv")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .body(compressed)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NoContent);
+    let response = client
+        .post("/api/v1/live-tv/sources/1/xmltv")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .body("<tv><channel id='broken'/>")
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::BadRequest);
+    let (count, config) = DbConn::get_one(client.rocket())
+        .await
+        .unwrap()
+        .run(|conn| {
+            (
+                p::table
+                    .filter(p::source_id.eq(1))
+                    .count()
+                    .get_result::<i64>(conn)
+                    .unwrap(),
+                s::table
+                    .find(1)
+                    .select(s::config_json)
+                    .first::<String>(conn)
+                    .unwrap(),
+            )
+        })
+        .await;
+    assert_eq!(count, 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(&config).unwrap()["guide_kind"],
+        "upload"
+    );
+}
 
 #[rocket::async_test]
 async fn live_tv_program_artwork_respects_the_selected_guide() {
@@ -55,7 +457,10 @@ async fn live_tv_program_artwork_respects_the_selected_guide() {
                     .execute(conn)
                     .unwrap();
                 let metadata = if artwork {
-                    json!({"image":"https://example.com/episode.jpg","poster":"https://example.com/series.jpg"})
+                    json!({
+                        "image":"https://example.com/episode.jpg",
+                        "poster":"https://example.com/series.jpg"
+                    })
                 } else {
                     json!({})
                 };
@@ -65,8 +470,8 @@ async fn live_tv_program_artwork_respects_the_selected_guide() {
                         p::source_id.eq(id),
                         p::guide_key.eq("station"),
                         p::title.eq("Last Man Standing"),
-                        p::starts_at.eq(now-30),
-                        p::ends_at.eq(now+3600),
+                        p::starts_at.eq(now - 30),
+                        p::ends_at.eq(now + 3600),
                         p::metadata_json.eq(metadata.to_string()),
                     ))
                     .execute(conn)
@@ -227,6 +632,8 @@ async fn live_tv_routes_enforce_setup_roles_and_recording_ownership() {
     }
     for path in [
         "/api/v1/live-tv/sources",
+        "/api/v1/live-tv/sources/1/connection",
+        "/api/v1/live-tv/source-groups",
         "/api/v1/live-tv/setup/channels",
         "/api/v1/live-tv/tuners",
         "/api/v1/live-tv/tuners/regions",

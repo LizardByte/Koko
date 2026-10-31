@@ -405,14 +405,17 @@ async fn capture_inner(
         .arg(session.directory.join("buffer.m3u8"))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    let mut segmenter = command
-        .spawn()
-        .map_err(|_| "Unable to start the TV buffer; check FFmpeg")?;
+    let mut segmenter = stream::Pipeline::new(
+        command
+            .spawn()
+            .map_err(|_| "Unable to start the TV buffer; check FFmpeg")?,
+    );
     let mut input = segmenter
+        .child
         .stdin
         .take()
         .ok_or("TV buffer did not open an input")?;
@@ -466,10 +469,14 @@ async fn capture_inner(
             }
         }
         if let Some(status) = segmenter
+            .child
             .try_wait()
             .map_err(|_| "Unable to check the TV buffer")?
         {
             if !status.success() {
+                tokio::task::yield_now().await;
+                pipeline.report_error();
+                segmenter.report_error();
                 failure =
                     Some("TV buffering stopped; check the source and available disk space".into());
             }
@@ -487,7 +494,7 @@ async fn capture_inner(
     {
         pump.abort();
     }
-    let _ = tokio::time::timeout(Duration::from_secs(3), segmenter.wait()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), segmenter.child.wait()).await;
     refresh_segments(session).await;
     copy_kept_segments(session).await?;
     failure.map_or(Ok(()), Err)

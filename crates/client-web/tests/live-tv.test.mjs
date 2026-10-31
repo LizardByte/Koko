@@ -10,17 +10,37 @@ globalThis.localStorage = { getItem: () => null };
 const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false, ws: false } });
 after(() => server.close());
 const { channelPrograms, renderLiveTvPage, tvImage } = await server.ssrLoadModule('/src/app/liveTv.ts');
-const { loadLiveTv } = await server.ssrLoadModule('/src/app/liveTvActions.ts');
+const { loadLiveTv,sourceConfig } = await server.ssrLoadModule('/src/app/liveTvActions.ts');
 const { renderLiveTvSettings } = await server.ssrLoadModule('/src/app/liveTvSetup.ts');
+const { renderTvGuideMapping,bindTvGuideMappings } = await server.ssrLoadModule('/src/app/liveTvMapping.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { programPosition, programBadges, matchesTvCategory, visibleGuideChannels, guideSources } = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
 const { renderPlayerOverlay } = await server.ssrLoadModule('/src/app/playbackController.ts');
 const { TvPlaybackWatchdog } = await server.ssrLoadModule('/src/app/tvPlaybackRecovery.ts');
 const { currentGuideWindow,programAtTime } = await server.ssrLoadModule('/src/app/tvGuideTime.ts');
+const {tvGuideRowRange,tvGuideViewKey} = await server.ssrLoadModule('/src/app/tvGuideViewport.ts');
+const {guideViews,activeGuideView} = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
+const {hydrateTvConnections,hydrateTvProviders} = await server.ssrLoadModule('/src/app/liveTvSourceActions.ts');
+const {renderTvSourceIcon,recoverTvSourceImage} = await server.ssrLoadModule('/src/app/liveTvIcons.ts');
 const {renderTvPlayerProgram} = await server.ssrLoadModule('/src/app/tvPlayer.ts');
 const now = Math.floor(Date.now() / 1000);
 const channel = { id: 1, source_id: 1, source_key: 'source', name: 'Test TV', number: '7.1', group_name: 'News', guide_key: 'station', enabled: true, available: true };
+
+test('source artwork falls back from an uploaded icon to its application logo and then Lucide',()=>{
+  const dom=new JSDOM(renderTvSourceIcon({kind:'nextpvr',image_url:'https://example.com/upload.png'}));
+  const image=dom.window.document.querySelector('img');
+  assert.equal(image.src,'https://example.com/upload.png');
+  recoverTvSourceImage(image);
+  assert.match(image.src,/\/assets\/providers\/nextpvr\.ico$/);
+  assert.equal(image.hidden,false);
+  recoverTvSourceImage(image);
+  assert.equal(image.hidden,true);
+  assert.ok(dom.window.document.querySelector('.tv-icon-fallback [data-lucide="database-zap"]'));
+  assert.doesNotMatch(renderTvSourceIcon({kind:'m3u'}),/<img/);
+  assert.match(renderTvSourceIcon({kind:'m3u',iptv_mode:'fastchannels'}),/\/assets\/providers\/fastchannels\.svg/);
+  dom.window.close();
+});
 const program = { id: 1, source_id: 1, guide_key: 'station', title: 'News', starts_at: now - 30, ends_at: now + 3600, metadata: { description: 'Evening news', categories: ['News'], credits: ['Presenter'] } };
 function data(extra = {}) {
   return { owner: 1, channels: [channel], programs: [program], stations: [], recordings: [], rules: [], sources: [], conflicts: [], windowStart: now, tab: 'guide', loading: false, ...extra };
@@ -31,6 +51,53 @@ function api(extra = {}) {
 }
 
 test('live television has its own persistent route', () => { assert.deepEqual(parseRoute(), { page: 'live-tv' }); });
+
+test('provider views keep categories and favorites scoped to the selected provider',()=>{
+  const first={...channel,provider_id:'espn'},second={...channel,id:2,provider_id:'sling'};
+  const providers=[{source_id:1,id:'espn',name:'ESPN',enabled:true,channel_count:1},{source_id:1,id:'sling',name:'Sling',enabled:true,channel_count:1}];
+  const model=data({channels:[first,second],providers,preferences:{favorites:[1,2],recent:[2,1]}});
+  assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[1,2]);
+  const original=tvGuideViewKey(model);model.providerView='1:espn';assert.notEqual(tvGuideViewKey(model),original);
+  assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[1]);
+  model.providerView='1:sling';model.channelView='favorites';assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[2]);
+  model.sourceId=2;model.channels.push({...second,id:3,source_id:2});assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[]);
+});
+
+test('IPTV provider editing offers channel icon references only from that provider',()=>{
+  state.bootstrap={current_user:{id:1,admin:true}};
+  const providers=[{source_id:1,id:'espn',name:'ESPN',enabled:true,channel_count:1,icon_channel_id:1,has_custom_icon:false}];
+  state.liveTv=data({providerEditor:'1:espn',sources:[{id:1,kind:'m3u',name:'IPTV',capacity:3,enabled:true,providers}],channels:[{...channel,provider_id:'espn',logo:'http://logos.local/espn.png'},{...channel,id:2,provider_id:'sling',logo:'http://logos.local/sling.png'}]});
+  const dom=new JSDOM(renderLiveTvSettings());const select=dom.window.document.querySelector('[name="icon_channel"]');
+  assert.equal(select.value,'channel:1');assert.ok(select.querySelector('option[value="channel:1"]'));assert.equal(select.querySelector('option[value="channel:2"]'),null);
+  assert.ok(dom.window.document.querySelector('[aria-label="Upload icon for ESPN"]'));dom.window.close();
+});
+
+test('IPTV connection edits retain their preset and can explicitly disable provider grouping',()=>{
+  state.bootstrap={current_user:{id:1,admin:true}};
+  const config={url:'http://fastchannels.local:5523',pin:'',xmltv_url:'',guide_kind:'automatic',iptv_mode:'fastchannels',provider_grouping:true,bridge_capacity:2};
+  state.liveTv=data({sources:[{id:1,name:'FastChannels',kind:'m3u',enabled:true,capacity:10}],connectionOpen:1,connections:{1:{source:{name:'FastChannels',kind:'m3u',capacity:10,config},has_pin:false}}});
+  const previous=globalThis.document,dom=new JSDOM(renderLiveTvSettings());globalThis.document=dom.window.document;
+  try {
+    hydrateTvConnections();const form=document.querySelector('[data-tv-replace-source="1"]');
+    assert.equal(form.elements.namedItem('iptv_mode').value,'fastchannels');assert.equal(form.elements.namedItem('provider_grouping').checked,true);assert.equal(form.elements.namedItem('bridge_capacity').value,'2');
+    const input=new FormData();input.set('url',config.url);input.set('iptv_mode','fastchannels');input.set('provider_grouping_present','true');
+    assert.equal(sourceConfig(input,config).provider_grouping,false);
+    state.liveTv.connectionDrafts={1:{provider_grouping:'false'}};hydrateTvConnections();assert.equal(form.elements.namedItem('provider_grouping').checked,false);
+  }finally{globalThis.document=previous;dom.window.close();}
+});
+
+test('an uploaded provider icon stays selected across DOM patches without losing pending edits',()=>{
+  state.bootstrap={current_user:{id:1,admin:true}};
+  const provider={source_id:1,id:'espn',name:'ESPN',enabled:true,channel_count:1,has_custom_icon:true,image_url:'/api/v1/live-tv/sources/1/image?v=fixture&provider=espn'};
+  state.liveTv=data({providerEditor:'1:espn',sources:[{id:1,name:'IPTV',kind:'m3u',enabled:true,capacity:1,providers:[provider]}]});
+  const previous=globalThis.document,dom=new JSDOM(renderLiveTvSettings());globalThis.document=dom.window.document;
+  try {
+    const form=document.querySelector('[data-tv-provider-form]');form.elements.namedItem('icon_channel').value='default';
+    hydrateTvProviders();assert.equal(form.elements.namedItem('icon_channel').value,'upload');
+    state.liveTv.providerDrafts={'1:espn':{name:'My ESPN',enabled:false,icon_channel:'upload'}};hydrateTvProviders();
+    assert.equal(form.elements.namedItem('name').value,'My ESPN');assert.equal(form.elements.namedItem('enabled').checked,false);
+  }finally{globalThis.document=previous;dom.window.close();}
+});
 
 test('the guide clips broadcasts to a shared timeline without closing schedule gaps', () => {
   const clipped = programPosition({...program,starts_at:now-900,ends_at:now+900},now);
@@ -57,6 +124,81 @@ test('source navigation and personal channel views retain source identity', () =
   model.sourceId=2; model.channelView='favorites';
   assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[2]);
   model.sourceId=1; assert.deepEqual(visibleGuideChannels(model),[]);
+});
+
+test('named guide groups combine sources while retaining source-scoped listings and personal filters',()=>{
+  const other={...channel,id:2,source_id:2,name:'Bridge channel'};
+  const model=data({channels:[channel,other],programs:[program,{...program,id:2,source_id:2,title:'Bridge show'}],sourceGroups:[{id:'combined',name:'FastChannels',source_ids:[1,2]}],preferences:{favorites:[2],recent:[2,1]}});
+  assert.deepEqual(guideViews(model).map(v=>({name:v.name,count:v.count})),[{name:'FastChannels',count:2}]);
+  assert.equal(activeGuideView(model).groupId,'combined');
+  assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[1,2]);
+  assert.equal(channelPrograms(other,model.programs)[0].title,'Bridge show');
+  model.channelView='favorites';assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[2]);
+  model.channelView='recent';assert.deepEqual(visibleGuideChannels(model).map(c=>c.id),[2,1]);
+});
+
+test('a 4402-channel guide indexes schedules once and mounts only a nearby row window',()=>{
+  const channels=Array.from({length:4402},(_,i)=>({...channel,id:i+1,guide_key:`station-${i}`}));
+  const rows=channels.flatMap(c=>Array.from({length:12},(_,slot)=>({...program,id:c.id*20+slot,guide_key:c.guide_key,title:`Channel ${c.id} show ${slot}`,starts_at:now+slot*1800,ends_at:now+(slot+1)*1800})));
+  let scans=0;
+  const indexed=new Proxy(rows,{get(target,key,receiver){if(key===Symbol.iterator){scans++;}return Reflect.get(target,key,receiver);}});
+  state.bootstrap={current_user:{id:1,admin:true}};
+  state.liveTv=data({channels,programs:indexed});
+  let html=renderLiveTvPage();
+  assert.equal(scans,1);
+  assert.ok((html.match(/class="tv-guide-row"/g) ?? []).length<30);
+  assert.match(html,/aria-rowcount="4403"/);
+  assert.ok(html.length<300_000);
+  state.liveTv.guideViewport={key:tvGuideViewKey(state.liveTv),top:2200*88,height:580};
+  state.liveTv.selectedChannelId=2201;state.liveTv.selectedProgramId=2201*20;
+  html=renderLiveTvPage();
+  assert.equal(scans,1);assert.match(html,/id="tv-channel-row-2201"/);
+  assert.doesNotMatch(html,/id="tv-channel-row-1"/);
+  const range=tvGuideRowRange(4402,4402*88,580);
+  assert.equal(range.end,4402);assert.ok(range.end-range.start<30);
+});
+
+test('source cards show counts and sizes and render only the opened source channel page',()=>{
+  state.bootstrap={current_user:{id:1,admin:true}};
+  state.liveTv=data({sources:[{id:1,name:'Fast',kind:'m3u',enabled:true,capacity:10,channel_count:4402,playlist_bytes:2*1024*1024,guide_bytes:150*1024*1024},{id:2,name:'Bridge',kind:'m3u',enabled:true,capacity:1}],channels:Array.from({length:4402},(_,i)=>({...channel,id:i+1,name:`Channel ${i+1}`})).concat([{...channel,id:5000,source_id:2,name:'Bridge only'}])});
+  let dom=new JSDOM(renderLiveTvSettings());
+  assert.equal(dom.window.document.querySelectorAll('[data-tv-channel-update]').length,0);
+  assert.match(dom.window.document.querySelector('[data-tv-source-card="1"]').textContent,/4402 channels/);
+  assert.match(dom.window.document.querySelector('[data-tv-source-card="1"]').textContent,/M3U.*MB.*XMLTV.*MB/);
+  dom.window.close();state.liveTv.mappingSource=1;state.liveTv.mappingPage=1;
+  dom=new JSDOM(renderLiveTvSettings());
+  assert.equal(dom.window.document.querySelectorAll('[data-tv-channel-update]').length,50);
+  assert.ok(dom.window.document.querySelector('[data-tv-source-card="1"] [data-tv-channel-update="51"]'));
+  assert.equal(dom.window.document.querySelector('[data-tv-channel-update="5000"]'),null);
+  dom.window.close();
+});
+
+test('connection editors prefill saved values and preserve masked PINs and unfinished drafts',()=>{
+  const config={url:'http://tv.local:8866/',pin:'',xmltv_url:'http://guide.local/listings.xml',guide_kind:'xmltv',artwork_provider:'guide',refresh_hours:12,zap2it:{country:'USA',postal_code:'14850',lineup_id:'saved-lineup',headend_id:'saved',device:'X',timezone:'',days:7}};
+  state.bootstrap={current_user:{id:1,admin:true}};
+  state.liveTv=data({sources:[{id:1,name:'NextPVR',kind:'nextpvr',enabled:true,capacity:3}],connectionOpen:1,connections:{1:{source:{name:'NextPVR',kind:'nextpvr',capacity:3,config},has_pin:true}}});
+  const previous=globalThis.document;
+  const dom=new JSDOM(renderLiveTvSettings());globalThis.document=dom.window.document;
+  try {
+    hydrateTvConnections();const form=document.querySelector('[data-tv-replace-source="1"]');
+    assert.equal(form.elements.namedItem('url').value,config.url);
+    assert.equal(form.elements.namedItem('xmltv_url').value,config.xmltv_url);
+    assert.equal(form.elements.namedItem('guide_kind').value,'xmltv');
+    assert.equal(form.elements.namedItem('artwork_provider').value,'guide');
+    assert.equal(form.elements.namedItem('refresh_hours').value,'12');
+    assert.equal(form.elements.namedItem('pin').required,false);
+    assert.equal(form.elements.namedItem('preserve_pin').value,'true');
+    state.liveTv.connectionDrafts={1:{url:'http://edited.local/'}};hydrateTvConnections();
+    assert.equal(form.elements.namedItem('url').value,'http://edited.local/');
+  } finally {globalThis.document=previous;dom.window.close();}
+});
+
+test('editing an automatic connection preserves its saved XMLTV URL and inactive lineup selection',()=>{
+  const original={url:'http://tv.local/',pin:'',xmltv_url:'http://guide.local/listings.xml',guide_kind:'automatic',artwork_provider:'guide',zap2it:{country:'USA',postal_code:'14850',lineup_id:'saved-lineup',headend_id:'saved',device:'X',timezone:'',days:7}};
+  const form=new FormData();for(const [name,value] of Object.entries({url:original.url,guide_kind:'automatic',refresh_hours:'18',preserve_pin:'true'}))form.set(name,value);
+  const config=sourceConfig(form,original);
+  assert.equal(config.xmltv_url,original.xmltv_url);assert.deepEqual(config.zap2it,original.zap2it);
+  assert.equal(config.refresh_hours,18);assert.equal(config.preserve_pin,true);
 });
 
 test('Zap2It logos and cover art request larger sizes while other hosts remain unchanged', () => {
@@ -117,6 +259,29 @@ test('guide mappings require the correct source and honor explicit overrides', (
   const rows = [program, { ...program, id: 2, source_id: 2 }, { ...program, id: 3, guide_key: 'override' }];
   assert.deepEqual(channelPrograms(channel, rows).map(p => p.id), [1]);
   assert.deepEqual(channelPrograms({ ...channel, guide_override: 'override' }, rows).map(p => p.id), [3]);
+});
+
+test('large guide station lists load only for the focused channel and retain edits on blur', () => {
+  const stations=Array.from({length:5200},(_,i)=>({source_id:1,guide_key:`station-${i}`,name:`Station ${i}`,number:String(i),aliases:[]}));
+  stations.push({source_id:2,guide_key:'foreign',name:'Other source',number:'1',aliases:[]});
+  const channels=Array.from({length:3600},(_,i)=>({...channel,id:i+1,guide_override:i===0?'station-5':undefined}));
+  const html=channels.map(c=>renderTvGuideMapping(c,stations)).join('');
+  assert.ok(html.length<1_000_000);
+  const dom=new JSDOM(html); const doc=dom.window.document;
+  const controller=new dom.window.AbortController();
+  bindTvGuideMappings(doc,controller.signal,stations);
+  assert.equal(doc.querySelectorAll('option').length,3601);
+  const [first,second]=doc.querySelectorAll('select');
+  assert.equal(first.value,'station-5'); first.focus();
+  assert.equal(first.options.length,5201);
+  assert.equal(first.querySelector('[value="foreign"]'),null);
+  first.value='station-5199'; second.focus();
+  assert.equal(first.options.length,2); assert.equal(first.value,'station-5199');
+  assert.equal(second.options.length,5201); second.blur();
+  assert.equal(second.options.length,1);
+  first.focus(); assert.equal(first.value,'station-5199'); first.blur();
+  controller.abort(); second.focus(); assert.equal(second.options.length,1);
+  dom.window.close();
 });
 test('broadcast metadata is escaped and active artwork URLs never become image elements', () => {
   state.bootstrap = { current_user: { id: 1, admin: false } };

@@ -6,6 +6,7 @@ export interface TvChannel {
   id: number; source_id: number; source_key: string; name: string; number: string;
   group_name: string; logo?: string | null; guide_key: string; guide_override?: string | null;
   enabled: boolean; available: boolean;
+  provider_id?:string|null;
 }
 /** Provider metadata retained with both guide programs and recordings. */
 export interface TvMetadata {
@@ -22,9 +23,15 @@ export interface TvProgram {
 /** A guide station that can be assigned explicitly to a tuner or IPTV channel. */
 export interface TvStation { source_id: number; guide_key: string; name: string; number: string; aliases: string[]; logo?: string | null }
 /** An administrator's configured tuner or playlist and refresh health. */
-export interface TvSource { id: number; name: string; kind: string; enabled: boolean; capacity: number; next_refresh: number; last_error?: string | null }
+export interface TvSource { id: number; name: string; kind: string; enabled: boolean; capacity: number; next_refresh: number; last_error?: string | null;channel_count?:number;playlist_bytes?:number|null;guide_bytes?:number|null;image_url?:string|null;iptv_mode?:string|null;providers?:TvProvider[] }
+/** A provider within an IPTV connection; identity remains stable when its display name or image changes. */
+export interface TvProvider {source_id:number;id:string;name:string;enabled:boolean;channel_count:number;image_url?:string|null;icon_channel_id?:number|null;has_custom_icon:boolean}
+/** Named guide lineup combining independent source connections and stream capacities. */
+export interface TvSourceGroup { id:string; name:string; source_ids:number[] }
+/** Editable source settings; a stored PIN stays masked and can be preserved on save. */
+export interface TvSourceConnection { source:TvSourceInput; has_pin:boolean }
 /** Public source labels for the guide, without setup details or credentials. */
-export interface TvGuideSource { id: number; name: string; kind: string }
+export interface TvGuideSource { id: number; name: string; kind: string;image_url?:string|null;iptv_mode?:string|null }
 /** Account-specific channel lists synchronized by the server. */
 export interface TvPreferences { favorites: number[]; recent: number[] }
 /** A private, recording-backed live viewing session and its currently seekable range. */
@@ -52,7 +59,9 @@ export function closeTvBufferOnExit(id: string): void {
 /** Source connection, guide, and optional native tuner settings supplied during setup. */
 export interface TvSourceConfig {
   url: string; pin: string; xmltv_url: string; guide_kind: string;
+  iptv_mode?:string;provider_grouping?:boolean;bridge_capacity?:number;
   artwork_provider?: string;
+  preserve_pin?:boolean;
   adapter?: number; frontend?: number; zap_path?: string; multiplex_urls?: string[];
   zap2it?: TvGuideSelection; refresh_hours?: number;
   native_device?: string; delivery_system?: string; region?: string; tuning_options?: string;
@@ -101,7 +110,20 @@ export interface TvSchedule {
 /** Read enabled channels or the administrator's complete channel list. */
 export function getTvChannels(setup = false): Promise<TvChannel[]> { return requestJson('GET', `/api/v1/live-tv/${setup ? 'setup/' : ''}channels`); }
 /** Fetch at most seven days of schedules and available guide station mappings. */
-export function getTvGuide(start: number, end: number): Promise<{ programs: TvProgram[]; stations: TvStation[]; sources?: TvGuideSource[]; preferences?: TvPreferences }> { return requestJson('GET', `/api/v1/live-tv/guide?start=${start}&end=${end}`); }
+export function getTvGuide(start: number, end: number): Promise<{ programs: TvProgram[]; stations: TvStation[]; sources?: TvGuideSource[]; preferences?: TvPreferences;source_groups?:TvSourceGroup[];providers?:TvProvider[] }> { return requestJson('GET', `/api/v1/live-tv/guide?start=${start}&end=${end}`); }
+/** Rename/show a provider and optionally keep its icon linked to one of its own channels. */
+export function setTvProvider(source:number,id:string,body:{name:string;enabled:boolean;icon_channel_id:number|null;remove_icon:boolean}):Promise<void> {return requestJson('PUT',`/api/v1/live-tv/sources/${source}/providers/${encodeURIComponent(id)}`,body);}
+/** Upload or restore source/provider artwork, using the authenticated image endpoint. */
+export async function setTvSourceImage(source:number,provider:string|undefined,file?:File):Promise<void> {
+  if (file && file.size>5*1024*1024) throw new Error('Choose an image smaller than 5 MiB.');
+  const token=getStoredAuthToken(),params=provider?`?provider=${encodeURIComponent(provider)}`:'';
+  const response=await fetch(resolveApiUrl(`/api/v1/live-tv/sources/${source}/image${params}`),{method:file?'PUT':'DELETE',credentials:'include',headers:token?{Authorization:`Bearer ${token}`}:{},body:file});
+  if(!response.ok) {const body=await response.json().catch(()=>({})) as {message?:string};throw new Error(body.message ?? 'Unable to update the icon.');}
+}
+/** Load saved source settings on demand for the administrator's connection editor. */
+export function getTvSourceConnection(id:number):Promise<TvSourceConnection> { return requestJson('GET',`/api/v1/live-tv/sources/${id}/connection`); }
+/** Persist shared lineup groups while leaving their member connections independent. */
+export function setTvSourceGroups(groups:TvSourceGroup[]):Promise<void> { return requestJson('PUT','/api/v1/live-tv/source-groups',groups); }
 /** Update a channel favorite for the signed-in account. */
 export function setTvFavorite(id: number, favorite: boolean): Promise<void> { return requestJson('PUT', `/api/v1/live-tv/channels/${id}/favorite`, {favorite}); }
 /** Read administrator source health. */
@@ -116,6 +138,8 @@ export function addTvSource(source: TvSourceInput): Promise<{ id: number; refres
 export function replaceTvSource(id: number, source: TvSourceInput): Promise<void> { return requestJson('PUT', `/api/v1/live-tv/sources/${id}/connection`, source, 180000); }
 /** Refresh a configured source immediately. */
 export function refreshTvSource(id: number): Promise<void> { return requestJson('POST', `/api/v1/live-tv/sources/${id}/refresh`, undefined, 180000); }
+/** Remove a source and its future schedules while preserving saved recordings. */
+export function removeTvSource(id:number):Promise<void> {return requestJson('DELETE',`/api/v1/live-tv/sources/${id}`);}
 /** Update source availability and stream capacity. */
 export function setTvSource(source: Pick<TvSource, 'id' | 'enabled' | 'capacity'>): Promise<void> { return requestJson('PUT', `/api/v1/live-tv/sources/${source.id}`, source); }
 /** Set channel visibility and an optional explicit guide station. */

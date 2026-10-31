@@ -8,6 +8,10 @@ import { bindTvGuideActions } from './liveTvGuideActions';
 import { channelArtwork, channelArtworkFallback, tvImage } from './liveTvGuideModel';
 import { currentGuideWindow, TV_SLOT_SECONDS, TV_WINDOW_SECONDS } from './tvGuideTime';
 import { tvChannelPlayback } from './tvPlayer';
+import { bindTvGuideMappings } from './liveTvMapping';
+import type { TvGuideViewport } from './tvGuideViewport';
+import { bindTvGuideViewport } from './liveTvGuideViewport';
+import { hydrateTvConnections, bindTvSourceSettings } from './liveTvSourceActions';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -17,10 +21,17 @@ export interface LiveTvState {
   loading: boolean; error?: string; message?: string;
   canRecord?: boolean; dvrSettings?: api.TvDvrSettings;
   setupKind?: string; setupAdding?: boolean; regions?: string[];
+  sourceGroups?:api.TvSourceGroup[]; sourceGroupId?:string;
+  connections?:Record<number,api.TvSourceConnection>;connectionOpen?:number;connectionLoading?:number;
+  connectionDrafts?:Record<number,Record<string,string>>;
+  mappingSource?:number;mappingQuery?:string;mappingPage?:number;
+  mappingProvider?:string;providerEditor?:string;providerView?:string;providers?:api.TvProvider[];
+  providerDrafts?:Record<string,{name:string;enabled:boolean;icon_channel:string}>;
   guideSources?: api.TvGuideSource[]; preferences?: api.TvPreferences;
   sourceId?: number; category?: string; channelView?: 'all' | 'favorites' | 'recent';
   selectedProgramId?: number; selectedChannelId?: number;
   filtersOpen?: boolean;
+  guideViewport?: TvGuideViewport;
 }
 
 /** Identify the administrator's dedicated Live TV settings section. */
@@ -50,7 +61,7 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
       setup ? source.getTvDvrSettings?.() : undefined,
     ]);
     if (generation !== loadGeneration || !isCurrent() || app.bootstrap?.current_user?.id !== owner) return;
-    app.liveTv = { ...data, channels, programs: guide.programs, stations: guide.stations, guideSources:guide.sources, preferences:guide.preferences, recordings: recordings.recordings, conflicts: recordings.conflicts, canRecord: recordings.can_record, dvrSettings, rules, sources, error: undefined, loading: false };
+    app.liveTv = { ...data, channels, programs: guide.programs, stations: guide.stations, guideSources:guide.sources, sourceGroups:guide.source_groups ?? [], providers:guide.providers ?? [], preferences:guide.preferences, recordings: recordings.recordings, conflicts: recordings.conflicts, canRecord: recordings.can_record, dvrSettings, rules, sources, error: undefined, loading: false };
   } catch (error) {
     if (generation === loadGeneration && isCurrent() && app.bootstrap?.current_user?.id === owner) {
       data.error = error instanceof Error ? error.message : 'Live TV could not be loaded.';
@@ -60,21 +71,30 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
 }
 
 function value(form: FormData, name: string): string { return String(form.get(name) ?? '').trim(); }
-function sourceConfig(form: FormData): api.TvSourceConfig {
+/** Read editable fields while retaining saved settings for inactive guide modes. */
+export function sourceConfig(form: FormData, original?: api.TvSourceConfig): api.TvSourceConfig {
   const selection = value(form, 'guide_provider');
   const zap2it = selection ? JSON.parse(selection) as api.TvGuideSelection : undefined;
   if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (!zap2it || zap2it.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
-  return { url: value(form, 'url'), pin: value(form, 'pin'), xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'), artwork_provider:value(form,'artwork_provider'),
+  const config:api.TvSourceConfig = { url: value(form, 'url'), pin: value(form, 'pin'), preserve_pin:value(form,'preserve_pin') === 'true', xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'), artwork_provider:value(form,'artwork_provider'),
+    iptv_mode:value(form,'iptv_mode'),provider_grouping:form.has('provider_grouping'),bridge_capacity:Number(value(form,'bridge_capacity')),
     zap2it: zap2it ? { ...zap2it, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),
     native_device: value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
     adapter: Number(value(form, 'adapter')), frontend: Number(value(form, 'frontend')), zap_path: value(form, 'zap_path'),
     multiplex_urls: value(form, 'multiplex_urls').split(/\r?\n/).map(s => s.trim()).filter(Boolean) };
+  const saved = original as Record<string,unknown> | undefined;
+  const merged = config as unknown as Record<string,unknown>;
+  for (const key of Object.keys(saved ?? {})) {
+    if (key==='provider_grouping'&&form.has('provider_grouping_present')) continue;
+    if (key === 'zap2it' ? !selection : !form.has(key)) merged[key]=saved![key];
+  }
+  return config;
 }
 function padding(form: FormData): { padding_before: number; padding_after: number } {
   return { padding_before: Number(value(form, 'before')) * 60, padding_after: Number(value(form, 'after')) * 60 };
 }
 
-interface Context { navigateTo: (path: string) => void; render: () => void }
+interface Context { navigateTo: (path: string) => void; render: () => void; renderTvSelection?: () => void }
 /** Stop TV streams when leaving Live TV or changing accounts, including minimized playback. */
 export function syncLiveTvAccount(): void {
   if (state.route.page !== 'live-tv' || guideClockOwner !== state.bootstrap?.current_user?.id) { nextGuideRefreshAt = 0; guideClockOwner = undefined; }
@@ -171,6 +191,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   }, { signal });
   bindPlayback(signal);
   bindTvGuideActions(signal, context, run);
+  bindTvGuideViewport(signal);
   bindRecordingForms(signal, run);
   bindRecordingButtons(signal, run);
   if (setup && state.bootstrap?.current_user?.admin) bindSetup(signal, run, context);
@@ -196,8 +217,10 @@ function loadTunerRegions(signal: AbortSignal): void {
     if (signal.aborted || !state.liveTv) return;
     state.liveTv.regions = regions;
     for (const select of selects) {
+      const saved = select.value;
       select.replaceChildren();
-      for (const region of regions) { const option = document.createElement('option'); option.value = region; option.textContent = region; option.selected = region.toLowerCase() === 'north-america'; select.append(option); }
+      for (const region of regions) { const option = document.createElement('option'); option.value = region; option.textContent = region; option.selected = saved ? region === saved : region.toLowerCase() === 'north-america'; select.append(option); }
+      if (saved && !regions.includes(saved)) {const option=document.createElement('option');option.value=saved;option.textContent=saved;option.selected=true;select.append(option);}
       select.disabled = false;
     }
   }).catch((error: unknown) => {
@@ -207,18 +230,23 @@ function loadTunerRegions(signal: AbortSignal): void {
 }
 
 function bindPlayback(signal: AbortSignal): void {
-  document.querySelectorAll<HTMLButtonElement>('[data-tv-play]').forEach(button => button.addEventListener('click', () => play('channels', Number(button.dataset.tvPlay)), { signal }));
-  document.querySelectorAll<HTMLButtonElement>('[data-tv-recording-play]').forEach(button => button.addEventListener('click', () => play('recordings', Number(button.dataset.tvRecordingPlay)), { signal }));
+  document.addEventListener('click', event => {
+    const button = (event.target as Element | null)?.closest<HTMLElement>('[data-tv-play], [data-tv-recording-play]');
+    if (button?.dataset.tvPlay) play('channels',Number(button.dataset.tvPlay));
+    else if (button?.dataset.tvRecordingPlay) play('recordings',Number(button.dataset.tvRecordingPlay));
+  },{signal});
 }
 function bindRecordingForms(signal: AbortSignal, run: Run): void {
-  document.querySelectorAll<HTMLFormElement>('[data-tv-program-record]').forEach(form => form.addEventListener('submit', event => {
+  document.addEventListener('submit', event => {
+    const form = (event.target as Element | null)?.closest<HTMLFormElement>('[data-tv-program-record]');
+    if (!form) return;
     event.preventDefault();
     const program = state.liveTv?.programs.find(p => p.id === Number(form.dataset.tvProgramRecord));
     if (!program) return;
     const input = new FormData(form);
     const button = (event as SubmitEvent).submitter as HTMLButtonElement | undefined;
     void run(() => api.scheduleTvRecording({ channel_id: Number(form.dataset.tvChannel), title: program.title, starts_at: program.starts_at, ends_at: program.ends_at, series: button?.value === 'series', new_only: input.has('new-only'), private: input.has('private'), ...padding(input) }), button);
-  }, { signal }));
+  }, { signal });
   document.querySelector<HTMLFormElement>('#tv-manual-record-form')?.addEventListener('submit', event => {
     event.preventDefault(); const input = new FormData(event.currentTarget as HTMLFormElement);
     void run(() => api.scheduleTvRecording({ channel_id: Number(value(input, 'channel')), title: value(input, 'title'), starts_at: Math.floor(new Date(value(input, 'start')).getTime() / 1000), ends_at: Math.floor(new Date(value(input, 'end')).getTime() / 1000), series: false, new_only: false, private: input.has('private'), ...padding(input) }));
@@ -235,6 +263,8 @@ function bindRecordingButtons(signal: AbortSignal, run: Run): void {
   for (const item of actions) document.querySelectorAll<HTMLButtonElement>(item.selector).forEach(button => button.addEventListener('click', () => { void run(() => item.action(Number(button.dataset[item.key])), button); }, { signal }));
 }
 function bindSetup(signal: AbortSignal, run: Run, context: Context): void {
+  hydrateTvConnections();
+  bindTvSourceSettings(signal,context,run);
   document.querySelector<HTMLSelectElement>('#tv-source-kind')?.addEventListener('change', event => {
     if (state.liveTv) { state.liveTv.setupKind = (event.currentTarget as HTMLSelectElement).value; state.liveTv.setupAdding = true; }
     context.render();
@@ -243,6 +273,7 @@ function bindSetup(signal: AbortSignal, run: Run, context: Context): void {
     if (state.liveTv) state.liveTv.setupAdding = (event.currentTarget as HTMLDetailsElement).open;
   }, { signal });
   bindGuideChoices(signal);
+  bindTvGuideMappings(document, signal, state.liveTv?.stations ?? []);
   bindTvDiscovery(signal);
   loadTunerRegions(signal);
   document.querySelector<HTMLFormElement>('#tv-dvr-settings')?.addEventListener('submit', event => {
@@ -272,7 +303,11 @@ function bindSetup(signal: AbortSignal, run: Run, context: Context): void {
   }, { signal }));
   document.querySelectorAll<HTMLFormElement>('[data-tv-replace-source]').forEach(form => form.addEventListener('submit', event => {
     event.preventDefault(); const input = new FormData(form);
-    void run(() => api.replaceTvSource(Number(form.dataset.tvReplaceSource), { name: value(input, 'name'), kind: value(input, 'kind'), capacity: Number(value(input, 'capacity')), config: sourceConfig(input) }), (event as SubmitEvent).submitter as HTMLButtonElement | undefined);
+    void run(async () => {
+      const id=Number(form.dataset.tvReplaceSource);
+      await api.replaceTvSource(id, { name: value(input, 'name'), kind: value(input, 'kind'), capacity: Number(value(input, 'capacity')), config: sourceConfig(input,state.liveTv?.connections?.[id]?.source.config) });
+      if (state.liveTv) {delete state.liveTv.connections?.[id];delete state.liveTv.connectionDrafts?.[id];state.liveTv.connectionOpen=undefined;}
+    }, (event as SubmitEvent).submitter as HTMLButtonElement | undefined);
   }, { signal }));
   document.querySelector<HTMLFormElement>('#tv-source-form')?.addEventListener('submit', event => {
     event.preventDefault(); const form = event.currentTarget as HTMLFormElement;

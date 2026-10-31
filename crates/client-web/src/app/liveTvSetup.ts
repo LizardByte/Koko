@@ -1,8 +1,10 @@
 /** Renders administrator Live TV source, guide, channel, and DVR settings. */
-import type { TvChannel, TvSource } from '../liveTvApi';
-import { escapeHtml as escape } from './format';
+import type { TvSource } from '../liveTvApi';
+import { escapeHtml as escape, formatFileSize } from './format';
 import { state } from './state';
 import type { LiveTvState } from './liveTvActions';
+import { renderTvSourceChannels,renderTvSourceGroups } from './liveTvSourceLists';
+import { renderTvSourceHeading,renderTvProviders } from './liveTvProviders';
 
 /** Keep Live TV administration inside the Settings workspace. */
 export function renderLiveTvSettings(): string {
@@ -12,34 +14,29 @@ export function renderLiveTvSettings(): string {
   const message = data.message ? `<p role="status">${escape(data.message)}</p>` : '';
   return `<section class="live-tv-settings">${error}${message}${data.loading ? '<p role="status">Updating Live TV settings…</p>' : ''}${renderSetup(data)}</section>`;
 }
-function renderSource(source: TvSource): string {
+function renderSource(source: TvSource, data: LiveTvState): string {
   const scan = source.kind === 'native' ? `<button type="button" class="secondary-button" data-tv-source-scan="${source.id}">Rescan channels</button>` : '';
-  return `<article class="live-tv-source"><h3>${escape(source.name)}</h3><p>${escape(source.kind)} · ${source.enabled ? 'Enabled' : 'Disabled'}</p>
+  const count = source.channel_count ?? data.channels.filter(c=>c.source_id === source.id && c.available).length;
+  const sizes = [source.playlist_bytes == null ? '' : `M3U ${formatFileSize(source.playlist_bytes)}`,source.guide_bytes == null ? '' : `XMLTV ${formatFileSize(source.guide_bytes)}`].filter(Boolean).join(' · ');
+  const open = data.connectionOpen === source.id;
+  let editor = '';
+  if (open) editor = data.connections?.[source.id] ? renderAddSource(source) : '<p role="status">Loading saved connection settings…</p>';
+  const sizeMarkup = sizes ? '<p class="muted">Last imported: '+escape(sizes)+'</p>' : '';
+  return `<article class="live-tv-source" data-tv-source-card="${source.id}">${renderTvSourceHeading(source)}<p>${escape(source.kind)} · ${source.enabled ? 'Enabled' : 'Disabled'} · ${count} ${count === 1 ? 'channel' : 'channels'}</p>${sizeMarkup}
     ${source.last_error ? `<p class="live-tv-error">${escape(source.last_error)}</p>` : '<p>Channels and guide refresh automatically.</p>'}
     <form data-tv-source-update="${source.id}" class="live-tv-inline-form"><label><input type="checkbox" name="enabled" ${source.enabled ? 'checked' : ''} /> Enabled</label>
       <label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source.capacity}" required /></label><button type="submit" class="secondary-button">Save</button></form>
     <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-refresh="${source.id}">Refresh channels and guide</button>${scan}
-      <label class="live-tv-upload">Import XMLTV<input type="file" accept=".xml,.xmltv,text/xml,application/xml" data-tv-guide-upload="${source.id}" /></label></div>
-    <details class="live-tv-panel"><summary>Replace connection settings</summary><p>Saved credentials are hidden. Enter the complete connection and guide settings again to replace them.</p>${renderAddSource(source)}</details></article>`;
-}
-
-function renderChannelMapping(channel: TvChannel, data: LiveTvState): string {
-  const stations = data.stations.filter(s => s.source_id === channel.source_id);
-  const options = stations.map(s => {
-    const label = `${s.number} ${s.name} (${s.guide_key})`;
-    return `<option value="${escape(s.guide_key)}" ${channel.guide_override === s.guide_key ? 'selected' : ''}>${escape(label)}</option>`;
-  }).join('');
-  return `<form data-tv-channel-update="${channel.id}" class="live-tv-channel-mapping"><strong>${escape(channel.number)} ${escape(channel.name)}</strong>
-    <label><input type="checkbox" name="enabled" ${channel.enabled ? 'checked' : ''} /> Enabled</label>
-    <label>Guide station<select name="guide"><option value="">Automatic (${escape(channel.guide_key || 'unmapped')})</option>${options}</select></label>
-    ${channel.available ? '' : '<span>Missing from source</span>'}<button type="submit" class="secondary-button">Save</button></form>`;
+      <label class="live-tv-upload">Import XMLTV<input type="file" accept=".xml,.xmltv,.gz,text/xml,application/xml,application/gzip" data-tv-guide-upload="${source.id}" /></label></div>
+    <details class="live-tv-panel" data-controlled-open data-tv-connection-source="${source.id}" ${open ? 'open' : ''}><summary>Edit connection settings</summary><p>Edit the saved connection and guide settings. Leave a saved PIN blank to keep it.</p>${editor}</details>${renderTvProviders(source,data)}${renderTvSourceChannels(source,data)}
+    <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-remove="${source.id}">Remove source</button></div></article>`;
 }
 
 function renderSetup(data: LiveTvState): string {
   return `<h2>TV sources</h2><p>Add HDHomeRun, an IPTV M3U playlist, or a local Hauppauge or other tuner directly. NextPVR and Tvheadend are also available as optional sources.</p>
-    <div class="live-tv-source-list">${data.sources.map(renderSource).join('')}</div>
+    <div class="live-tv-source-list">${data.sources.map(source=>renderSource(source,data)).join('')}</div>
     <details id="tv-add-source-panel" class="live-tv-panel" ${!data.sources.length || data.setupAdding ? 'open' : ''}><summary>Add a TV source</summary><label class="live-tv-kind-picker">Source type<select id="tv-source-kind">${SOURCE_TYPES.map(([kind,label]) => `<option value="${kind}" ${kind === (data.setupKind ?? 'hdhomerun') ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${renderAddSource()}</details>
-    <details class="live-tv-panel"><summary>Channel visibility and guide mapping</summary><p>Choose a guide station when the automatic match is missing or incorrect.</p>${data.channels.map(c => renderChannelMapping(c, data)).join('')}</details>
+    ${renderTvSourceGroups(data)}
     ${renderDvrSettings(data)}`;
 }
 
@@ -50,20 +47,27 @@ function renderAddSource(source?: TvSource): string {
   const identity = source ? `data-tv-replace-source="${source.id}"` : 'id="tv-source-form"';
   const capacity = ['native', 'dvb'].includes(kind) ? '<input type="hidden" name="capacity" value="1" />'
     : `<label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source?.capacity ?? 1}" required /></label>`;
-  return `<form ${identity} class="live-tv-form" data-tv-source-kind="${escape(kind)}"><input type="hidden" name="kind" value="${escape(kind)}" />
+  const savedPin = Boolean(source && state.liveTv?.connections?.[source.id]?.has_pin);
+  return `<form ${identity} class="live-tv-form" data-tv-source-kind="${escape(kind)}"><input type="hidden" name="kind" value="${escape(kind)}" /><input type="hidden" name="preserve_pin" value="${savedPin}" />
     <label>Name<input name="name" value="${escape(source?.name ?? '')}" required maxlength="200" placeholder="Living room TV" /></label>${capacity}
-    ${renderConnection(kind)}${renderGuideSettings(kind)}<button type="submit">${source ? 'Save connection settings' : 'Add source'}</button></form>`;
+    ${renderConnection(kind,savedPin)}${renderGuideSettings(kind)}<button type="submit">${source ? 'Save connection settings' : 'Add source'}</button></form>`;
 }
 
-function renderConnection(kind: string): string {
+function renderConnection(kind: string, savedPin = false): string {
   if (kind === 'native') return renderLocalTuner();
   if (kind === 'dvb') return `<label>DVB channel file path<input name="url" required placeholder="/var/lib/koko/channels.conf" /></label>
     <label>DVB adapter<input name="adapter" type="number" min="0" max="63" value="0" /></label><label>DVB frontend<input name="frontend" type="number" min="0" max="63" value="0" /></label>
     <label>dvbv5-zap path<input name="zap_path" placeholder="dvbv5-zap" /></label><p class="live-tv-form-help">Install v4l-utils and generate this channel file with dvbv5-scan. For automatic channel scanning, choose Local tuner instead.</p>`;
-  if (kind === 'm3u') return '<label>IPTV playlist URL<input name="url" type="url" required placeholder="https://provider.example/channels.m3u" /></label>';
+  if (kind === 'm3u') return `<label>IPTV connection<select name="iptv_mode"><option value="playlist">M3U playlist</option><option value="fastchannels">FastChannels server</option></select></label>
+    <label class="tv-iptv-address"><span data-tv-iptv-address-label>IPTV playlist URL</span><input name="url" type="url" required placeholder="https://provider.example/channels.m3u" /></label>
+    <p class="live-tv-form-help" data-tv-iptv-server-help hidden>Enter the server address, for example http://192.168.1.13:5523. Koko imports the native lineup and guide automatically, plus PrismCast channels when the bridge is enabled in FastChannels.</p>
+    <input type="hidden" name="provider_grouping_present" value="true"/><label class="live-tv-form-help"><input type="checkbox" name="provider_grouping"/> Group channels by provider (channel-id prefix before the first dot)</label>
+    <p class="live-tv-form-help">Works with FastChannels, E+TV, and other playlists that include provider prefixes. Provider names and icons can be customized after importing.</p>
+    <fieldset class="live-tv-guide-account" data-tv-iptv-bridge hidden disabled><legend>PrismCast</legend><label>Simultaneous bridge streams<input name="bridge_capacity" type="number" min="1" max="64" value="1"/></label><p>This limit is shared by all providers using the bridge.</p></fieldset>`;
   const label = SOURCE_TYPES.find(([id]) => kind === id)?.[1] ?? 'TV server';
   const port = ({ nextpvr: ':8866', tvheadend: ':9981' } as Record<string, string>)[kind] ?? '';
-  const pin = kind === 'nextpvr' ? '<label>NextPVR PIN<input name="pin" type="password" autocomplete="off" required /></label>' : '';
+  const pinAttributes = savedPin ? 'placeholder="Leave blank to keep the saved PIN"' : 'required';
+  const pin = kind === 'nextpvr' ? `<label>NextPVR PIN<input name="pin" type="password" autocomplete="off" ${pinAttributes} /></label>` : '';
   return `<fieldset class="live-tv-source-discovery"><legend>${escape(label)} connection</legend>
     <div class="live-tv-discovery-toolbar"><button type="button" data-tv-discover-source="${escape(kind)}">Find ${escape(label)}</button><p role="status" data-tv-discovery-status></p></div>
     <div class="live-tv-discovery-results" data-tv-discovery-results role="radiogroup" aria-label="Discovered ${escape(label)} sources" hidden></div>

@@ -89,6 +89,10 @@ pub(crate) fn schedule(
     if !source.enabled {
         return Err("This source is disabled".into());
     }
+    let provider = super::providers::load(conn, source.id).map_err(super::db_error)?;
+    if !super::providers::allowed(&source, &channel, &provider) {
+        return Err("This provider is hidden".into());
+    }
     let program = storage::guide(conn, request.starts_at, request.ends_at)
         .map_err(super::db_error)?
         .into_iter()

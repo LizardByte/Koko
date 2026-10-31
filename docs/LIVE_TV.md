@@ -31,6 +31,47 @@ finds nothing, including when the source is on another subnet. For local tuners,
 discovered device or enter its driver name/path, then select a supported frequency region.
 When no tuner is attached, **Find local tuners** reports that none were found.
 
+Each source card shows its channel count and the M3U/XMLTV sizes from its last successful
+import, when those files apply. Refresh the source to update these figures.
+
+Use **Remove source** on a source card to remove its channels, guide, future recording
+schedules, and series rules. Saved DVR recordings and their files are kept. Stop playback
+and active recordings from the source before removing it.
+Open **Edit connection settings** to change its saved values. Leave a saved NextPVR PIN
+blank to keep it, or enter a replacement PIN.
+
+### IPTV providers and FastChannels
+
+For FastChannels, choose **IPTV (M3U)**, then select **FastChannels server** under
+**IPTV connection**. Enter only the server address, such as `http://192.168.1.13:5523`.
+Koko imports the default feed's native channels, available PrismCast channels, and their guide.
+Enable and configure PrismCast in FastChannels to include its bridged channels.
+Set **Simultaneous bridge streams** to the number of captures your PrismCast server allows;
+this allowance is shared across its providers.
+
+For an ordinary playlist, select **M3U playlist** and enter its URL. Enable
+**Group channels by provider** when the playlist has provider prefixes in its channel IDs,
+as FastChannels and E+TV do. After the import, each provider appears under the source card.
+Expand a provider to change its name, show or hide it in the guide, or choose **Manage channels**
+to edit only that provider's channel visibility and guide mappings.
+
+In the guide, select the connection and then choose a provider or **All providers**.
+Category filters, favorites, and recently played channels still apply within that selection.
+
+FastChannels presets, HDHomeRun, NextPVR, and Tvheadend use their application icons.
+Other connection types use standard symbols, and each provider has a default icon.
+Use **Upload icon** on its Settings card
+to replace it with a PNG, JPEG, WebP, or GIF image smaller than 5 MiB. For providers, the
+**Provider icon** selector also offers icons from that provider's channels. A selected channel
+icon updates automatically when the channel logo changes. Choose **Default provider icon**
+or **Use default icon** to restore the bundled icon.
+
+Under **Guide source groups**, choose **Add a source group**, enter a name, and select two
+or more sources. They appear together as one lineup in the guide. For example, group a
+regular FastChannels playlist with its separate PrismCast playlist. Each member keeps its
+own guide settings and simultaneous stream limit. Editing or deleting a group keeps its
+member sources, channels, favorites, and recordings.
+
 Set **Simultaneous streams** to the number of tuners or streams your source permits.
 Each live viewer and active recording uses one stream. Keeping the program you are watching
 shares that viewer's stream until you change channel. A direct Linux DVB source uses one
@@ -48,6 +89,8 @@ description, poster, and recording options above the guide. When you have severa
 choose one in the source list. Open **Filters** to use categories, channel groups, favorites,
 recently played channels, or search. Close the filters to leave more room for the guide.
 Category filters and **NEW**, **LIVE**, **PREMIERE**, and **FINALE** labels depend on your guide's metadata.
+With a guide cell focused, use **Page Up / Page Down** to move through a large lineup and
+**Home / End** to reach its first or last channel. Up/down movement keeps the same schedule time.
 Up and down keep the same time position as you move between channels. Left and right move
 between programs. Completed half-hour columns disappear automatically; choose **Now** to
 return from a future guide window to the current listings.
@@ -80,6 +123,10 @@ You can also choose **Import XMLTV** on an existing source and select a local XM
 Importing a file selects that uploaded guide until you configure another guide source.
 Upload a newer file when its listings expire.
 
+M3U playlists and XMLTV guides have no fixed import size or entry-count limit. Large feeds
+need enough free temporary disk space and memory to process their channels and listings.
+Gzip-compressed XMLTV files are supported for both URLs and uploads.
+
 Koko automatically removes expired listings, keeping up to 24 hours of guide history and
 21 days of upcoming programs. This also applies when a source is offline or disabled.
 Saved recordings and their program details are retained until you delete the recording.
@@ -105,7 +152,8 @@ Guide duration and descriptions depend on the broadcaster. Some stations supply 
 current and next program; others supply several days. Broadcast schedules may lack episode
 numbers, images, or new-episode flags.
 
-Under **Channel visibility and guide mapping**, disable unwanted channels or select the correct
+Open **Channel visibility and guide mapping** on the relevant source card. Search or page
+through that source's channels, disable unwanted channels, or select the correct
 guide station when its listings are missing or incorrect. You can watch channels and schedule
 recordings by time even without guide data.
 

@@ -1,6 +1,6 @@
 /** Source selection, category matching, and time-aligned geometry for the TV guide. */
 import { resolveApiUrl } from '../api';
-import type { TvChannel, TvMetadata, TvProgram } from '../liveTvApi';
+import type { TvChannel, TvMetadata, TvProgram, TvStation, TvProvider } from '../liveTvApi';
 import type { LiveTvState } from './liveTvActions';
 
 import { TV_WINDOW_SECONDS } from './tvGuideTime';
@@ -12,16 +12,32 @@ const CATEGORY_PATTERNS: Record<string, RegExp> = {
   Kids: /child|kids|youth|animation|cartoon/i, Music: /music|concert/i, Documentaries: /documentar/i,
 };
 
+const schedules = new WeakMap<TvProgram[], {length:number; sources:Map<number,Map<string,TvProgram[]>>}>();
+const stationIndexes = new WeakMap<TvStation[], Map<number,Map<string,TvStation>>>();
+const channelViews = new WeakMap<LiveTvState, {key:unknown[]; channels:TvChannel[]}>();
+const timeFormat = new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'});
+const dateFormat = new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+
 /** Match source-scoped station IDs, respecting an explicit channel mapping. */
 export function channelPrograms(channel: TvChannel, programs: TvProgram[]): TvProgram[] {
   const key = channel.guide_override ?? channel.guide_key;
-  return programs.filter(p => p.source_id === channel.source_id && p.guide_key === key).sort((a,b) => a.starts_at - b.starts_at);
+  let index = schedules.get(programs);
+  if (!index || index.length !== programs.length) {
+    const sources = new Map<number,Map<string,TvProgram[]>>();
+    for (const program of programs) {
+      const stations = sources.get(program.source_id) ?? new Map<string,TvProgram[]>();
+      const rows = stations.get(program.guide_key) ?? [];
+      rows.push(program); stations.set(program.guide_key,rows); sources.set(program.source_id,stations);
+    }
+    for (const stations of sources.values()) for (const rows of stations.values()) rows.sort((a,b)=>a.starts_at-b.starts_at);
+    index = {length:programs.length,sources}; schedules.set(programs,index);
+  }
+  return index.sources.get(channel.source_id)?.get(key) ?? [];
 }
 
 /** Format UTC seconds in the viewer's local timezone. */
 export function tvTime(seconds: number, date = false): string {
-  return new Date(seconds * 1000).toLocaleString(undefined, date
-    ? { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' } : { hour:'numeric', minute:'2-digit' });
+  return (date ? dateFormat : timeFormat).format(seconds*1000);
 }
 
 /** Accept remote artwork and the authenticated Koko program-artwork endpoint. */
@@ -45,7 +61,17 @@ export function channelArtwork(channel: TvChannel, data: LiveTvState): string {
 /** Guide station artwork can replace an unavailable tuner logo in both guide and player. */
 export function channelArtworkFallback(channel: TvChannel, data: LiveTvState): string {
   const key = channel.guide_override ?? channel.guide_key;
-  return tvImage(data.stations.find(s => s.source_id === channel.source_id && s.guide_key === key)?.logo);
+  let index = stationIndexes.get(data.stations);
+  if (!index) {
+    index = new Map();
+    for (const station of data.stations) {
+      const rows = index.get(station.source_id) ?? new Map<string,TvStation>();
+      if (!rows.has(station.guide_key)) rows.set(station.guide_key,station);
+      index.set(station.source_id,rows);
+    }
+    stationIndexes.set(data.stations,index);
+  }
+  return tvImage(index.get(channel.source_id)?.get(key)?.logo);
 }
 
 /** Distinguish actual live broadcasts from programs merely airing at the current time. */
@@ -79,34 +105,83 @@ export function guideSources(data: LiveTvState): { id: number; name: string; cou
 
 /** Keep source navigation stable when devices disappear or channel setup changes. */
 export function activeGuideSource(data: LiveTvState): number | undefined {
-  const sources = guideSources(data);
-  return sources.find(s => s.id === data.sourceId)?.id ?? sources[0]?.id;
+  return activeGuideView(data)?.sourceIds[0];
+}
+
+/** One rail entry represents either a named group or an ungrouped source. */
+export interface TvGuideView { key:string; name:string; count:number;sourceIds:number[];groupId?:string }
+
+/** Group connected sources without deduplicating channels or combining tuner limits. */
+export function guideViews(data: LiveTvState): TvGuideView[] {
+  const sources = guideSources(data), counts = new Map(sources.map(s=>[s.id,s.count]));
+  const grouped = new Set<number>();
+  const views:TvGuideView[] = [];
+  for (const group of data.sourceGroups ?? []) {
+    const ids = group.source_ids.filter(id=>counts.has(id));
+    ids.forEach(id=>grouped.add(id));
+    if (ids.length) views.push({key:`group:${group.id}`,groupId:group.id,name:group.name,sourceIds:ids,count:ids.reduce((sum,id)=>sum+(counts.get(id) ?? 0),0)});
+  }
+  for (const source of sources) if (!grouped.has(source.id)) views.push({key:`source:${source.id}`,name:source.name,count:source.count,sourceIds:[source.id]});
+  return views;
+}
+
+/** Retain the selected group, including when a previously standalone member is grouped. */
+export function activeGuideView(data: LiveTvState): TvGuideView | undefined {
+  const views = guideViews(data);
+  return views.find(v=>data.sourceGroupId && v.groupId === data.sourceGroupId)
+    ?? views.find(v=>!v.groupId && v.sourceIds[0] === data.sourceId)
+    ?? views.find(v=>v.sourceIds.includes(data.sourceId ?? -1)) ?? views[0];
+}
+
+/** Provider navigation stays within the selected connection or named source group. */
+export function guideProviders(data:LiveTvState):TvProvider[] {
+  const ids=new Set(activeGuideView(data)?.sourceIds);
+  return (data.providers ?? []).filter(p=>p.enabled&&ids.has(p.source_id));
+}
+
+/** Ignore a stale provider selection when its connection/group is no longer displayed. */
+export function activeGuideProvider(data:LiveTvState):TvProvider|undefined {
+  return guideProviders(data).find(p=>`${p.source_id}:${p.id}`===data.providerView);
 }
 
 /** Filter within a source while retaining all time positions for the displayed channels. */
 export function visibleGuideChannels(data: LiveTvState): TvChannel[] {
-  const source = activeGuideSource(data), query = (data.query ?? '').toLocaleLowerCase();
+  const view = activeGuideView(data), query = (data.query ?? '').toLocaleLowerCase();
+  const sourceIds = new Set(view?.sourceIds);
   const favorites = data.preferences?.favorites ?? [], recent = data.preferences?.recent ?? [];
+  const provider=activeGuideProvider(data);
+  const key = [data.channels,data.channels.length,data.programs,data.programs.length,view?.key,data.sourceGroups,data.providers,data.providerView,query,data.group,data.category,data.channelView,data.windowStart,data.preferences?.favorites,data.preferences?.recent];
+  const cached = channelViews.get(data);
+  if (cached && key.every((value,i)=>Object.is(value,cached.key[i]))) return cached.channels;
+  const favoriteIds = new Set(favorites), recentOrder = new Map(recent.map((id,i)=>[id,i]));
   const channels = data.channels.filter(c => {
-    if (!c.enabled || !c.available || c.source_id !== source || (data.group && c.group_name !== data.group)) return false;
-    if (data.channelView === 'favorites' && !favorites.includes(c.id)) return false;
-    if (data.channelView === 'recent' && !recent.includes(c.id)) return false;
+    if (!c.enabled || !c.available || !sourceIds.has(c.source_id) || (data.group && c.group_name !== data.group)) return false;
+    if (provider&&(c.source_id!==provider.source_id || c.provider_id!==provider.id)) return false;
+    if (data.channelView === 'favorites' && !favoriteIds.has(c.id)) return false;
+    if (data.channelView === 'recent' && !recentOrder.has(c.id)) return false;
+    if (!query && (!data.category || data.category === 'All programs')) return true;
     const programs = channelPrograms(c, data.programs).filter(p => programPosition(p, data.windowStart) && matchesTvCategory(p, data.category));
     if (data.category && data.category !== 'All programs' && !programs.length) return false;
     return !query || `${c.number} ${c.name}`.toLocaleLowerCase().includes(query) || programs.some(p => p.title.toLocaleLowerCase().includes(query));
   });
-  return data.channelView === 'recent' ? channels.sort((a,b) => recent.indexOf(a.id) - recent.indexOf(b.id)) : channels;
+  if (data.channelView === 'recent') channels.sort((a,b) => recentOrder.get(a.id)!-recentOrder.get(b.id)!);
+  channelViews.set(data,{key,channels});
+  return channels;
 }
 
 /** Resolve the highlighted program for the hero, falling back to the current broadcast. */
 export function guideSelection(data: LiveTvState): { channel?: TvChannel; program?: TvProgram } {
   const channels = visibleGuideChannels(data);
-  const pairs = channels.flatMap(channel => channelPrograms(channel, data.programs)
-    .filter(p => programPosition(p, data.windowStart) && matchesTvCategory(p, data.category)).map(program => ({ channel, program })));
-  const selected = pairs.find(p => p.program.id === data.selectedProgramId && p.channel.id === data.selectedChannelId);
   const selectedChannel = channels.find(c => c.id === data.selectedChannelId);
-  const candidates = selectedChannel ? pairs.filter(p => p.channel.id === selectedChannel.id) : pairs;
   const now = Date.now() / 1000;
-  return selected ?? candidates.find(p => p.program.starts_at <= now && p.program.ends_at > now)
-    ?? candidates[0] ?? { channel:selectedChannel ?? channels[0] };
+  let first: {channel:TvChannel;program:TvProgram} | undefined;
+  for (const channel of selectedChannel ? [selectedChannel] : channels) {
+    const rows = channelPrograms(channel,data.programs).filter(p=>programPosition(p,data.windowStart) && matchesTvCategory(p,data.category));
+    const selected = rows.find(p=>p.id === data.selectedProgramId);
+    if (selected) return {channel,program:selected};
+    const current = rows.find(p=>p.starts_at <= now && p.ends_at > now);
+    if (current) return {channel,program:current};
+    if (!first && rows[0]) first = {channel,program:rows[0]};
+  }
+  return first ?? {channel:selectedChannel ?? channels[0]};
 }

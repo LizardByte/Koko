@@ -325,6 +325,158 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
   }
 });
 
+test('a 4402-channel guide stays bounded while scrolling, navigating, searching, and jumping to the end',async({page},testInfo)=>{
+  test.setTimeout(120000);
+  const start=Math.floor(Date.now()/1800000)*1800;
+  const channels=Array.from({length:4402},(_,i)=>({id:i+1,source_id:1,source_key:String(i),guide_key:String(i),name:`Channel ${i+1}`,number:String(i+1),group_name:'',enabled:true,available:true}));
+  const programs=channels.flatMap(c=>Array.from({length:4},(_,i)=>({id:c.id*10+i,source_id:1,guide_key:c.guide_key,title:`Channel ${c.id} program ${i}`,starts_at:start+i*5400,ends_at:start+(i+1)*5400,metadata:{description:`Program details for channel ${c.id}`,categories:['News']}})));
+  await page.route('**/api/v1/live-tv/channels',route=>route.fulfill({json:channels}));
+  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs,stations:[],sources:[{id:1,name:'Large lineup',kind:'m3u'}]}}));
+  await page.goto('/');await page.getByLabel('Username',{exact:true}).fill('playback-admin');await page.getByLabel('Password',{exact:true}).fill(process.env.KOKO_E2E_PASSWORD);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.locator('#login-form')).toHaveCount(0);
+  await page.goto('/live-tv');
+  const scroll=page.locator('#tv-guide-scroll');
+  await expect(scroll).toHaveAttribute('data-tv-channel-count','4402');
+  expect(await page.locator('.tv-guide-row').count()).toBeLessThan(30);
+  await page.locator('#tv-program-1-10').focus();
+  const mounted=await page.locator('#tv-channel-row-1').elementHandle();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#tv-program-2-20')).toBeFocused();
+  expect(await mounted.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(page.locator('#tv-guide-hero h2')).toHaveText('Channel 2 program 0');
+  await page.evaluate(()=>{
+    const guide=document.querySelector('#tv-guide-scroll');window.tvGuideIdentity=guide;
+    for(let i=0;i<50;i++) document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));
+  });
+  await expect(page.locator('#tv-program-52-520')).toBeFocused();
+  expect(await page.evaluate(()=>window.tvGuideIdentity===document.querySelector('#tv-guide-scroll'))).toBe(true);
+  expect(await page.locator('.tv-guide-row').count()).toBeLessThan(30);
+  await scroll.evaluate(node=>{node.scrollTop=2200*88;node.scrollLeft=240;});
+  await expect(page.locator('#tv-program-2201-22010')).toBeAttached();
+  await page.locator('#tv-program-2201-22010').focus();
+  await page.keyboard.press('ArrowDown');await expect(page.locator('#tv-program-2202-22020')).toBeFocused();
+  await page.keyboard.press('End');await expect(page.locator('#tv-program-4402-44020')).toBeFocused();
+  expect(await page.locator('.tv-guide-row').count()).toBeLessThan(30);
+  await page.keyboard.press('Home');await expect(page.locator('#tv-program-1-10')).toBeFocused();
+  await page.getByRole('button',{name:'Filters',exact:true}).click();
+  await page.getByRole('searchbox',{name:'Search channels or programs',exact:true}).fill('Channel 4402');
+  await page.locator('#tv-filter-form').getByRole('button',{name:'Search',exact:true}).click();
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.locator('#tv-guide-hero h2')).toHaveText('Channel 4402 program 0');
+  await page.getByRole('searchbox',{name:'Search channels or programs',exact:true}).fill('');
+  await page.locator('#tv-filter-form').getByRole('button',{name:'Search',exact:true}).click();
+  expect(await page.locator('.tv-guide-row').count()).toBeLessThan(30);
+  await scroll.screenshot({path:testInfo.outputPath('large-guide-virtual-rows.png')});
+});
+
+test('source settings prefill connections, report imports, isolate channel editors, and persist guide groups',async({page})=>{
+  test.setTimeout(150000);
+  const stamp=seconds=>new Date(seconds*1000).toISOString().slice(0,19).replaceAll(/[-T:]/g,'')+' +0000';
+  const fixture=createServer((request,response)=>{
+    const now=Math.floor(Date.now()/1000),bridge=request.url.startsWith('/bridge');
+    if (request.url.endsWith('.m3u')) {
+      response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="station" tvg-chno="${bridge?'5167':'100'}",${bridge?'ESPN bridge':'Regular channel'}\nhttp://example.com/stream.ts\n`);
+    } else {
+      response.end(`<tv><channel id="station"><display-name>${bridge?'ESPN bridge':'Regular channel'}</display-name></channel><programme channel="station" start="${stamp(now-600)}" stop="${stamp(now+7200)}"><title>${bridge?'ESPN program':'Regular program'}</title></programme></tv>`);
+    }
+  });
+  await new Promise(done=>fixture.listen(0,'127.0.0.1',done));
+  let headers;const ids=[];
+  try {
+    await page.goto('/');await page.getByLabel('Username',{exact:true}).fill('playback-admin');await page.getByLabel('Password',{exact:true}).fill(process.env.KOKO_E2E_PASSWORD);await page.getByRole('button',{name:'Sign in',exact:true}).click();await expect(page.locator('#login-form')).toHaveCount(0);
+    const token=await page.evaluate(()=>localStorage.getItem('koko-client-web-auth-token'));headers={Authorization:`Bearer ${token}`};
+    const base=`http://127.0.0.1:${fixture.address().port}`;
+    for(const [name,prefix,capacity] of [['Regular feed','regular',10],['PrismCast bridge','bridge',1]]) {
+      const response=await page.request.post('/api/v1/live-tv/sources',{headers,data:{name,kind:'m3u',capacity,config:{url:`${base}/${prefix}.m3u`,guide_kind:'xmltv',xmltv_url:`${base}/${prefix}.xml`,artwork_provider:'guide',refresh_hours:12}}});
+      expect(response.ok()).toBeTruthy();ids.push((await response.json()).id);
+    }
+    await expect.poll(async()=>{
+      const sources=await(await page.request.get('/api/v1/live-tv/sources',{headers})).json();
+      return sources.filter(s=>ids.includes(s.id)&&s.channel_count===1&&s.playlist_bytes>0&&s.guide_bytes>0).length;
+    },{timeout:65000}).toBe(2);
+    await page.goto('/settings/live-tv');
+    const regular=page.locator(`[data-tv-source-card="${ids[0]}"]`),bridge=page.locator(`[data-tv-source-card="${ids[1]}"]`);
+    await expect(regular).toContainText('1 channel');await expect(regular).toContainText('Last imported: M3U');await expect(regular).toContainText('XMLTV');
+    await regular.getByText('Edit connection settings',{exact:true}).click();
+    const editor=regular.locator('[data-tv-replace-source]');
+    await expect(editor.getByLabel('IPTV playlist URL',{exact:true})).toHaveValue(`${base}/regular.m3u`);
+    await expect(editor.getByLabel('XMLTV URL',{exact:true})).toHaveValue(`${base}/regular.xml`);
+    await expect(editor.getByRole('combobox',{name:'Program artwork',exact:true})).toHaveValue('guide');
+    await expect(editor.getByLabel('Refresh interval (hours)',{exact:true})).toHaveValue('12');
+    await editor.getByLabel('Refresh interval (hours)',{exact:true}).fill('18');
+    await regular.getByText('Channel visibility and guide mapping',{exact:true}).click();
+    await expect(editor.getByLabel('XMLTV URL',{exact:true})).toHaveValue(`${base}/regular.xml`);
+    await expect(editor.getByLabel('Refresh interval (hours)',{exact:true})).toHaveValue('18');
+    await editor.getByRole('button',{name:'Save connection settings',exact:true}).click();
+    await expect(editor).toHaveCount(0);
+    if (!(await regular.locator('[data-tv-mapping-source]').evaluate(node=>node.open))) await regular.getByText('Channel visibility and guide mapping',{exact:true}).click();
+    await expect(regular.locator('[data-tv-channel-update]')).toHaveCount(1);await expect(bridge.locator('[data-tv-channel-update]')).toHaveCount(0);
+    await bridge.getByText('Channel visibility and guide mapping',{exact:true}).click();
+    await expect(bridge.locator('[data-tv-channel-update]')).toHaveCount(1);await expect(regular.locator('[data-tv-channel-update]')).toHaveCount(0);
+    await page.getByText('Add a source group',{exact:true}).click();
+    const group=page.locator('[data-tv-group-form=""]');await group.getByLabel('Group name',{exact:true}).fill('Combined FastChannels');
+    for(const id of ids) await group.locator(`input[name="source_id"][value="${id}"]`).check();
+    await group.getByRole('button',{name:'Create group',exact:true}).click();
+    await expect(page.getByText('Combined FastChannels',{exact:true})).toBeVisible();
+    await page.goto('/live-tv');
+    const tab=page.locator('[data-tv-source-group]').filter({hasText:'Combined FastChannels'});
+    if(await tab.count()) await tab.click();
+    await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-channel-count','2');
+    const bridgeChannel=(await(await page.request.get('/api/v1/live-tv/channels',{headers})).json()).find(c=>c.source_id===ids[1]);
+    await page.locator(`[data-tv-select-channel="${bridgeChannel.id}"]`).first().click();
+    await expect(page.locator('#tv-guide-hero h2')).toHaveText('ESPN program');
+    await page.reload();await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-channel-count','2');
+    const saved=await(await page.request.get(`/api/v1/live-tv/sources/${ids[0]}/connection`,{headers})).json();
+    expect(saved.source.config.refresh_hours).toBe(18);expect(saved.source.config.url).toBe(`${base}/regular.m3u`);
+    const configured=await(await page.request.get('/api/v1/live-tv/sources',{headers})).json();
+    expect(configured.find(s=>s.id===ids[0]).capacity).toBe(10);expect(configured.find(s=>s.id===ids[1]).capacity).toBe(1);
+    await page.goto('/settings/live-tv');await page.getByText('Combined FastChannels',{exact:true}).click();
+    const savedGroup=page.locator('[data-tv-group-form]').filter({has:page.locator('[data-tv-group-delete]')}).filter({has:page.locator('input[value="Combined FastChannels"]')});
+    await savedGroup.getByLabel('Group name',{exact:true}).fill('FastChannels and bridge');
+    await savedGroup.getByRole('button',{name:'Save group',exact:true}).click();
+    await expect(page.getByText('FastChannels and bridge',{exact:true})).toBeVisible();
+    const renamed=page.locator('[data-tv-group-form]').filter({has:page.locator('input[value="FastChannels and bridge"]')});
+    await renamed.getByRole('button',{name:'Delete group',exact:true}).click();
+    await expect(page.getByText('FastChannels and bridge',{exact:true})).toHaveCount(0);
+    expect((await(await page.request.get('/api/v1/live-tv/sources',{headers})).json()).filter(s=>ids.includes(s.id))).toHaveLength(2);
+  } finally {
+    for(const id of ids) if(headers) await page.request.put(`/api/v1/live-tv/sources/${id}`,{headers,data:{enabled:false,capacity:1}}).catch(()=>undefined);
+    await new Promise(done=>fixture.close(done));
+  }
+});
+
+test('large Live TV Settings loads mapping choices on demand and saves the selected station', async ({page},testInfo) => {
+  const stations=Array.from({length:5200},(_,i)=>({source_id:1,guide_key:`station-${i}`,name:`Station ${i}`,number:String(i),aliases:[]}));
+  const channels=[1,2].map(id=>({id,source_id:1,source_key:String(id),name:`Channel ${id}`,number:String(id),group_name:'',guide_key:`station-${id}`,guide_override:id===1?'station-5':null,enabled:true,available:true}));
+  const updates=[];
+  await page.route('**/api/v1/live-tv/setup/channels',route=>route.fulfill({json:channels}));
+  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs:[],stations}}));
+  await page.route('**/api/v1/live-tv/sources',route=>route.fulfill({json:[{id:1,name:'Large lineup',kind:'m3u',enabled:true,capacity:1,next_refresh:0}]}));
+  await page.route('**/api/v1/live-tv/channels/1',route=>{
+    const update=route.request().postDataJSON(); updates.push(update); channels[0].guide_override=update.guide_override;
+    return route.fulfill({status:204});
+  });
+  await page.goto('/');
+  await page.getByLabel('Username',{exact:true}).fill('playback-admin');
+  await page.getByLabel('Password',{exact:true}).fill(process.env.KOKO_E2E_PASSWORD);
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await expect(page.locator('#login-form')).toHaveCount(0);
+  await page.goto('/settings/live-tv');
+  const mapping=page.locator('[data-tv-channel-update="1"]');
+  await page.getByText('Channel visibility and guide mapping',{exact:true}).click();
+  const select=mapping.getByRole('combobox',{name:'Guide station',exact:true});
+  await expect(page.locator('[data-tv-guide-source] option')).toHaveCount(3);
+  await select.click();
+  await expect(select.locator('option')).toHaveCount(5201);
+  await select.press('Escape');
+  await select.selectOption('station-5199');
+  await mapping.getByRole('button',{name:'Save',exact:true}).click();
+  await expect.poll(()=>updates).toEqual([{enabled:true,guide_override:'station-5199'}]);
+  await expect(select).toHaveValue('station-5199');
+  await expect(page.locator('[data-tv-guide-source] option')).toHaveCount(3);
+  await expect(mapping).toBeVisible();
+  await mapping.screenshot({path:testInfo.outputPath('large-lineup-channel-mapping.png')});
+});
+
 test('Live TV Settings separates setup flows and finds local tuner metadata without hardware', async ({ page }, testInfo) => {
   test.setTimeout(90000);
   await page.goto('/');

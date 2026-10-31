@@ -64,11 +64,18 @@ const DOM_PATCH_KEY_ATTRIBUTES = [
   'data-player-audio-track-index',
   'data-trailer-seek',
   'data-tv-source',
+  'data-tv-source-group',
+  'data-tv-provider',
+  'data-tv-provider-editor',
+  'data-tv-provider-form',
   'data-tv-select-program',
   'data-tv-select-channel',
   'data-tv-category',
   'data-tv-channel-view',
   'data-tv-favorite',
+  'data-tv-source-card',
+  'data-tv-channel-update',
+  'data-tv-group-form',
 ] as const;
 
 function elementSelectorForFocus(element: Element | null): string | undefined {
@@ -107,6 +114,7 @@ function domPatchKey(node: Node): string | undefined {
 }
 
 function scrollPositionKey(element: Element, index: number): string | undefined {
+  if (element.id === 'tv-guide-scroll') return `tv-guide:${(element as HTMLElement).dataset.tvView ?? ''}`;
   const patchKey = domPatchKey(element);
   if (patchKey) {
     return patchKey;
@@ -275,7 +283,7 @@ function patchNode(current: Node, next: Node): Node {
       && current.hasAttribute('data-player-view-key')
       && current.getAttribute('data-player-view-key') === next.getAttribute('data-player-view-key')) return current;
     // A results refresh must preserve the user's expanded settings cards.
-    const detailsOpen = current instanceof HTMLDetailsElement ? current.open : undefined;
+    const detailsOpen = current instanceof HTMLDetailsElement && !next.hasAttribute('data-controlled-open') ? current.open : undefined;
     patchAttributes(current, next);
     patchChildren(current, next);
     syncFormControlState(current, next);

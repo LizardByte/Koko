@@ -13,18 +13,23 @@ export { channelPrograms, tvImage, tvTime } from './liveTvGuideModel';
 export function renderLiveTvPage(): string {
   const data = state.liveTv;
   if (!data || data.owner !== state.bootstrap?.current_user?.id) return '<section class="live-tv-page"><h1>Live TV</h1><p role="status">Loading channels and guide…</p></section>';
-  const admin = state.bootstrap?.current_user?.admin === true;
   const tab = data.tab ?? 'guide';
-  const tabs = [{ key: 'guide', label: 'Guide' }, { key: 'recordings', label: 'Recordings' }];
-  let content = renderTvGuide(data);
-  if (tab === 'recordings') content = renderRecordings(data);
-  return `<div id="tv-pinned-header" class="home-pinned-header"><header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Live TV">
-    <nav class="browse-tabs" aria-label="Live TV sections">${tabs.map(t => `<button type="button" class="browse-tab-button${tab === t.key ? ' active' : ''}" data-tv-tab="${t.key}" aria-pressed="${tab === t.key}">${t.label}</button>`).join('')}</nav>
-    <div class="home-navbar-tools">${admin ? '<button type="button" class="secondary-button" data-settings-section-path="/settings/live-tv">Live TV settings</button>' : ''}<button type="button" class="secondary-button" data-tv-refresh>${renderIcon('refresh-cw')} Refresh</button></div></header>${renderTvHero(data)}</div>
+  const content = tab === 'recordings' ? renderRecordings(data) : renderTvGuide(data);
+  return `<div id="tv-pinned-header" class="home-pinned-header">${renderTvPinnedHeader(data)}</div>
     <section id="tv-content" class="shelf-stack panel page-panel" data-nav-section="live-tv" data-nav-label="Live TV">
     ${data.error ? `<p class="live-tv-error" role="alert">${escape(data.error)}</p>` : ''}
     ${data.message ? `<p role="status">${escape(data.message)}</p>` : ''}
     ${data.loading ? '<p role="status">Updating Live TV…</p>' : ''}${content}</section>`;
+}
+
+/** Update highlighted program details without rebuilding the channel grid or shared player. */
+export function renderTvPinnedHeader(data: LiveTvState): string {
+  const admin = state.bootstrap?.current_user?.admin === true;
+  const tab = data.tab ?? 'guide';
+  const tabs = [{ key: 'guide', label: 'Guide' }, { key: 'recordings', label: 'Recordings' }];
+  return `<header class="home-navbar" data-nav-section="browse-controls" data-nav-label="Live TV">
+    <nav class="browse-tabs" aria-label="Live TV sections">${tabs.map(t => `<button type="button" class="browse-tab-button${tab === t.key ? ' active' : ''}" data-tv-tab="${t.key}" aria-pressed="${tab === t.key}">${t.label}</button>`).join('')}</nav>
+    <div class="home-navbar-tools">${admin ? '<button type="button" class="secondary-button" data-settings-section-path="/settings/live-tv">Live TV settings</button>' : ''}<button type="button" class="secondary-button" data-tv-refresh>${renderIcon('refresh-cw')} Refresh</button></div></header>${renderTvHero(data)}`;
 }
 
 function renderRecording(recording: TvRecording, data: LiveTvState): string {

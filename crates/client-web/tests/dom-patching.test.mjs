@@ -27,6 +27,13 @@ test('adding a navigation hint preserves the mounted video and player controls',
   assert.equal(document.querySelector('video'),video);
 });
 
+test('controlled source editors honor their state while ordinary settings panels retain expansion',()=>{
+  root.innerHTML='<details id="source" data-controlled-open open><summary>Edit source</summary></details><details id="ordinary" open><summary>Settings</summary></details>';
+  setElementHtml(root,'<details id="source" data-controlled-open><summary>Edit source</summary></details><details id="ordinary"><summary>Settings</summary></details>');
+  assert.equal(document.querySelector('#source').open,false);
+  assert.equal(document.querySelector('#ordinary').open,true);
+});
+
 test('changing the media source replaces the decoder element even with the same player id',()=>{
   root.innerHTML = player('/buffer/one');
   const previous = document.querySelector('video');

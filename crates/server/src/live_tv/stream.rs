@@ -41,16 +41,26 @@ use tokio::{
     },
 };
 
-static LEASES: Lazy<Mutex<HashMap<i32, i32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static LEASES: Lazy<Mutex<HashMap<(i32, bool), i32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// Serialize capture admission with removal without waiting for long-running guide refreshes.
+pub(super) static ADMISSIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub(super) struct Lease(i32);
+pub(super) struct Lease(Vec<(i32, bool)>);
+/// Source removal shares the admission lock with new captures and waits for existing leases.
+pub(super) fn source_in_use(id: i32) -> bool {
+    LEASES.lock().map_or(true, |leases| {
+        leases.get(&(id, false)).copied().unwrap_or(0) > 0
+    })
+}
 impl Drop for Lease {
     fn drop(&mut self) {
         if let Ok(mut leases) = LEASES.lock() {
-            if let Some(count) = leases.get_mut(&self.0) {
-                *count -= 1;
-                if *count == 0 {
-                    leases.remove(&self.0);
+            for key in &self.0 {
+                if let Some(count) = leases.get_mut(key) {
+                    *count -= 1;
+                    if *count == 0 {
+                        leases.remove(key);
+                    }
                 }
             }
         }
@@ -58,35 +68,60 @@ impl Drop for Lease {
 }
 
 pub(super) fn lease(source: &Source) -> Result<Lease, String> {
+    reserve(source, false)
+}
+
+fn reserve(
+    source: &Source,
+    bridge: bool,
+) -> Result<Lease, String> {
+    let mut limits = vec![((source.id, false), source.capacity)];
+    if bridge {
+        limits.push((
+            (source.id, true),
+            sources::config(source)?.bridge_capacity.max(1) as i32,
+        ));
+    }
     let mut leases = LEASES.lock().map_err(|_| "Unable to reserve a tuner")?;
-    let count = leases.entry(source.id).or_default();
-    if *count >= source.capacity {
+    if limits
+        .iter()
+        .any(|(key, limit)| leases.get(key).copied().unwrap_or(0) >= *limit)
+    {
         return Err(
             "All tuners or allowed IPTV streams are busy. Stop another stream or recording and \
              try again"
                 .into(),
         );
     }
-    *count += 1;
-    Ok(Lease(source.id))
+    for (key, _) in &limits {
+        *leases.entry(*key).or_default() += 1;
+    }
+    Ok(Lease(limits.into_iter().map(|(key, _)| key).collect()))
 }
 
 pub(super) async fn input(
     db: &DbConn,
     id: i32,
 ) -> Result<(Source, Channel, Lease), String> {
-    let (source, channel) = db
+    let _admission = ADMISSIONS.lock().await;
+    let (source, channel, bridge, provider_enabled) = db
         .run(move |conn| {
             let channel = storage::channel(conn, id)?;
             let source = storage::source(conn, channel.source_id)?;
-            Ok::<_, diesel::result::Error>((source, channel))
+            let metadata = super::providers::load(conn, source.id)?;
+            let provider_enabled = super::providers::allowed(&source, &channel, &metadata);
+            let bridge = metadata
+                .channels
+                .get(&channel.source_key)
+                .is_some_and(|c| c.bridge);
+            Ok::<_, diesel::result::Error>((source, channel, bridge, provider_enabled))
         })
         .await
         .map_err(super::db_error)?;
-    if !source.enabled || !channel.enabled || !channel.available {
+    if !source.enabled || !channel.enabled || !channel.available || !provider_enabled {
         return Err("This channel is disabled or unavailable".into());
     }
-    let lease = match lease(&source) {
+    let lease = match reserve(&source, bridge) {
         Ok(lease) => lease,
         Err(error) => {
             if !super::broadcast::preempt(source.id) {
@@ -95,7 +130,7 @@ pub(super) async fn input(
             let wait = async {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    if let Ok(lease) = lease(&source) {
+                    if let Ok(lease) = reserve(&source, bridge) {
                         break lease;
                     }
                 }
@@ -435,7 +470,11 @@ impl Drop for Pipeline {
 }
 
 impl Pipeline {
-    fn report_error(&self) {
+    pub(super) fn new(child: Child) -> Self {
+        make_pipeline(child, None, None, None)
+    }
+
+    pub(super) fn report_error(&self) {
         if let Ok(data) = self.log.lock() {
             let message = String::from_utf8_lossy(&data);
             static URL: Lazy<regex::Regex> =
@@ -579,6 +618,33 @@ pub(crate) async fn play_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_bridged_providers_share_one_capture_limit_and_release_it_on_disconnect() {
+        let source = Source {
+            id: 910001,
+            name: "IPTV".into(),
+            kind: "m3u".into(),
+            config_json: serde_json::json!({"bridge_capacity":1}).to_string(),
+            enabled: true,
+            capacity: 3,
+            next_refresh: 0,
+            last_error: None,
+        };
+        let first = reserve(&source, true).unwrap();
+        assert!(reserve(&source, true).is_err());
+        let direct = lease(&source).unwrap();
+        drop(first);
+        let second = reserve(&source, true).unwrap();
+        drop(second);
+        drop(direct);
+        assert!(
+            !LEASES
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|(id, _)| *id == source.id)
+        );
+    }
     #[test]
     fn only_browser_compatible_progressive_video_uses_original_passthrough() {
         let compatible = serde_json::json!({"streams":[

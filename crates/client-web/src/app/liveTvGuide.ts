@@ -6,9 +6,12 @@ import { renderButtonContent, renderIcon } from './ui';
 import { renderFeatureHero } from './featureHero';
 import { renderPlayerOverlay } from './playbackController';
 import type { LiveTvState } from './liveTvActions';
-import { activeGuideSource, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideSources, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
+import { activeGuideView, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideViews, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
 import { currentGuideWindow, TV_SLOT_SECONDS } from './tvGuideTime';
 import { renderMetadataSearchProviderAttribution } from './providers';
+import { tvGuideRowRange, tvGuideViewKey, TV_ROW_HEIGHT } from './tvGuideViewport';
+import { activeGuideProvider,guideProviders } from './liveTvGuideModel';
+import { renderTvProviderIcon,renderTvSourceIcon,renderTvAllProvidersIcon } from './liveTvIcons';
 
 function badges(program: TvProgram): string {
   return programBadges(program.metadata).map(tag => `<span class="tv-program-badge tv-badge-${tag.toLowerCase()}">${tag}</span>`).join('');
@@ -80,23 +83,45 @@ function programCell(channel: TvChannel, program: TvProgram, data: LiveTvState):
     <strong>${escape(program.title)}</strong>${subtitle}<span class="tv-guide-badges">${badges(program)}</span></button>`;
 }
 
-function channelRow(channel: TvChannel, data: LiveTvState): string {
+function channelRow(channel: TvChannel, data: LiveTvState, index: number): string {
   const favorite = data.preferences?.favorites.includes(channel.id) === true;
   const programs = channelPrograms(channel, data.programs).map(p => programCell(channel, p, data)).join('');
-  return `<div class="tv-guide-row" role="row"><div class="tv-guide-channel" role="rowheader"><button type="button" class="tv-channel-select" data-tv-select-channel="${channel.id}" aria-label="Details for ${escape(channel.name)}">
+  return `<div id="tv-channel-row-${channel.id}" class="tv-guide-row" data-tv-row-index="${index}" role="row" aria-rowindex="${index+2}"><div class="tv-guide-channel" role="rowheader"><button type="button" class="tv-channel-select" data-tv-select-channel="${channel.id}" aria-label="Details for ${escape(channel.name)}">
     <span class="tv-channel-logo-slot" aria-hidden="true">${channelLogo(channel,data)}</span><span><strong>${escape(channel.number)}</strong><span>${escape(channel.name)}</span></span></button>
     <div class="tv-channel-actions"><button type="button" data-tv-play="${channel.id}" aria-label="Watch ${escape(channel.name)} live">${renderIcon('play')}</button>
     <button type="button" data-tv-favorite="${channel.id}" aria-pressed="${favorite}" aria-label="${favorite ? 'Remove' : 'Add'} ${escape(channel.name)} ${favorite ? 'from' : 'to'} favorites">${renderIcon('star')}</button></div></div>
     <div class="tv-guide-track" role="cell">${programs || '<span class="tv-guide-no-listings">No listings available · Watch this channel live</span>'}</div></div>`;
 }
 
+/** Render only the viewport's channel rows, with spacers for the remainder of the lineup. */
+export function renderTvGuideRows(data: LiveTvState, channels = visibleGuideChannels(data)): string {
+  const viewport = data.guideViewport?.key === tvGuideViewKey(data) ? data.guideViewport : undefined;
+  const {start,end} = tvGuideRowRange(channels.length,viewport?.top,viewport?.height);
+  const selection = guideSelection(data);
+  const selected = {...data,selectedProgramId:selection.program?.id,selectedChannelId:selection.channel?.id};
+  return `<div id="tv-guide-spacer-top" role="presentation" aria-hidden="true" style="height:${start*TV_ROW_HEIGHT}px"></div>${channels.slice(start,end).map((c,i)=>channelRow(c,selected,start+i)).join('')}<div id="tv-guide-spacer-bottom" role="presentation" aria-hidden="true" style="height:${(channels.length-end)*TV_ROW_HEIGHT}px"></div>`;
+}
+
 /** Align channel rows beneath one sticky time header and one shared horizontal scrollbar. */
 export function renderTvGuide(data: LiveTvState): string {
-  const sources = guideSources(data), source = activeGuideSource(data), channels = visibleGuideChannels(data);
-  const selection = guideSelection(data);
-  const selectedData = {...data,selectedProgramId:selection.program?.id,selectedChannelId:selection.channel?.id};
-  const groups = [...new Set(data.channels.filter(c => c.source_id === source).map(c => c.group_name).filter(Boolean))].sort((a,b) => a.localeCompare(b));
-  const sourceTabs = sources.map(s => `<button type="button" data-tv-source="${s.id}" aria-pressed="${s.id === source}"><strong>${escape(s.name)}</strong><small>${s.count} ${s.count === 1 ? 'channel' : 'channels'}</small></button>`).join('');
+  const sources = guideViews(data), source = activeGuideView(data), channels = visibleGuideChannels(data);
+  const ids = new Set(source?.sourceIds);
+  const groups = [...new Set(data.channels.filter(c => ids.has(c.source_id)).map(c => c.group_name).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+  const providers=guideProviders(data),provider=activeGuideProvider(data);
+  const providerButtons=providers.map(p=>{
+    const key=p.source_id+':'+p.id,count=data.channels.filter(c=>c.source_id===p.source_id&&c.provider_id===p.id&&c.enabled&&c.available).length;
+    return `<button type="button" data-tv-provider="${escape(key)}" aria-pressed="${provider===p}">${renderTvProviderIcon(p)}<span>${escape(p.name)}<small>${count} ${count===1?'channel':'channels'}</small></span></button>`;
+  }).join('');
+  const providerTabs=providers.length?'<nav class="tv-provider-tabs" aria-label="IPTV providers"><button type="button" data-tv-provider="" aria-pressed="'+String(!provider)+'">'+renderTvAllProvidersIcon()+'<span>All providers</span></button>'+providerButtons+'</nav>':'';
+  const sourceTabs = sources.map(s => {
+    const attribute = s.groupId ? 'data-tv-source-group="'+escape(s.groupId)+'"' : 'data-tv-source="'+s.sourceIds[0]+'"';
+    const connection=data.guideSources?.find(source=>source.id===s.sourceIds[0]);
+    const children=s.key===source?.key?providerTabs:'';
+    return `<button type="button" ${attribute} aria-pressed="${s.key === source?.key}">${renderTvSourceIcon(connection ?? {kind:'tv'})}<strong>${escape(s.name)}</strong><small>${s.count} ${s.count === 1 ? 'channel' : 'channels'}</small></button>${children}`;
+  }).join('');
+  const hasRail=sources.length>1||providers.length>0;
+  const connection=data.guideSources?.find(s=>s.id===source?.sourceIds[0]);
+  const lineup=!hasRail&&source?'<div class="tv-guide-lineup">'+renderTvSourceIcon(connection ?? {kind:'tv'})+'<strong>'+escape(source.name)+'</strong></div>':'';
   const categories = TV_CATEGORIES.map(category => `<button type="button" data-tv-category="${category}" aria-pressed="${category === (data.category ?? 'All programs')}">${category}</button>`).join('');
   const ticks = Array.from({length:12}, (_,i) => `<div class="tv-guide-tick" role="columnheader">${escape(tvTime(data.windowStart + i*TV_SLOT_SECONDS))}</div>`).join('');
   const now = (Date.now()/1000 - data.windowStart) / (6*3600) * 100;
@@ -109,9 +134,9 @@ export function renderTvGuide(data: LiveTvState): string {
     <div id="tv-filter-panel" ${data.filtersOpen ? '' : 'hidden'}><form id="tv-filter-form"><label><span class="sr-only">Search channels or programs</span><input type="search" name="query" value="${escape(data.query ?? '')}" placeholder="Find channels or programs" /></label>
     <label><span class="sr-only">Channel group</span><select name="group"><option value="">All channel groups</option>${groups.map(g => `<option ${data.group === g ? 'selected' : ''}>${escape(g)}</option>`).join('')}</select></label><button type="submit" class="secondary-button">Search</button></form>
     <nav class="tv-guide-filters" aria-label="Program categories">${categories}</nav><nav class="tv-guide-views" aria-label="Channel lists">${views}</nav></div>
-    <div class="tv-guide-layout${sources.length > 1 ? ' has-source-rail' : ''}">${sources.length > 1 ? `<nav class="tv-source-rail" aria-label="TV sources">${sourceTabs}</nav>` : ''}
-    <div class="tv-guide-board">${channels.length ? `<div id="tv-guide-scroll" class="tv-guide-scroll table-shell" data-tv-guide-source="${data.owner}:${source}" data-tv-window-start="${data.windowStart}" role="region" aria-label="TV program guide" tabindex="0"><div class="tv-guide-grid" role="table" aria-label="${escape(sources.find(s => s.id === source)?.name ?? 'TV')} schedules">
-      <div class="tv-guide-time-row" role="row"><div class="tv-guide-corner" role="columnheader">Channels</div><div class="tv-guide-time-track">${ticks}</div></div>${channels.map(c => channelRow(c,selectedData)).join('')}${nowLine}</div></div>`
+    ${lineup}<div class="tv-guide-layout${hasRail ? ' has-source-rail' : ''}">${hasRail ? `<nav class="tv-source-rail" aria-label="TV sources">${sourceTabs}</nav>` : ''}
+    <div class="tv-guide-board">${channels.length ? `<div id="tv-guide-scroll" class="tv-guide-scroll table-shell" data-tv-guide-source="${data.owner}:${escape(source?.key ?? '')}" data-tv-view="${escape(tvGuideViewKey(data))}" data-tv-channel-count="${channels.length}" data-tv-window-start="${data.windowStart}" role="region" aria-label="TV program guide" tabindex="0"><div class="tv-guide-grid" role="table" aria-rowcount="${channels.length+1}" aria-label="${escape(source?.name ?? 'TV')} schedules">
+      <div class="tv-guide-time-row" role="row" aria-rowindex="1"><div class="tv-guide-corner" role="columnheader">Channels</div><div class="tv-guide-time-track">${ticks}</div></div><div id="tv-guide-rows" role="rowgroup">${renderTvGuideRows(data,channels)}</div>${nowLine}</div></div>`
       : '<p class="tv-guide-empty">No channels match this view. Try All channels or All programs, or add a TV source in Settings → Live TV.</p>'}
       ${data.category && data.category !== 'All programs' ? '<p class="tv-guide-hint">Channels with matching programs are shown. Other programs are dimmed to preserve the schedule.</p>' : ''}</div></div>`;
 }

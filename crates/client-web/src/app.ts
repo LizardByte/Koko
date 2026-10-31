@@ -1,5 +1,5 @@
 /** Coordinates app startup, route-level data loading, and shell rendering. */
-import { renderLiveTvPage } from './app/liveTv';
+import { renderLiveTvPage, renderTvPinnedHeader } from './app/liveTv';
 import { syncLiveTvAccount } from './app/liveTvActions';
 import './app/liveTv.css';
 import './app/liveTvGuide.css';
@@ -301,7 +301,16 @@ function eventBindingContext(): AppEventBindingContext {
     render,
     schedulePendingMetadataRefresh,
     setElementHtml,
+    renderTvSelection,
   };
+}
+
+/** Refresh the shared TV hero without rebuilding or rebinding the guide grid. */
+function renderTvSelection(): void {
+  const header = document.querySelector<HTMLElement>('#tv-pinned-header');
+  if (!header || !state.liveTv) { render(); return; }
+  setElementHtml(header,renderTvPinnedHeader(state.liveTv));
+  createIcons({icons,root:header});
 }
 
 function renderLibraryRefreshIndicator(library: MediaLibrary): string {

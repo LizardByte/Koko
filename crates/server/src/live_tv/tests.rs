@@ -131,7 +131,7 @@ async fn broadcast_transport_stream_round_trip() {
     std::fs::remove_dir(root).unwrap();
 }
 
-fn database() -> SqliteConnection {
+pub(super) fn database() -> SqliteConnection {
     let mut conn = SqliteConnection::establish(":memory:").unwrap();
     crate::db::configure_sqlite_connection(&mut conn).unwrap();
     crate::db::run_pending_sqlite_migrations(&mut conn).unwrap();
@@ -166,6 +166,79 @@ fn database() -> SqliteConnection {
         storage::save_channels(&mut conn, id, &[channel]).unwrap();
     }
     conn
+}
+
+#[test]
+fn guide_retention_prunes_disabled_and_offline_sources_without_touching_dvr_metadata() {
+    use crate::db::schema::live_tv_programs as p;
+    let mut conn = database();
+    let now = now();
+    diesel::update(s::table.find(2))
+        .set(s::enabled.eq(false))
+        .execute(&mut conn)
+        .unwrap();
+    for (source, start, end) in [
+        (1, now - 3 * 86400, now - 2 * 86400),
+        (2, now - 3 * 86400, now - 2 * 86400),
+        (1, now + 22 * 86400, now + 23 * 86400),
+        (1, now - 100, now + 100),
+    ] {
+        diesel::insert_into(p::table)
+            .values((
+                p::source_id.eq(source),
+                p::guide_key.eq("station"),
+                p::starts_at.eq(start),
+                p::ends_at.eq(end),
+                p::title.eq("Retention fixture"),
+                p::metadata_json.eq("{}"),
+            ))
+            .execute(&mut conn)
+            .unwrap();
+    }
+    let snapshot = serde_json::json!({
+        "description":"Recorded episode metadata",
+        "episode_id":"retained-episode"
+    })
+    .to_string();
+    diesel::insert_into(r::table)
+        .values((
+            r::user_id.eq(1),
+            r::channel_id.eq(1),
+            r::title.eq("Saved DVR"),
+            r::starts_at.eq(now - 3 * 86400),
+            r::ends_at.eq(now - 2 * 86400),
+            r::padding_before.eq(0),
+            r::padding_after.eq(0),
+            r::state.eq("completed"),
+            r::metadata_json.eq(&snapshot),
+        ))
+        .execute(&mut conn)
+        .unwrap();
+    assert_eq!(retention::prune(&mut conn, now).unwrap(), 3);
+    assert_eq!(p::table.count().get_result::<i64>(&mut conn).unwrap(), 1);
+    assert_eq!(
+        r::table
+            .select(r::metadata_json)
+            .first::<String>(&mut conn)
+            .unwrap(),
+        snapshot
+    );
+}
+
+#[test]
+fn guide_ingestion_bounds_history_and_future_without_accumulating_refreshes() {
+    let mut conn = database();
+    let now = now();
+    let rows = vec![
+        program(now - 3 * 86400, now - 2 * 86400, "past"),
+        program(now, now + 1800, "current"),
+        program(now + 22 * 86400, now + 23 * 86400, "future"),
+    ];
+    storage::save_programs(&mut conn, 1, &rows).unwrap();
+    storage::save_programs(&mut conn, 1, &rows).unwrap();
+    let kept = storage::guide(&mut conn, now - 4 * 86400, now + 24 * 86400).unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].metadata.episode_id.as_deref(), Some("current"));
 }
 
 #[test]
@@ -337,6 +410,11 @@ fn gracenote_maps_station_identity_metadata_and_six_hour_requests() {
         Some("S30E39")
     );
     assert_eq!(guide.programs[0].metadata.is_new, Some(true));
+    assert_eq!(guide.programs[0].metadata.year, Some(2026));
+    assert_eq!(
+        guide.programs[0].metadata.series_id.as_deref(),
+        Some("SH00225395")
+    );
     assert_eq!(
         guide.programs[0].metadata.image.as_deref(),
         Some("https://zpmc.tmsimg.com/assets/p184466_b_v13_ah.jpg?w=960")
@@ -434,6 +512,24 @@ fn xmltv_keeps_rich_metadata_and_uses_broadcast_timezone() {
     assert_eq!(guide.stations[0].number, "7.1");
     assert!(formats::xmltv("<!DOCTYPE tv [<!ENTITY x 'expansion'>]><tv/>").is_err());
     assert_eq!(formats::xml_time("20261030230000"), Some(program.starts_at));
+}
+
+#[test]
+fn xmltv_artwork_matching_reads_movie_year_and_zero_based_episode_numbers() {
+    let xml = XML.replace(
+        "<episode-num system=\"onscreen\">S1E2</episode-num>",
+        "<date>19580401</date>",
+    );
+    let guide = formats::parse_guide(&xml).unwrap();
+    assert_eq!(guide.programs[0].metadata.year, Some(1958));
+    assert_eq!(guide.programs[0].metadata.episode.as_deref(), Some("S1E2"));
+    let invalid = xml.replace("0.1.", "4294967295.1.");
+    assert!(
+        formats::parse_guide(&invalid).unwrap().programs[0]
+            .metadata
+            .episode
+            .is_none()
+    );
 }
 
 #[test]

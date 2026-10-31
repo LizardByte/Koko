@@ -8,6 +8,7 @@ import { renderPlayerOverlay } from './playbackController';
 import type { LiveTvState } from './liveTvActions';
 import { activeGuideSource, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideSources, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
 import { currentGuideWindow, TV_SLOT_SECONDS } from './tvGuideTime';
+import { renderMetadataSearchProviderAttribution } from './providers';
 
 function badges(program: TvProgram): string {
   return programBadges(program.metadata).map(tag => `<span class="tv-program-badge tv-badge-${tag.toLowerCase()}">${tag}</span>`).join('');
@@ -33,6 +34,12 @@ function heroPlaybackActions(preview: boolean): string {
   return `<button type="button" class="secondary-button home-feature-action" id="expand-tv-player">${renderButtonContent('Expand player','maximize')}</button><button type="button" class="secondary-button home-feature-action" id="close-player" aria-label="Stop playback">${renderButtonContent('Stop playback','x')}</button>`;
 }
 
+function artworkAttribution(program: TvProgram | undefined): string {
+  const providers = program?.metadata.artwork_sources ?? [];
+  if (!providers.length) return '';
+  return `<div class="tv-artwork-attribution">Artwork providers: ${providers.map(renderMetadataSearchProviderAttribution).join(' ')}</div>`;
+}
+
 /** Display program artwork and descriptions, reserving the artwork area for minimized playback. */
 export function renderTvHero(data: LiveTvState): string {
   const { channel, program } = guideSelection(data);
@@ -56,7 +63,7 @@ export function renderTvHero(data: LiveTvState): string {
   return renderFeatureHero({id:'tv-guide-hero',label:'Program details',image,
     poster:poster ? {url:poster,label:`${title} poster`} : undefined,
     copy:`<div class="tv-hero-channel">${logo}<p class="eyebrow">${label}${channelLabel}</p></div><h2>${escape(title)}</h2>${subtitle}
-      <p>${escape(description)}</p><div class="hero-meta-row">${program ? badges(program) : ''}${tags}${timeMarkup}</div>`,
+      <p>${escape(description)}</p><div class="hero-meta-row">${program ? badges(program) : ''}${tags}${timeMarkup}</div>${artworkAttribution(program)}`,
     actions:`<div class="home-feature-actions">${playbackActions}${watch}${program && channel && program.ends_at > now ? recordingChoices(channel,program) : ''}</div>`,
     media:{id:'tv-hero-media',active:preview,content:state.activeTvPlayback ? renderPlayerOverlay() : ''},
   });

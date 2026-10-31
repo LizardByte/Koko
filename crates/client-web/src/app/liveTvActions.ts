@@ -64,7 +64,7 @@ function sourceConfig(form: FormData): api.TvSourceConfig {
   const selection = value(form, 'guide_provider');
   const zap2it = selection ? JSON.parse(selection) as api.TvGuideSelection : undefined;
   if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (!zap2it || zap2it.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
-  return { url: value(form, 'url'), pin: value(form, 'pin'), xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'),
+  return { url: value(form, 'url'), pin: value(form, 'pin'), xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'), artwork_provider:value(form,'artwork_provider'),
     zap2it: zap2it ? { ...zap2it, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),
     native_device: value(form, 'native_device'), delivery_system: value(form, 'delivery_system'), region: value(form, 'region'), tuning_options: value(form, 'tuning_options'),
     adapter: Number(value(form, 'adapter')), frontend: Number(value(form, 'frontend')), zap_path: value(form, 'zap_path'),

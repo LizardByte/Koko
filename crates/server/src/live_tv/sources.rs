@@ -41,6 +41,9 @@ pub(crate) struct SourceConfig {
     pub pin: String,
     pub xmltv_url: String,
     pub guide_kind: String,
+    /// Automatic uses configured movie/TV providers for artwork; guide preserves guide artwork
+    /// only.
+    pub artwork_provider: String,
     pub adapter: u32,
     pub frontend: u32,
     pub zap_path: String,
@@ -240,6 +243,12 @@ pub(crate) fn config(source: &Source) -> Result<SourceConfig, String> {
 }
 
 fn validate(input: &mut SourceInput) -> Result<(), String> {
+    if !matches!(
+        input.config.artwork_provider.as_str(),
+        "" | "automatic" | "guide" | "tmdb" | "tvdb"
+    ) {
+        return Err("Choose Automatic, Guide only, TheMovieDB, or TheTVDB artwork".into());
+    }
     if input.name.trim().is_empty() || input.name.len() > 200 || !(1..=64).contains(&input.capacity)
     {
         return Err("Enter a source name and a stream limit between 1 and 64".into());

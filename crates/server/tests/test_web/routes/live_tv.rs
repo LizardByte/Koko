@@ -107,6 +107,26 @@ async fn live_tv_program_artwork_respects_the_selected_guide() {
         }
     }
     assert_eq!(response["programs"].as_array().unwrap().len(), 9);
+    for (id, suffix, expected) in [
+        (1, "", "https://example.com/episode.jpg"),
+        (3, "?kind=poster", "https://example.com/series.jpg"),
+        (8, "", "https://example.com/episode.jpg"),
+    ] {
+        let response = client
+            .get(format!("/api/v1/live-tv/programs/{id}/artwork{suffix}"))
+            .header(Header::new("Authorization", format!("Bearer {admin}")))
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::TemporaryRedirect);
+        assert_eq!(response.headers().get_one("Location"), Some(expected));
+    }
+    // An explicitly selected guide with no artwork must not fetch a same-title NextPVR image.
+    let response = client
+        .get("/api/v1/live-tv/programs/9/artwork")
+        .header(Header::new("Authorization", format!("Bearer {admin}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
 }
 
 #[rocket::async_test]

@@ -104,11 +104,15 @@ pub(super) fn merge_guide(
     incoming: Guide,
 ) -> QueryResult<()> {
     conn.transaction(|conn| {
-        let mut programs = guide(conn, super::now() - 86400, super::now() + 21 * 86400)?
-            .into_iter()
-            .filter(|p| p.source_id == source)
-            .map(|p| ((p.guide_key.clone(), p.starts_at), p))
-            .collect::<std::collections::HashMap<_, _>>();
+        let mut programs = guide(
+            conn,
+            super::now() - super::retention::HISTORY,
+            super::now() + super::retention::FUTURE,
+        )?
+        .into_iter()
+        .filter(|p| p.source_id == source)
+        .map(|p| ((p.guide_key.clone(), p.starts_at), p))
+        .collect::<std::collections::HashMap<_, _>>();
         for program in incoming.programs {
             programs.insert((program.guide_key.clone(), program.starts_at), program);
         }
@@ -297,9 +301,19 @@ pub(crate) fn save_programs(
     source: i32,
     rows: &[Program],
 ) -> QueryResult<()> {
+    if rows
+        .iter()
+        .any(|program| program.ends_at <= program.starts_at)
+    {
+        return Err(diesel::result::Error::RollbackTransaction);
+    }
     conn.transaction(|conn| {
         diesel::delete(p::table.filter(p::source_id.eq(source))).execute(conn)?;
-        for row in rows {
+        let now = super::now();
+        for row in rows
+            .iter()
+            .filter(|row| super::retention::contains(row, now))
+        {
             diesel::insert_into(p::table)
                 .values((
                     p::source_id.eq(source),

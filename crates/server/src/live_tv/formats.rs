@@ -68,6 +68,9 @@ pub(crate) struct ProgramMetadata {
     pub categories: Vec<String>,
     pub image: Option<String>,
     pub poster: Option<String>,
+    pub year: Option<i32>,
+    pub series_id: Option<String>,
+    pub artwork_sources: Vec<String>,
     pub rating: Option<String>,
     pub episode: Option<String>,
     pub episode_id: Option<String>,
@@ -370,6 +373,12 @@ pub(super) fn xmltv(value: &str) -> Result<Vec<Program>, String> {
                         .map(str::to_owned)
                 }
                 "rating" => metadata.rating = child_text(child, "value"),
+                "date" => {
+                    metadata.year = child
+                        .text()
+                        .and_then(|value| value.get(..4))
+                        .and_then(|year| year.parse().ok())
+                }
                 "episode-num" => {
                     let episode = child.text().map(str::to_owned);
                     if child.attribute("system") == Some("onscreen") {
@@ -378,6 +387,26 @@ pub(super) fn xmltv(value: &str) -> Result<Vec<Program>, String> {
                         metadata.episode_id = episode.map(|id| {
                             format!("{}:{id}", child.attribute("system").unwrap_or("unknown"))
                         });
+                    }
+                    if metadata.episode.is_none() && child.attribute("system") == Some("xmltv_ns") {
+                        let parts = child
+                            .text()
+                            .unwrap_or_default()
+                            .split('.')
+                            .take(2)
+                            .map(|part| {
+                                part.split('/')
+                                    .next()
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .parse::<u32>()
+                                    .ok()
+                                    .and_then(|number| number.checked_add(1))
+                            })
+                            .collect::<Vec<_>>();
+                        if let [Some(season), Some(episode)] = parts.as_slice() {
+                            metadata.episode = Some(format!("S{season}E{episode}"));
+                        }
                     }
                 }
                 "new" => metadata.is_new = Some(true),

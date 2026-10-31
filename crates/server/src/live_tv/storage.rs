@@ -154,14 +154,30 @@ pub(crate) struct GuideSource {
     pub id: i32,
     pub name: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iptv_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
 }
 
 pub(crate) fn guide_sources(conn: &mut SqliteConnection) -> QueryResult<Vec<GuideSource>> {
-    s::table
+    let rows = s::table
         .filter(s::enabled.eq(true))
-        .select((s::id, s::name, s::kind))
+        .select(Source::as_select())
         .order(s::id)
-        .load(conn)
+        .load::<Source>(conn)?;
+    rows.into_iter()
+        .map(|source| {
+            let id = source.id;
+            Ok(GuideSource {
+                id,
+                iptv_mode: super::sources::iptv_mode(&source),
+                name: source.name,
+                kind: source.kind,
+                image_url: super::providers::load(conn, id)?.image_url(id, None),
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone, Queryable, Selectable, Serialize, JsonSchema)]
@@ -211,6 +227,7 @@ pub(crate) struct SeriesRule {
 
 pub(crate) fn sources(conn: &mut SqliteConnection) -> QueryResult<Vec<Source>> {
     s::table
+        .filter(s::kind.ne(super::removal::REMOVED))
         .order(s::name)
         .select(Source::as_select())
         .load(conn)
@@ -220,7 +237,11 @@ pub(crate) fn source(
     conn: &mut SqliteConnection,
     id: i32,
 ) -> QueryResult<Source> {
-    s::table.find(id).select(Source::as_select()).first(conn)
+    s::table
+        .find(id)
+        .filter(s::kind.ne(super::removal::REMOVED))
+        .select(Source::as_select())
+        .first(conn)
 }
 
 pub(crate) fn channel(
@@ -235,10 +256,17 @@ pub(crate) fn channels(
     include_disabled: bool,
 ) -> QueryResult<Vec<Channel>> {
     let mut query = c::table
-        .filter(c::source_id.eq_any(s::table.filter(s::enabled.eq(true)).select(s::id)))
+        .filter(
+            c::source_id.eq_any(
+                s::table
+                    .filter(s::kind.ne(super::removal::REMOVED))
+                    .select(s::id),
+            ),
+        )
         .into_boxed();
     if !include_disabled {
         query = query
+            .filter(c::source_id.eq_any(s::table.filter(s::enabled.eq(true)).select(s::id)))
             .filter(c::enabled.eq(true))
             .filter(c::available.eq(true));
     }

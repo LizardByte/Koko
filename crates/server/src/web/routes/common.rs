@@ -49,69 +49,85 @@ pub fn favicon() -> (ContentType, &'static [u8]) {
 #[get("/assets/providers/<filename>")]
 pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Status> {
     let asset: (ContentType, &'static [u8]) = match filename {
-        "librivox.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/librivox.png"),
+        "audiosilo.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/audiosilo.svg"),
         ),
         "comicvine.svg" => (
             ContentType::SVG,
             include_bytes!("../../../../../assets/providers/comicvine.svg"),
         ),
-        "libex-light.png" => (
+        "fanart.png" => (
             ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/libex-light.png"),
+            include_bytes!("../../../../../assets/providers/fanart.png"),
+        ),
+        "fastchannels.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/fastchannels.svg"),
+        ),
+        "hdhomerun.ico" => (
+            ContentType::Icon,
+            include_bytes!("../../../../../assets/providers/hdhomerun.ico"),
         ),
         "libex-dark.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/libex-dark.png"),
         ),
-        "audiosilo.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/audiosilo.svg"),
-        ),
-        "tmdb.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/tmdb.svg"),
-        ),
-        "tvdb-light.png" => (
+        "libex-light.png" => (
             ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/tvdb-light.png"),
+            include_bytes!("../../../../../assets/providers/libex-light.png"),
         ),
-        "tvdb-dark.png" => (
+        "librivox.png" => (
             ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/tvdb-dark.png"),
+            include_bytes!("../../../../../assets/providers/librivox.png"),
         ),
-        "themerr.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/themerr.png"),
-        ),
-        "trailerdb-light.svg" => (
+        "local-nfo.svg" => (
             ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/trailerdb-light.svg"),
-        ),
-        "trailerdb-dark.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/trailerdb-dark.svg"),
-        ),
-        "musicbrainz.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/musicbrainz.svg"),
-        ),
-        "fanart.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/fanart.png"),
+            include_bytes!("../../../../../assets/providers/local-nfo.svg"),
         ),
         "lrclib.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/lrclib.png"),
         ),
+        "musicbrainz.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/musicbrainz.svg"),
+        ),
+        "nextpvr.ico" => (
+            ContentType::Icon,
+            include_bytes!("../../../../../assets/providers/nextpvr.ico"),
+        ),
         "open-library.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/open-library.png"),
         ),
-        "local-nfo.svg" => (
+        "themerr.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/themerr.png"),
+        ),
+        "tmdb.svg" => (
             ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/local-nfo.svg"),
+            include_bytes!("../../../../../assets/providers/tmdb.svg"),
+        ),
+        "trailerdb-dark.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/trailerdb-dark.svg"),
+        ),
+        "trailerdb-light.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/trailerdb-light.svg"),
+        ),
+        "tvdb-dark.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tvdb-dark.png"),
+        ),
+        "tvdb-light.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tvdb-light.png"),
+        ),
+        "tvheadend.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tvheadend.png"),
         ),
         _ => return Err(Status::NotFound),
     };

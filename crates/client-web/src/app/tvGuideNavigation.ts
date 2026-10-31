@@ -1,6 +1,7 @@
 /** Keeps keyboard and gamepad guide navigation at a stable broadcast time across channel rows. */
 import type { NavigationDirection } from './spatialNavigation';
 import { programAtTime, TV_WINDOW_SECONDS } from './tvGuideTime';
+import { ensureTvGuideRow, TV_ROW_HEIGHT, TV_HEADER_HEIGHT } from './tvGuideViewport';
 
 interface GuidePosition {
   source: string;
@@ -66,11 +67,14 @@ export function tvGuideNavigationTarget(control: HTMLElement, direction: Navigat
   if (!guide || !row || !control.hasAttribute('data-tv-select-channel')) return;
   rememberTvGuideFocus(control);
   const time = position!.time;
-  if (direction === 'left' || direction === 'right') return horizontalTarget(guide,row,control,direction,time);
-  const rows = Array.from(guide.querySelectorAll('.tv-guide-row'));
-  const nextRow = rows[rows.indexOf(row)+(direction === 'down' ? 1 : -1)];
-  if (!nextRow) return;
   const programColumn = position!.programColumn;
+  if (direction === 'left' || direction === 'right') return horizontalTarget(guide,row,control,direction,time);
+  const step = direction === 'down' ? 1 : -1;
+  const rows = Array.from(guide.querySelectorAll('.tv-guide-row'));
+  const rowIndex = (row as HTMLElement).dataset.tvRowIndex;
+  const nextRow = rowIndex === undefined ? rows[rows.indexOf(row)+step]
+    : ensureTvGuideRow(guide,Number(rowIndex)+step) ?? guide.querySelector<HTMLElement>(`[data-tv-row-index="${Number(rowIndex)+step}"]`);
+  if (!nextRow) return;
   const target = programColumn ? programForRow(nextRow,time) : nextRow.querySelector<HTMLElement>('.tv-channel-select') ?? undefined;
   if (target) remember(guide,target,time,programColumn);
   return {target};
@@ -80,6 +84,25 @@ export function tvGuideNavigationTarget(control: HTMLElement, direction: Navigat
 export function tvGuideNavigationTime(control: HTMLElement): number | undefined {
   const guide = control.closest<HTMLElement>('#tv-guide-scroll');
   return guide && position?.key === key(control) ? clampTime(guide,position.time) : undefined;
+}
+
+/** Page through long lineups, or jump to their first/last channel, at the same schedule time. */
+export function tvGuideJumpTarget(control: HTMLElement, keyName: string): {target?:HTMLElement} | undefined {
+  if (!['PageUp','PageDown','Home','End'].includes(keyName)) return;
+  const guide=control.closest<HTMLElement>('#tv-guide-scroll'), row=control.closest<HTMLElement>('[data-tv-row-index]');
+  if (!guide || !row || !control.hasAttribute('data-tv-select-channel')) return;
+  rememberTvGuideFocus(control);
+  const {time,programColumn}=position!;
+  const count=Number(guide.dataset.tvChannelCount), index=Number(row.dataset.tvRowIndex);
+  const page=Math.max(1,Math.floor((guide.clientHeight-TV_HEADER_HEIGHT)/TV_ROW_HEIGHT));
+  let next=index+(keyName === 'PageDown' ? page : -page);
+  if (keyName === 'Home') next=0;
+  if (keyName === 'End') next=count-1;
+  const nextRow=ensureTvGuideRow(guide,Math.max(0,Math.min(count-1,next)));
+  if (!nextRow) return {target:undefined};
+  const target=programColumn ? programForRow(nextRow,time) : nextRow.querySelector<HTMLElement>('.tv-channel-select') ?? undefined;
+  if (target) remember(guide,target,time,programColumn);
+  return {target};
 }
 
 /** Replace an expired focused program with a program on the same channel after a guide update. */

@@ -294,6 +294,7 @@ impl<'r> FromRequest<'r> for Claims {
             || ((path.starts_with("/api/v1/live-tv/programs/")
                 || path.starts_with("/api/v1/live-tv/channels/"))
                 && path.ends_with("/artwork"))
+            || (path.starts_with("/api/v1/live-tv/sources/") && path.ends_with("/image"))
             || path.starts_with("/api/v1/user-profile-images/"));
         let token = if let Some(header) = keys.first() {
             header.strip_prefix(BEARER)

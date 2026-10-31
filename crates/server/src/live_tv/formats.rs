@@ -1,4 +1,6 @@
-//! Bounded playlist and XMLTV parsing without resolving external XML entities.
+//! Channel playlist parsing and shared guide data types.
+
+mod xmltv;
 
 use rocket_okapi::okapi::schemars::{
     self,
@@ -119,75 +121,12 @@ pub(super) fn endpoint(
         .map_err(|_| "Invalid TV server address".into())
 }
 
+#[cfg(test)]
 pub(super) fn parse_guide(value: &str) -> Result<Guide, String> {
-    let programs = xmltv(value)?;
-    let doc = roxmltree::Document::parse_with_options(
-        value,
-        roxmltree::ParsingOptions {
-            allow_dtd: true,
-            nodes_limit: 3_000_000,
-            ..Default::default()
-        },
-    )
-    .map_err(|_| "Invalid XMLTV guide")?;
-    let mut stations = Vec::new();
-    for node in doc
-        .root_element()
-        .children()
-        .filter(|n| n.has_tag_name("channel"))
-    {
-        let Some(key) = node.attribute("id") else {
-            continue;
-        };
-        let aliases = node
-            .children()
-            .filter(|n| n.has_tag_name("display-name"))
-            .filter_map(|n| n.text().map(str::to_owned))
-            .collect::<Vec<_>>();
-        let number = child_text(node, "lcn")
-            .or_else(|| {
-                aliases
-                    .iter()
-                    .find(|s| {
-                        s.chars()
-                            .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
-                    })
-                    .cloned()
-            })
-            .unwrap_or_default();
-        stations.push(Station {
-            source_id: 0,
-            guide_key: key.into(),
-            name: aliases.first().cloned().unwrap_or_else(|| key.into()),
-            number,
-            aliases,
-            logo: node
-                .children()
-                .find(|n| n.has_tag_name("icon"))
-                .and_then(|n| n.attribute("src"))
-                .filter(|url| http_url(url).is_ok())
-                .map(str::to_owned),
-        });
-    }
-    // Some minimal guides omit channel declarations. Keep their explicit station IDs mappable.
-    let mut keys = stations
-        .iter()
-        .map(|s| s.guide_key.clone())
-        .collect::<HashSet<_>>();
-    for p in &programs {
-        if keys.insert(p.guide_key.clone()) {
-            stations.push(Station {
-                source_id: 0,
-                guide_key: p.guide_key.clone(),
-                name: p.guide_key.clone(),
-                number: String::new(),
-                aliases: vec![],
-                logo: None,
-            });
-        }
-    }
-    Ok(Guide { programs, stations })
+    xmltv::read(value.as_bytes(), None)
 }
+
+pub(super) use xmltv::read as read_guide;
 
 pub(super) fn http_url(value: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(value.trim()).map_err(|_| "Enter a valid HTTP or HTTPS URL")?;
@@ -222,27 +161,74 @@ fn display_separator(value: &str) -> Option<usize> {
     None
 }
 
+#[cfg(test)]
 pub(super) fn m3u(
     value: &str,
     base: &str,
 ) -> Result<Vec<Channel>, String> {
+    read_m3u(value.as_bytes(), base)
+}
+
+#[cfg(test)]
+pub(super) fn read_m3u(
+    input: impl std::io::BufRead,
+    base: &str,
+) -> Result<Vec<Channel>, String> {
+    read_playlist(input, base, false, false).map(|p| p.channels)
+}
+
+pub(super) struct Playlist {
+    pub channels: Vec<Channel>,
+    pub identities: HashMap<String, String>,
+}
+
+/// Preserve provider identity separately from guide IDs and optional stable FastChannels IDs.
+pub(super) fn read_playlist(
+    mut input: impl std::io::BufRead,
+    base: &str,
+    stable_ids: bool,
+    allow_empty: bool,
+) -> Result<Playlist, String> {
     let base = http_url(base)?;
     let mut rows = Vec::new();
+    let mut identities = HashMap::new();
     let mut pending: Option<(HashMap<String, String>, String)> = None;
     let mut seen = HashSet::new();
-    if !value
+    let mut line = String::new();
+    loop {
+        if input
+            .read_line(&mut line)
+            .map_err(|_| "Unable to read the channel playlist")?
+            == 0
+        {
+            return Err("The channel source is not an extended M3U playlist".into());
+        }
+        let header = line.trim_start_matches('\u{feff}').trim();
+        if !header.is_empty() {
+            break;
+        }
+        line.clear();
+    }
+    if !line
         .trim_start_matches('\u{feff}')
         .trim_start()
         .starts_with("#EXTM3U")
     {
         return Err("The channel source is not an extended M3U playlist".into());
     }
-    if value.lines().any(|line| {
-        line.starts_with("#EXT-X-TARGETDURATION") || line.starts_with("#EXT-X-STREAM-INF")
-    }) {
-        return Err("Enter a channel playlist, rather than an individual HLS stream".into());
-    }
-    for line in value.lines().map(str::trim) {
+    loop {
+        line.clear();
+        if input
+            .read_line(&mut line)
+            .map_err(|_| "Unable to read the channel playlist")?
+            == 0
+        {
+            break;
+        }
+        let line = line.trim();
+        if line.starts_with("#EXT-X-TARGETDURATION") || line.starts_with("#EXT-X-STREAM-INF") {
+            return Err("Enter a channel playlist, rather than an individual HLS stream".into());
+        }
         if let Some(info) = line.strip_prefix("#EXTINF:") {
             let split = display_separator(info).ok_or("A channel entry has no display name")?;
             pending = Some((
@@ -257,9 +243,16 @@ pub(super) fn m3u(
                 .join(line)
                 .map_err(|_| "A channel has an invalid stream URL")?;
             http_url(url.as_str())?;
-            let guide_key = attrs.get("tvg-id").cloned().unwrap_or_default();
+            let identity = attrs.get("channel-id").cloned().unwrap_or_default();
+            let guide_key = attrs
+                .get("tvg-id")
+                .cloned()
+                .or_else(|| stable_ids.then(|| identity.clone()))
+                .unwrap_or_default();
             // The URL distinguishes multiple qualities with the same EPG ID.
-            let key = if guide_key.is_empty() {
+            let key = if stable_ids && !identity.is_empty() {
+                format!("fastchannels:{identity}")
+            } else if guide_key.is_empty() {
                 format!(
                     "stream:{}",
                     Sha256::digest(url.as_str().as_bytes())
@@ -273,6 +266,7 @@ pub(super) fn m3u(
             if !seen.insert(key.clone()) {
                 continue;
             }
+            identities.insert(key.clone(), identity);
             let mut channel = Channel::new(key, name, url.to_string());
             channel.guide_key = guide_key;
             channel.number = attrs.get("tvg-chno").cloned().unwrap_or_default();
@@ -282,15 +276,15 @@ pub(super) fn m3u(
                 .filter(|v| http_url(v).is_ok())
                 .cloned();
             rows.push(channel);
-            if rows.len() > 20_000 {
-                return Err("The playlist exceeds 20,000 channels".into());
-            }
         }
     }
-    if rows.is_empty() {
+    if rows.is_empty() && !allow_empty {
         return Err("No playable channels were found in the playlist".into());
     }
-    Ok(rows)
+    Ok(Playlist {
+        channels: rows,
+        identities,
+    })
 }
 
 pub(super) fn xml_time(value: &str) -> Option<i64> {
@@ -318,139 +312,4 @@ pub(super) fn child_text(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-}
-
-pub(super) fn xmltv(value: &str) -> Result<Vec<Program>, String> {
-    // Allow the conventional external DOCTYPE declaration; roxmltree never fetches it.
-    // Entity declarations are rejected to avoid expansion and unsupported custom entities.
-    if value.contains("<!ENTITY") {
-        return Err("XMLTV entity declarations are not supported".into());
-    }
-    let doc = roxmltree::Document::parse_with_options(
-        value,
-        roxmltree::ParsingOptions {
-            allow_dtd: true,
-            nodes_limit: 3_000_000,
-            ..Default::default()
-        },
-    )
-    .map_err(|_| "The guide is not valid XMLTV")?;
-    if !doc.root_element().has_tag_name("tv") {
-        return Err("The guide must contain an XMLTV tv root".into());
-    }
-    let mut rows = Vec::new();
-    for node in doc
-        .root_element()
-        .children()
-        .filter(|n| n.has_tag_name("programme"))
-    {
-        let (Some(key), Some(start)) = (
-            node.attribute("channel"),
-            node.attribute("start").and_then(xml_time),
-        ) else {
-            continue;
-        };
-        let end = node.attribute("stop").and_then(xml_time);
-        let Some(title) = child_text(node, "title") else {
-            continue;
-        };
-        let mut metadata = ProgramMetadata {
-            subtitle: child_text(node, "sub-title"),
-            description: child_text(node, "desc"),
-            ..Default::default()
-        };
-        for child in node.children() {
-            match child.tag_name().name() {
-                "category" => {
-                    if let Some(text) = child.text() {
-                        metadata.categories.push(text.to_owned());
-                    }
-                }
-                "icon" => {
-                    metadata.image = child
-                        .attribute("src")
-                        .filter(|s| http_url(s).is_ok())
-                        .map(str::to_owned)
-                }
-                "rating" => metadata.rating = child_text(child, "value"),
-                "date" => {
-                    metadata.year = child
-                        .text()
-                        .and_then(|value| value.get(..4))
-                        .and_then(|year| year.parse().ok())
-                }
-                "episode-num" => {
-                    let episode = child.text().map(str::to_owned);
-                    if child.attribute("system") == Some("onscreen") {
-                        metadata.episode = episode;
-                    } else if metadata.episode_id.is_none() {
-                        metadata.episode_id = episode.map(|id| {
-                            format!("{}:{id}", child.attribute("system").unwrap_or("unknown"))
-                        });
-                    }
-                    if metadata.episode.is_none() && child.attribute("system") == Some("xmltv_ns") {
-                        let parts = child
-                            .text()
-                            .unwrap_or_default()
-                            .split('.')
-                            .take(2)
-                            .map(|part| {
-                                part.split('/')
-                                    .next()
-                                    .unwrap_or_default()
-                                    .trim()
-                                    .parse::<u32>()
-                                    .ok()
-                                    .and_then(|number| number.checked_add(1))
-                            })
-                            .collect::<Vec<_>>();
-                        if let [Some(season), Some(episode)] = parts.as_slice() {
-                            metadata.episode = Some(format!("S{season}E{episode}"));
-                        }
-                    }
-                }
-                "new" => metadata.is_new = Some(true),
-                "premiere" => {
-                    metadata.is_premiere = Some(true);
-                    metadata.is_new = Some(true);
-                }
-                "live" => metadata.is_live = Some(true),
-                "finale" => metadata.is_finale = Some(true),
-                "previously-shown" => metadata.is_new = Some(false),
-                "credits" => {
-                    metadata.credits = child
-                        .children()
-                        .filter_map(|c| c.text())
-                        .map(str::to_owned)
-                        .collect()
-                }
-                _ => {}
-            }
-        }
-        rows.push(Program {
-            id: 0,
-            source_id: 0,
-            guide_key: key.into(),
-            starts_at: start,
-            ends_at: end.unwrap_or(0),
-            title,
-            metadata,
-        });
-        if rows.len() > 250_000 {
-            return Err("The guide exceeds 250,000 programs".into());
-        }
-    }
-    rows.sort_by(|a, b| (&a.guide_key, a.starts_at).cmp(&(&b.guide_key, b.starts_at)));
-    // XMLTV stop is optional. Infer it only from the next event on the same station.
-    for index in 0..rows.len() {
-        if rows[index].ends_at == 0
-            && index + 1 < rows.len()
-            && rows[index].guide_key == rows[index + 1].guide_key
-        {
-            rows[index].ends_at = rows[index + 1].starts_at;
-        }
-    }
-    rows.retain(|p| p.ends_at > p.starts_at);
-    rows.dedup_by(|a, b| a.guide_key == b.guide_key && a.starts_at == b.starts_at);
-    Ok(rows)
 }

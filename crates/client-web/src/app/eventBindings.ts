@@ -110,6 +110,8 @@ export interface AppEventBindingContext {
   refreshPendingMetadataData: () => Promise<void>;
   /** Re-renders the app shell. */
   render: (preserveScroll?: boolean) => void;
+  /** Refresh the TV hero while retaining the mounted guide and its focus. */
+  renderTvSelection?: () => void;
   /** Schedules the background metadata refresh poller. */
   schedulePendingMetadataRefresh: (force?: boolean) => void;
   /** Replaces a partial DOM subtree and reuses the app DOM patcher. */

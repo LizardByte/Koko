@@ -5,13 +5,18 @@ mod broadcast;
 mod buffer_files;
 pub(crate) mod discovery;
 mod dvr;
+pub(crate) mod feeds;
 mod formats;
 pub(crate) mod gracenote;
+pub(crate) mod iptv;
 mod native;
 pub(crate) mod preferences;
+pub(crate) mod providers;
 mod proxy;
+pub(crate) mod removal;
 mod retention;
 pub(crate) mod settings;
+pub(crate) mod setup;
 mod sources;
 mod storage;
 mod stream;
@@ -42,6 +47,10 @@ pub(crate) use dvr::conflicts as recording_conflicts;
 pub(crate) use dvr::{
     ScheduleRequest,
     schedule,
+};
+pub(crate) use sources::{
+    SourceConnection,
+    connection,
 };
 pub(crate) use sources::{
     nextpvr_artwork,
@@ -96,11 +105,15 @@ pub(crate) async fn remove_recording_file(
 pub(crate) async fn import_guide(
     db: &crate::db::DbConn,
     id: i32,
-    value: String,
+    file: std::fs::File,
 ) -> Result<(), String> {
     let lock = sources::source_lock(id);
     let _guard = lock.lock().await;
-    let guide = formats::parse_guide(&value)?;
+    let guide_bytes = file
+        .metadata()
+        .map_err(|_| "Unable to read the XMLTV file size")?
+        .len();
+    let guide = feeds::read_guide(file).await?;
     let source = db
         .run(move |conn| storage::source(conn, id))
         .await
@@ -112,6 +125,9 @@ pub(crate) async fn import_guide(
     db.run(move |conn| {
         storage::source(conn, id)?;
         storage::save_guide(conn, id, &guide)?;
+        let mut sizes = setup::feed_sizes(conn, id)?;
+        sizes.guide_bytes = Some(guide_bytes);
+        setup::save_feed_sizes(conn, id, &sizes)?;
         use crate::db::schema::live_tv_sources as s;
         use diesel::prelude::*;
         diesel::update(s::table.find(id))

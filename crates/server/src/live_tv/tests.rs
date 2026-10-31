@@ -510,7 +510,7 @@ fn xmltv_keeps_rich_metadata_and_uses_broadcast_timezone() {
     assert_eq!(program.metadata.is_new, Some(true));
     assert_eq!(guide.programs[1].ends_at, guide.programs[2].starts_at);
     assert_eq!(guide.stations[0].number, "7.1");
-    assert!(formats::xmltv("<!DOCTYPE tv [<!ENTITY x 'expansion'>]><tv/>").is_err());
+    assert!(formats::parse_guide("<!DOCTYPE tv [<!ENTITY x 'expansion'>]><tv/>").is_err());
     assert_eq!(formats::xml_time("20261030230000"), Some(program.starts_at));
 }
 

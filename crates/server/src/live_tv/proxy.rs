@@ -274,6 +274,8 @@ async fn serve(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_owned();
+    // Reqwest's size hint shrinks as chunks are consumed. The relay also sends the sniffed prefix.
+    let content_length = response.content_length();
     let mut first = response
         .chunk()
         .await
@@ -324,7 +326,7 @@ async fn serve(
         let mut header = format!(
             "HTTP/1.1 {status} Upstream\r\nContent-Type: {content_type}\r\nConnection: close\r\n"
         );
-        if let Some(length) = response.content_length() {
+        if let Some(length) = content_length {
             header.push_str(&format!("Content-Length: {length}\r\n"));
         }
         if let Some(range) = response
@@ -363,6 +365,67 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rocket::async_test]
+    async fn binary_resources_keep_the_full_length_after_playlist_sniffing() {
+        for (size, head, range) in [
+            (4, false, false),
+            (1024, false, false),
+            (256 * 1024, false, false),
+            (1024, false, true),
+            (1024, true, false),
+        ] {
+            let data = vec![0xa5; size];
+            let expected = data.clone();
+            let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/init.mp4?v=1", upstream.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = upstream.accept().await.unwrap();
+                let (_, requested_range, _) = request(&mut socket).await.unwrap();
+                assert_eq!(
+                    requested_range.as_deref(),
+                    range.then_some("bytes=1024-2047")
+                );
+                let status = if range { "206 Partial Content" } else { "200 OK" };
+                let content_range =
+                    if range { "Content-Range: bytes 1024-2047/4096\r\n" } else { "" };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nContent-Length: \
+                             {size}\r\n{content_range}Connection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(&data).await.unwrap();
+            });
+            let (_proxy, url) = start(&url).await.unwrap();
+            let client = reqwest::Client::new();
+            let mut builder = if head { client.head(url) } else { client.get(url) };
+            if range {
+                builder = builder.header(reqwest::header::RANGE, "bytes=1024-2047");
+            }
+            let response = builder.send().await.unwrap();
+            assert_eq!(response.status().as_u16(), if range { 206 } else { 200 });
+            assert_eq!(
+                response.headers()[reqwest::header::CONTENT_LENGTH],
+                size.to_string(),
+                "The relay must include the bytes already read while detecting playlists"
+            );
+            if range {
+                assert_eq!(
+                    response.headers()[reqwest::header::CONTENT_RANGE],
+                    "bytes 1024-2047/4096"
+                );
+            }
+            let body = response.bytes().await.unwrap();
+            assert_eq!(body.as_ref(), if head { &[][..] } else { &expected });
+            server.await.unwrap();
+        }
+    }
+
     #[test]
     fn hls_rewrites_nested_playlists_keys_maps_and_byte_range_resources() {
         let state = State {

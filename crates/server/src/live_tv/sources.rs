@@ -9,6 +9,7 @@ use super::formats::{
 use super::{
     Channel,
     Source,
+    feeds,
     formats,
     storage,
 };
@@ -38,7 +39,15 @@ use std::time::Duration;
 #[serde(default)]
 pub(crate) struct SourceConfig {
     pub url: String,
+    /// Empty/playlist accepts an M3U URL; fastchannels accepts one server address.
+    pub iptv_mode: String,
+    pub provider_grouping: bool,
+    /// Shared across all bridged providers; zero selects one simultaneous capture.
+    pub bridge_capacity: u32,
     pub pin: String,
+    /// Connection editors can leave the masked PIN unchanged without retrieving it.
+    #[serde(skip_serializing)]
+    pub preserve_pin: bool,
     pub xmltv_url: String,
     pub guide_kind: String,
     /// Automatic uses configured movie/TV providers for artwork; guide preserves guide artwork
@@ -58,13 +67,41 @@ pub(crate) struct SourceConfig {
     pub tuning_options: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 pub(crate) struct SourceInput {
     pub name: String,
     /// hdhomerun, m3u, nextpvr, or tvheadend.
     pub kind: String,
     pub capacity: i32,
     pub config: SourceConfig,
+}
+
+#[derive(Serialize, JsonSchema)]
+pub(crate) struct SourceConnection {
+    pub source: SourceInput,
+    pub has_pin: bool,
+}
+
+pub(crate) async fn connection(
+    db: &DbConn,
+    id: i32,
+) -> Result<SourceConnection, String> {
+    let source = db
+        .run(move |conn| storage::source(conn, id))
+        .await
+        .map_err(super::db_error)?;
+    let mut config = config(&source)?;
+    let has_pin = !config.pin.is_empty();
+    config.pin.clear();
+    Ok(SourceConnection {
+        source: SourceInput {
+            name: source.name,
+            kind: source.kind,
+            capacity: source.capacity,
+            config,
+        },
+        has_pin,
+    })
 }
 
 pub(crate) async fn nextpvr_artwork(
@@ -169,13 +206,17 @@ async fn nextpvr_image(
 }
 
 pub(super) fn client() -> Result<Client, String> {
+    client_builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|_| "Unable to create Live TV HTTP client".into())
+}
+
+pub(super) fn client_builder() -> reqwest::ClientBuilder {
     Client::builder()
         .user_agent(concat!("Koko/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(90))
         .gzip(true)
-        .build()
-        .map_err(|_| "Unable to create Live TV HTTP client".into())
 }
 
 pub(super) async fn bytes(
@@ -232,6 +273,17 @@ pub(super) async fn json(request: reqwest::RequestBuilder) -> Result<serde_json:
         .map_err(|_| "The TV source returned invalid JSON".into())
 }
 
+/// Public presentation hint for the IPTV preset, without exposing connection credentials.
+pub(super) fn iptv_mode(source: &Source) -> Option<String> {
+    if source.kind != "m3u" {
+        return None;
+    }
+    config(source)
+        .ok()
+        .filter(|config| config.iptv_mode == "fastchannels")
+        .map(|config| config.iptv_mode)
+}
+
 pub(crate) fn config(source: &Source) -> Result<SourceConfig, String> {
     if source.config_json.starts_with('{') {
         return serde_json::from_str(&source.config_json)
@@ -243,6 +295,16 @@ pub(crate) fn config(source: &Source) -> Result<SourceConfig, String> {
 }
 
 fn validate(input: &mut SourceInput) -> Result<(), String> {
+    if !matches!(
+        input.config.iptv_mode.as_str(),
+        "" | "playlist" | "fastchannels"
+    ) || input.config.bridge_capacity > 64
+        || (input.config.iptv_mode == "fastchannels" && input.kind != "m3u")
+    {
+        return Err(
+            "Choose an IPTV playlist or FastChannels server and a bridge limit from 1 to 64".into(),
+        );
+    }
     if !matches!(
         input.config.artwork_provider.as_str(),
         "" | "automatic" | "guide" | "tmdb" | "tvdb"
@@ -287,6 +349,9 @@ fn validate(input: &mut SourceInput) -> Result<(), String> {
         input.capacity = 1;
     } else {
         formats::http_url(&input.config.url)?;
+        if input.config.iptv_mode == "fastchannels" {
+            super::iptv::endpoint(&input.config.url, "feeds/default/native/m3u")?;
+        }
     }
     if !input.config.xmltv_url.is_empty() {
         formats::http_url(&input.config.xmltv_url)?;
@@ -397,12 +462,16 @@ pub(crate) async fn replace_source(
     let _setup_guard = setup_lock.lock().await;
     let lock = source_lock(id);
     let _guard = lock.lock().await;
-    validate(&mut input)?;
-    resolve_native_device(db, &mut input, Some(id)).await?;
     let previous = db
         .run(move |conn| storage::source(conn, id))
         .await
         .map_err(super::db_error)?;
+    if input.config.preserve_pin && input.config.pin.is_empty() {
+        input.config.pin = config(&previous)?.pin;
+    }
+    input.config.preserve_pin = false;
+    validate(&mut input)?;
+    resolve_native_device(db, &mut input, Some(id)).await?;
     if input.kind != previous.kind {
         return Err("Add a new source to use a different tuner type".into());
     }
@@ -463,7 +532,7 @@ async fn hdhomerun(source: &SourceConfig) -> Result<Vec<Channel>, String> {
 async fn automatic_guide(
     source: &Source,
     config: &SourceConfig,
-) -> Result<Option<Guide>, String> {
+) -> Result<Option<(Guide, Option<u64>)>, String> {
     let parsed = match source.kind.as_str() {
         "hdhomerun" => {
             let base = formats::http_url(&config.url)?;
@@ -479,18 +548,24 @@ async fn automatic_guide(
                 .ok_or("The HDHomeRun did not supply guide credentials")?;
             let mut url = formats::http_url("https://api.hdhomerun.com/api/xmltv")?;
             url.query_pairs_mut().append_pair("DeviceAuth", auth);
-            formats::parse_guide(&text(url).await?)
+            xmltv_guide(url).await
         }
-        "nextpvr" => nextpvr::guide(config).await.map(from_programs),
-        "tvheadend" => {
-            formats::parse_guide(&text(formats::endpoint(&config.url, "xmltv/channels")?).await?)
-        }
+        "nextpvr" => nextpvr::guide(config)
+            .await
+            .map(|p| (from_programs(p), None)),
+        "tvheadend" => xmltv_guide(formats::endpoint(&config.url, "xmltv/channels")?).await,
         _ if !config.xmltv_url.is_empty() => {
-            formats::parse_guide(&text(formats::http_url(&config.xmltv_url)?).await?)
+            xmltv_guide(formats::http_url(&config.xmltv_url)?).await
         }
         _ => return Ok(None),
     }?;
     Ok(Some(parsed))
+}
+
+async fn xmltv_guide(url: Url) -> Result<(Guide, Option<u64>), String> {
+    feeds::guide_input(url)
+        .await
+        .map(|(guide, size)| (guide, Some(size)))
 }
 
 fn from_programs(programs: Vec<super::Program>) -> Guide {
@@ -574,43 +649,82 @@ async fn refresh_inner(
     source: &Source,
 ) -> Result<(), String> {
     let config = config(source)?;
+    let mut playlist_bytes = None;
+    let mut imported_identities = None;
+    let mut imported_guide = None;
     let rows = match source.kind.as_str() {
+        "m3u" => {
+            let imported = super::iptv::import(&config).await?;
+            playlist_bytes = Some(imported.playlist_bytes);
+            imported_identities = Some(imported.identities);
+            imported_guide = imported.guide;
+            imported.channels
+        }
         "hdhomerun" => hdhomerun(&config).await?,
         "nextpvr" => nextpvr::channels(&config).await?,
         "dvb" => super::native::channels(&config).await?,
         "native" => super::tsduck::channels(source, &config).await?,
         "tvheadend" => {
             let url = formats::endpoint(&config.url, "playlist/channels.m3u")?;
-            formats::m3u(&text(url.clone()).await?, url.as_str())?
+            let (rows, size) = feeds::playlist_input(url).await?;
+            playlist_bytes = Some(size);
+            rows
         }
-        _ => formats::m3u(&text(formats::http_url(&config.url)?).await?, &config.url)?,
+        _ => {
+            let (rows, size) = feeds::playlist_input(formats::http_url(&config.url)?).await?;
+            playlist_bytes = Some(size);
+            rows
+        }
     };
     let id = source.id;
-    db.run(move |conn| storage::save_channels(conn, id, &rows))
-        .await
-        .map_err(super::db_error)?;
+    let stable_ids = config.iptv_mode == "fastchannels";
+    db.run(move |conn| {
+        conn.transaction(|conn| {
+            if let Some(identities) = imported_identities.as_ref().filter(|_| stable_ids) {
+                let previous = super::providers::load(conn, id)?;
+                super::iptv::reconcile(conn, id, &rows, identities, &previous)?;
+            }
+            storage::save_channels(conn, id, &rows)?;
+            if let Some(identities) = imported_identities {
+                let mut metadata = super::providers::load(conn, id)?;
+                super::iptv::merge_metadata(&mut metadata, identities);
+                super::providers::save(conn, id, &metadata)?;
+            }
+            let mut sizes = super::setup::feed_sizes(conn, id)?;
+            sizes.playlist_bytes = playlist_bytes;
+            super::setup::save_feed_sizes(conn, id, &sizes)
+        })
+    })
+    .await
+    .map_err(super::db_error)?;
     let guide = match config.guide_kind.as_str() {
-        "gracenote" | "zap2it" => Some(super::gracenote::guide(&config.zap2it).await?),
-        "xmltv" => Some(formats::parse_guide(
-            &text(formats::http_url(&config.xmltv_url)?).await?,
-        )?),
+        "automatic" | "" if imported_guide.is_some() => {
+            imported_guide.map(|(guide, size)| (guide, Some(size)))
+        }
+        "gracenote" | "zap2it" => Some((super::gracenote::guide(&config.zap2it).await?, None)),
+        "xmltv" => Some(xmltv_guide(formats::http_url(&config.xmltv_url)?).await?),
         "upload" => None,
-        "broadcast" => Some(super::broadcast::collect(db, source, &config).await?),
+        "broadcast" => Some((super::broadcast::collect(db, source, &config).await?, None)),
         "automatic" | "" if matches!(source.kind.as_str(), "dvb" | "native") => {
-            Some(super::broadcast::collect(db, source, &config).await?)
+            Some((super::broadcast::collect(db, source, &config).await?, None))
         }
         _ => automatic_guide(source, &config).await?,
     };
     let broadcast = config.guide_kind == "broadcast"
         || (matches!(source.kind.as_str(), "dvb" | "native")
             && matches!(config.guide_kind.as_str(), "" | "automatic"));
-    if let Some(guide) = guide {
+    if let Some((guide, guide_bytes)) = guide {
         db.run(move |conn| {
-            if broadcast {
-                storage::merge_guide(conn, id, guide)
-            } else {
-                storage::save_guide(conn, id, &guide)
-            }
+            conn.transaction(|conn| {
+                if broadcast {
+                    storage::merge_guide(conn, id, guide)?;
+                } else {
+                    storage::save_guide(conn, id, &guide)?;
+                }
+                let mut sizes = super::setup::feed_sizes(conn, id)?;
+                sizes.guide_bytes = guide_bytes;
+                super::setup::save_feed_sizes(conn, id, &sizes)
+            })
         })
         .await
         .map_err(super::db_error)?;

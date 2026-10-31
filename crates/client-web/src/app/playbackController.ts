@@ -24,6 +24,7 @@ import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
 import * as tvApi from '../liveTvApi';
 import { TvPlaybackWatchdog } from './tvPlaybackRecovery';
+import { bindTvPlayerGuide, refreshTvPlayerGuide, refreshTvPlayerProgram, renderTvPlayerGuide, renderTvPlayerProgram, tvChannelPlayback } from './tvPlayer';
 import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
 import { renderButtonContent, renderIcon, subtitleLanguage } from './ui';
 import { buildYouTubeWatchUrl, extractYouTubeVideoId, loadYouTubeIframeApi } from './youtube';
@@ -260,8 +261,8 @@ function renderAudioTrackMenuMarkup(isAudio: boolean, audioTracks: MediaAudioTra
     `;
 }
 
-function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string, channel = false): string {
-  if (logoUrl && channel) return `<div class="player-channel-heading"><img class="player-channel-logo" data-tv-image src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)} logo" referrerpolicy="no-referrer" /><h2>${escapeHtml(title)}</h2></div>`;
+function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string, channel = false, fallback = ''): string {
+  if (logoUrl && channel) return `<div class="player-channel-heading"><img class="player-channel-logo" data-tv-image data-fallback-src="${escapeHtml(fallback)}" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)} logo" referrerpolicy="no-referrer" /><h2>${escapeHtml(title)}</h2></div>`;
   return logoUrl
     ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)}" />`
     : `<h2>${escapeHtml(title)}</h2>`;
@@ -363,7 +364,7 @@ function playerSeekEnabled(view: PlayerView): boolean {
 
 function renderPlayerTime(view: PlayerView): string {
   if (!playerSeekEnabled(view)) return '<span class="player-badge">Live TV</span>';
-  const live = view.tv?.buffer ? '<button id="player-go-live" class="player-badge" type="button">Go live</button>' : '';
+  const live = view.tv?.buffer ? '<span id="player-live-status" class="player-badge">Live</span>' : '';
   return `<span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(view.duration))}</span></span>${live}`;
 }
 
@@ -386,6 +387,19 @@ function renderPlayerSeek(seconds: number): string {
   return `<button class="player-icon-button" type="button" data-player-seek="${seconds}" title="${label}" aria-label="${label}">${renderIcon(icon,'player-control-icon')}</button>`;
 }
 
+function renderTvSkipToEnd(view: PlayerView): string {
+  return view.tv?.buffer ? `<button id="player-skip-to-end" class="player-icon-button" type="button" title="Skip to end" aria-label="Skip to end">${renderIcon('step-forward','player-control-icon')}</button>` : '';
+}
+
+function renderTvGuideButton(view: PlayerView): string {
+  return view.tv?.kind === 'channels' ? `<button id="player-tv-guide-toggle" class="player-icon-button" type="button" title="Channel guide" aria-label="Channel guide" aria-expanded="${Boolean(view.tv.guideOpen)}" aria-controls="player-tv-guide">${renderIcon('tv','player-control-icon')}</button>` : '';
+}
+
+function tvPlayerPresentation(view: PlayerView): {program:string;guide:string;className:string} {
+  if (!view.tv) return {program:'',guide:'',className:''};
+  return {program:`<div id="player-tv-program">${renderTvPlayerProgram()}</div>`,guide:renderTvPlayerGuide(),className:view.tv.guideOpen ? 'has-tv-guide' : ''};
+}
+
 function renderMediaPlayerOverlay(): string {
   const view = currentPlayerView();
   if (!view) return '';
@@ -394,26 +408,27 @@ function renderMediaPlayerOverlay(): string {
   const label = view.tv ? 'Live TV' : 'Now playing';
   const media = view.source ? renderMediaElementMarkup(view.isAudio,view.source,view.poster,view.tracks) : '';
   const mediaMarkup = state.playbackSettings?.paused ? media.replace(' autoplay','') : media;
-  const viewKey = escapeHtml(JSON.stringify([view.source,preview,view.title,view.logo,state.playbackProblem,view.tv?.buffer?.can_keep]));
+  const viewKey = escapeHtml(JSON.stringify([view.source,preview,view.title,view.logo,view.tv?.logoFallback,state.playbackProblem,view.tv?.buffer?.can_keep]));
   if (preview) return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay tv-preview-player">
     <div id="media-player-shell" class="player-shell media-player-shell video-player-shell ${state.playbackProblem ? 'has-media-error' : ''}">
       ${mediaMarkup}<div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div>
     </div></div>`;
   const quality = !view.isAudio && (!view.tv || view.tv.buffer) ? renderPlaybackQuality(state.activePlaybackQuality ?? 'original') : '';
   const seek = playerSeekEnabled(view);
+  const tvPresentation = tvPlayerPresentation(view);
   return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay ${preview ? 'tv-preview-player' : ''}">
-    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
+    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} ${tvPresentation.className} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
       ${mediaMarkup}<div class="player-loading-indicator" aria-live="polite"><span class="loading-spinner player-loading-spinner" aria-hidden="true"></span></div>
       <div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div><div class="player-idle-hit-area" aria-hidden="true"></div>
-      <div class="player-top-controls player-controls"><div class="player-title-block"><span class="eyebrow">${label}</span>${renderPlayerTitleMarkup(view.logo,view.title,Boolean(view.tv))}</div>
+      <div class="player-top-controls player-controls"><div class="player-title-block"><span class="eyebrow">${label}</span>${renderPlayerTitleMarkup(view.logo,view.title,Boolean(view.tv),view.tv?.logoFallback)}${tvPresentation.program}</div>
         <div class="player-top-actions">${renderTranscodeBadge(view.audioOverride)}<button id="close-player" class="player-icon-button" type="button" title="${closeLabel}" aria-label="${closeLabel}">${renderIcon('x','player-control-icon')}</button></div></div>
       <div class="player-bottom-controls player-controls">${seek ? '<input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />' : ''}
         <div class="player-control-row"><div class="player-control-cluster player-time-cluster">${renderPlayerTime(view)}</div>
-          <div class="player-control-cluster player-transport-cluster">${seek ? renderPlayerSeek(-10) : ''}<button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause','player-control-icon')}</button>${seek ? renderPlayerSeek(10) : ''}</div>
+          <div class="player-control-cluster player-transport-cluster">${renderTvKeepControls(view)}${seek ? renderPlayerSeek(-10) : ''}<button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause','player-control-icon')}</button>${seek ? renderPlayerSeek(10) : ''}${renderTvSkipToEnd(view)}</div>
           <div class="player-control-cluster player-tool-cluster"><button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2','player-control-icon')}</button>
-            <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />${renderTvKeepControls(view)}${view.audioMenu}${quality}${view.subtitles}${renderPictureInPictureButton(view.isAudio)}
+            <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />${renderTvGuideButton(view)}${view.audioMenu}${quality}${view.subtitles}${renderPictureInPictureButton(view.isAudio)}
             <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize','player-control-icon')}</button></div></div></div>
-    </div></div>`;
+      ${tvPresentation.guide}</div></div>`;
 }
 function themeSongLayer(): HTMLElement {
   let layer = document.querySelector<HTMLElement>('#theme-song-layer');
@@ -653,7 +668,10 @@ export function stopTvPlayback(): void {
 export async function startTvPlayback(input: Omit<NonNullable<typeof state.activeTvPlayback>, 'owner'>): Promise<void> {
   const owner = state.bootstrap?.current_user?.id;
   if (owner === undefined) return;
+  const previous = state.activeTvPlayback ? document.querySelector<HTMLMediaElement>('#media-player') : null;
+  const volume = previous ? {paused:false,volume:previous.volume,muted:previous.muted} : undefined;
   stopMusic(); closeTrailerPlayer(); closeActivePlaybackSession();
+  if (volume) state.playbackSettings = volume;
   state.activeTvPlayback = {...input,owner}; state.isPlayerOpen = true;
   state.activePlaybackQuality = 'original';
   const tv = state.activeTvPlayback;
@@ -1355,7 +1373,7 @@ function recoverTvPlayback(player: HTMLMediaElement, interrupted = false): boole
   if (result === 'recover') {
     const livePosition = Math.max(buffer.start_ms,buffer.end_ms-6000);
     // Keep a time-shifted viewer's position on the first retry. If the same point
-    // repeatedly fails, use the current live edge as the manual Go live action does.
+    // repeatedly fails, use the current live edge as Skip to end does.
     seekTvBuffer(watchdog.attempts > 1 ? livePosition : Math.min(position,livePosition),false);
   }
   return true;
@@ -1413,7 +1431,7 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
   tvPlaybackWatchdog(tv).attach(activePlaybackPositionMs(player),Date.now());
   const cleanupMenu = bindTvRecordingMenu(tv);
   const goLive = () => { if (tv.buffer) seekTvBuffer(tv.buffer.end_ms-6000,false); };
-  const live = document.querySelector('#player-go-live');
+  const live = document.querySelector('#player-skip-to-end');
   live?.addEventListener('click',goLive);
   const timer = globalThis.setInterval(() => {
     if (!current() || !tv.buffer || polling) return;
@@ -1427,7 +1445,7 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
       const position = activePlaybackPositionMs(player);
       if (!player.paused && position < info.start_ms && info.end_ms > info.start_ms) seekTvBuffer(info.start_ms);
       else if (!state.playbackProblem && !recoverTvPlayback(player) && !info.finished && !player.paused) {
-        showPlaybackProblem({message:'TV playback could not reconnect automatically. Try Go live or retry playback.',retry:true});
+        showPlaybackProblem({message:'TV playback could not reconnect automatically. Try Skip to end or retry playback.',retry:true});
       }
     }).catch(error => { if (current()) console.warn('Unable to refresh the TV buffer',error); }).finally(() => { polling = false; });
   },2000);
@@ -1437,6 +1455,8 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
 /** Binds controls for the browser playback overlay in the current DOM tree. */
 export function bindPlayerProgress(): void {
   preservePlayerIcons();
+  refreshTvPlayerGuide();
+  refreshTvPlayerProgram();
   const player = document.querySelector<HTMLMediaElement>('#media-player');
   const bindingKey = document.querySelector('#media-player-overlay')?.getAttribute('data-player-view-key') ?? '';
   const bound = player ? initializedMediaSources.get(player) : undefined;
@@ -1489,8 +1509,10 @@ export function bindPlayerProgress(): void {
   let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0 || mediaInitialization.seekApplied;
   let stallHandle: number | undefined;
   const cleanupTvBuffer = bindTvBufferControls(player);
+  const cleanupTvGuide = bindTvPlayerGuide(channel => { void startTvPlayback(tvChannelPlayback(channel,true)); });
   mediaInitialization.cleanup = () => {
     cleanupTvBuffer();
+    cleanupTvGuide();
     if (controlsHideHandle !== undefined) globalThis.clearTimeout(controlsHideHandle);
     if (stallHandle !== undefined) globalThis.clearTimeout(stallHandle);
   };
@@ -1568,6 +1590,7 @@ export function bindPlayerProgress(): void {
     const duration = playbackDurationSeconds();
     const start = (tv?.buffer?.start_ms ?? 0)/1000;
     const currentPosition = Math.min(duration || Number.POSITIVE_INFINITY, playbackBaseOffsetSeconds + player.currentTime);
+    refreshTvPlayerProgram(currentPosition*1000);
     if (progress && !isScrubbing) {
       progress.value = duration > start ? String(Math.min(1000, Math.max(0, ((currentPosition-start) / (duration-start)) * 1000))) : '0';
       progress.disabled = duration <= start;
@@ -1578,8 +1601,8 @@ export function bindPlayerProgress(): void {
     if (durationLabel) {
       durationLabel.textContent = formatMediaTime(duration);
     }
-    const liveButton = document.querySelector('#player-go-live');
-    if (liveButton) liveButton.textContent = duration-currentPosition < 6 ? 'Live' : 'Go live';
+    const liveStatus = document.querySelector<HTMLElement>('#player-live-status');
+    if (liveStatus) liveStatus.hidden = duration-currentPosition >= 8;
   };
 
   const applyInitialDirectSeek = (): void => {
@@ -1618,7 +1641,8 @@ export function bindPlayerProgress(): void {
       const focusedControl = document.activeElement?.closest('.player-controls');
       const menuOpen = document.querySelector('#media-player-overlay [aria-haspopup="menu"][aria-expanded="true"]');
       const selecting = document.activeElement instanceof HTMLSelectElement && focusedControl;
-      if (!player.paused && !isScrubbing && !state.playbackProblem && !menuOpen && !selecting && !(keepFocusedControlsVisible && focusedControl)) {
+      const guideOpen = state.activeTvPlayback?.guideOpen;
+      if (!player.paused && !isScrubbing && !state.playbackProblem && !menuOpen && !guideOpen && !selecting && !(keepFocusedControlsVisible && focusedControl)) {
         if (document.activeElement?.closest('.player-controls')) shell?.focus({preventScroll:true});
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');

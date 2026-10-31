@@ -48,6 +48,12 @@ description, poster, and recording options above the guide. When you have severa
 choose one in the source list. Open **Filters** to use categories, channel groups, favorites,
 recently played channels, or search. Close the filters to leave more room for the guide.
 Category filters and **NEW**, **LIVE**, **PREMIERE**, and **FINALE** labels depend on your guide's metadata.
+Up and down keep the same time position as you move between channels. Left and right move
+between programs. Completed half-hour columns disappear automatically; choose **Now** to
+return from a future guide window to the current listings.
+In the full video player, choose **Channel guide** to browse a compact Now/Next list while
+the video continues playing. Search or filter by source, then select another channel to
+switch. Close the channel guide to return the video to its full size.
 
 Select the star next to a channel to add it to **Favorites**. **Recently played** shows the
 channels you have watched, with the most recent first. Both lists belong to your account.
@@ -95,15 +101,16 @@ recordings by time even without guide data.
 
 Watching a channel automatically starts a temporary recording. Playback uses this buffer, so
 you can pause, rewind within the available buffer, and change playback quality. You can only rewind
-as far as the point when you started watching. Choose **Go live** to return to the live edge.
-If playback stalls, Koko tries to reconnect automatically. You can still choose **Go live**
+as far as the point when you started watching. Choose **Skip to end**, beside the forward
+button, to return to the newest available point. If playback stalls, Koko tries to reconnect
+automatically. You can still choose **Skip to end**
 or **Retry playback** if it cannot recover.
 
 Closing the full player keeps the channel playing as the hero's artwork. Choose **Expand player** to
 return to the full player, or choose **Stop playback** to stop it. Changing channels or leaving
 Live TV stops that channel's temporary recording and removes its buffer.
 
-Choose the recording icon in the full player's playback bar, then **Shared recording** or
+Choose the recording icon to the left of skip back in the full player's playback bar, then **Shared recording** or
 **Private recording**, to save the available buffered portion of the current program and
 continue recording until its scheduled end. If listings are missing, it
 records for one hour from when you choose to keep it. Kept recordings continue when you

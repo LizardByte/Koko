@@ -531,7 +531,7 @@ test('mouse input clears section decoration without losing the remembered target
   sections[1].controls[1].focus();
   key('ArrowUp');
   assert.equal(sections[1].classes.has('nav-section-active'), true);
-  listeners.get('pointerdown')();
+  listeners.get('pointerdown')({target:document.activeElement});
   assert.equal(sections[1].classes.has('nav-section-active'), false);
   key('Tab'); key('Tab', { shiftKey: true });
   assert.equal(document.activeElement.name, 'Browse second');

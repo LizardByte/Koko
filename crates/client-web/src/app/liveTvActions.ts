@@ -5,7 +5,9 @@ import { state } from './state';
 import { startTvPlayback, stopTvPlayback } from './playbackController';
 import { bindTvDiscovery } from './liveTvDiscovery';
 import { bindTvGuideActions } from './liveTvGuideActions';
-import { channelArtwork, channelPrograms, tvImage } from './liveTvGuideModel';
+import { channelArtwork, channelArtworkFallback, tvImage } from './liveTvGuideModel';
+import { currentGuideWindow, TV_SLOT_SECONDS, TV_WINDOW_SECONDS } from './tvGuideTime';
+import { tvChannelPlayback } from './tvPlayer';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -25,6 +27,8 @@ export interface LiveTvState {
 export function isLiveTvSettings(route: AppRoute): boolean { return route.page === 'settings' && route.section === 'live-tv'; }
 
 let loadGeneration = 0;
+let nextGuideRefreshAt = 0;
+let guideClockOwner: number | undefined;
 type LiveTvApi = Pick<typeof api, 'getTvChannels' | 'getTvGuide' | 'getTvRecordings' | 'getTvRules' | 'getTvSources'> & Partial<Pick<typeof api, 'getTvDvrSettings'>>;
 
 /** Ignore older guide windows as well as responses belonging to previous accounts. */
@@ -33,14 +37,15 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
   const owner = app.bootstrap?.current_user?.id;
   if (owner === undefined) { app.liveTv = undefined; return; }
   const previous = app.liveTv?.owner === owner ? app.liveTv : undefined;
-  const data: LiveTvState = previous ?? { owner, channels: [], programs: [], stations: [], recordings: [], rules: [], sources: [], conflicts: [], windowStart: Math.floor(Date.now() / 1800000) * 1800, tab: 'guide', loading: true };
+  const data: LiveTvState = previous ?? { owner, channels: [], programs: [], stations: [], recordings: [], rules: [], sources: [], conflicts: [], windowStart: currentGuideWindow(), tab: 'guide', loading: true };
+  data.windowStart = currentGuideWindow(data.windowStart);
   app.liveTv = data;
   data.loading = true;
   const admin = app.bootstrap?.current_user?.admin === true;
   const setup = admin && isLiveTvSettings(app.route);
   try {
     const [channels, guide, recordings, rules, sources, dvrSettings] = await Promise.all([
-      source.getTvChannels(setup), source.getTvGuide(data.windowStart, data.windowStart + 6 * 3600),
+      source.getTvChannels(setup), source.getTvGuide(data.windowStart, data.windowStart + TV_WINDOW_SECONDS),
       source.getTvRecordings(), source.getTvRules(), setup ? source.getTvSources() : Promise.resolve([]),
       setup ? source.getTvDvrSettings?.() : undefined,
     ]);
@@ -72,23 +77,56 @@ function padding(form: FormData): { padding_before: number; padding_after: numbe
 interface Context { navigateTo: (path: string) => void; render: () => void }
 /** Stop TV streams when leaving Live TV or changing accounts, including minimized playback. */
 export function syncLiveTvAccount(): void {
+  if (state.route.page !== 'live-tv' || guideClockOwner !== state.bootstrap?.current_user?.id) { nextGuideRefreshAt = 0; guideClockOwner = undefined; }
   const tv = state.activeTvPlayback;
   if (tv && (tv.owner !== state.bootstrap?.current_user?.id || state.route.page !== 'live-tv')) stopTvPlayback();
+}
+
+function advanceGuideWindow(context: Context): void {
+  const data = state.liveTv;
+  if (!data) return;
+  const start = currentGuideWindow(data.windowStart);
+  if (start === data.windowStart) return;
+  const scroll = document.querySelector<HTMLElement>('#tv-guide-scroll');
+  const width = scroll?.querySelector('.tv-guide-time-track')?.getBoundingClientRect().width ?? 0;
+  if (scroll) scroll.scrollLeft = Math.max(0,scroll.scrollLeft-(start-data.windowStart)/TV_WINDOW_SECONDS*width);
+  data.windowStart = start;
+  // Reclip cached listings immediately, including while the guide request is slow.
+  context.render();
+}
+
+function bindGuideClock(signal: AbortSignal, owner: number | undefined, reload: () => Promise<void>): void {
+  if (isLiveTvSettings(state.route)) return;
+  const now = Date.now();
+  if (guideClockOwner !== owner || !nextGuideRefreshAt) { guideClockOwner = owner; nextGuideRefreshAt = now+60000; }
+  const slotExpires = (currentGuideWindow()+TV_SLOT_SECONDS)*1000+25;
+  // A fixed deadline survives focus-triggered redraws; resetting a full minute
+  // on every render would postpone both guide refreshes and half-hour rollover.
+  const timer = globalThis.setTimeout(() => {
+    nextGuideRefreshAt = Date.now()+60000;
+    void reload();
+  },Math.max(0,Math.min(60000,nextGuideRefreshAt-now,slotExpires-now)));
+  signal.addEventListener('abort',() => globalThis.clearTimeout(timer),{once:true});
 }
 
 function play(kind: 'channels' | 'recordings', id: number): void {
   const data = state.liveTv;
   if (!data || data.owner !== state.bootstrap?.current_user?.id) return;
+  if (kind === 'channels') {
+    const channel = data.channels.find(c => c.id === id);
+    if (!channel) return;
+    data.selectedChannelId = id; data.selectedProgramId = undefined;
+    void startTvPlayback(tvChannelPlayback(channel));
+    return;
+  }
   const recording = data.recordings.find(r => r.id === id);
-  const channel = data.channels.find(c => c.id === (kind === 'channels' ? id : recording?.channel_id));
-  const now = Date.now()/1000;
-  const program = channel && channelPrograms(channel,data.programs).find(p => p.starts_at <= now && p.ends_at > now);
-  const title = kind === 'channels' ? channel?.name : recording?.title;
+  const channel = data.channels.find(c => c.id === recording?.channel_id);
+  const title = recording?.title;
   if (!title) return;
-  if (kind === 'channels') { data.selectedChannelId = id; data.selectedProgramId = program?.id; }
-  const image = tvImage(kind === 'channels' ? program?.metadata.image || channel?.logo : recording?.metadata.image);
+  const image = tvImage(recording?.metadata.image);
   const logo = channel ? channelArtwork(channel,data) : undefined;
-  void startTvPlayback({kind,id,title,image,logo,url:api.tvStreamUrl(kind,id)});
+  const logoFallback = channel ? channelArtworkFallback(channel,data) : undefined;
+  void startTvPlayback({kind,id,title,image,logo,logoFallback,url:api.tvStreamUrl(kind,id)});
 }
 /** Bind route controls once per render and cancel listeners when the app replaces its DOM. */
 export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
@@ -98,7 +136,12 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   if ((!setup && state.route.page !== 'live-tv') || state.liveTv?.owner !== state.bootstrap?.current_user?.id) return;
   const owner = state.liveTv?.owner;
   const current = () => (setup ? isLiveTvSettings(state.route) : state.route.page === 'live-tv') && state.bootstrap?.current_user?.id === owner;
-  const reload = async () => { await loadLiveTv(state, current); if (current()) context.render(); };
+  const reload = async () => {
+    if (!current()) return;
+    advanceGuideWindow(context);
+    await loadLiveTv(state, current);
+    if (current()) context.render();
+  };
   const run = async (operation: () => Promise<unknown>, button?: HTMLButtonElement) => {
     if (button) button.disabled = true;
     try {
@@ -117,7 +160,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   document.querySelectorAll<HTMLButtonElement>('[data-tv-window]').forEach(button => button.addEventListener('click', () => {
     if (!state.liveTv) return;
     const step = Number(button.dataset.tvWindow);
-    state.liveTv.windowStart = step ? state.liveTv.windowStart + step * 6 * 3600 : Math.floor(Date.now() / 1800000) * 1800;
+    state.liveTv.windowStart = currentGuideWindow(step ? state.liveTv.windowStart + step * TV_WINDOW_SECONDS : 0);
     const scroll = document.querySelector('#tv-guide-scroll'); if (scroll) scroll.scrollLeft = 0;
     void reload();
   }, { signal }));
@@ -131,10 +174,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
   bindRecordingForms(signal, run);
   bindRecordingButtons(signal, run);
   if (setup && state.bootstrap?.current_user?.admin) bindSetup(signal, run, context);
-  const timer = globalThis.setTimeout(() => {
-    if (current() && !setup && !(document.activeElement instanceof HTMLInputElement)) void reload();
-  }, 60000);
-  signal.addEventListener('abort', () => globalThis.clearTimeout(timer), { once: true });
+  bindGuideClock(signal,owner,reload);
 }
 
 type Run = (operation: () => Promise<unknown>, button?: HTMLButtonElement) => Promise<void>;

@@ -3,8 +3,7 @@ import { resolveApiUrl } from '../api';
 import type { TvChannel, TvMetadata, TvProgram } from '../liveTvApi';
 import type { LiveTvState } from './liveTvActions';
 
-/** Six hours share one horizontal timeline; each half hour occupies a fixed column. */
-export const TV_WINDOW_SECONDS = 6 * 3600;
+import { TV_WINDOW_SECONDS } from './tvGuideTime';
 /** Viewer-facing program categories supported by common XMLTV and tuner guides. */
 export const TV_CATEGORIES = ['All programs', 'Sports', 'Movies', 'News', 'Kids', 'Music', 'Documentaries'] as const;
 const CATEGORY_PATTERNS: Record<string, RegExp> = {
@@ -40,8 +39,13 @@ export function tvImage(value?: string | null): string {
 
 /** Prefer the channel's guide station logo when the tuner supplies no artwork. */
 export function channelArtwork(channel: TvChannel, data: LiveTvState): string {
+  return tvImage(channel.logo) || channelArtworkFallback(channel,data);
+}
+
+/** Guide station artwork can replace an unavailable tuner logo in both guide and player. */
+export function channelArtworkFallback(channel: TvChannel, data: LiveTvState): string {
   const key = channel.guide_override ?? channel.guide_key;
-  return tvImage(channel.logo) || tvImage(data.stations.find(s => s.source_id === channel.source_id && s.guide_key === key)?.logo);
+  return tvImage(data.stations.find(s => s.source_id === channel.source_id && s.guide_key === key)?.logo);
 }
 
 /** Distinguish actual live broadcasts from programs merely airing at the current time. */

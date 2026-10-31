@@ -5,6 +5,7 @@ import { state } from './state';
 /** Update the guide without restarting a playing or minimized TV stream. */
 export function bindTvGuideActions(signal: AbortSignal, context: {render: () => void}, run: (operation: () => Promise<unknown>, button?: HTMLButtonElement) => Promise<void>): void {
   document.querySelectorAll<HTMLImageElement>('[data-tv-image], #tv-guide-hero .home-feature-poster').forEach(image=>{
+    if (image.closest('#media-player-overlay')) return;
     const fallback = () => {
       const url = image.dataset.fallbackSrc;
       if (url && image.getAttribute('src') !== url) image.src = url;

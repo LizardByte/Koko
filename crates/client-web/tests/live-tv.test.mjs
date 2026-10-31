@@ -17,6 +17,8 @@ const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { programPosition, programBadges, matchesTvCategory, visibleGuideChannels, guideSources } = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
 const { renderPlayerOverlay } = await server.ssrLoadModule('/src/app/playbackController.ts');
 const { TvPlaybackWatchdog } = await server.ssrLoadModule('/src/app/tvPlaybackRecovery.ts');
+const { currentGuideWindow,programAtTime } = await server.ssrLoadModule('/src/app/tvGuideTime.ts');
+const {renderTvPlayerProgram} = await server.ssrLoadModule('/src/app/tvPlayer.ts');
 const now = Math.floor(Date.now() / 1000);
 const channel = { id: 1, source_id: 1, source_key: 'source', name: 'Test TV', number: '7.1', group_name: 'News', guide_key: 'station', enabled: true, available: true };
 const program = { id: 1, source_id: 1, guide_key: 'station', title: 'News', starts_at: now - 30, ends_at: now + 3600, metadata: { description: 'Evening news', categories: ['News'], credits: ['Presenter'] } };
@@ -65,7 +67,7 @@ test('Zap2It logos and cover art request larger sizes while other hosts remain u
 
 test('TV uses the shared video player in both overlay and hero modes without exposing another account', () => {
   state.bootstrap={current_user:{id:1,admin:true}};
-  state.activeTvPlayback={owner:1,kind:'channels',id:5,title:'Live news',logo:'/channel-logo.png',url:'/api/v1/live-tv/sessions/test/stream',buffer:{session_id:'test',start_ms:0,end_ms:12000,can_keep:true}};
+  state.activeTvPlayback={owner:1,kind:'channels',id:5,title:'Live news',logo:'/channel-logo.png',logoFallback:'https://example.com/station.png',url:'/api/v1/live-tv/sessions/test/stream',buffer:{session_id:'test',start_ms:0,end_ms:12000,can_keep:true}};
   state.isPlayerOpen=true;
   let dom=new JSDOM(renderPlayerOverlay());
   assert.ok(dom.window.document.querySelector('.media-player-shell video#media-player'));
@@ -76,6 +78,10 @@ test('TV uses the shared video player in both overlay and hero modes without exp
   assert.equal(dom.window.document.querySelector('#player-recording-menu').hidden,true);
   assert.equal(dom.window.document.querySelectorAll('#player-recording-menu [role="menuitem"]').length,2);
   assert.equal(dom.window.document.querySelector('.player-channel-logo').getAttribute('src'),'/channel-logo.png');
+  assert.equal(dom.window.document.querySelector('.player-channel-logo').dataset.fallbackSrc,'https://example.com/station.png');
+  const controls=[...dom.window.document.querySelectorAll('.player-transport-cluster button[aria-label]')].filter(button=>!button.closest('[role="menu"]')).map(button=>button.getAttribute('aria-label'));
+  assert.deepEqual(controls,['Keep recording','Back 10 seconds','Pause','Forward 10 seconds','Skip to end']);
+  assert.equal(dom.window.document.querySelector('#player-go-live'),null);
   assert.equal(dom.window.document.querySelector('.player-channel-heading h2').textContent,'Live news');
   assert.equal(dom.window.document.querySelector('video').hasAttribute('controls'),false);
   const source=dom.window.document.querySelector('video').getAttribute('src'); dom.window.close();
@@ -206,4 +212,29 @@ test('a slow previous guide window cannot overwrite a more recent navigation', a
   await loadLiveTv(target, () => true, api({ getTvGuide: async () => ({ programs: [{ ...program, title: 'New window' }], stations: [] }) }));
   release({ programs: [{ ...program, title: 'Old window' }], stations: [] }); await first;
   assert.equal(target.liveTv.programs[0].title, 'New window');
+});
+
+test('expired guide columns are removed while future browsing windows remain selected',async()=>{
+  const slot=currentGuideWindow();
+  assert.equal(currentGuideWindow(slot,slot*1000+1799999),slot);
+  assert.equal(currentGuideWindow(slot,slot*1000+1800000),slot+1800);
+  assert.equal(currentGuideWindow(slot+21600,slot*1000),slot+21600);
+  const target=app({liveTv:data({windowStart:slot-3600})});
+  let from;
+  await loadLiveTv(target,()=>true,api({getTvGuide:async start=>{from=start;return{programs:[],stations:[]};}}));
+  assert.equal(from,slot); assert.equal(target.liveTv.windowStart,slot);
+  const entries=[{starts_at:0,ends_at:1800},{starts_at:1800,ends_at:3600}];
+  assert.equal(programAtTime(entries,1800),entries[1]);
+});
+
+test('the player describes its own broadcast, including buffered programs, without following guide browsing',()=>{
+  state.bootstrap={current_user:{id:1,admin:true}};
+  state.liveTv=data({programs:[{...program,metadata:{...program.metadata,subtitle:'Headlines',episode:'S1 E2',is_new:true,rating:'TV-PG'}},
+    {...program,id:9,title:'Earlier broadcast',starts_at:now-3600,ends_at:now-30,metadata:{description:'Earlier details'}}],selectedProgramId:9});
+  state.activeTvPlayback={owner:1,kind:'channels',id:1,title:channel.name,url:'/buffer',buffer:{end_ms:3600000}};
+  const html=renderTvPlayerProgram(3600000);
+  assert.match(html,/News/);assert.match(html,/Headlines/);assert.match(html,/Evening news/);assert.match(html,/NEW/);assert.match(html,/S1 E2/);assert.match(html,/TV-PG/);
+  assert.doesNotMatch(html,/Earlier broadcast/);
+  assert.match(renderTvPlayerProgram(1800000),/Earlier broadcast/);
+  state.activeTvPlayback=undefined;
 });

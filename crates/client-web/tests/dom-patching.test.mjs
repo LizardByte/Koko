@@ -13,6 +13,7 @@ globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.windo
 const server = await createServer({root:fileURLToPath(new URL('..',import.meta.url)),server:{middlewareMode:true,hmr:false,ws:false}});
 after(async()=>{await server.close();dom.window.close();});
 const {setElementHtml} = await server.ssrLoadModule('/src/app/domPatcher.ts');
+const {rememberTvGuideFocus,tvGuideNavigationTarget,tvGuideNavigationTime,restoreTvGuideFocus} = await server.ssrLoadModule('/src/app/tvGuideNavigation.ts');
 const root = document.querySelector('#app');
 const player = source => `<div id="media-player-overlay"><video id="media-player" src="${source}"></video></div>`;
 
@@ -59,4 +60,56 @@ test('a pending patch restore does not undo subsequent keyboard or pointer scrol
   guide.scrollTop=300;
   await new Promise(resolve=>requestAnimationFrame(resolve));
   assert.equal(guide.scrollTop,300);
+});
+
+function guideFixture(start = 0) {
+  const ranges=[[[0,1800],[1800,3600],[3600,7200]],[[0,7200]],[[0,900],[900,1800],[1800,2700],[2700,3600],[3600,7200]],[],[[0,1800],[2400,7200]]];
+  const rows=ranges.map((row,index)=>{
+    const programs=row.map(([from,to],id)=>to>start?`<button id="p-${index}-${id}" class="tv-guide-program" data-tv-select-channel="${index}" data-tv-select-program="${id+1}" data-tv-start="${from}" data-tv-end="${to}"></button>`:'').join('');
+    return `<div class="tv-guide-row"><button class="tv-channel-select" data-tv-select-channel="${index}"></button>${programs}</div>`;
+  }).join('');
+  return `<div id="tv-guide-scroll" data-tv-guide-source="1:1" data-tv-window-start="${start}">${rows}</div>`;
+}
+
+test('guide navigation retains a time through long broadcasts, short entries, gaps, and empty rows',()=>{
+  rememberTvGuideFocus(null); root.innerHTML=guideFixture();
+  let control=document.querySelector('#p-0-1'); control.focus(); rememberTvGuideFocus(control);
+  const move=direction=>{control=tvGuideNavigationTarget(control,direction).target;control.focus();rememberTvGuideFocus(control);return control.id;};
+  assert.equal(move('down'),'p-1-0');
+  assert.equal(tvGuideNavigationTime(control),1800);
+  assert.equal(move('down'),'p-2-2');
+  assert.equal(move('down'),'');
+  assert.equal(move('down'),'p-4-0');
+  assert.equal(tvGuideNavigationTime(control),1800);
+  assert.equal(move('up'),'');
+  assert.equal(move('up'),'p-2-2');
+  assert.equal(move('right'),'p-2-3');
+  assert.equal(tvGuideNavigationTime(control),2700);
+  assert.equal(move('up'),'p-1-0');
+  assert.equal(move('up'),'p-0-1');
+  assert.equal(tvGuideNavigationTime(control),2700);
+});
+
+test('an expired focused broadcast moves to the same channel at the new guide start',()=>{
+  rememberTvGuideFocus(null); root.innerHTML=guideFixture();
+  const old=document.querySelector('#p-0-0');old.focus();rememberTvGuideFocus(old);
+  setElementHtml(root,guideFixture(1800));
+  assert.equal(document.activeElement,document.body);
+  const target=restoreTvGuideFocus();
+  assert.equal(target.id,'p-0-1');
+  assert.equal(tvGuideNavigationTime(target),1800);
+  target.focus();rememberTvGuideFocus(target);
+  assert.equal(restoreTvGuideFocus(),undefined);
+  target.blur();
+  assert.equal(target.isConnected,true);
+  assert.equal(restoreTvGuideFocus(),target);
+});
+
+test('a queued render restore cannot undo a newer navigation focus',async()=>{
+  rememberTvGuideFocus(null);root.innerHTML='<button id="before">Before</button><button id="after">After</button>';
+  document.querySelector('#before').focus();
+  setElementHtml(root,'<button id="before">Before refresh</button><button id="after">After refresh</button>');
+  document.querySelector('#after').focus();
+  await new Promise(resolve=>requestAnimationFrame(resolve));
+  assert.equal(document.activeElement.id,'after');
 });

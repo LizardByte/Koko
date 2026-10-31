@@ -88,7 +88,7 @@ tmdb_client = "=1.8.0"
 tray-icon = { version = "=0.26.1", optional = true }
 tvdb4 = "=0.1.0"
 unicode-normalization = "=0.1.26"
-webbrowser = { version = "=1.2.5", optional = true }
+webbrowser = { version = "=1.2.6", optional = true }
 # common = { path = "../common" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

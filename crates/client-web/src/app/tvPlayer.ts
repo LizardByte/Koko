@@ -136,6 +136,23 @@ function observePlayerControls(shell: HTMLElement | null): () => void {
   return () => observer.disconnect();
 }
 
+/** Reveal the current channel inside the guide's own scroller, leaving the video and page in place. */
+function revealPlayingChannel(panel: HTMLElement, focus: boolean): void {
+  const list = panel.querySelector<HTMLElement>('#player-tv-guide-channels');
+  const channel = list?.querySelector<HTMLElement>('[data-player-tv-channel][aria-pressed="true"]');
+  if (!list || !channel) return;
+  if (channel.hidden) {
+    const query = panel.querySelector<HTMLInputElement>('#player-tv-guide-search');
+    const source = panel.querySelector<HTMLSelectElement>('#player-tv-guide-source');
+    if (query) query.value = '';
+    if (source) source.value = '';
+    filterChannels();
+  }
+  if (focus) channel.focus({preventScroll:true});
+  const bounds = list.getBoundingClientRect(), row = channel.getBoundingClientRect();
+  list.scrollTop += row.top-bounds.top-Math.max(0,(list.clientHeight-row.height)/2);
+}
+
 /** Bind independently of page refreshes so browsing channels never interrupts the decoder. */
 export function bindTvPlayerGuide(onTune: (channel: TvChannel) => void): () => void {
   const events = new AbortController(), signal = events.signal;
@@ -148,7 +165,7 @@ export function bindTvPlayerGuide(onTune: (channel: TvChannel) => void): () => v
     if (!panel || !state.activeTvPlayback) return;
     state.activeTvPlayback.guideOpen = open; panel.hidden = !open;
     shell?.classList.toggle('has-tv-guide',open); toggle?.setAttribute('aria-expanded',String(open));
-    if (open) panel.querySelector<HTMLElement>('[data-player-tv-channel][aria-pressed="true"]')?.focus({preventScroll:true});
+    if (open) revealPlayingChannel(panel,true);
     else toggle?.focus({preventScroll:true});
   };
   toggle?.addEventListener('click',()=>setOpen(Boolean(panel?.hidden)),{signal});
@@ -165,5 +182,6 @@ export function bindTvPlayerGuide(onTune: (channel: TvChannel) => void): () => v
     if (event.target instanceof HTMLImageElement && event.target.hasAttribute('data-tv-image')) recoverImage(event.target);
   },{capture:true,signal});
   root?.querySelectorAll<HTMLImageElement>('[data-tv-image]').forEach(image=>{if (image.complete && !image.naturalWidth) recoverImage(image);});
+  if (panel && !panel.hidden) revealPlayingChannel(panel,false);
   return () => { events.abort(); cleanupLayout(); };
 }

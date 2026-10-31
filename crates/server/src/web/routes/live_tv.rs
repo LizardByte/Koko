@@ -194,18 +194,23 @@ pub async fn get_guide(
     }
     db.run(move |conn| {
         let sources = tv::guide_sources(conn)?;
+        let nextpvr_artwork_sources: std::collections::HashSet<_> = tv::list_sources(conn)?
+            .iter()
+            .filter(|source| tv::uses_nextpvr_artwork(source))
+            .map(|source| source.id)
+            .collect();
         let mut programs = tv::guide(conn, start, end)?;
         for program in &mut programs {
-            if sources
-                .iter()
-                .any(|s| s.id == program.source_id && s.kind == "nextpvr")
-            {
-                program.metadata.image =
-                    Some(format!("/api/v1/live-tv/programs/{}/artwork", program.id));
-                program.metadata.poster = Some(format!(
-                    "/api/v1/live-tv/programs/{}/artwork?kind=poster",
-                    program.id
-                ));
+            if nextpvr_artwork_sources.contains(&program.source_id) {
+                program.metadata.image.get_or_insert_with(|| {
+                    format!("/api/v1/live-tv/programs/{}/artwork", program.id)
+                });
+                program.metadata.poster.get_or_insert_with(|| {
+                    format!(
+                        "/api/v1/live-tv/programs/{}/artwork?kind=poster",
+                        program.id
+                    )
+                });
             }
         }
         Ok::<_, diesel::result::Error>(GuideResponse {

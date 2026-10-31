@@ -58,7 +58,7 @@ switch. Close the channel guide to return the video to its full size.
 Select the star next to a channel to add it to **Favorites**. **Recently played** shows the
 channels you have watched, with the most recent first. Both lists belong to your account.
 
-Choose the guide source when adding a TV source:
+Choose the guide source when adding a TV source. Program artwork follows the guide you select:
 
 - **Automatic** uses HDHomeRun's guide, the NextPVR/Tvheadend guide, or broadcast guide
   reception for a local tuner.

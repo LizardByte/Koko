@@ -572,3 +572,75 @@ test('the guide preserves its time column across channels and advances expired s
   await page.getByRole('button',{name:'Now',exact:true}).click();
   await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-window-start',String(start+5400));
 });
+
+test('the guide in the player centers playback controls and reveals the playing channel',async({page},testInfo)=>{
+  const channels=Array.from({length:40},(_,i)=>({id:1001+i,source_id:90,source_key:String(i),guide_key:String(i),name:`Fixture ${i+1}`,number:String(i+1),group_name:'',enabled:true,available:true}));
+  await page.route('**/api/v1/live-tv/channels',route=>route.fulfill({json:channels}));
+  await page.route('**/api/v1/live-tv/guide?**',route=>route.fulfill({json:{programs:[],stations:[],sources:[{id:90,name:'Guide layout fixture',kind:'m3u'}],preferences:{favorites:[],recent:[]}}}));
+  await page.goto('/');
+  await page.getByLabel('Username',{exact:true}).fill('playback-admin');
+  await page.getByLabel('Password',{exact:true}).fill(process.env.KOKO_E2E_PASSWORD);
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await expect(page.locator('#login-form')).toHaveCount(0);
+  const token=await page.evaluate(()=>localStorage.getItem('koko-client-web-auth-token'));
+  const headers={Authorization:`Bearer ${token}`};
+  const items=await (await page.request.get('/api/v1/items',{headers})).json();
+  const sample=items.find(item=>item.display_title==='Playback Sample');
+  const sampleResponse=await page.request.get(`/api/v1/items/${sample.id}/stream`,{headers});
+  expect(sampleResponse.ok()).toBeTruthy();
+  const sampleVideo=await sampleResponse.body();
+  let playing=1040;
+  const buffer=()=>({session_id:'layout-buffer',channel_id:playing,title:`Fixture ${playing-1000}`,start_ms:0,end_ms:6000,finished:true,can_keep:true});
+  await page.route('**/api/v1/live-tv/sessions',route=>{
+    playing=route.request().postDataJSON().channel_id;
+    return route.fulfill({json:buffer()});
+  });
+  await page.route('**/api/v1/live-tv/sessions/layout-buffer**',route=>{
+    if(new URL(route.request().url()).pathname.endsWith('/stream')) return route.fulfill({contentType:'video/mp4',body:sampleVideo});
+    return route.request().method()==='DELETE' ? route.fulfill({status:204}) : route.fulfill({json:buffer()});
+  });
+  await page.goto('/live-tv');
+  await page.locator('[data-tv-play="1040"]').click();
+  await expect.poll(()=>page.locator('#media-player').evaluate(video=>video.readyState>=2 && video.currentTime>.1)).toBeTruthy();
+  const video=await page.locator('#media-player').elementHandle();
+  const mainScroll=await page.locator('.main-shell').evaluate(main=>main.scrollTop);
+  const guide=page.getByRole('complementary',{name:'Channel guide',exact:true});
+  const revealCurrent=async id=>{
+    await expect(guide.locator(`[data-player-tv-channel="${id}"]`)).toBeFocused();
+    const visible=await guide.locator(`[data-player-tv-channel="${id}"]`).evaluate(channel=>{
+      const row=channel.getBoundingClientRect(),list=channel.closest('#player-tv-guide-channels').getBoundingClientRect();
+      return row.top>=list.top-1 && row.bottom<=list.bottom+1;
+    });
+    expect(visible).toBe(true);
+  };
+  const centered=async()=>{
+    const videoBounds=await page.locator('#media-player').boundingBox(),playBounds=await page.locator('#player-play-toggle-small').boundingBox();
+    expect(Math.abs(playBounds.x+playBounds.width/2-videoBounds.x-videoBounds.width/2)).toBeLessThan(1);
+  };
+  await page.getByRole('button',{name:'Channel guide',exact:true}).click();
+  await revealCurrent(1040);await centered();
+  expect(await video.evaluate(node=>node===document.querySelector('#media-player'))).toBe(true);
+  expect(await page.locator('.main-shell').evaluate(main=>main.scrollTop)).toBe(mainScroll);
+  await page.screenshot({path:testInfo.outputPath('centered-player-guide.png')});
+  await page.getByRole('button',{name:'Close channel guide',exact:true}).click();
+  await page.locator('#player-tv-guide-channels').evaluate(list=>{list.scrollTop=0;});
+  await page.getByRole('button',{name:'Channel guide',exact:true}).click();
+  await revealCurrent(1040);
+  await guide.getByRole('searchbox',{name:'Find a channel',exact:true}).fill('Fixture 1');
+  await page.getByRole('button',{name:'Close channel guide',exact:true}).click();
+  await page.getByRole('button',{name:'Channel guide',exact:true}).click();
+  await revealCurrent(1040);
+  await expect(guide.getByRole('searchbox',{name:'Find a channel',exact:true})).toHaveValue('');
+  await guide.getByRole('button',{name:'Watch Fixture 39 live',exact:true}).click();
+  await expect(guide.locator('[data-player-tv-channel="1039"]')).toHaveAttribute('aria-pressed','true');
+  await expect.poll(()=>guide.locator('[data-player-tv-channel="1039"]').evaluate(channel=>{
+    const row=channel.getBoundingClientRect(),list=channel.closest('#player-tv-guide-channels').getBoundingClientRect();
+    return row.top>=list.top-1 && row.bottom<=list.bottom+1;
+  })).toBeTruthy();
+  await centered();
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'Close channel guide',exact:true}).click();
+  await page.getByRole('button',{name:'Channel guide',exact:true}).click();
+  await expect(guide.locator('[data-player-tv-channel="1039"]')).toBeInViewport();
+  await centered();
+});

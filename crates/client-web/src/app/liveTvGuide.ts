@@ -6,7 +6,8 @@ import { renderButtonContent, renderIcon } from './ui';
 import { renderFeatureHero } from './featureHero';
 import { renderPlayerOverlay } from './playbackController';
 import type { LiveTvState } from './liveTvActions';
-import { activeGuideSource, channelArtwork, channelPrograms, guideSelection, guideSources, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
+import { activeGuideSource, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideSources, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
+import { currentGuideWindow, TV_SLOT_SECONDS } from './tvGuideTime';
 
 function badges(program: TvProgram): string {
   return programBadges(program.metadata).map(tag => `<span class="tv-program-badge tv-badge-${tag.toLowerCase()}">${tag}</span>`).join('');
@@ -15,8 +16,7 @@ function badges(program: TvProgram): string {
 function channelLogo(channel: TvChannel, data: LiveTvState, hero = false): string {
   const logo = channelArtwork(channel,data);
   if (!logo) return '';
-  const key = channel.guide_override ?? channel.guide_key;
-  const fallback = tvImage(data.stations.find(s => s.source_id === channel.source_id && s.guide_key === key)?.logo);
+  const fallback = channelArtworkFallback(channel,data);
   return `<img class="${hero ? 'tv-hero-channel-logo' : 'tv-channel-logo'}" data-tv-image data-fallback-src="${escape(fallback)}" src="${escape(logo)}" alt="${hero ? escape(channel.name)+' logo' : ''}" referrerpolicy="no-referrer" loading="lazy" />`;
 }
 
@@ -69,7 +69,7 @@ function programCell(channel: TvChannel, program: TvProgram, data: LiveTvState):
   const selected = data.selectedProgramId === program.id && data.selectedChannelId === channel.id;
   const dimmed = !matchesTvCategory(program, data.category);
   const subtitle = program.metadata.subtitle ? `<span class="tv-guide-subtitle">${escape(program.metadata.subtitle)}</span>` : '';
-  return `<button id="tv-program-${channel.id}-${program.id}" type="button" class="tv-guide-program${onAir ? ' is-on-air' : ''}${dimmed ? ' is-dimmed' : ''}" data-tv-select-program="${program.id}" data-tv-select-channel="${channel.id}" aria-pressed="${selected}" aria-label="${escape(program.title)}, ${escape(tvTime(program.starts_at))} to ${escape(tvTime(program.ends_at))}" style="left:${position.left}%;width:${position.width}%">
+  return `<button id="tv-program-${channel.id}-${program.id}" type="button" class="tv-guide-program${onAir ? ' is-on-air' : ''}${dimmed ? ' is-dimmed' : ''}" data-tv-select-program="${program.id}" data-tv-select-channel="${channel.id}" data-tv-start="${program.starts_at}" data-tv-end="${program.ends_at}" aria-pressed="${selected}" aria-label="${escape(program.title)}, ${escape(tvTime(program.starts_at))} to ${escape(tvTime(program.ends_at))}" style="left:${position.left}%;width:${position.width}%">
     <strong>${escape(program.title)}</strong>${subtitle}<span class="tv-guide-badges">${badges(program)}</span></button>`;
 }
 
@@ -91,19 +91,19 @@ export function renderTvGuide(data: LiveTvState): string {
   const groups = [...new Set(data.channels.filter(c => c.source_id === source).map(c => c.group_name).filter(Boolean))].sort((a,b) => a.localeCompare(b));
   const sourceTabs = sources.map(s => `<button type="button" data-tv-source="${s.id}" aria-pressed="${s.id === source}"><strong>${escape(s.name)}</strong><small>${s.count} ${s.count === 1 ? 'channel' : 'channels'}</small></button>`).join('');
   const categories = TV_CATEGORIES.map(category => `<button type="button" data-tv-category="${category}" aria-pressed="${category === (data.category ?? 'All programs')}">${category}</button>`).join('');
-  const ticks = Array.from({length:12}, (_,i) => `<div class="tv-guide-tick" role="columnheader">${escape(tvTime(data.windowStart + i*1800))}</div>`).join('');
+  const ticks = Array.from({length:12}, (_,i) => `<div class="tv-guide-tick" role="columnheader">${escape(tvTime(data.windowStart + i*TV_SLOT_SECONDS))}</div>`).join('');
   const now = (Date.now()/1000 - data.windowStart) / (6*3600) * 100;
   const nowLine = now >= 0 && now < 100 ? `<div class="tv-guide-now" aria-hidden="true" style="left:calc(var(--tv-channel-width) + ${now / 100} * var(--tv-timeline-width))"><span>Now</span></div>` : '';
   const views = [['all','All channels'],['favorites','Favorites'],['recent','Recently played']].map(([key,label]) => `<button type="button" data-tv-channel-view="${key}" aria-pressed="${key === (data.channelView ?? 'all')}">${label}</button>`).join('');
   const filterCount = [data.query,data.group,data.category && data.category !== 'All programs',data.channelView && data.channelView !== 'all'].filter(Boolean).length;
   const filterLabel = filterCount ? `Filters · ${filterCount} active` : 'Filters';
-  return `<div class="tv-guide-toolbar"><div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-window="-1" aria-label="Earlier programs">${renderIcon('chevron-left')}</button><button type="button" class="secondary-button" data-tv-window="0">Now</button><button type="button" class="secondary-button" data-tv-window="1" aria-label="Later programs">${renderIcon('chevron-right')}</button><strong>${escape(tvTime(data.windowStart,true))}</strong></div>
+  return `<div class="tv-guide-toolbar"><div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-window="-1" aria-label="Earlier programs" ${data.windowStart <= currentGuideWindow() ? 'disabled' : ''}>${renderIcon('chevron-left')}</button><button type="button" class="secondary-button" data-tv-window="0">Now</button><button type="button" class="secondary-button" data-tv-window="1" aria-label="Later programs">${renderIcon('chevron-right')}</button><strong>${escape(tvTime(data.windowStart,true))}</strong></div>
     <button type="button" id="toggle-tv-filters" class="secondary-button browse-filter-toggle" aria-expanded="${Boolean(data.filtersOpen)}" aria-controls="tv-filter-panel">${renderButtonContent(filterLabel,'sliders-horizontal')}</button></div>
     <div id="tv-filter-panel" ${data.filtersOpen ? '' : 'hidden'}><form id="tv-filter-form"><label><span class="sr-only">Search channels or programs</span><input type="search" name="query" value="${escape(data.query ?? '')}" placeholder="Find channels or programs" /></label>
     <label><span class="sr-only">Channel group</span><select name="group"><option value="">All channel groups</option>${groups.map(g => `<option ${data.group === g ? 'selected' : ''}>${escape(g)}</option>`).join('')}</select></label><button type="submit" class="secondary-button">Search</button></form>
     <nav class="tv-guide-filters" aria-label="Program categories">${categories}</nav><nav class="tv-guide-views" aria-label="Channel lists">${views}</nav></div>
     <div class="tv-guide-layout${sources.length > 1 ? ' has-source-rail' : ''}">${sources.length > 1 ? `<nav class="tv-source-rail" aria-label="TV sources">${sourceTabs}</nav>` : ''}
-    <div class="tv-guide-board">${channels.length ? `<div id="tv-guide-scroll" class="tv-guide-scroll table-shell" role="region" aria-label="TV program guide" tabindex="0"><div class="tv-guide-grid" role="table" aria-label="${escape(sources.find(s => s.id === source)?.name ?? 'TV')} schedules">
+    <div class="tv-guide-board">${channels.length ? `<div id="tv-guide-scroll" class="tv-guide-scroll table-shell" data-tv-guide-source="${data.owner}:${source}" data-tv-window-start="${data.windowStart}" role="region" aria-label="TV program guide" tabindex="0"><div class="tv-guide-grid" role="table" aria-label="${escape(sources.find(s => s.id === source)?.name ?? 'TV')} schedules">
       <div class="tv-guide-time-row" role="row"><div class="tv-guide-corner" role="columnheader">Channels</div><div class="tv-guide-time-track">${ticks}</div></div>${channels.map(c => channelRow(c,selectedData)).join('')}${nowLine}</div></div>`
       : '<p class="tv-guide-empty">No channels match this view. Try All channels or All programs, or add a TV source in Settings → Live TV.</p>'}
       ${data.category && data.category !== 'All programs' ? '<p class="tv-guide-hint">Channels with matching programs are shown. Other programs are dimmed to preserve the schedule.</p>' : ''}</div></div>`;

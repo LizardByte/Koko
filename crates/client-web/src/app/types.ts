@@ -171,7 +171,7 @@ export interface AppState {
   isLoading: boolean;
   isPlayerOpen: boolean;
   activePlaybackItem?: MediaItemDetail;
-  activeTvPlayback?: { owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string; image?: string; logo?: string; buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number };
+  activeTvPlayback?: { owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string; image?: string; logo?: string; logoFallback?: string; guideOpen?: boolean; buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number };
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
   activePlaybackQuality?: import('./playbackOptions').PlaybackQuality;
@@ -261,6 +261,7 @@ export type AppIconName =
   | 'settings'
   | 'skip-back'
   | 'skip-forward'
+  | 'step-forward'
   | 'sliders-horizontal'
   | 'star'
   | 'trash-2'

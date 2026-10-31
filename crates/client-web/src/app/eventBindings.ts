@@ -523,7 +523,9 @@ export function bindEvents(context: AppEventBindingContext): void {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    if (this === globalThis) {
+    // An abort listener must outlive the render it cleans up. Attaching that
+    // same signal to its listener would remove it before cleanup can run.
+    if (this === globalThis || this instanceof AbortSignal) {
       originalAddEventListener.call(this, type, listener, options);
       return;
     }

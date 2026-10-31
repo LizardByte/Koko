@@ -147,6 +147,7 @@ function captureRenderSnapshot(): RenderSnapshot {
 }
 
 function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): void {
+  const focusAfterPatch = document.activeElement;
   // Honor navigation that scrolls after the patch but before the restore frame.
   const afterPatch = new Map<Element, ScrollPosition>();
   document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach(element => {
@@ -167,8 +168,9 @@ function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): voi
     const activeElement = snapshot.activeSelector
       ? document.querySelector<HTMLInputElement | HTMLTextAreaElement>(snapshot.activeSelector)
       : undefined;
-    if (activeElement && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
-    if (snapshot.activeSelection && activeElement?.setSelectionRange) {
+    const restoreFocus = document.activeElement === focusAfterPatch;
+    if (restoreFocus && activeElement && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
+    if (restoreFocus && snapshot.activeSelection && activeElement?.setSelectionRange) {
       activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
     }
   });

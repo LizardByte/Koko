@@ -1111,7 +1111,7 @@ function updateIconButton(
 function preservePlayerIcons(): void {
   // Lucide otherwise replaces finished SVGs on each global page refresh, even
   // between pointer-down and pointer-up on the same close/volume control.
-  document.querySelectorAll('#media-player-overlay svg[data-lucide]').forEach(icon => icon.removeAttribute('data-lucide'));
+  document.querySelectorAll<SVGElement>('#media-player-overlay svg[data-lucide]').forEach(icon => { delete icon.dataset.lucide; });
 }
 
 /** Creates a seek handler that increases the step when repeated in one direction. */
@@ -1525,7 +1525,7 @@ export function bindPlayerProgress(): void {
   refreshTvPlayerProgram();
   const player = document.querySelector<HTMLMediaElement>('#media-player');
   const overlay=document.querySelector<HTMLElement>('#media-player-overlay');
-  const bindingKey = (overlay?.getAttribute('data-player-view-key') ?? '')+(overlay?.dataset.multiControlsKey??'');
+  const bindingKey = (overlay?.dataset.playerViewKey ?? '')+(overlay?.dataset.multiControlsKey??'');
   const bound = player ? initializedMediaSources.get(player) : undefined;
   if (bound?.bindingKey === bindingKey && cleanupMediaBinding === bound.cleanup && !mediaEvents?.signal.aborted) return;
   cleanupMediaBinding?.();

@@ -22,6 +22,17 @@ use std::path::{
 
 const KEY: &str = "live_tv";
 
+/// Prepare a capture path on the blocking database worker, before committing a recording row.
+pub(crate) fn prepare_capture_path(
+    conn: &mut SqliteConnection,
+    id: i32,
+) -> Result<PathBuf, String> {
+    let path = capture_path(conn, id)?;
+    std::fs::create_dir_all(path.parent().ok_or("Invalid recording folder")?)
+        .map_err(|_| "Unable to create the recording folder")?;
+    Ok(path)
+}
+
 #[derive(Default, Deserialize, Serialize, JsonSchema)]
 #[serde(default)]
 pub(crate) struct DvrSettings {

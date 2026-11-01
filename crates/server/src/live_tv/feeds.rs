@@ -22,7 +22,7 @@ pub(crate) fn temporary() -> Result<tokio::fs::File, String> {
         })
 }
 
-async fn download(url: reqwest::Url) -> Result<std::fs::File, String> {
+async fn download(url: reqwest::Url) -> Result<tokio::fs::File, String> {
     download_file(url, false)
         .await?
         .ok_or_else(|| "The TV feed is unavailable".into())
@@ -31,7 +31,7 @@ async fn download(url: reqwest::Url) -> Result<std::fs::File, String> {
 async fn download_file(
     url: reqwest::Url,
     optional_bridge: bool,
-) -> Result<Option<std::fs::File>, String> {
+) -> Result<Option<tokio::fs::File>, String> {
     // An idle transfer should fail, but a large feed that keeps delivering data should
     // not be cut off by the short total timeout used for tuner control requests.
     let client = sources::client_builder()
@@ -64,7 +64,7 @@ async fn download_file(
     file.flush()
         .await
         .map_err(|_| "Unable to save the TV feed; check temporary disk space")?;
-    Ok(Some(file.into_std().await))
+    Ok(Some(file))
 }
 
 fn reader(mut file: std::fs::File) -> Result<Box<dyn BufRead + Send>, String> {
@@ -108,8 +108,10 @@ pub(super) async fn playlist_details(
     };
     let size = file
         .metadata()
+        .await
         .map_err(|_| "Unable to read the TV feed size")?
         .len();
+    let file = file.into_std().await;
     let channels = tokio::task::spawn_blocking(move || {
         formats::read_playlist(reader(file)?, url.as_str(), stable_ids, allow_empty)
     })
@@ -122,9 +124,10 @@ pub(super) async fn guide_input(url: reqwest::Url) -> Result<(formats::Guide, u6
     let file = download(url).await?;
     let size = file
         .metadata()
+        .await
         .map_err(|_| "Unable to read the guide size")?
         .len();
-    Ok((read_guide(file).await?, size))
+    Ok((read_guide(file.into_std().await).await?, size))
 }
 
 #[cfg(test)]

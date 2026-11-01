@@ -1,6 +1,7 @@
 /** Loads saved connection editors and binds source-specific channel pages and guide groups. */
 import * as api from '../liveTvApi';
 import { state } from './state';
+import { formDataString } from './formUtils';
 import { confirmAction } from './confirmationDialog';
 
 type Run = (operation:()=>Promise<unknown>,button?:HTMLButtonElement)=>Promise<void>;
@@ -51,7 +52,7 @@ function rememberDraft(form: HTMLFormElement): void {
 
 function providerKey(form:HTMLFormElement):string {return form.dataset.tvProviderSource+':'+form.dataset.tvProviderForm;}
 function providerDraft(form:HTMLFormElement):{name:string;enabled:boolean;icon_channel:string} {
-  const input=new FormData(form);return {name:String(input.get('name')??''),enabled:input.has('enabled'),icon_channel:String(input.get('icon_channel')??'default')};
+  const input=new FormData(form);return {name:formDataString(input.get('name'), ''),enabled:input.has('enabled'),icon_channel:formDataString(input.get('icon_channel'), 'default')};
 }
 
 /** Server-selected icons and unsaved provider edits survive DOM patches and image uploads. */
@@ -112,9 +113,9 @@ export function bindTvSourceSettings(signal: AbortSignal, context:{render:()=>vo
   document.querySelectorAll<HTMLFormElement>('[data-tv-provider-form]').forEach(form=>{
     form.addEventListener('input',()=>{if(state.liveTv){state.liveTv.providerDrafts??={};state.liveTv.providerDrafts[providerKey(form)]=providerDraft(form);}},{signal});
     form.addEventListener('submit',event=>{
-    event.preventDefault();const input=new FormData(form),choice=String(input.get('icon_channel') ?? 'default');
+    event.preventDefault();const input=new FormData(form),choice=formDataString(input.get('icon_channel'), 'default');
     void run(async()=>{
-      await api.setTvProvider(Number(form.dataset.tvProviderSource),form.dataset.tvProviderForm!,{name:String(input.get('name')??''),enabled:input.has('enabled'),icon_channel_id:choice.startsWith('channel:')?Number(choice.slice(8)):null,remove_icon:choice==='default'});
+      await api.setTvProvider(Number(form.dataset.tvProviderSource),form.dataset.tvProviderForm!,{name:formDataString(input.get('name'), ''),enabled:input.has('enabled'),icon_channel_id:choice.startsWith('channel:')?Number(choice.slice(8)):null,remove_icon:choice==='default'});
       if(state.liveTv?.providerDrafts) delete state.liveTv.providerDrafts[providerKey(form)];
     });
   },{signal});});
@@ -162,7 +163,7 @@ export function bindTvSourceSettings(signal: AbortSignal, context:{render:()=>vo
   },{signal}));
   document.querySelectorAll<HTMLFormElement>('[data-tv-mapping-search]').forEach(form=>form.addEventListener('submit',event=>{
     event.preventDefault();if (!state.liveTv) return;
-    const input=new FormData(form);state.liveTv.mappingQuery=String(input.get('query') ?? '').trim();state.liveTv.mappingProvider=String(input.get('provider') ?? '');state.liveTv.mappingPage=0;context.render();
+    const input=new FormData(form);state.liveTv.mappingQuery=formDataString(input.get('query'), '').trim();state.liveTv.mappingProvider=formDataString(input.get('provider'), '');state.liveTv.mappingPage=0;context.render();
   },{signal}));
   document.querySelectorAll<HTMLElement>('[data-tv-mapping-page]').forEach(button=>button.addEventListener('click',()=>{
     if (state.liveTv) {state.liveTv.mappingPage=Number(button.dataset.tvMappingPage);context.render();}
@@ -171,7 +172,7 @@ export function bindTvSourceSettings(signal: AbortSignal, context:{render:()=>vo
     event.preventDefault();
     void run(async()=>{
       const input=new FormData(form), id=form.dataset.tvGroupForm || crypto.randomUUID();
-      const group={id,name:String(input.get('name') ?? '').trim(),source_ids:input.getAll('source_id').map(Number)};
+      const group={id,name:formDataString(input.get('name'), '').trim(),source_ids:input.getAll('source_id').map(Number)};
       if (new Set(group.source_ids).size < 2) throw new Error('Choose at least two sources for this group.');
       const groups=[...(state.liveTv?.sourceGroups ?? [])], index=groups.findIndex(g=>g.id === id);
       if (index < 0) groups.push(group); else groups[index]=group;

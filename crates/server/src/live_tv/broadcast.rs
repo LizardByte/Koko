@@ -114,21 +114,12 @@ fn multiple_string(
         .map(str::to_owned)
 }
 
-pub(super) fn parse(value: &str) -> Result<Guide, String> {
-    let doc = roxmltree::Document::parse_with_options(
-        value,
-        roxmltree::ParsingOptions {
-            nodes_limit: 1_000_000,
-            ..Default::default()
-        },
-    )
-    .map_err(|_| "The broadcast guide decoder returned invalid XML")?;
-    if !doc.root_element().has_tag_name("tsduck") {
-        return Err("The broadcast guide decoder returned an unexpected document".into());
-    }
+fn station_tables(
+    root: roxmltree::Node<'_, '_>
+) -> (HashMap<String, Station>, HashMap<u32, String>) {
     let mut stations = HashMap::new();
     let mut descriptions = HashMap::new();
-    for table in doc.root_element().children() {
+    for table in root.children() {
         if matches!(table.tag_name().name(), "TVCT" | "CVCT") {
             for channel in table.children().filter(|n| n.has_tag_name("channel")) {
                 let Some(id) = number(channel.attribute("source_id")) else {
@@ -183,6 +174,103 @@ pub(super) fn parse(value: &str) -> Result<Guide, String> {
             }
         }
     }
+    (stations, descriptions)
+}
+
+fn event_description(
+    table: roxmltree::Node<'_, '_>,
+    event: roxmltree::Node<'_, '_>,
+    descriptions: &HashMap<u32, String>,
+) -> Option<String> {
+    let atsc = table.has_tag_name("ATSC_EIT");
+    let short = event
+        .children()
+        .find(|n| n.has_tag_name("short_event_descriptor"));
+    let mut description = None;
+
+    if atsc {
+        if let (Some(source), Some(id)) = (
+            number(table.attribute("source_id")),
+            number(event.attribute("event_id")),
+        ) {
+            description = descriptions.get(&((source << 16) | (id << 2) | 2)).cloned();
+        }
+    } else {
+        let mut text = short
+            .and_then(|n| child_text(n, "text"))
+            .unwrap_or_default();
+        let mut extended = event
+            .children()
+            .filter(|n| n.has_tag_name("extended_event_descriptor"))
+            .collect::<Vec<_>>();
+        extended.sort_by_key(|n| number(n.attribute("descriptor_number")).unwrap_or(0));
+        for node in extended {
+            if let Some(extra) = child_text(node, "text") {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&extra);
+            }
+        }
+        description = (!text.is_empty()).then_some(text);
+    }
+    description
+}
+
+fn event_program(
+    table: roxmltree::Node<'_, '_>,
+    event: roxmltree::Node<'_, '_>,
+    key: &str,
+    descriptions: &HashMap<u32, String>,
+) -> Option<Program> {
+    let atsc = table.has_tag_name("ATSC_EIT");
+    let start = stamp(event.attribute("start_time"))?;
+    let length = if atsc {
+        number(event.attribute("length_in_seconds")).map(i64::from)
+    } else {
+        event.attribute("duration").and_then(duration)
+    }
+    .unwrap_or(0);
+    if length <= 0 {
+        return None;
+    }
+    let short = event
+        .children()
+        .find(|n| n.has_tag_name("short_event_descriptor"));
+    let title = if atsc {
+        multiple_string(event, "title_text")
+    } else {
+        short.and_then(|n| child_text(n, "event_name"))
+    };
+    let title = title.filter(|s| !s.trim().is_empty())?;
+    // Broadcast event IDs are reused and do not identify stable episodes.
+    Some(Program {
+        id: 0,
+        source_id: 0,
+        guide_key: key.into(),
+        starts_at: start,
+        ends_at: start + length,
+        title,
+        metadata: ProgramMetadata {
+            description: event_description(table, event, descriptions),
+            ..Default::default()
+        },
+    })
+}
+
+pub(super) fn parse(value: &str) -> Result<Guide, String> {
+    let doc = roxmltree::Document::parse_with_options(
+        value,
+        roxmltree::ParsingOptions {
+            nodes_limit: 1_000_000,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| "The broadcast guide decoder returned invalid XML")?;
+    if !doc.root_element().has_tag_name("tsduck") {
+        return Err("The broadcast guide decoder returned an unexpected document".into());
+    }
+    let (mut stations, descriptions) = station_tables(doc.root_element());
     let mut programs = HashMap::new();
     for table in doc.root_element().children().filter(|n| {
         matches!(n.tag_name().name(), "EIT" | "ATSC_EIT") && n.attribute("current") != Some("false")
@@ -199,70 +287,9 @@ pub(super) fn parse(value: &str) -> Result<Guide, String> {
             )
         };
         for event in table.children().filter(|n| n.has_tag_name("event")) {
-            let Some(start) = stamp(event.attribute("start_time")) else {
-                continue;
-            };
-            let length = if atsc {
-                number(event.attribute("length_in_seconds")).map(i64::from)
-            } else {
-                event.attribute("duration").and_then(duration)
+            if let Some(program) = event_program(table, event, &key, &descriptions) {
+                programs.insert((key.clone(), program.starts_at), program);
             }
-            .unwrap_or(0);
-            if length <= 0 {
-                continue;
-            }
-            let short = event
-                .children()
-                .find(|n| n.has_tag_name("short_event_descriptor"));
-            let title = if atsc {
-                multiple_string(event, "title_text")
-            } else {
-                short.and_then(|n| child_text(n, "event_name"))
-            };
-            let Some(title) = title.filter(|s| !s.trim().is_empty()) else {
-                continue;
-            };
-            let mut metadata = ProgramMetadata::default();
-            if atsc {
-                if let (Some(source), Some(id)) = (
-                    number(table.attribute("source_id")),
-                    number(event.attribute("event_id")),
-                ) {
-                    metadata.description =
-                        descriptions.get(&((source << 16) | (id << 2) | 2)).cloned();
-                }
-            } else {
-                let mut text = short
-                    .and_then(|n| child_text(n, "text"))
-                    .unwrap_or_default();
-                let mut extended = event
-                    .children()
-                    .filter(|n| n.has_tag_name("extended_event_descriptor"))
-                    .collect::<Vec<_>>();
-                extended.sort_by_key(|n| number(n.attribute("descriptor_number")).unwrap_or(0));
-                for node in extended {
-                    if let Some(extra) = child_text(node, "text") {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(&extra);
-                    }
-                }
-                metadata.description = (!text.is_empty()).then_some(text);
-            }
-            // Broadcast event IDs are reused; do not treat them as stable episode identifiers.
-            programs.insert(
-                (key.clone(), start),
-                Program {
-                    id: 0,
-                    source_id: 0,
-                    guide_key: key.clone(),
-                    starts_at: start,
-                    ends_at: start + length,
-                    title,
-                    metadata,
-                },
-            );
         }
     }
     for (key, _) in programs.keys() {
@@ -324,6 +351,116 @@ async fn recording_soon(
     .unwrap_or(true)
 }
 
+async fn collect_native(
+    db: &DbConn,
+    source: &Source,
+    config: &SourceConfig,
+) -> Result<(Guide, Option<String>), String> {
+    let mut result = Guide {
+        programs: Vec::new(),
+        stations: Vec::new(),
+    };
+    let mut last_error = None;
+    let channels = if source.kind == "native" {
+        super::tsduck::channels(source, config).await?
+    } else {
+        super::native::channels(config).await?
+    };
+    let mut seen = HashSet::new();
+    for channel in channels {
+        if !seen.insert(
+            channel
+                .source_key
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .to_owned(),
+        ) {
+            continue;
+        }
+        if recording_soon(db, source.id).await {
+            break;
+        }
+        let _lease = super::stream::lease(source)?;
+        let (_scan, cancel) = scan(source.id);
+        let mut tuner;
+        let output: Box<dyn tokio::io::AsyncRead + Unpin + Send> = if source.kind == "native" {
+            Box::new(super::tsduck::tune(config, &channel).await?)
+        } else {
+            tuner = super::native::tune(config, &channel, true)?;
+            Box::new(tuner.stdout.take().ok_or("Unable to read the DVB tuner")?)
+        };
+        match decode_idle(config, output, cancel).await {
+            Ok(guide) => {
+                result.programs.extend(guide.programs);
+                result.stations.extend(guide.stations);
+            }
+            Err(error) => {
+                last_error = Some(error);
+                break;
+            }
+        }
+    }
+    Ok((result, last_error))
+}
+
+async fn collect_network(
+    db: &DbConn,
+    source: &Source,
+    config: &SourceConfig,
+) -> Result<(Guide, Option<String>), String> {
+    let mut result = Guide {
+        programs: Vec::new(),
+        stations: Vec::new(),
+    };
+    let mut last_error = None;
+    if config.multiplex_urls.is_empty() {
+        return Err(
+            "Enter unfiltered multiplex URLs for broadcast guide scanning. HDHomeRun requires \
+             physical RF channels or frequencies, rather than virtual channel URLs"
+                .into(),
+        );
+    }
+    for value in &config.multiplex_urls {
+        if recording_soon(db, source.id).await {
+            break;
+        }
+        let _lease = super::stream::lease(source)?;
+        let (_scan, cancel) = scan(source.id);
+        let url = super::formats::http_url(value)?;
+        let response = super::sources::client()?
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| "Unable to tune the broadcast multiplex")?
+            .error_for_status()
+            .map_err(|_| "The broadcast tuner is unavailable")?;
+        // A small duplex pipe bounds memory while the HTTP producer feeds the table decoder.
+        let (mut writer, reader) = tokio::io::duplex(188 * 1024);
+        let producer = AbortTask(tokio::spawn(async move {
+            let mut response = response;
+            while let Ok(Some(chunk)) = response.chunk().await {
+                if writer.write_all(&chunk).await.is_err() {
+                    break;
+                }
+            }
+        }));
+        let guide = decode_idle(config, reader, cancel).await;
+        drop(producer);
+        match guide {
+            Ok(guide) => {
+                result.programs.extend(guide.programs);
+                result.stations.extend(guide.stations);
+            }
+            Err(error) => {
+                last_error = Some(error);
+                break;
+            }
+        }
+    }
+    Ok((result, last_error))
+}
+
 pub(super) async fn collect(
     db: &DbConn,
     source: &Source,
@@ -334,98 +471,11 @@ pub(super) async fn collect(
             "Broadcast guide scanning is deferred while a recording is due or in progress".into(),
         );
     }
-    let mut result = Guide {
-        programs: Vec::new(),
-        stations: Vec::new(),
-    };
-    let mut last_error = None;
-    if matches!(source.kind.as_str(), "dvb" | "native") {
-        let channels = if source.kind == "native" {
-            super::tsduck::channels(source, config).await?
-        } else {
-            super::native::channels(config).await?
-        };
-        let mut seen = HashSet::new();
-        for channel in channels {
-            if !seen.insert(
-                channel
-                    .source_key
-                    .split(':')
-                    .next()
-                    .unwrap_or("")
-                    .to_owned(),
-            ) {
-                continue;
-            }
-            if recording_soon(db, source.id).await {
-                break;
-            }
-            let _lease = super::stream::lease(source)?;
-            let (_scan, cancel) = scan(source.id);
-            let mut tuner;
-            let output: Box<dyn tokio::io::AsyncRead + Unpin + Send> = if source.kind == "native" {
-                Box::new(super::tsduck::tune(config, &channel).await?)
-            } else {
-                tuner = super::native::tune(config, &channel, true)?;
-                Box::new(tuner.stdout.take().ok_or("Unable to read the DVB tuner")?)
-            };
-            match decode_idle(config, output, cancel).await {
-                Ok(guide) => {
-                    result.programs.extend(guide.programs);
-                    result.stations.extend(guide.stations);
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                    break;
-                }
-            }
-        }
+    let (mut result, last_error) = if matches!(source.kind.as_str(), "dvb" | "native") {
+        collect_native(db, source, config).await?
     } else {
-        if config.multiplex_urls.is_empty() {
-            return Err(
-                "Enter unfiltered multiplex URLs for broadcast guide scanning. HDHomeRun requires \
-                 physical RF channels or frequencies, rather than virtual channel URLs"
-                    .into(),
-            );
-        }
-        for value in &config.multiplex_urls {
-            if recording_soon(db, source.id).await {
-                break;
-            }
-            let _lease = super::stream::lease(source)?;
-            let (_scan, cancel) = scan(source.id);
-            let url = super::formats::http_url(value)?;
-            let response = super::sources::client()?
-                .get(url)
-                .send()
-                .await
-                .map_err(|_| "Unable to tune the broadcast multiplex")?
-                .error_for_status()
-                .map_err(|_| "The broadcast tuner is unavailable")?;
-            // A small duplex pipe bounds memory while the HTTP producer feeds the table decoder.
-            let (mut writer, reader) = tokio::io::duplex(188 * 1024);
-            let producer = AbortTask(tokio::spawn(async move {
-                let mut response = response;
-                while let Ok(Some(chunk)) = response.chunk().await {
-                    if writer.write_all(&chunk).await.is_err() {
-                        break;
-                    }
-                }
-            }));
-            let guide = decode_idle(config, reader, cancel).await;
-            drop(producer);
-            match guide {
-                Ok(guide) => {
-                    result.programs.extend(guide.programs);
-                    result.stations.extend(guide.stations);
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                    break;
-                }
-            }
-        }
-    }
+        collect_network(db, source, config).await?
+    };
     if result.programs.is_empty() {
         return Err(last_error.unwrap_or_else(|| {
             "No broadcast schedule was received. Check reception and that the source includes DVB \

@@ -179,7 +179,7 @@ export function bindTvPlayerGuide(onTune: (channel: TvChannel) => void): () => v
   document.querySelector('#player-tv-guide-search')?.addEventListener('input',filterChannels,{signal});
   document.querySelector('#player-tv-guide-source')?.addEventListener('change',filterChannels,{signal});
   root?.addEventListener('error',event=>{
-    if (event.target instanceof HTMLImageElement && event.target.hasAttribute('data-tv-image')) recoverImage(event.target);
+    if (event.target instanceof HTMLImageElement && event.target.dataset.tvImage !== undefined) recoverImage(event.target);
   },{capture:true,signal});
   root?.querySelectorAll<HTMLImageElement>('[data-tv-image]').forEach(image=>{if (image.complete && !image.naturalWidth) recoverImage(image);});
   if (panel && !panel.hidden) revealPlayingChannel(panel,false);

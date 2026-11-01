@@ -301,6 +301,39 @@ pub(super) fn recover(conn: &mut SqliteConnection) -> QueryResult<()> {
     Ok(())
 }
 
+async fn recover_deletions(db: &DbConn) {
+    let deleting = db
+        .run(|conn| {
+            r::table
+                .filter(r::state.eq("deleting"))
+                .select(r::id)
+                .load::<i32>(conn)
+        })
+        .await
+        .unwrap_or_default();
+    for id in deleting {
+        match super::remove_recording_file(db, id).await {
+            Ok(()) => {
+                let _ = db
+                    .run(move |conn| {
+                        diesel::delete(r::table.find(id).filter(r::state.eq("deleting")))
+                            .execute(conn)
+                    })
+                    .await;
+            }
+            Err(error) => {
+                let _ = db
+                    .run(move |conn| {
+                        diesel::update(r::table.find(id))
+                            .set((r::state.eq("failed"), r::last_error.eq(error)))
+                            .execute(conn)
+                    })
+                    .await;
+            }
+        }
+    }
+}
+
 pub(crate) fn start_workers(
     db: DbConn,
     mut shutdown: rocket::Shutdown,
@@ -310,36 +343,7 @@ pub(crate) fn start_workers(
         if let Err(error) = db.run(recover).await {
             log::error!("Unable to recover Live TV recordings: {error}");
         }
-        let deleting = db
-            .run(|conn| {
-                r::table
-                    .filter(r::state.eq("deleting"))
-                    .select(r::id)
-                    .load::<i32>(conn)
-            })
-            .await
-            .unwrap_or_default();
-        for id in deleting {
-            match super::remove_recording_file(&db, id).await {
-                Ok(()) => {
-                    let _ = db
-                        .run(move |conn| {
-                            diesel::delete(r::table.find(id).filter(r::state.eq("deleting")))
-                                .execute(conn)
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    let _ = db
-                        .run(move |conn| {
-                            diesel::update(r::table.find(id))
-                                .set((r::state.eq("failed"), r::last_error.eq(error)))
-                                .execute(conn)
-                        })
-                        .await;
-                }
-            }
-        }
+        recover_deletions(&db).await;
         let mut workers = tokio::task::JoinSet::new();
         let maintenance_db = db.clone();
         workers.spawn(async move {

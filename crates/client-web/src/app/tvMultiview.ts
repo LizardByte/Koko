@@ -156,7 +156,7 @@ export async function retryTvMultiviewMain():Promise<void> {
 function watchMainOnly():void {
   const video=document.querySelector<HTMLVideoElement>('#media-player');
   if(video)state.playbackSettings={paused:video.paused,volume:video.volume,muted:video.muted};
-  callbacks.beforeMainChange();stopTvMultiview();callbacks.render();
+  callbacks.beforeMainChange();void stopTvMultiview();callbacks.render();
   if(!state.playbackSettings?.paused)void document.querySelector<HTMLVideoElement>('#media-player')?.play().catch(()=>undefined);
 }
 
@@ -223,13 +223,13 @@ function promoteClickedTile(target:Element):void {
 function handleAction(event:MouseEvent):void {
   const target=event.target as Element,button=target.closest<HTMLButtonElement>('button');
   if(!button){promoteClickedTile(target);return;}
-  if(button.id==='player-multiview'||button.hasAttribute('data-tv-multi-add')){
+  if(button.id==='player-multiview'||button.dataset.tvMultiAdd !== undefined){
     const view=ensureView();if(view&&view.tiles.length<TV_MULTIVIEW_LIMIT){openTvMultiviewPicker(view,addTvMultiviewChannel);}return;
   }
   if(button.dataset.tvMultiMain){promoteTvMultiview(Number(button.dataset.tvMultiMain));return;}
   if(button.dataset.tvMultiRemove){removeTile(Number(button.dataset.tvMultiRemove));return;}
   if(button.dataset.tvMultiRetry){const tile=state.tvMultiview?.tiles.find(t=>t.playback.id===Number(button.dataset.tvMultiRetry));if(tile){void retryTile(tile);}return;}
-  if(button.hasAttribute('data-tv-multi-only')){watchMainOnly();return;}
+  if(button.dataset.tvMultiOnly !== undefined){watchMainOnly();return;}
   const view=state.tvMultiview;
   if(view&&['grid','focus'].includes(button.dataset.tvMultiLayout??'')){view.layout=button.dataset.tvMultiLayout as 'grid'|'focus';callbacks.render();}
 }
@@ -253,7 +253,7 @@ export function syncTvMultiview():void {
 
 function syncAddTile(view:TvMultiview,stage:HTMLElement):void {
   let empty=stage.querySelector<HTMLElement>('#tv-multiview-empty');
-  if(view.tiles.length<TV_MULTIVIEW_LIMIT){if(!empty){empty=document.createElement('button');empty.id='tv-multiview-empty';empty.setAttribute('type','button');empty.setAttribute('data-tv-multi-add','');empty.className='tv-stream-add';empty.innerHTML=`${renderIcon('plus')}<span>Add stream</span>`;stage.append(empty);}}
+  if(view.tiles.length<TV_MULTIVIEW_LIMIT){if(!empty){empty=document.createElement('button');empty.id='tv-multiview-empty';empty.setAttribute('type','button');empty.dataset.tvMultiAdd='';empty.className='tv-stream-add';empty.innerHTML=`${renderIcon('plus')}<span>Add stream</span>`;stage.append(empty);}}
   else empty?.remove();
   if(empty&&view.tiles.length<TV_MULTIVIEW_LIMIT&&stage.lastElementChild!==empty)stage.append(empty);
 }

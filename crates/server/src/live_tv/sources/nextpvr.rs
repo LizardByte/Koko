@@ -49,6 +49,9 @@ pub(super) async fn login(config: &SourceConfig) -> Result<String, String> {
     let sid = child_text(doc.root_element(), "sid").ok_or("NextPVR did not supply a session")?;
     let salt =
         child_text(doc.root_element(), "salt").ok_or("NextPVR did not supply a session salt")?;
+    // NextPVR mandates MD5(":" + MD5(pin) + ":" + salt) for its session challenge.
+    // This is wire-protocol compatibility, not Koko's password-storage algorithm.
+    // https://forums.nextpvr.com/showthread.php?pid=524900&tid=59581
     let pin = format!("{:x}", md5::compute(config.pin.as_bytes()));
     let digest = format!("{:x}", md5::compute(format!(":{pin}:{salt}")));
     let mut url = endpoint(config, "session.login", Some(&sid))?;

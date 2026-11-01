@@ -110,11 +110,13 @@ pub(crate) async fn import_guide(
 ) -> Result<(), String> {
     let lock = sources::source_lock(id);
     let _guard = lock.lock().await;
+    let file = tokio::fs::File::from_std(file);
     let guide_bytes = file
         .metadata()
+        .await
         .map_err(|_| "Unable to read the XMLTV file size")?
         .len();
-    let guide = feeds::read_guide(file).await?;
+    let guide = feeds::read_guide(file.into_std().await).await?;
     let source = db
         .run(move |conn| storage::source(conn, id))
         .await

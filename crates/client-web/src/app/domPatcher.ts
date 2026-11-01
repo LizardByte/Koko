@@ -280,10 +280,10 @@ function patchNode(current: Node, next: Node): Node {
     // The player owns its live controls. Background page updates must not replace
     // focused menus, in-progress clicks, volume, or the controls' idle state.
     if (current.id === 'media-player-overlay' && next.id === current.id
-      && current.hasAttribute('data-player-view-key')
-      && current.getAttribute('data-player-view-key') === next.getAttribute('data-player-view-key')) return current;
+      && current instanceof HTMLElement && current.dataset.playerViewKey !== undefined
+      && next instanceof HTMLElement && current.dataset.playerViewKey === next.dataset.playerViewKey) return current;
     // A results refresh must preserve the user's expanded settings cards.
-    const detailsOpen = current instanceof HTMLDetailsElement && !next.hasAttribute('data-controlled-open') ? current.open : undefined;
+    const detailsOpen = current instanceof HTMLDetailsElement && next instanceof HTMLElement && next.dataset.controlledOpen === undefined ? current.open : undefined;
     patchAttributes(current, next);
     patchChildren(current, next);
     syncFormControlState(current, next);

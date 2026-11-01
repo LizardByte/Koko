@@ -740,9 +740,7 @@ pub(crate) async fn keep(
                     .select(r::id)
                     .first::<i32>(conn)
                     .map_err(super::db_error)?;
-                let path = settings::capture_path(conn, id)?;
-                std::fs::create_dir_all(path.parent().ok_or("Invalid recording folder")?)
-                    .map_err(|_| "Unable to create the recording folder")?;
+                let path = settings::prepare_capture_path(conn, id)?;
                 diesel::update(r::table.find(id))
                     .set(r::file_name.eq(path.to_string_lossy().as_ref()))
                     .execute(conn)

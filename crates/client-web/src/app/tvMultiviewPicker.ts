@@ -14,7 +14,7 @@ export function closeTvMultiviewPicker():void {dismiss?.();}
 /** Render at most fifty results, even when a source exposes thousands of channels. */
 export function openTvMultiviewPicker(view:TvMultiview,add:(channel:TvChannel)=>Promise<void>):void {
   closeTvMultiviewPicker();
-  const data=state.liveTv;if(!data||data.owner!==view.owner)return;
+  const data=state.liveTv;if(data?.owner!==view.owner)return;
   const previous=document.activeElement as HTMLElement|null,dialog=document.createElement('dialog');
   dialog.className='tv-program-dialog tv-multiview-picker';dialog.id='tv-multiview-picker';dialog.setAttribute('aria-labelledby','tv-multi-picker-title');
   const sources=data.guideSources?.map(s=>`<option value="${s.id}">${escape(s.name)}</option>`).join('')??'';

@@ -23,12 +23,12 @@ test(`IPTV with ${keySource} and delayed audio decodes through the temporary TV 
   const encrypted=Buffer.concat([cipher.update(transport),cipher.final()]);
   const inline=`data:text/plain;base64,${key.toString('base64')}`;
   const attributes=`METHOD=AES-128,URI="${keySource==='inline HLS keys'?inline:'key.m3u8'}",IV=0x${iv.toString('hex')}`;
-  let sourceId,sessionId,headers,segments=0;
+  let sourceId,sessionId,headers,segments=0,unwanted=0;
   const fixture=createServer((request,response)=>{
     if(request.url==='/channels.m3u')response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="inline" tvg-chno="410",Inline Key TV\nhttp://127.0.0.1:${fixture.address().port}/master.m3u8\n`);
     else if(request.url==='/master.m3u8'){
       response.setHeader('Content-Type','application/vnd.apple.mpegurl');
-      response.end(`#EXTM3U\n#EXT-X-VERSION:5\n#EXT-X-SESSION-KEY:${attributes}\n#EXT-X-STREAM-INF:BANDWIDTH=12000000,RESOLUTION=640x360\nmedia.m3u8\n`);
+      response.end(`#EXTM3U\n#EXT-X-VERSION:5\n#EXT-X-SESSION-KEY:${attributes}\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Unavailable",URI="unavailable.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=160x90\nunavailable.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=12000000,RESOLUTION=640x360,SUBTITLES="subs"\nmedia.m3u8\n`);
     }else if(request.url==='/media.m3u8'){
       response.setHeader('Content-Type','application/vnd.apple.mpegurl');
       response.end(`#EXTM3U\n#EXT-X-VERSION:5\n#EXT-X-TARGETDURATION:12\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-KEY:${attributes}\n#EXTINF:12,\nsegment.ts\n#EXT-X-ENDLIST\n`);
@@ -37,7 +37,7 @@ test(`IPTV with ${keySource} and delayed audio decodes through the temporary TV 
       response.setHeader('Content-Type','application/vnd.apple.mpegurl');response.end(key);
     }else if(request.url==='/segment.ts'){
       segments++;response.setHeader('Content-Type','video/mp2t');response.end(encrypted);
-    }else {response.writeHead(404);response.end();}
+    }else {unwanted++;response.writeHead(503);response.end();}
   });
   await new Promise(done=>fixture.listen(0,'127.0.0.1',done));
   try{
@@ -52,6 +52,11 @@ test(`IPTV with ${keySource} and delayed audio decodes through the temporary TV 
     const tuned=await tuning,session=await tuned.json();expect(tuned.ok(),JSON.stringify(session)).toBeTruthy();sessionId=session.session_id;
     await expect.poll(()=>page.locator('#media-player').evaluate(video=>video.readyState>=2&&video.currentTime>0.2&&video.videoWidth===640),{timeout:45000}).toBeTruthy();
     expect(segments).toBeGreaterThan(0);
+    expect(unwanted).toBe(0);
+    await expect.poll(()=>page.locator('#media-player').evaluate(video=>{
+      const stream=video.captureStream(),count=stream.getAudioTracks().length;
+      stream.getTracks().forEach(track=>track.stop());return count;
+    }),{timeout:30000}).toBe(1);
   }finally{
     if(sessionId&&headers)await page.request.delete(`/api/v1/live-tv/sessions/${sessionId}`,{headers});
     if(sourceId&&headers)await page.request.delete(`/api/v1/live-tv/sources/${sourceId}`,{headers});

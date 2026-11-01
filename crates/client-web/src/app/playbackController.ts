@@ -24,6 +24,7 @@ import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
 import * as tvApi from '../liveTvApi';
 import { TvPlaybackWatchdog } from './tvPlaybackRecovery';
+import { bindTvPlaybackHeadroom, tvLivePosition } from './tvPlaybackHeadroom';
 import { configureTvMultiview, finishTvMultiviewOnExit, renderTvMultiviewButton, renderTvStage, retryTvMultiviewMain, stopTvMultiview, syncTvMultiview } from './tvMultiview';
 import { bindTvPlayerGuide, refreshTvPlayerGuide, refreshTvPlayerProgram, renderTvPlayerGuide, renderTvPlayerProgram, tvChannelPlayback } from './tvPlayer';
 import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
@@ -705,7 +706,7 @@ async function openTvBuffer(tv: NonNullable<typeof state.activeTvPlayback>, owne
     if (!tvTuneCurrent(tv,owner,request)) return;
     const buffer = await tvApi.startTvBuffer(tv.id);
     if (!tvTuneCurrent(tv,owner,request)) { await tvApi.closeTvBuffer(buffer.session_id); return; }
-    tv.buffer = buffer; tv.startMs = Math.max(buffer.start_ms,buffer.end_ms-6000);
+    tv.buffer = buffer; tv.startMs = tvLivePosition(tv);
     tv.url = tvApi.tvBufferStreamUrl(buffer.session_id,tv.startMs,'original',request);
     if (state.liveTv?.owner === owner) {
       const preferences = state.liveTv.preferences ?? {favorites:[],recent:[]};
@@ -1398,10 +1399,10 @@ function recoverTvPlayback(player: HTMLMediaElement, interrupted = false): boole
   const watchdog = tvPlaybackWatchdog(tv);
   const position = activePlaybackPositionMs(player);
   const result = watchdog.observe({position,interrupted:interrupted || player.ended || Boolean(player.error),
-    paused:player.paused && !player.ended && !player.error,unavailable:buffer.end_ms-buffer.start_ms < 1000},Date.now());
+    paused:player.paused && !player.ended && !player.error,unavailable:buffer.end_ms-buffer.start_ms < 4000},Date.now());
   if (result === 'exhausted') return false;
   if (result === 'recover') {
-    const livePosition = Math.max(buffer.start_ms,buffer.end_ms-6000);
+    const livePosition = tvLivePosition(tv);
     // Keep a time-shifted viewer's position on the first retry. If the same point
     // repeatedly fails, use the current live edge as Skip to end does.
     seekTvBuffer(watchdog.attempts > 1 ? livePosition : Math.min(position,livePosition),false);
@@ -1460,7 +1461,8 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
   const current = () => !disposed && state.activeTvPlayback === tv;
   tvPlaybackWatchdog(tv).attach(activePlaybackPositionMs(player),Date.now());
   const cleanupMenu = bindTvRecordingMenu(tv);
-  const goLive = () => { if (tv.buffer) seekTvBuffer(tv.buffer.end_ms-6000,false); };
+  const cleanupHeadroom = bindTvPlaybackHeadroom(player,tv,current,() => Boolean(state.playbackSettings?.paused));
+  const goLive = () => { if (tv.buffer) seekTvBuffer(tvLivePosition(tv),false); };
   const live = document.querySelector('#player-skip-to-end');
   live?.addEventListener('click',goLive);
   const timer = globalThis.setInterval(() => {
@@ -1479,7 +1481,7 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
       }
     }).catch(error => { if (current()) console.warn('Unable to refresh the TV buffer',error); }).finally(() => { polling = false; });
   },2000);
-  return () => { disposed = true; globalThis.clearInterval(timer); cleanupMenu(); live?.removeEventListener('click',goLive); };
+  return () => { disposed = true; globalThis.clearInterval(timer); cleanupMenu(); cleanupHeadroom(); live?.removeEventListener('click',goLive); };
 }
 
 /** Refresh the main tile's shared controls while preserving the other video decoders. */
@@ -1611,14 +1613,14 @@ export function bindPlayerProgress(): void {
   };
 
   const setPlayerLoading = (loading: boolean): void => {
-    const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
+    const shouldShowLoading = loading && !player.ended && (player.readyState < player.HAVE_FUTURE_DATA || Boolean(tv && player.playbackRate===0));
     shell?.classList.toggle('is-media-loading', shouldShowLoading);
     trackPlaybackStall(shouldShowLoading);
     if (!state.playbackProblem) shell?.classList.remove('has-media-error');
   };
 
   const refreshPlayerLoading = (): void => {
-    setPlayerLoading(!player.paused && player.readyState < player.HAVE_FUTURE_DATA);
+    setPlayerLoading(!player.paused && (player.readyState < player.HAVE_FUTURE_DATA || Boolean(tv && player.playbackRate===0)));
   };
 
   const updatePlayButtons = (): void => {
@@ -1707,7 +1709,7 @@ export function bindPlayerProgress(): void {
       const menuOpen = document.querySelector('#media-player-overlay [aria-haspopup="menu"][aria-expanded="true"]');
       const selecting = document.activeElement instanceof HTMLSelectElement && focusedControl;
       const guideOpen = state.activeTvPlayback?.guideOpen;
-      if (!player.paused && !isScrubbing && !state.playbackProblem && !menuOpen && !guideOpen && !selecting && !(keepFocusedControlsVisible && focusedControl)) {
+      if (!player.paused && player.readyState >= player.HAVE_CURRENT_DATA && !isScrubbing && !state.playbackProblem && !menuOpen && !guideOpen && !selecting && !(keepFocusedControlsVisible && focusedControl)) {
         if (document.activeElement?.closest('.player-controls')) shell?.focus({preventScroll:true});
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');
@@ -1916,13 +1918,13 @@ export function bindPlayerProgress(): void {
   player.addEventListener('loadstart', () => setPlayerLoading(true), {signal:mediaSignal});
   player.addEventListener('waiting', refreshPlayerLoading, {signal:mediaSignal});
   player.addEventListener('stalled', refreshPlayerLoading, {signal:mediaSignal});
-  player.addEventListener('loadeddata', () => setPlayerLoading(false), {signal:mediaSignal});
+  player.addEventListener('loadeddata', () => {setPlayerLoading(false);showControls();}, {signal:mediaSignal});
   player.addEventListener('canplay', () => {
     applyInitialDirectSeek();
-    setPlayerLoading(false);
+    refreshPlayerLoading();
   }, {signal:mediaSignal});
   player.addEventListener('playing', () => {
-    setPlayerLoading(false);
+    refreshPlayerLoading();
     if (!tv && playbackItem && state.activePlaybackCompatible && state.activePlaybackItem?.id === playbackItem.id) {
       compatiblePlaybackSources.add(playbackSourceKey(playbackItem.id));
     }
@@ -1947,6 +1949,7 @@ export function bindPlayerProgress(): void {
     showControls();
   }, {signal:mediaSignal});
   player.addEventListener('volumechange', updateMuteButton, {signal:mediaSignal});
+  player.addEventListener('ratechange', refreshPlayerLoading, {signal:mediaSignal});
   player.addEventListener('timeupdate', () => {
     refreshPlayerLoading();
     updateTimeline();

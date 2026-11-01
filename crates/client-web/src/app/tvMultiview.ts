@@ -7,6 +7,7 @@ import { escapeHtml as escape } from './format';
 import { renderIcon } from './ui';
 import { tvChannelPlayback } from './tvPlayer';
 import { TvPlaybackWatchdog } from './tvPlaybackRecovery';
+import { bindTvPlaybackHeadroom, tvLivePosition } from './tvPlaybackHeadroom';
 import { channelPrograms } from './liveTvGuideModel';
 import { openTvMultiviewPicker, closeTvMultiviewPicker } from './tvMultiviewPicker';
 import { createIcons, icons } from 'lucide';
@@ -108,7 +109,7 @@ async function tuneTile(view:TvMultiview,tile:TvMultiviewTile,channel:api.TvChan
     await releasing;if(!current(view,tile)){return;}
     const buffer=await api.startTvBuffer(channel.id);
     if(!current(view,tile)){await api.closeTvBuffer(buffer.session_id);return;}
-    tile.playback.buffer=buffer;tile.playback.startMs=Math.max(buffer.start_ms,buffer.end_ms-6000);
+    tile.playback.buffer=buffer;tile.playback.startMs=tvLivePosition(tile.playback);
     tile.playback.url=api.tvBufferStreamUrl(buffer.session_id,tile.playback.startMs,tile.quality,++attempt);
     if(state.liveTv?.owner===view.owner){const preferences=state.liveTv.preferences??{favorites:[],recent:[]};state.liveTv.preferences={...preferences,recent:[channel.id,...preferences.recent.filter(id=>id!==channel.id)].slice(0,30)};}
   }catch(error){if(current(view,tile))tile.problem={message:error instanceof Error?error.message:'Unable to start this stream.',retry:true};}
@@ -192,12 +193,13 @@ function bindSatellite(tile:TvMultiviewTile,video:HTMLVideoElement):()=>void {
   const view=state.tvMultiview!,events=new AbortController(),watchdog=new TvPlaybackWatchdog();let polling=false;
   const position=()=>Number(video.dataset.playbackOffsetMs??tile.playback.startMs??0)+video.currentTime*1000;
   const active=()=>current(view,tile)&&tile.playback!==state.activeTvPlayback;
+  const cleanupHeadroom=bindTvPlaybackHeadroom(video,tile.playback,active,()=>tile.paused);
   watchdog.attach(position(),Date.now());
   const recover=(interrupted=false)=>{
     const buffer=tile.playback.buffer;if(!active()||!buffer||buffer.error||buffer.finished||tile.paused)return;
-    const result=watchdog.observe({position:position(),interrupted:interrupted||video.ended||Boolean(video.error),paused:video.paused&&!video.ended&&!video.error,unavailable:buffer.end_ms-buffer.start_ms<1000},Date.now());
+    const result=watchdog.observe({position:position(),interrupted:interrupted||video.ended||Boolean(video.error),paused:video.paused&&!video.ended&&!video.error,unavailable:buffer.end_ms-buffer.start_ms<4000},Date.now());
     if(result==='recover'){
-      const live=Math.max(buffer.start_ms,buffer.end_ms-6000);tile.playback.startMs=watchdog.attempts>1?live:Math.max(buffer.start_ms,Math.min(position(),live));
+      const live=tvLivePosition(tile.playback);tile.playback.startMs=watchdog.attempts>1?live:Math.max(buffer.start_ms,Math.min(position(),live));
       tile.playback.url=api.tvBufferStreamUrl(buffer.session_id,tile.playback.startMs,tile.quality,++attempt);callbacks.render();
     }else if(result==='exhausted'&&!tile.problem){tile.problem={message:'This stream stopped. Retry or choose another channel.',retry:true};callbacks.render();}
   };
@@ -211,7 +213,7 @@ function bindSatellite(tile:TvMultiviewTile,video:HTMLVideoElement):()=>void {
       else recover();
     }).catch(()=>undefined).finally(()=>{polling=false;});
   },2000);
-  return ()=>{events.abort();globalThis.clearInterval(timer);};
+  return ()=>{events.abort();cleanupHeadroom();globalThis.clearInterval(timer);};
 }
 
 function promoteClickedTile(target:Element):void {

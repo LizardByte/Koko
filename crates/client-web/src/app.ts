@@ -3,6 +3,7 @@ import { renderLiveTvPage, renderTvPinnedHeader } from './app/liveTv';
 import { syncLiveTvAccount } from './app/liveTvActions';
 import './app/liveTv.css';
 import './app/liveTvGuide.css';
+import './app/tvMultiview.css';
 import { renderPodcastPage } from './app/podcasts';
 import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';

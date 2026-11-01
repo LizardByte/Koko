@@ -171,7 +171,9 @@ export interface AppState {
   isLoading: boolean;
   isPlayerOpen: boolean;
   activePlaybackItem?: MediaItemDetail;
-  activeTvPlayback?: { owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string; image?: string; logo?: string; logoFallback?: string; guideOpen?: boolean; buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number };
+  activeTvPlayback?: TvPlayback;
+  /** Independently buffered Live TV tiles; the active tile owns the shared player controls and audio. */
+  tvMultiview?: import('./tvMultiview').TvMultiview;
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
   activePlaybackQuality?: import('./playbackOptions').PlaybackQuality;
@@ -198,6 +200,13 @@ export interface AppState {
     since: string;
     until: string;
   };
+}
+
+/** One account-owned TV stream, retained when its tile becomes the main view. */
+export interface TvPlayback {
+  owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string;
+  image?: string; logo?: string; logoFallback?: string; guideOpen?: boolean;
+  buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number;
 }
 
 /** Lucide icon names intentionally allowed by the web UI renderer. */
@@ -236,6 +245,7 @@ export type AppIconName =
   | 'languages'
   | 'layers'
   | 'layout-grid'
+  | 'layout-panel-left'
   | 'link-2'
   | 'log-in'
   | 'log-out'

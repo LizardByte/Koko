@@ -5,7 +5,7 @@ import { escapeHtml as escape } from './format';
 import { renderIcon } from './ui';
 import type { AppIconName } from './types';
 
-const PROVIDERS:Record<string,string>={adultswim:'png',amazon:'svg',bally:'svg',cbs:'png',espn:'png',foxone:'ico',freelivesports:'png',fubo:'png',hallmark:'png',hulu:'png',lg:'svg',localnow:'png',nfl:'png',plex:'svg',pluto:'png',reelz:'png',roku:'svg',samsung:'svg',sling:'svg',spectrum:'png',stirr:'png',tubi:'png',vizio:'png',whale:'svg',wsn:'png',xumo:'svg',youtube:'png'};
+const PROVIDERS:Record<string,string>={adultswim:'png',amazon:'svg',bally:'svg',cbs:'png',espn:'png',foxone:'ico',freelivesports:'png',fubo:'png',hallmark:'png',hulu:'png',lg:'svg',localnow:'png',nfl:'png',plex:'svg',pluto:'png',reelz:'png',roku:'svg',samsung:'svg',sling:'svg',spectrum:'png',stirr:'png',tcl:'png',tubi:'png',vizio:'png',whale:'svg',wsn:'png',xumo:'svg',youtube:'png'};
 const ALIASES:Record<string,string>={adult_swim:'adultswim',amazon_prime_free:'amazon',ballysports:'bally',cbs_sports:'cbs',charter:'spectrum',fox_one:'foxone',fubotv:'fubo','lg-channels':'lg',pluto_tv:'pluto',prime:'amazon',reelz_tve:'reelz',roku_channel:'roku',samsungtvplus:'samsung',sling_freestream:'sling',slingtv:'sling',watchfree:'vizio',youtube_tv:'youtube',youtubetv:'youtube'};
 const SOURCE_NAMES:Record<string,string>={fastchannels:'FastChannels',hdhomerun:'HDHomeRun',nextpvr:'NextPVR',m3u:'IPTV',tvheadend:'Tvheadend',native:'Local tuner',dvb:'Local tuner'};
 const SOURCE_LOGOS:Record<string,string>={fastchannels:'fastchannels.svg',hdhomerun:'hdhomerun.ico',nextpvr:'nextpvr.ico',tvheadend:'tvheadend.png'};

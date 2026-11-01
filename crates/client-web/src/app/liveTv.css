@@ -10,8 +10,6 @@
 :is(.live-tv-page, .live-tv-settings) label { display: flex; flex-direction: column; gap: .4rem; }
 :is(.live-tv-page, .live-tv-settings) label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
 :is(.live-tv-page, .live-tv-settings) input, :is(.live-tv-page, .live-tv-settings) select, :is(.live-tv-page, .live-tv-settings) textarea { min-width: 0; padding: .6rem; color: inherit; background: var(--surface-base); border: 1px solid var(--surface-raised); border-radius: 6px; }
-.live-tv-record-choices { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-.live-tv-record-choices label:has(input[type="checkbox"]) { grid-column: 1 / -1; }
 .live-tv-error { color: #ffbcaa; padding: .75rem; border-left: 3px solid #ffbcaa; background: #742c211f; }
 .live-tv-recording { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; margin-bottom: .75rem; background: var(--surface-panel); border: 1px solid var(--surface-raised); border-radius: var(--radius-card); }
 .live-tv-recording h3, .live-tv-recording p { margin: .35rem 0; }

@@ -52,7 +52,6 @@ export function bindTvGuideActions(signal: AbortSignal, context: {render: () => 
       document.querySelectorAll<HTMLElement>('.tv-guide-program').forEach(cell=>cell.setAttribute('aria-pressed',String(Number(cell.dataset.tvSelectChannel) === selection.channel?.id && Number(cell.dataset.tvSelectProgram) === selection.program?.id)));
       if (context.renderTvSelection) context.renderTvSelection(); else context.render();
   };
-  document.addEventListener('click',select,{signal});
   document.addEventListener('focusin',select,{signal});
   document.addEventListener('click', event => {
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-tv-favorite]');

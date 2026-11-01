@@ -51,7 +51,7 @@ test('IPTV groups FastChannels and E+TV providers and keeps channel-linked icons
     await expect(presetIcon).toHaveAttribute('src',/\/assets\/providers\/fastchannels\.svg$/);
     await expect.poll(()=>presetIcon.evaluate(image=>image.complete&&image.naturalWidth>0)).toBeTruthy();
     const fastFox=page.locator(`[data-tv-provider="${sourceId}:fox_one"]`);
-    await expect(fastFox).toContainText('FOX One');
+    await expect(fastFox).toHaveAttribute('aria-label',/^FOX One,/);
     await expect(fastFox.locator('img')).toHaveAttribute('src',/\/assets\/providers\/tv-foxone\.ico$/);
     await fastFox.scrollIntoViewIfNeeded();
     await expect.poll(()=>fastFox.locator('img').evaluate(image=>image.complete&&image.naturalWidth>0)).toBeTruthy();

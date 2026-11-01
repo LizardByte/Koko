@@ -1,8 +1,25 @@
 /** Shared TV timeline, program hero, and the minimized shared video player. */
-.tv-record-options { position: relative; }
-.tv-record-options > summary { padding: .7rem 1rem; cursor: pointer; border: 1px solid var(--surface-raised); border-radius: 8px; display: flex; align-items: center; gap: .5rem; }
-.tv-record-options[open] { flex-basis: 100%; }
-.tv-record-options form { padding: 1rem 0; max-width: 600px; }
+.tv-program-dialog { width:min(38rem,calc(100vw - 2rem));max-height:calc(100dvh - 2rem);margin:auto;padding:1.5rem;overflow:auto;border:1px solid var(--surface-raised);border-radius:var(--radius-card);background:var(--surface-panel);color:inherit;font:inherit;box-shadow:0 1rem 4rem #0008; }
+.tv-program-dialog::backdrop { background:#000b;backdrop-filter:blur(3px); }
+.tv-program-dialog header { display:flex;align-items:start;justify-content:space-between;gap:1rem; }
+.tv-program-dialog header h2 { margin:.25rem 0;font-size:1.35rem; }
+.tv-program-dialog header .eyebrow { margin:0;color:var(--text-muted); }
+.tv-program-dialog header button { flex:none;padding:.5rem; }
+.tv-program-dialog button { min-height:44px; }
+.tv-program-dialog button svg { width:1.2rem;height:1.2rem; }
+.tv-dialog-program { margin:1rem 0; }
+.tv-dialog-program h3 { margin:0 0 .4rem;font-size:1.1rem; }
+.tv-dialog-program p { color:var(--text-muted);margin:.25rem 0; }
+.tv-dialog-actions,.tv-record-form { display:grid;gap:1rem; }
+.tv-dialog-actions button { display:flex;align-items:center;justify-content:center;gap:.5rem; }
+.tv-record-padding { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem; }
+.tv-record-form label { display:grid;gap:.5rem; }
+.tv-record-form input[type="number"] { min-width:0;width:100%;padding:.75rem;border:1px solid var(--surface-raised);border-radius:.5rem;background:var(--surface-base);color:inherit;font:inherit; }
+.tv-record-form .tv-dialog-checkbox { display:flex;align-items:center;gap:.6rem; }
+.tv-dialog-checkbox input { flex:none;width:1.1rem;height:1.1rem;margin:0;accent-color:var(--accent); }
+.tv-record-form p { margin:0;color:var(--text-muted);font-size:.9rem; }
+.tv-program-dialog footer { display:flex;justify-content:flex-end;flex-wrap:wrap;gap:.75rem;margin-top:.5rem; }
+.tv-program-dialog [hidden] { display:none; }
 .tv-guide-toolbar, #tv-filter-form, .tv-guide-filters, .tv-guide-views { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
 .tv-hero-channel { display: flex; align-items: center; gap: .75rem; }
 .tv-artwork-attribution { display: flex; align-items: center; gap: .5rem; font-size: .75rem; color: var(--text-muted); margin-top: .5rem; }
@@ -16,12 +33,14 @@
 .tv-guide-filters button, .tv-guide-views button, .tv-source-rail button { background: var(--surface-panel); color: var(--text-muted); border: 1px solid var(--surface-raised); }
 .tv-guide-filters button[aria-pressed="true"], .tv-guide-views button[aria-pressed="true"], .tv-source-rail button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .tv-guide-layout { display: grid; min-width: 0; }
-.tv-guide-layout.has-source-rail { grid-template-columns: 150px minmax(0, 1fr); gap: 1rem; }
+.tv-guide-layout.has-source-rail { grid-template-columns: 10rem minmax(0, 1fr); gap: 1rem; }
 .tv-source-rail { display: flex; flex-direction: column; gap: .5rem; }
-.tv-source-rail button { padding: 1rem; text-align: left; display: grid; gap: .5rem; overflow-wrap: anywhere; }
+.tv-source-rail button { padding: .75rem; text-align: left; display: flex;align-items:center;gap:.75rem;justify-content:space-between;overflow-wrap:anywhere;flex-shrink:0; }
+.tv-source-count { font-size:1.1rem;font-weight:700;font-variant-numeric:tabular-nums; }
+.browse-workspace .tv-source-rail button:focus-visible,body[data-input-mode='gamepad'] .browse-workspace .tv-source-rail button:focus { outline-offset:-3px;box-shadow:inset 0 0 0 4px var(--surface-base); }
 .tv-source-rail small { font-weight: 400; }
 .tv-guide-board { min-width: 0; }
-.tv-guide-scroll { --tv-channel-width: 180px; --tv-timeline-width: 1440px; max-height: min(580px, max(160px, calc(100dvh - var(--home-pinned-header-height, 0px) - 130px))); overflow: auto; border: 1px solid var(--surface-raised); border-radius: 10px; scrollbar-gutter: stable; }
+.tv-guide-scroll { --tv-channel-width: 220px; --tv-timeline-width: 1440px; max-height: min(580px, max(160px, calc(100dvh - var(--home-pinned-header-height, 0px) - 130px))); overflow: auto; border: 1px solid var(--surface-raised); border-radius: 10px; scrollbar-gutter: stable; }
 .tv-guide-grid { position: relative; width: calc(var(--tv-channel-width) + var(--tv-timeline-width)); isolation: isolate; }
 .tv-guide-row, .tv-guide-time-row { display: grid; grid-template-columns: var(--tv-channel-width) var(--tv-timeline-width); }
 .tv-guide-row { height: 88px; }
@@ -33,7 +52,8 @@
 .tv-guide-tick:first-child { border-left: 0; }
 .tv-guide-channel { position: sticky; left: 0; z-index: 4; min-height: 88px; border-bottom: 1px solid var(--surface-raised); border-right: 1px solid var(--surface-raised); background: var(--surface-panel); padding: .5rem; display: flex; align-items: center; gap: .25rem; }
 .tv-channel-select { flex: 1; min-width: 0; display: flex; align-items: center; gap: .5rem; background: none; color: inherit; padding: .25rem; text-align: left; }
-.tv-channel-select > .tv-channel-logo-slot { display: flex; align-items: center; justify-content: center; width: 40px; height: 44px; flex: 0 0 40px; }
+.tv-guide-program.is-holding,.tv-channel-select.is-holding { box-shadow:inset 0 0 0 2px var(--accent-soft); }
+.tv-channel-select > .tv-channel-logo-slot { display: flex; align-items: center; justify-content: center; width: 72px; height: 60px; flex: 0 0 72px; }
 .tv-channel-logo-slot img { width: 100%; max-height: 100%; object-fit: contain; }
 .tv-channel-logo-slot img[hidden], .player-channel-logo[hidden] { display: none; }
 .tv-channel-select > span { display: grid; gap: .25rem; min-width: 0; font-size: .8rem; }
@@ -112,25 +132,29 @@
   .tv-guide-layout.has-source-rail { grid-template-columns: minmax(0, 1fr); }
   .tv-source-rail { flex-direction: row; flex-wrap: wrap; }
   .tv-source-rail button { padding: .5rem .75rem; }
-  .tv-guide-scroll { --tv-channel-width: 140px; }
-  .tv-channel-select > .tv-channel-logo-slot { width: 26px; flex-basis: 26px; }
+  .tv-guide-scroll { --tv-channel-width: 180px; }
+  .tv-channel-select > .tv-channel-logo-slot { width: 52px; height:52px;flex-basis:52px; }
   .tv-guide-toolbar input { width: 100%; }
   .tv-guide-toolbar form { width: 100%; }
 }
-.tv-provider-tabs { display:flex;flex-direction:column;gap:.4rem;padding:0 0 .5rem; }
+.tv-provider-tabs { display:flex;flex-direction:column;gap:.4rem;margin-left:.6rem;padding:0 0 .5rem .6rem;border-left:2px solid var(--surface-raised); }
+.tv-source-label,.tv-provider-label { color:var(--text-muted);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;padding:.25rem; }
+.tv-source-label { width:100%; }
 .tv-provider-tabs button { display:flex;gap:.65rem;align-items:center;flex-shrink:0;background:var(--surface-panel);color:var(--text-muted);border:1px solid var(--surface-raised); }
 .tv-provider-tabs button[aria-pressed="true"] { border-color:var(--accent);color:var(--accent); }
 .tv-provider-tabs button > span:last-child { display:grid;gap:.25rem;text-align:left; }
 .tv-provider-tabs small { color:var(--text-muted);font-weight:400; }
 .tv-provider-tabs .tv-source-icon { width:2.5rem;height:2.5rem;flex-basis:2.5rem; }
 .tv-source-rail { max-height:min(580px,max(160px,calc(100dvh - var(--home-pinned-header-height,0px) - 130px)));overflow-y:auto;align-self:start; }
-.tv-source-rail .tv-provider-tabs button { display:flex;padding:.5rem;gap:.5rem; }
+.tv-source-rail .tv-provider-tabs button { display:flex;padding:.5rem;gap:.5rem;background:var(--surface-base);border-radius:.6rem; }
 .tv-provider-tabs button > span:last-child { min-width:0;overflow-wrap:anywhere; }
-.tv-source-rail .tv-provider-tabs .tv-source-icon { width:2rem;height:2rem;flex-basis:2rem; }
-.tv-source-rail .tv-source-icon { margin-bottom:.25rem; }
+.tv-source-rail .tv-provider-tabs .tv-source-icon { width:3rem;height:3rem;flex-basis:3rem; }
+.tv-source-rail .tv-source-icon { width:4rem;height:4rem;flex-basis:4rem; }
+.tv-source-rail .tv-type-symbol svg { width:2.5rem;height:2.5rem; }
 .tv-guide-lineup { display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem; }
 @media(max-width:700px) {
   .tv-source-rail { max-height:180px; }
-  .tv-provider-tabs { flex-direction:row;overflow-x:auto;width:100%; }
+  .tv-provider-tabs { flex-direction:row;flex-wrap:wrap;width:calc(100% - .6rem); }
+  .tv-provider-label { width:100%; }
   .tv-source-rail .tv-provider-tabs button { flex-shrink:0; }
 }

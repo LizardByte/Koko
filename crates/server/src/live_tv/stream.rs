@@ -45,7 +45,7 @@ static LEASES: Lazy<Mutex<HashMap<(i32, bool), i32>>> = Lazy::new(|| Mutex::new(
 /// High-bitrate TV may not reveal audio parameters within FFmpeg's default probe budget.
 pub(super) const PROBE_ARGS: [&str; 4] = [
     "-analyzeduration",
-    "15000000",
+    "7000000",
     "-probesize",
     "20000000",
 ];

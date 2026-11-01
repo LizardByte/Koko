@@ -294,7 +294,7 @@ test('broadcast metadata is escaped and active artwork URLs never become image e
   assert.equal(dom.window.document.querySelector('.tv-guide-hero'),null);
   dom.window.close();
   assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;img/); assert.doesNotMatch(html, /javascript:|<script>|<img src=x/);
-  assert.match(html, /Record program/); assert.match(html, /Record series/); assert.doesNotMatch(html, /data-tv-tab="setup"/);
+  assert.match(html, /Record program or series/); assert.match(html, /data-tv-record-options="1"/); assert.doesNotMatch(html, /data-tv-program-record|data-tv-tab="setup"/);
 });
 test('a previous account cannot reveal its cached DVR or setup data', () => {
   state.bootstrap = { current_user: { id: 2, admin: true } };

@@ -85,9 +85,12 @@ numbers. If needed, specify the full path to `dvbv5-zap`.
 
 ## Program guide
 
-The guide aligns channels along one scrollable timeline. Select a program to see its artwork,
-description, poster, and recording options above the guide. When you have several sources,
-choose one in the source list. Open **Filters** to use categories, channel groups, favorites,
+The guide aligns channels along one scrollable timeline. Focus a program to preview its
+artwork and description above the guide. Click or press **Enter** on a channel or program
+to watch that channel live. Hold or right-click to open channel and recording options.
+**Record program or series** opens a dialog with padding, series, and privacy settings.
+Source and provider icons show channel counts; hover over an icon to see its name.
+Providers are indented beneath their source. Open **Filters** to use categories, channel groups, favorites,
 recently played channels, or search. Close the filters to leave more room for the guide.
 Category filters and **NEW**, **LIVE**, **PREMIERE**, and **FINALE** labels depend on your guide's metadata.
 With a guide cell focused, use **Page Up / Page Down** to move through a large lineup and

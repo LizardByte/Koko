@@ -88,7 +88,7 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await page.screenshot({ path: testInfo.outputPath('live-tv-guide.png') });
     const channels = await (await page.request.get('/api/v1/live-tv/channels', { headers })).json();
     const hls = channels.find(c => c.source_id === sourceId && c.name === 'HLS Test TV');
-    await page.locator(`[data-tv-play="${hls.id}"]`).first().click();
+    await page.locator(`#tv-channel-select-${hls.id}`).click();
     await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.1),{timeout:45000}).toBeTruthy();
     await page.getByRole('button', { name:'Close player',exact:true }).click();
     await expect(page.locator('.tv-preview-player #media-player')).toBeAttached();
@@ -113,7 +113,7 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await page.getByRole('button',{name:'Close player',exact:true}).click();
     await page.getByRole('button',{name:'Stop playback',exact:true}).click();
     await expect.poll(()=>activeStreams).toBe(0);
-    await page.locator(`[data-tv-play="${channel.id}"]`).first().click();
+    await page.locator(`.tv-guide-program[data-tv-select-channel="${channel.id}"]`).first().click();
     await expect.poll(() => page.locator('#media-player').evaluate(video => video.readyState >= 2 && video.currentTime > 0.2),{timeout:45000}).toBeTruthy();
     const viewport = await page.locator('.media-player-overlay').boundingBox();
     expect(viewport.x).toBe(0); expect(viewport.y).toBe(0); expect(viewport.height).toBe(900);
@@ -421,11 +421,11 @@ test('source settings prefill connections, report imports, isolate channel edito
     await group.getByRole('button',{name:'Create group',exact:true}).click();
     await expect(page.getByText('Combined FastChannels',{exact:true})).toBeVisible();
     await page.goto('/live-tv');
-    const tab=page.locator('[data-tv-source-group]').filter({hasText:'Combined FastChannels'});
+    const tab=page.locator('[data-tv-source-group][aria-label^="Combined FastChannels,"]');
     if(await tab.count()) await tab.click();
     await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-channel-count','2');
     const bridgeChannel=(await(await page.request.get('/api/v1/live-tv/channels',{headers})).json()).find(c=>c.source_id===ids[1]);
-    await page.locator(`[data-tv-select-channel="${bridgeChannel.id}"]`).first().click();
+    await page.locator(`[data-tv-select-channel="${bridgeChannel.id}"]`).first().focus();
     await expect(page.locator('#tv-guide-hero h2')).toHaveText('ESPN program');
     await page.reload();await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-channel-count','2');
     const saved=await(await page.request.get(`/api/v1/live-tv/sources/${ids[0]}/connection`,{headers})).json();

@@ -12,6 +12,8 @@ import { bindTvGuideMappings } from './liveTvMapping';
 import type { TvGuideViewport } from './tvGuideViewport';
 import { bindTvGuideViewport } from './liveTvGuideViewport';
 import { hydrateTvConnections, bindTvSourceSettings } from './liveTvSourceActions';
+import { bindHoldActions } from './holdActions';
+import { openTvGuideOptions, openTvRecordingOptions, syncTvDialogs } from './liveTvDialogs';
 
 /** Live TV data belongs to the account that fetched it; setup data is administrator-only. */
 export interface LiveTvState {
@@ -98,6 +100,7 @@ function padding(form: FormData): { padding_before: number; padding_after: numbe
 interface Context { navigateTo: (path: string) => void; render: () => void; renderTvSelection?: () => void }
 /** Stop TV streams when leaving Live TV or changing accounts, including minimized playback. */
 export function syncLiveTvAccount(): void {
+  syncTvDialogs();
   if (state.route.page !== 'live-tv' || guideClockOwner !== state.bootstrap?.current_user?.id) { nextGuideRefreshAt = 0; guideClockOwner = undefined; }
   const tv = state.activeTvPlayback;
   if (tv && (tv.owner !== state.bootstrap?.current_user?.id || state.route.page !== 'live-tv')) stopTvPlayback();
@@ -190,7 +193,7 @@ export function bindLiveTvActions(signal: AbortSignal, context: Context): void {
     const form = new FormData(event.currentTarget as HTMLFormElement);
     state.liveTv.query = value(form, 'query'); state.liveTv.group = value(form, 'group'); context.render();
   }, { signal });
-  bindPlayback(signal);
+  bindPlayback(signal,()=>{void reload();});
   bindTvGuideActions(signal, context, run);
   bindTvGuideViewport(signal);
   bindRecordingForms(signal, run);
@@ -230,24 +233,17 @@ function loadTunerRegions(signal: AbortSignal): void {
   });
 }
 
-function bindPlayback(signal: AbortSignal): void {
+function bindPlayback(signal: AbortSignal, changed:()=>void): void {
+  const watch=(id:number)=>play('channels',id);
+  bindHoldActions('[data-tv-guide-activate]',button=>watch(Number(button.dataset.tvSelectChannel)),button=>openTvGuideOptions(Number(button.dataset.tvSelectChannel),Number(button.dataset.tvSelectProgram)||undefined,{play:watch,changed}),signal);
   document.addEventListener('click', event => {
-    const button = (event.target as Element | null)?.closest<HTMLElement>('[data-tv-play], [data-tv-recording-play]');
+    const button = (event.target as Element | null)?.closest<HTMLElement>('[data-tv-play], [data-tv-recording-play], [data-tv-record-options]');
     if (button?.dataset.tvPlay) play('channels',Number(button.dataset.tvPlay));
     else if (button?.dataset.tvRecordingPlay) play('recordings',Number(button.dataset.tvRecordingPlay));
+    else if(button?.dataset.tvRecordOptions)openTvRecordingOptions(Number(button.dataset.tvRecordOptions),Number(button.dataset.tvRecordProgram),changed);
   },{signal});
 }
 function bindRecordingForms(signal: AbortSignal, run: Run): void {
-  document.addEventListener('submit', event => {
-    const form = (event.target as Element | null)?.closest<HTMLFormElement>('[data-tv-program-record]');
-    if (!form) return;
-    event.preventDefault();
-    const program = state.liveTv?.programs.find(p => p.id === Number(form.dataset.tvProgramRecord));
-    if (!program) return;
-    const input = new FormData(form);
-    const button = (event as SubmitEvent).submitter as HTMLButtonElement | undefined;
-    void run(() => api.scheduleTvRecording({ channel_id: Number(form.dataset.tvChannel), title: program.title, starts_at: program.starts_at, ends_at: program.ends_at, series: button?.value === 'series', new_only: input.has('new-only'), private: input.has('private'), ...padding(input) }), button);
-  }, { signal });
   document.querySelector<HTMLFormElement>('#tv-manual-record-form')?.addEventListener('submit', event => {
     event.preventDefault(); const input = new FormData(event.currentTarget as HTMLFormElement);
     void run(() => api.scheduleTvRecording({ channel_id: Number(value(input, 'channel')), title: value(input, 'title'), starts_at: Math.floor(new Date(value(input, 'start')).getTime() / 1000), ends_at: Math.floor(new Date(value(input, 'end')).getTime() / 1000), series: false, new_only: false, private: input.has('private'), ...padding(input) }));

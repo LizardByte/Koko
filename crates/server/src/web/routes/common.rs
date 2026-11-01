@@ -201,6 +201,10 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/tv-stirr.png"),
         ),
+        "tv-tcl.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-tcl.png"),
+        ),
         "tv-tubi.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/tv-tubi.png"),

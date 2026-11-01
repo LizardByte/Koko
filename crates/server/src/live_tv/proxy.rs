@@ -369,6 +369,50 @@ async fn request(socket: &mut TcpStream) -> Result<(String, Option<String>, bool
     Ok((first[1].into(), range, first[0] == "HEAD"))
 }
 
+async fn response_prefix(
+    response: &mut reqwest::Response,
+    error: bool,
+) -> Result<Vec<u8>, String> {
+    let mut first = response
+        .chunk()
+        .await
+        .map_err(|_| "Unable to read the TV stream")?
+        .map(|b| b.to_vec())
+        .unwrap_or_default();
+    while !first.is_empty() && first.len() < if error { 8192 } else { 7 } {
+        if error && provider_failure(&first).is_some() {
+            break;
+        }
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "Unable to read the TV stream")?
+        else {
+            break;
+        };
+        first.extend_from_slice(&chunk);
+    }
+    Ok(first)
+}
+
+fn record_failure(
+    state: &State,
+    id: u64,
+    error: bool,
+    first: &[u8],
+) {
+    if let Ok(mut failure) = state.failure.lock() {
+        if error {
+            *failure = provider_failure(first).map(|message| (id, message));
+        } else if failure
+            .as_ref()
+            .is_some_and(|(resource, _)| *resource == id)
+        {
+            *failure = None;
+        }
+    }
+}
+
 async fn serve(
     mut socket: TcpStream,
     state: Arc<State>,
@@ -443,36 +487,9 @@ async fn serve(
     let content_type = if resource.key { "application/octet-stream" } else { &content_type };
     // Reqwest's size hint shrinks as chunks are consumed. The relay also sends the sniffed prefix.
     let content_length = response.content_length();
-    let mut first = response
-        .chunk()
-        .await
-        .map_err(|_| "Unable to read the TV stream")?
-        .map(|b| b.to_vec())
-        .unwrap_or_default();
     let error = response.status().is_client_error() || response.status().is_server_error();
-    while !first.is_empty() && first.len() < if error { 8192 } else { 7 } {
-        if error && provider_failure(&first).is_some() {
-            break;
-        }
-        let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "Unable to read the TV stream")?
-        else {
-            break;
-        };
-        first.extend_from_slice(&chunk);
-    }
-    if let Ok(mut failure) = state.failure.lock() {
-        if error {
-            *failure = provider_failure(&first).map(|message| (id, message));
-        } else if failure
-            .as_ref()
-            .is_some_and(|(resource, _)| *resource == id)
-        {
-            *failure = None;
-        }
-    }
+    let mut first = response_prefix(&mut response, error).await?;
+    record_failure(&state, id, error, &first);
     // Some providers label keys and segments as playlists. Keys are always opaque bytes, even
     // if a valid random key happens to begin with the playlist signature.
     let playlist = !resource.key && first.starts_with(b"#EXTM3U");

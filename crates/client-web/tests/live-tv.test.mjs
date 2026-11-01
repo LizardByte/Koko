@@ -286,14 +286,15 @@ test('large guide station lists load only for the focused channel and retain edi
 });
 test('broadcast metadata is escaped and active artwork URLs never become image elements', () => {
   state.bootstrap = { current_user: { id: 1, admin: false } };
-  state.liveTv = data({ programs: [{ ...program, title: '<script>bad()</script>', metadata: { description: '<img src=x onerror=bad()>', image: 'javascript:bad()', credits: ['<actor>'] } }] });
+  state.liveTv = data({ programs: [{ ...program, title: '<script>bad()</script><ScRiPt>bad()</ScRiPt>', metadata: { description: '<img src=x onerror=bad()>', image: 'javascript:bad()', credits: ['<actor>'] } }] });
   const html = renderLiveTvPage();
   const dom = new JSDOM(html);
   assert.ok(dom.window.document.querySelector('.home-pinned-header > .home-feature > .home-feature-copy'));
   assert.ok(dom.window.document.querySelector('.home-navbar .browse-tabs'));
   assert.equal(dom.window.document.querySelector('.tv-guide-hero'),null);
+  assert.equal(dom.window.document.querySelector('script, img[src="x"]'),null);
   dom.window.close();
-  assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;img/); assert.doesNotMatch(html, /javascript:|<script>|<img src=x/);
+  assert.match(html, /&lt;script&gt;/); assert.match(html, /&lt;ScRiPt&gt;/); assert.match(html, /&lt;img/); assert.doesNotMatch(html, /javascript:|<script>|<img src=x/i);
   assert.match(html, /Record program or series/); assert.match(html, /data-tv-record-options="1"/); assert.doesNotMatch(html, /data-tv-program-record|data-tv-tab="setup"/);
 });
 test('a previous account cannot reveal its cached DVR or setup data', () => {

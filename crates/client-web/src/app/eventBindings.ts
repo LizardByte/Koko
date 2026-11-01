@@ -2,7 +2,6 @@
 
 import { clearBrowseSessions } from './browseSession';
 import { bindLiveTvActions } from './liveTvActions';
-import { dismissPlayer } from './playbackController';
 import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
 import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
@@ -26,6 +25,7 @@ import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMeta
 import { mediaExtraToTrailerOption } from './mediaExtras';
 import { currentThemeSongYouTubeTarget, currentTrailerOptions } from './mediaTargets';
 import {
+  dismissPlayer,
   bindPlayerProgress,
   bindTrailerPlayer,
   closeActivePlaybackSession,

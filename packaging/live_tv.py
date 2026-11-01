@@ -82,7 +82,8 @@ def download(kind, cache):
 def source_tree(cache):
     archive = download("source", cache)
     source = cache / f"tsduck-{VERSION}"
-    if not source.exists():
+    # Cargo cache cleanup may leave the directory while pruning SDK source files.
+    if not (source / "src/libtscore/reactor/unix/tsReactiveWebRequest.cpp").is_file():
         with tarfile.open(archive) as package:
             package.extractall(cache, filter="data")
     return source
@@ -120,7 +121,7 @@ def build_windows(target, destination, cache, build_dir, cmake):
 
 def patch_source(root, source):
     """Apply the pinned SDK backport once, including when reusing an extracted build cache."""
-    patch = root / "packaging/patches/tsduck-no-web.patch"
+    patch = root / "packaging/linux/flatpak/modules/patches/tsduck-no-web.patch"
     reverse = subprocess.run(
         ["patch", "-R", "--dry-run", "--silent", "-p1", "-i", str(patch)],
         cwd=source, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

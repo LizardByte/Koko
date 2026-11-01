@@ -26,7 +26,7 @@
     },
     {
       "type": "patch",
-      "path": "../../../patches/tsduck-no-web.patch"
+      "path": "patches/tsduck-no-web.patch"
     }
   ]
 }

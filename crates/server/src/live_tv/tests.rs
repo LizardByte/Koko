@@ -57,15 +57,18 @@ async fn broadcast_transport_stream_round_trip() {
     let packetizer =
         tables.with_file_name(if cfg!(windows) { "tspacketize.exe" } else { "tspacketize" });
     let root = std::env::temp_dir().join(format!("koko-broadcast-{:032x}", rand::random::<u128>()));
-    std::fs::create_dir_all(&root).unwrap();
+    tokio::fs::create_dir_all(&root).await.unwrap();
     let input = root.join("tables.xml");
     let output = root.join("broadcast.ts");
-    std::fs::write(&input, include_str!("fixtures/broadcast.xml")).unwrap();
-    let status = std::process::Command::new(packetizer)
+    tokio::fs::write(&input, include_str!("fixtures/broadcast.xml"))
+        .await
+        .unwrap();
+    let status = tokio::process::Command::new(packetizer)
         .args(["--pid", "0x1ffb", "--output"])
         .arg(&output)
         .arg(&input)
         .status()
+        .await
         .unwrap();
     assert!(status.success());
     let config = SourceConfig::default();
@@ -81,7 +84,7 @@ async fn broadcast_transport_stream_round_trip() {
     assert!(guide.stations.iter().any(|s| s.number == "7.1"));
     // Exercise the exact native tuner bridge using TSDuck's file-backed tuner emulator.
     let emulator = root.join("tuner.xml");
-    std::fs::write(
+    tokio::fs::write(
         &emulator,
         concat!(
             "<tsduck><tuner type=\"ATSC\"/><defaults directory=\".\"/>",
@@ -89,6 +92,7 @@ async fn broadcast_transport_stream_round_trip() {
             "delivery=\"ATSC\" file=\"broadcast.ts\"/></tsduck>"
         ),
     )
+    .await
     .unwrap();
     let config = SourceConfig {
         native_device: emulator.to_string_lossy().into(),
@@ -126,9 +130,9 @@ async fn broadcast_transport_stream_round_trip() {
             Err(e) => panic!("Native capture did not release its file: {e}"),
         }
     }
-    std::fs::remove_file(emulator).unwrap();
-    std::fs::remove_file(input).unwrap();
-    std::fs::remove_dir(root).unwrap();
+    tokio::fs::remove_file(emulator).await.unwrap();
+    tokio::fs::remove_file(input).await.unwrap();
+    tokio::fs::remove_dir(root).await.unwrap();
 }
 
 pub(super) fn database() -> SqliteConnection {

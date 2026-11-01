@@ -22,7 +22,7 @@ const dateFormat = new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric
 export function channelPrograms(channel: TvChannel, programs: TvProgram[]): TvProgram[] {
   const key = channel.guide_override ?? channel.guide_key;
   let index = schedules.get(programs);
-  if (!index || index.length !== programs.length) {
+  if (index?.length !== programs.length) {
     const sources = new Map<number,Map<string,TvProgram[]>>();
     for (const program of programs) {
       const stations = sources.get(program.source_id) ?? new Map<string,TvProgram[]>();

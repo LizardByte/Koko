@@ -19,8 +19,135 @@ use std::{
     io::BufRead,
 };
 
-/// Parse entries independently; retained program metadata, rather than the XML document,
-/// determines memory use. The optional time applies the server's normal retention window.
+struct XmltvReader {
+    entry: Option<Writer<Vec<u8>>>,
+    root_header: Vec<u8>,
+    depth: usize,
+    root_seen: bool,
+    root_closed: bool,
+    declaration_seen: bool,
+    doctype_seen: bool,
+    guide: Guide,
+}
+
+impl XmltvReader {
+    fn write_entry(
+        &mut self,
+        event: &Event<'_>,
+    ) -> Result<(), String> {
+        if let Some(writer) = &mut self.entry {
+            writer
+                .write_event(event.borrow())
+                .map_err(|_| "Unable to read XMLTV entry")?;
+        }
+        Ok(())
+    }
+
+    fn open(
+        &mut self,
+        event: &Event<'_>,
+        start: &quick_xml::events::BytesStart<'_>,
+        now: Option<i64>,
+    ) -> Result<(), String> {
+        if self.depth == 0 {
+            if self.root_seen || start.name().as_ref() != "tv" {
+                return Err("The guide must contain one XMLTV tv root".into());
+            }
+            // Validate attributes, retaining namespace declarations for each independent entry.
+            let mut root = Writer::new(Vec::new());
+            root.write_event(Event::Empty(start.clone()))
+                .map_err(|_| "Invalid XMLTV root")?;
+            validate(&root.into_inner())?;
+            let mut root = Writer::new(Vec::new());
+            root.write_event(Event::Start(start.clone()))
+                .map_err(|_| "Invalid XMLTV root")?;
+            self.root_header = root.into_inner();
+            self.root_seen = true;
+            self.root_closed = matches!(event, Event::Empty(_));
+        } else if self.depth == 1 {
+            self.entry = Some(Writer::new(self.root_header.clone()));
+        }
+        self.write_entry(event)?;
+        if matches!(event, Event::Start(_)) {
+            self.depth += 1;
+        } else if self.depth == 1 {
+            finish_entry(self.entry.take().unwrap(), &mut self.guide, now)?;
+        }
+        Ok(())
+    }
+
+    fn close(
+        &mut self,
+        event: &Event<'_>,
+        now: Option<i64>,
+    ) -> Result<(), String> {
+        if self.depth == 0 {
+            return Err("The guide is not valid XMLTV".into());
+        }
+        self.write_entry(event)?;
+        self.depth -= 1;
+        if self.depth == 1 {
+            finish_entry(self.entry.take().unwrap(), &mut self.guide, now)?;
+        } else if self.depth == 0 {
+            self.root_closed = true;
+        }
+        Ok(())
+    }
+
+    fn outside_entry(
+        &self,
+        event: &Event<'_>,
+    ) -> Result<(), String> {
+        match event {
+            Event::Text(text)
+                if self.depth == 0 && !AsRef::<str>::as_ref(text).trim().is_empty() =>
+            {
+                return Err("The guide is not valid XMLTV".into());
+            }
+            Event::GeneralRef(_) | Event::CData(_) if self.depth == 0 => {
+                return Err("The guide is not valid XMLTV".into());
+            }
+            Event::GeneralRef(value) => {
+                let name: &str = value;
+                quick_xml::escape::unescape(&format!("&{name};"))
+                    .map_err(|_| "XMLTV custom entities are not supported")?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn accept(
+        &mut self,
+        event: &Event<'_>,
+        now: Option<i64>,
+    ) -> Result<(), String> {
+        match event {
+            Event::Decl(_) => {
+                if self.root_seen || self.declaration_seen || self.doctype_seen {
+                    return Err("The guide is not valid XMLTV".into());
+                }
+                self.declaration_seen = true;
+            }
+            Event::DocType(value) => {
+                // External XMLTV DTDs are accepted but never fetched; custom entities are
+                // forbidden.
+                if self.root_seen || self.doctype_seen || value.contains("<!ENTITY") {
+                    return Err("XMLTV entity declarations are not supported".into());
+                }
+                self.doctype_seen = true;
+            }
+            Event::Start(start) | Event::Empty(start) => self.open(event, start, now)?,
+            Event::End(_) => self.close(event, now)?,
+            _ if self.entry.is_some() => self.write_entry(event)?,
+            _ => self.outside_entry(event)?,
+        }
+        Ok(())
+    }
+}
+
+/// Parse entries independently; retained metadata, rather than the document, determines memory use.
+/// The optional time applies the server's normal retention window.
 pub(crate) fn read(
     input: impl BufRead,
     now: Option<i64>,
@@ -28,117 +155,39 @@ pub(crate) fn read(
     let mut reader = Reader::from_reader(input);
     reader.config_mut().enable_all_checks(true);
     let mut buffer = Vec::new();
-    let mut entry: Option<Writer<Vec<u8>>> = None;
-    let mut root_header = Vec::new();
-    let mut depth = 0;
-    let mut root_seen = false;
-    let mut root_closed = false;
-    let mut declaration_seen = false;
-    let mut doctype_seen = false;
-    let mut guide = Guide {
-        programs: Vec::new(),
-        stations: Vec::new(),
+    let mut state = XmltvReader {
+        entry: None,
+        root_header: Vec::new(),
+        depth: 0,
+        root_seen: false,
+        root_closed: false,
+        declaration_seen: false,
+        doctype_seen: false,
+        guide: Guide {
+            programs: Vec::new(),
+            stations: Vec::new(),
+        },
     };
     loop {
         buffer.clear();
         let event = reader
             .read_event_into(&mut buffer)
             .map_err(|_| "The guide is not valid XMLTV")?;
-        match &event {
-            Event::Eof => {
-                if !root_closed || depth != 0 {
-                    return Err("The guide is incomplete or has no XMLTV tv root".into());
-                }
-                break;
+        if matches!(event, Event::Eof) {
+            if !state.root_closed || state.depth != 0 {
+                return Err("The guide is incomplete or has no XMLTV tv root".into());
             }
-            Event::Decl(_) => {
-                if root_seen || declaration_seen || doctype_seen {
-                    return Err("The guide is not valid XMLTV".into());
-                }
-                declaration_seen = true;
-            }
-            Event::DocType(value) => {
-                // Conventional external XMLTV DTDs are accepted but never fetched. Custom
-                // entities are forbidden even when they occur in an otherwise ignored entry.
-                if root_seen || doctype_seen || value.contains("<!ENTITY") {
-                    return Err("XMLTV entity declarations are not supported".into());
-                }
-                doctype_seen = true;
-            }
-            Event::Start(start) | Event::Empty(start) => {
-                if depth == 0 {
-                    if root_seen || start.name().as_ref() != "tv" {
-                        return Err("The guide must contain one XMLTV tv root".into());
-                    }
-                    // Also validate the root's attributes without retaining the full document.
-                    let mut root = Writer::new(Vec::new());
-                    root.write_event(Event::Empty(start.clone()))
-                        .map_err(|_| "Invalid XMLTV root")?;
-                    validate(&root.into_inner())?;
-                    let mut root = Writer::new(Vec::new());
-                    root.write_event(Event::Start(start.clone()))
-                        .map_err(|_| "Invalid XMLTV root")?;
-                    root_header = root.into_inner();
-                    root_seen = true;
-                    root_closed = matches!(event, Event::Empty(_));
-                } else if depth == 1 {
-                    // Preserve root namespace declarations for namespaced guide extensions.
-                    entry = Some(Writer::new(root_header.clone()));
-                }
-                if let Some(writer) = &mut entry {
-                    writer
-                        .write_event(event.borrow())
-                        .map_err(|_| "Unable to read XMLTV entry")?;
-                }
-                if matches!(event, Event::Start(_)) {
-                    depth += 1;
-                } else if depth == 1 {
-                    finish_entry(entry.take().unwrap(), &mut guide, now)?;
-                }
-            }
-            Event::End(_) => {
-                if depth == 0 {
-                    return Err("The guide is not valid XMLTV".into());
-                }
-                if let Some(writer) = &mut entry {
-                    writer
-                        .write_event(event.borrow())
-                        .map_err(|_| "Unable to read XMLTV entry")?;
-                }
-                depth -= 1;
-                if depth == 1 {
-                    finish_entry(entry.take().unwrap(), &mut guide, now)?;
-                } else if depth == 0 {
-                    root_closed = true;
-                }
-            }
-            _ => {
-                if let Some(writer) = &mut entry {
-                    writer
-                        .write_event(event.borrow())
-                        .map_err(|_| "Unable to read XMLTV entry")?;
-                } else {
-                    match &event {
-                        Event::Text(text) => {
-                            let text: &str = text;
-                            if depth == 0 && !text.trim().is_empty() {
-                                return Err("The guide is not valid XMLTV".into());
-                            }
-                        }
-                        Event::GeneralRef(_) | Event::CData(_) if depth == 0 => {
-                            return Err("The guide is not valid XMLTV".into());
-                        }
-                        Event::GeneralRef(value) => {
-                            let name: &str = value;
-                            quick_xml::escape::unescape(&format!("&{name};"))
-                                .map_err(|_| "XMLTV custom entities are not supported")?;
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            break;
         }
+        state.accept(&event, now)?;
     }
+    Ok(complete_guide(state.guide, now))
+}
+
+fn complete_guide(
+    mut guide: Guide,
+    now: Option<i64>,
+) -> Guide {
     let rows = &mut guide.programs;
     rows.sort_by(|a, b| (&a.guide_key, a.starts_at).cmp(&(&b.guide_key, b.starts_at)));
     // XMLTV stop is optional. Infer it only from the next event on the same station,
@@ -171,7 +220,7 @@ pub(crate) fn read(
             });
         }
     }
-    Ok(guide)
+    guide
 }
 
 fn validate(xml: &[u8]) -> Result<roxmltree::Document<'_>, String> {

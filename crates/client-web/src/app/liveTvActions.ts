@@ -1,4 +1,5 @@
 /** Loads account-scoped Live TV data and binds source, guide, playback, and DVR actions. */
+import { formDataString } from './formUtils';
 import * as api from '../liveTvApi';
 import type { AppRoute, AppState } from './types';
 import { state } from './state';
@@ -73,12 +74,12 @@ export async function loadLiveTv(app: AppState, isCurrent: () => boolean, source
   }
 }
 
-function value(form: FormData, name: string): string { return String(form.get(name) ?? '').trim(); }
+function value(form: FormData, name: string): string { return formDataString(form.get(name)).trim(); }
 /** Read editable fields while retaining saved settings for inactive guide modes. */
 export function sourceConfig(form: FormData, original?: api.TvSourceConfig): api.TvSourceConfig {
   const selection = value(form, 'guide_provider');
   const zap2it = selection ? JSON.parse(selection) as api.TvGuideSelection : undefined;
-  if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (!zap2it || zap2it.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
+  if (['zap2it', 'gracenote'].includes(value(form, 'guide_kind')) && (zap2it?.country !== value(form, 'guide_country') || zap2it.postal_code !== value(form, 'guide_postal').toUpperCase().replace(/ /g, ''))) throw new Error('Search for and select a Zap2It provider for this postal code.');
   const config:api.TvSourceConfig = { url: value(form, 'url'), pin: value(form, 'pin'), preserve_pin:value(form,'preserve_pin') === 'true', xmltv_url: value(form, 'xmltv_url'), guide_kind: value(form, 'guide_kind'), artwork_provider:value(form,'artwork_provider'),
     iptv_mode:value(form,'iptv_mode'),provider_grouping:form.has('provider_grouping'),bridge_capacity:Number(value(form,'bridge_capacity')),
     zap2it: zap2it ? { ...zap2it, days: Number(value(form, 'guide_days')) } : undefined, refresh_hours: Number(value(form, 'refresh_hours')),

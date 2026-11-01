@@ -28,7 +28,7 @@ function remember(guide: HTMLElement, control: HTMLElement, time: number, progra
 /** Initialize an anchor for direct focus without resetting one established by directional input. */
 export function rememberTvGuideFocus(control: HTMLElement | null): void {
   const guide = control?.closest<HTMLElement>('#tv-guide-scroll');
-  if (!guide || !control?.hasAttribute('data-tv-select-channel')) { position = undefined; return; }
+  if (!guide || control?.dataset.tvSelectChannel === undefined) { position = undefined; return; }
   if (position && position.source === guide.dataset.tvGuideSource && position.key === key(control)) {
     remember(guide,control,position.time,position.programColumn);
   } else remember(guide,control,Number(control.dataset.tvStart ?? guide.dataset.tvWindowStart));
@@ -64,7 +64,7 @@ function horizontalTarget(guide: HTMLElement, row: Element, control: HTMLElement
 /** Resolve a row or adjacent broadcast using the remembered time, never a card's center. */
 export function tvGuideNavigationTarget(control: HTMLElement, direction: NavigationDirection): {target?:HTMLElement} | undefined {
   const guide = control.closest<HTMLElement>('#tv-guide-scroll'), row = control.closest('.tv-guide-row');
-  if (!guide || !row || !control.hasAttribute('data-tv-select-channel')) return;
+  if (!guide || !row || control.dataset.tvSelectChannel === undefined) return;
   rememberTvGuideFocus(control);
   const time = position!.time;
   const programColumn = position!.programColumn;
@@ -90,7 +90,7 @@ export function tvGuideNavigationTime(control: HTMLElement): number | undefined 
 export function tvGuideJumpTarget(control: HTMLElement, keyName: string): {target?:HTMLElement} | undefined {
   if (!['PageUp','PageDown','Home','End'].includes(keyName)) return;
   const guide=control.closest<HTMLElement>('#tv-guide-scroll'), row=control.closest<HTMLElement>('[data-tv-row-index]');
-  if (!guide || !row || !control.hasAttribute('data-tv-select-channel')) return;
+  if (!guide || !row || control.dataset.tvSelectChannel === undefined) return;
   rememberTvGuideFocus(control);
   const {time,programColumn}=position!;
   const count=Number(guide.dataset.tvChannelCount), index=Number(row.dataset.tvRowIndex);
@@ -109,7 +109,7 @@ export function tvGuideJumpTarget(control: HTMLElement, keyName: string): {targe
 export function restoreTvGuideFocus(): HTMLElement | undefined {
   // Moving a still-mounted keyed cell can blur it too, even when isConnected
   // remains true. Restore only when no newer control has received focus.
-  if (!position || (document.activeElement && document.activeElement !== document.body)) return;
+  if (!position || document.activeElement?.isSameNode(document.body) === false) return;
   const guide = document.querySelector<HTMLElement>('#tv-guide-scroll');
   if (!guide || guide.dataset.tvGuideSource !== position.source) { position = undefined; return; }
   const row = Array.from(guide.querySelectorAll('.tv-guide-row')).find(candidate =>

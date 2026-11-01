@@ -6,11 +6,10 @@ import { renderButtonContent, renderIcon } from './ui';
 import { renderFeatureHero } from './featureHero';
 import { renderPlayerOverlay } from './playbackController';
 import type { LiveTvState } from './liveTvActions';
-import { activeGuideView, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideViews, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
+import { activeGuideProvider, guideProviders, activeGuideView, channelArtwork, channelArtworkFallback, channelPrograms, guideSelection, guideViews, matchesTvCategory, programBadges, programPosition, tvImage, tvTime, TV_CATEGORIES, visibleGuideChannels } from './liveTvGuideModel';
 import { currentGuideWindow, TV_SLOT_SECONDS } from './tvGuideTime';
 import { renderMetadataSearchProviderAttribution } from './providers';
 import { tvGuideRowRange, tvGuideViewKey, TV_ROW_HEIGHT } from './tvGuideViewport';
-import { activeGuideProvider,guideProviders } from './liveTvGuideModel';
 import { renderTvProviderIcon,renderTvSourceIcon,renderTvAllProvidersIcon } from './liveTvIcons';
 
 function badges(program: TvProgram): string {

@@ -88,6 +88,7 @@ jobs:
     env:
       KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
       KOKO_E2E_BROWSER: ${{ matrix.browser }}
+      KOKO_E2E_SERVER: ${{ github.workspace }}/target/debug/koko
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -118,6 +119,11 @@ jobs:
           else
             node node_modules/playwright/cli.js install --with-deps chrome
           fi
+
+      - name: Build browser test server
+        env:
+          KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
+        run: cargo build -p koko --locked --no-default-features
 
       - name: Test real browser playback
         working-directory: crates/client-web

@@ -109,9 +109,9 @@ export function tvGuideJumpTarget(control: HTMLElement, keyName: string): {targe
 export function restoreTvGuideFocus(): HTMLElement | undefined {
   // Moving a still-mounted keyed cell can blur it too, even when isConnected
   // remains true. Restore only when no newer control has received focus.
-  if (!position || document.activeElement?.isSameNode(document.body) === false) return;
+  if (!position || (document.activeElement && document.activeElement !== document.body)) return;
   const guide = document.querySelector<HTMLElement>('#tv-guide-scroll');
-  if (!guide || guide.dataset.tvGuideSource !== position.source) { position = undefined; return; }
+  if (guide?.dataset.tvGuideSource !== position.source) { position = undefined; return; }
   const row = Array.from(guide.querySelectorAll('.tv-guide-row')).find(candidate =>
     candidate.querySelector<HTMLElement>('.tv-channel-select')?.dataset.tvSelectChannel === position!.control.dataset.tvSelectChannel);
   const time = clampTime(guide,position.time);

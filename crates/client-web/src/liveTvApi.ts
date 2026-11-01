@@ -39,8 +39,8 @@ export interface TvBufferInfo {
   session_id: string; channel_id: number; title: string; start_ms: number; end_ms: number;
   recording_id?: number | null; finished: boolean; error?: string | null; can_keep: boolean;
 }
-/** Tune once and begin a temporary recording before opening the player. */
-export function startTvBuffer(channel_id: number): Promise<TvBufferInfo> { return requestJson('POST','/api/v1/live-tv/sessions',{channel_id},45000); }
+/** Tune once and begin a temporary recording, allowing time for a cold provider and server cleanup. */
+export function startTvBuffer(channel_id: number): Promise<TvBufferInfo> { return requestJson('POST','/api/v1/live-tv/sessions',{channel_id},90000); }
 /** Renew the viewing session and read the rolling buffer range. */
 export function getTvBuffer(id: string): Promise<TvBufferInfo> { return requestJson('GET',`/api/v1/live-tv/sessions/${encodeURIComponent(id)}`); }
 /** Stop temporary capture, preserving an explicitly kept DVR recording. */

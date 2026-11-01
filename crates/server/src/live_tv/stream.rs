@@ -20,6 +20,7 @@ use rocket::{
 use std::{
     collections::HashMap,
     io,
+    path::Path,
     pin::Pin,
     process::Stdio,
     sync::Mutex,
@@ -42,6 +43,8 @@ use tokio::{
 };
 
 static LEASES: Lazy<Mutex<HashMap<(i32, bool), i32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// Upstream providers and browser bridges may need time to prepare a cold stream.
+pub(super) const SOURCE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 /// High-bitrate TV may not reveal audio parameters within FFmpeg's default probe budget.
 pub(super) const PROBE_ARGS: [&str; 4] = [
     "-analyzeduration",
@@ -155,7 +158,7 @@ pub(super) fn command(
     record: bool,
     local: bool,
 ) -> Command {
-    command_for_service(url, record, local, None)
+    command_for_service(url, record, local, None, None)
 }
 
 fn command_for_service(
@@ -163,6 +166,7 @@ fn command_for_service(
     record: bool,
     local: bool,
     service: Option<&str>,
+    buffer: Option<&Path>,
 ) -> Command {
     let mut command = Command::new(crate::config::current_settings().ffmpeg.ffmpeg_path);
     command.args([
@@ -172,14 +176,20 @@ fn command_for_service(
         "-nostdin",
     ]);
     if !local {
+        // The loopback relay must have time to finish its bounded upstream retries.
         command.args([
             "-rw_timeout",
-            "15000000",
+            &(SOURCE_READ_TIMEOUT.as_micros() + 5_000_000).to_string(),
+        ]);
+        command.args([
             "-protocol_whitelist",
             "http,https,tcp,tls,crypto,udp,rtp",
         ]);
     }
     command.args(PROBE_ARGS);
+    if buffer.is_some() {
+        command.args(["-fflags", "+genpts"]);
+    }
     command.args(["-i", url]);
     if let Some(service) = service {
         command.args([
@@ -194,9 +204,27 @@ fn command_for_service(
         ]);
     }
     if record {
-        command.args([
-            "-c", "copy", "-f", "mpegts", "pipe:1",
-        ]);
+        command.args(["-c", "copy"]);
+        if let Some(directory) = buffer {
+            command.args([
+                "-f",
+                "hls",
+                "-hls_time",
+                "2",
+                "-hls_list_size",
+                "1800",
+                "-hls_delete_threshold",
+                "4",
+                "-hls_flags",
+                "delete_segments+program_date_time+temp_file",
+                "-hls_segment_filename",
+            ]);
+            command
+                .arg(directory.join("segment-%010d.ts"))
+                .arg(directory.join("buffer.m3u8"));
+        } else {
+            command.args(["-f", "mpegts", "pipe:1"]);
+        }
     } else {
         command.args([
             "-vf",
@@ -228,7 +256,7 @@ fn command_for_service(
     }
     command
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(if buffer.is_some() { Stdio::null() } else { Stdio::piped() })
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
@@ -478,12 +506,11 @@ impl Drop for Pipeline {
 }
 
 impl Pipeline {
-    pub(super) fn new(child: Child) -> Self {
-        make_pipeline(child, None, None, None)
-    }
-
     pub(super) fn report_error(&self) {
         if let Ok(data) = self.log.lock() {
+            if data.is_empty() {
+                return;
+            }
             let message = String::from_utf8_lossy(&data);
             static URL: Lazy<regex::Regex> =
                 Lazy::new(|| regex::Regex::new(r"https?://[^\s]+").unwrap());
@@ -522,6 +549,20 @@ fn playback_failure(data: &[u8]) -> Option<String> {
             _ => "Check the source app and try this channel again",
         };
         return Some(format!("The TV source returned HTTP {code}. {action}."));
+    }
+    if text.contains("Server returned 5XX") {
+        return Some(
+            "The TV source returned a server error (HTTP 5xx). Check the source app and try this \
+             channel again."
+                .into(),
+        );
+    }
+    if text.contains("Connection timed out") || text.contains("Operation timed out") {
+        return Some(
+            "The TV source did not respond in time. It may still be starting; try this channel \
+             again."
+                .into(),
+        );
     }
     if text.contains("No space left on device") {
         return Some(
@@ -576,6 +617,24 @@ pub(super) async fn pipeline(
     channel: &Channel,
     record: bool,
 ) -> Result<Pipeline, String> {
+    pipeline_with_buffer(source, channel, record, None).await
+}
+
+/// Segment directly from the source, avoiding a second demuxer and probe before playback.
+pub(super) async fn buffer_pipeline(
+    source: &Source,
+    channel: &Channel,
+    directory: &Path,
+) -> Result<Pipeline, String> {
+    pipeline_with_buffer(source, channel, true, Some(directory)).await
+}
+
+async fn pipeline_with_buffer(
+    source: &Source,
+    channel: &Channel,
+    record: bool,
+    buffer: Option<&Path>,
+) -> Result<Pipeline, String> {
     if source.kind == "native" {
         let config = sources::config(source)?;
         let mut input = super::tsduck::tune(&config, channel).await?;
@@ -584,7 +643,7 @@ pub(super) async fn pipeline(
             .rsplit(':')
             .next()
             .ok_or("Invalid tuner service")?;
-        let mut child = command_for_service("pipe:0", record, true, Some(service))
+        let mut child = command_for_service("pipe:0", record, true, Some(service), buffer)
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|_| "Unable to start FFmpeg")?;
@@ -601,7 +660,7 @@ pub(super) async fn pipeline(
         let config = sources::config(source)?;
         let mut tuner = super::native::tune(&config, channel, false)?;
         let mut input = tuner.stdout.take().ok_or("Unable to read the DVB tuner")?;
-        let mut child = command("pipe:0", record, true)
+        let mut child = command_for_service("pipe:0", record, true, None, buffer)
             .stdin(Stdio::piped())
             .spawn()
             .map_err(|_| "Unable to start FFmpeg")?;
@@ -616,7 +675,7 @@ pub(super) async fn pipeline(
     } else {
         let upstream = sources::stream_url(source, channel).await?;
         let (proxy, url) = super::proxy::start(&upstream).await?;
-        let child = command(&url, record, false)
+        let child = command_for_service(&url, record, false, None, buffer)
             .spawn()
             .map_err(|_| "Unable to start FFmpeg; check its path in Settings")?;
         let keepalive = sources::keepalive(source, &upstream)?;
@@ -700,6 +759,12 @@ mod tests {
         );
         assert!(playback_failure(b"Invalid data found when processing input").is_none());
         assert!(playback_failure(b"frame 404, HTTP connection closed").is_none());
+        let error =
+            playback_failure(b"Error opening input: Server returned 5XX Server Error reply")
+                .unwrap();
+        assert!(error.contains("HTTP 5xx") && !error.contains("disk"));
+        let error = playback_failure(b"Connection timed out while opening input").unwrap();
+        assert!(error.contains("did not respond in time") && !error.contains("disk"));
     }
     #[test]
     fn all_bridged_providers_share_one_capture_limit_and_release_it_on_disconnect() {

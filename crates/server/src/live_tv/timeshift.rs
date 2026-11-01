@@ -21,7 +21,6 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    process::Stdio,
     sync::{
         Arc,
         Mutex,
@@ -35,10 +34,7 @@ use std::{
         Instant,
     },
 };
-use tokio::{
-    io::AsyncWriteExt,
-    process::Command,
-};
+use tokio::io::AsyncWriteExt;
 
 /// File database used by independent capture tasks; it does not retain a Rocket pool guard.
 pub(crate) struct BufferDatabase(pub String);
@@ -367,65 +363,6 @@ async fn capture_inner(
     session: &Session,
     pipeline: &mut stream::Pipeline,
 ) -> Result<(), String> {
-    let output = pipeline
-        .child
-        .stdout
-        .take()
-        .ok_or("TV capture did not open an output")?;
-    let mut command = Command::new(crate::config::current_settings().ffmpeg.ffmpeg_path);
-    command
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-fflags",
-            "+genpts",
-        ])
-        .args(stream::PROBE_ARGS)
-        .args([
-            "-i",
-            "pipe:0",
-            "-map",
-            "0:v:0?",
-            "-map",
-            "0:a:0?",
-            "-c",
-            "copy",
-            "-f",
-            "hls",
-            "-hls_time",
-            "2",
-            "-hls_list_size",
-            "1800",
-            "-hls_delete_threshold",
-            "4",
-            "-hls_flags",
-            "delete_segments+program_date_time+temp_file",
-            "-hls_segment_filename",
-        ])
-        .arg(session.directory.join("segment-%010d.ts"))
-        .arg(session.directory.join("buffer.m3u8"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    let mut segmenter = stream::Pipeline::new(
-        command
-            .spawn()
-            .map_err(|_| "Unable to start the TV buffer; check FFmpeg")?,
-    );
-    let mut input = segmenter
-        .child
-        .stdin
-        .take()
-        .ok_or("TV buffer did not open an input")?;
-    let pump = tokio::spawn(async move {
-        let mut output = output;
-        tokio::io::copy(&mut output, &mut input).await
-    });
     let mut ticks = tokio::time::interval(Duration::from_millis(250));
     let mut check = Instant::now();
     let mut failure = None;
@@ -446,6 +383,9 @@ async fn capture_inner(
         let closed = session.closed.load(Ordering::Relaxed)
             || session.last_access.lock().unwrap().elapsed() > Duration::from_secs(IDLE_SECONDS);
         if kept.is_none() && closed {
+            if session.stats.lock().unwrap().segments.is_empty() {
+                pipeline.report_error();
+            }
             session.closed.store(true, Ordering::Relaxed);
             break;
         }
@@ -471,7 +411,7 @@ async fn capture_inner(
                 }
             }
         }
-        if let Some(status) = segmenter
+        if let Some(status) = pipeline
             .child
             .try_wait()
             .map_err(|_| "Unable to check the TV buffer")?
@@ -479,31 +419,15 @@ async fn capture_inner(
             if !status.success() {
                 tokio::task::yield_now().await;
                 pipeline.report_error();
-                segmenter.report_error();
-                failure = Some(
-                    segmenter
-                        .failure_message()
-                        .or_else(|| pipeline.failure_message())
-                        .unwrap_or_else(|| {
-                            "TV buffering stopped; check the source and available disk space".into()
-                        }),
-                );
+                failure = Some(pipeline.failure_message().unwrap_or_else(|| {
+                    "TV capture stopped. Check the source app or server logs, then retry.".into()
+                }));
             }
             break;
         }
     }
     let _ = pipeline.child.kill().await;
-    if tokio::time::timeout(Duration::from_secs(3), async {
-        while !pump.is_finished() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .is_err()
-    {
-        pump.abort();
-    }
-    let _ = tokio::time::timeout(Duration::from_secs(3), segmenter.child.wait()).await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), pipeline.child.wait()).await;
     refresh_segments(session).await;
     copy_kept_segments(session).await?;
     failure.map_or(Ok(()), Err)
@@ -515,6 +439,9 @@ pub(crate) async fn start(
     owner: i32,
     channel_id: i32,
 ) -> Result<BufferInfo, String> {
+    // This includes source setup as well as capture readiness, keeping the HTTP client's
+    // longer request deadline outside the complete tune-and-cleanup budget.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(75);
     if SESSIONS.lock().unwrap().len() >= 64 {
         return Err("The server has too many TV buffers open".into());
     }
@@ -532,7 +459,7 @@ pub(crate) async fn start(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|_| "Unable to create the TV buffer folder; check DVR storage")?;
-    let pipeline = match stream::pipeline(&source, &channel, true).await {
+    let pipeline = match stream::buffer_pipeline(&source, &channel, &directory).await {
         Ok(p) => p,
         Err(e) => {
             let _ = tokio::fs::remove_dir_all(&directory).await;
@@ -565,7 +492,7 @@ pub(crate) async fn start(
     });
     SESSIONS.lock().unwrap().insert(id.clone(), session.clone());
     tokio::spawn(capture(session.clone(), pipeline, lease));
-    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+    let ready = tokio::time::timeout_at(deadline, async {
         loop {
             let info = info(&session, true);
             if let Some(error) = info.error {

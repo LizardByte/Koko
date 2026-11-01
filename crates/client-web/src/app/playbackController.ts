@@ -690,7 +690,7 @@ export async function startTvPlayback(input: Omit<NonNullable<typeof state.activ
   state.activePlaybackQuality = 'original';
   const tv = state.activeTvPlayback;
   const request = ++playbackRequest;
-  if (tv.kind === 'channels') tv.url = '';
+  if (tv.kind === 'channels') {tv.url = '';tv.buffer=undefined;tv.startMs=undefined;}
   render();
   if (tv.kind !== 'channels') return;
   // Finish releasing an earlier tune before asking a single-tuner source for another.
@@ -877,7 +877,10 @@ export async function restartMediaPlayback(quality?: PlaybackQuality, compatible
 
 async function restartTvPlayback(quality?:PlaybackQuality):Promise<void> {
   const tv=state.activeTvPlayback!;
-  if(state.tvMultiview&&(!tv.buffer||tv.buffer.error)){await retryTvMultiviewMain();return;}
+  if(tv.kind==='channels'&&(!tv.buffer||tv.buffer.error||(tv.buffer.finished&&!quality))){
+    if(state.tvMultiview)await retryTvMultiviewMain();else await startTvPlayback(tv);
+    return;
+  }
   const player=document.querySelector<HTMLMediaElement>('#media-player');
   if(player)rememberPlaybackSettings(player);
   if(quality)state.activePlaybackQuality=quality;

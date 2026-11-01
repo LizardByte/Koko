@@ -362,14 +362,14 @@ function handleNavigationKey(event: KeyboardEvent): void {
 
 /** Bind section-aware navigation for browsing pages, leaving settings and players to their own controls. */
 export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 'isPlayerOpen' | 'route'>): void {
-  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden || Boolean(document.querySelector('dialog.book-reader[open]'));
+  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden || Boolean(document.querySelector('dialog[open]'));
   globalThis.addEventListener('pointermove', (event) => {
     if (event.movementX || event.movementY) setInputMode('pointer');
   }, { passive: true });
   globalThis.addEventListener('pointerdown', (event) => { setInputMode('pointer'); rememberTvGuidePointer(event); }, { passive: true });
   globalThis.addEventListener('focusin', syncNavigationState);
   globalThis.addEventListener('keydown', (event) => {
-    if (document.querySelector('dialog.book-reader[open]')) return;
+    if (document.querySelector('dialog[open]')) return;
     if (suspended() || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.defaultPrevented) {
       if ((event.target as HTMLElement | null)?.matches('[data-resume-hold]') && ['Enter', ' '].includes(event.key)) setInputMode('keyboard');

@@ -1,5 +1,9 @@
 //! Per-stream loopback proxy for TLS-capable HTTP and authenticated HLS resource rewriting.
 
+use base64::{
+    Engine,
+    engine::general_purpose::STANDARD,
+};
 use reqwest::Url;
 use std::{
     collections::HashMap,
@@ -79,13 +83,17 @@ impl State {
         &self,
         url: Url,
     ) -> Result<String, String> {
-        super::formats::http_url(url.as_str())?;
-        let suffix = url
-            .path()
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let suffix = if url.scheme() == "data" {
+            inline_key(&url)?;
+            "key".to_owned()
+        } else {
+            super::formats::http_url(url.as_str())?;
+            url.path()
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+        };
         let suffix = if matches!(
             suffix.as_str(),
             "m3u8" | "m3u" | "ts" | "m2ts" | "mp4" | "m4s" | "m4a" | "aac" | "mp3" | "vtt" | "key"
@@ -101,6 +109,24 @@ impl State {
             .insert(url);
         Ok(format!("{}/{}/{id}.{suffix}", self.root, self.token))
     }
+}
+
+/// Accept only the 16-byte AES keys embedded by HLS providers, never arbitrary inline media.
+fn inline_key(url: &Url) -> Result<Vec<u8>, String> {
+    let invalid = "Invalid inline HLS encryption key";
+    let (metadata, encoded) = url.path().split_once(',').ok_or(invalid)?;
+    if !metadata.ends_with(";base64")
+        || encoded.len() != 24
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid.into());
+    }
+    let key = STANDARD.decode(encoded).map_err(|_| invalid)?;
+    if key.len() != 16 {
+        return Err(invalid.into());
+    }
+    Ok(key)
 }
 
 pub(super) struct Proxy {
@@ -258,6 +284,24 @@ async fn serve(
         .map_err(|_| "Unable to read stream resources")?
         .get(id.unwrap())
         .ok_or("Stream resource expired")?;
+    if url.scheme() == "data" {
+        let key = inline_key(&url)?;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \
+                  16\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .map_err(|_| "TV player disconnected")?;
+        if !head {
+            socket
+                .write_all(&key)
+                .await
+                .map_err(|_| "TV player disconnected")?;
+        }
+        let _ = socket.shutdown().await;
+        return Ok(());
+    }
     let mut builder = state.client.get(url);
     if let Some(range) = range {
         builder = builder.header(reqwest::header::RANGE, range);
@@ -367,6 +411,53 @@ mod tests {
     use super::*;
 
     #[rocket::async_test]
+    async fn inline_hls_keys_are_relayed_as_bounded_binary_resources() {
+        let key = b"0123456789abcdef";
+        let inline = format!("data:text/plain;base64,{}", STANDARD.encode(key));
+        let master = format!(
+            "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"{inline}\"\n#EXT-X-STREAM-INF:\
+             BANDWIDTH=1000000\nmedia.m3u8\n"
+        );
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/master.m3u8", upstream.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = upstream.accept().await.unwrap();
+            request(&mut socket).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: \
+                 application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: \
+                 close\r\n\r\n{master}",
+                master.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let (_proxy, url) = start(&url).await.unwrap();
+        let client = reqwest::Client::new();
+        let master = client.get(url).send().await.unwrap().text().await.unwrap();
+        assert!(!master.contains("data:") && !master.contains(&STANDARD.encode(key)));
+        let pattern = regex::Regex::new(r#"URI="([^"]+)""#).unwrap();
+        let captures = pattern.captures(&master).unwrap();
+        let key_url = &captures[1];
+        assert!(key_url.ends_with(".key"));
+        let response = client.get(key_url).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.content_length(), Some(16));
+        assert_eq!(response.bytes().await.unwrap().as_ref(), key);
+        let response = client.head(key_url).send().await.unwrap();
+        assert_eq!(response.headers()[reqwest::header::CONTENT_LENGTH], "16");
+        assert!(response.bytes().await.unwrap().is_empty());
+        server.await.unwrap();
+        for invalid in [
+            "data:text/plain,0123456789abcdef",
+            "data:text/plain;base64,AA==",
+            "data:text/plain;base64,!!!!!!!!!!!!!!!!!!!!!!!!",
+            "data:text/plain;base64,MDEyMzQ1Njc4OWFiY2RlZg==#fragment",
+        ] {
+            assert!(inline_key(&Url::parse(invalid).unwrap()).is_err());
+        }
+    }
+
+    #[rocket::async_test]
     async fn binary_resources_keep_the_full_length_after_playlist_sniffing() {
         for (size, head, range) in [
             (4, false, false),
@@ -439,10 +530,14 @@ mod tests {
                 ids: HashMap::new(),
             }),
         };
-        let original = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key?secret=hidden\"\n#EXT-X-MAP:\
-                        URI=\"init.mp4\"\n../segment.ts?token=secret\n";
+        let inline_key = "data:text/plain;base64,ABEiM0RVZneImaq7zN3u/w==";
+        let original = format!(
+            "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"{inline_key}\"\n#EXT-X-KEY:\
+             METHOD=AES-128,URI=\"key?secret=hidden\"\n#EXT-X-MAP:URI=\"init.mp4\"\n../segment.ts?\
+             token=secret\n"
+        );
         let result = rewrite(
-            original,
+            &original,
             &Url::parse("https://provider.example/live/index.m3u8").unwrap(),
             &state,
         )
@@ -450,10 +545,19 @@ mod tests {
         assert!(!result.contains("provider.example"));
         assert!(!result.contains("hidden"));
         assert!(!result.contains("token=secret"));
-        assert_eq!(result.matches("http://127.0.0.1:1234/opaque/").count(), 3);
+        assert!(!result.contains(inline_key));
+        assert_eq!(result.matches("http://127.0.0.1:1234/opaque/").count(), 4);
         assert!(
             rewrite(
                 "#EXTM3U\nfile:///private/secret",
+                &Url::parse("https://example.com/").unwrap(),
+                &state
+            )
+            .is_err()
+        );
+        assert!(
+            rewrite(
+                "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"file:///private/secret\"",
                 &Url::parse("https://example.com/").unwrap(),
                 &state
             )

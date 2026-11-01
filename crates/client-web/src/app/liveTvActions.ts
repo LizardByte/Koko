@@ -23,6 +23,7 @@ export interface LiveTvState {
   setupKind?: string; setupAdding?: boolean; regions?: string[];
   sourceGroups?:api.TvSourceGroup[]; sourceGroupId?:string;
   connections?:Record<number,api.TvSourceConnection>;connectionOpen?:number;connectionLoading?:number;
+  sourceCardsOpen?:number[];
   connectionDrafts?:Record<number,Record<string,string>>;
   mappingSource?:number;mappingQuery?:string;mappingPage?:number;
   mappingProvider?:string;providerEditor?:string;providerView?:string;providers?:api.TvProvider[];

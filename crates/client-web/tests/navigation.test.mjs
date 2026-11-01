@@ -149,7 +149,7 @@ globalThis.document = {
       '.search-popover': searchPopover,
       '#item-more[open]': moreMenu?.open ? moreMenu : null,
       '.resume-playback-menu:not([hidden])': resumeMenu && !resumeMenu.hidden ? resumeMenu : null,
-      'dialog.book-reader[open]': readerOpen ? {} : null,
+      'dialog[open]': readerOpen ? {} : null,
       '[data-resume-hold]': resumeTrigger,
       [`[data-resume-hold][aria-controls="${resumeMenu?.id}"]`]: resumeTrigger,
     };

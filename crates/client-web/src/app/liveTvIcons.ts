@@ -1,12 +1,12 @@
-/** Shared source-type symbols and provider badges, with uploaded/channel-linked image overrides. */
+/** Bundled application and provider logos, with uploaded or channel-linked image overrides. */
 import type { TvGuideSource, TvProvider } from '../liveTvApi';
 import { resolveApiUrl } from '../api';
 import { escapeHtml as escape } from './format';
 import { renderIcon } from './ui';
 import type { AppIconName } from './types';
 
-const PROVIDERS:Record<string,[string,string]>={espn:['ESPN','#cf2439'],adultswim:['AS','#252c3c'],sling:['SLING','#0c6d9b'],pluto:['pluto','#5a3cb0'],roku:['roku','#662d91'],tubi:['tubi','#665500'],foxone:['FOX','#125aa8'],bally:['BALLY','#a52936'],wsn:['WSN','#673bb1'],plex:['plex','#806300'],samsung:['TV+','#16348d'],lg:['LG','#a60940'],amazon:['prime','#12658a']};
-const ALIASES:Record<string,string>={amazon_prime_free:'amazon',ballysports:'bally','lg-channels':'lg'};
+const PROVIDERS:Record<string,string>={adultswim:'png',amazon:'svg',bally:'svg',cbs:'png',espn:'png',foxone:'ico',freelivesports:'png',fubo:'png',hallmark:'png',hulu:'png',lg:'svg',localnow:'png',nfl:'png',plex:'svg',pluto:'png',reelz:'png',roku:'svg',samsung:'svg',sling:'svg',spectrum:'png',stirr:'png',tubi:'png',vizio:'png',whale:'svg',wsn:'png',xumo:'svg',youtube:'png'};
+const ALIASES:Record<string,string>={adult_swim:'adultswim',amazon_prime_free:'amazon',ballysports:'bally',cbs_sports:'cbs',charter:'spectrum',fox_one:'foxone',fubotv:'fubo','lg-channels':'lg',pluto_tv:'pluto',prime:'amazon',reelz_tve:'reelz',roku_channel:'roku',samsungtvplus:'samsung',sling_freestream:'sling',slingtv:'sling',watchfree:'vizio',youtube_tv:'youtube',youtubetv:'youtube'};
 const SOURCE_NAMES:Record<string,string>={fastchannels:'FastChannels',hdhomerun:'HDHomeRun',nextpvr:'NextPVR',m3u:'IPTV',tvheadend:'Tvheadend',native:'Local tuner',dvb:'Local tuner'};
 const SOURCE_LOGOS:Record<string,string>={fastchannels:'fastchannels.svg',hdhomerun:'hdhomerun.ico',nextpvr:'nextpvr.ico',tvheadend:'tvheadend.png'};
 /** Use authenticated Koko artwork or an ordinary HTTP image, never arbitrary markup or data URLs. */
@@ -36,9 +36,9 @@ export function recoverTvSourceImage(image:HTMLImageElement):void {
   if(backup){delete image.dataset.tvSourceFallback;image.src=backup;image.hidden=false;}
   else image.hidden=true;
 }
-/** Bundled provider badges work offline; an uploaded or channel-linked image overrides the badge. */
+/** Prefer custom/channel artwork, then the real provider logo, with Lucide for unknown brands. */
 export function renderTvProviderIcon(provider:Pick<TvProvider,'id'|'name'|'image_url'>):string {
-  const [text,color]=PROVIDERS[ALIASES[provider.id] ?? provider.id] ?? [provider.name.split(/\s+/).map(s=>s[0] ?? '').join('').slice(0,3).toUpperCase(),'#34445b'];
-  const fallback=`<svg viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="${color}"/><text x="32" y="34" fill="white" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="${text.length>4?13:17}" font-weight="700">${escape(text)}</text></svg>`;
-  return frame(fallback,tvSourceImage(provider.image_url),`${provider.name} provider icon`);
+  const id=ALIASES[provider.id] ?? provider.id,extension=PROVIDERS[id];
+  const logo=extension?resolveApiUrl(`/assets/providers/tv-${id}.${extension}`):'',custom=tvSourceImage(provider.image_url);
+  return frame(renderIcon('tv','tv-type-symbol'),custom||logo,`${provider.name} provider icon`,custom?logo:'');
 }

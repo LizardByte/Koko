@@ -33,6 +33,7 @@ When no tuner is attached, **Find local tuners** reports that none were found.
 
 Each source card shows its channel count and the M3U/XMLTV sizes from its last successful
 import, when those files apply. Refresh the source to update these figures.
+Source cards and provider sections start collapsed. Select a header to show its settings.
 
 Use **Remove source** on a source card to remove its channels, guide, future recording
 schedules, and series rules. Saved DVR recordings and their files are kept. Stop playback
@@ -43,7 +44,7 @@ blank to keep it, or enter a replacement PIN.
 ### IPTV providers and FastChannels
 
 For FastChannels, choose **IPTV (M3U)**, then select **FastChannels server** under
-**IPTV connection**. Enter only the server address, such as `http://192.168.1.13:5523`.
+**IPTV connection**. Enter only the server address, such as `http://fastchannels.example:5523`.
 Koko imports the default feed's native channels, available PrismCast channels, and their guide.
 Enable and configure PrismCast in FastChannels to include its bridged channels.
 Set **Simultaneous bridge streams** to the number of captures your PrismCast server allows;

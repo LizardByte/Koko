@@ -261,6 +261,7 @@ mod tests {
     fn provider_prefix_is_independent_of_guide_ids_and_channel_names() {
         assert_eq!(provider("espn.espn1"), "espn");
         assert_eq!(provider("foxone.MyNetwork TV"), "foxone");
+        assert_eq!(provider("fox_one.fox_sports"), "fox_one");
         assert_eq!(provider("124636"), "other");
         assert_eq!(
             endpoint("http://localhost:5523/sub/", "feeds/default/native/m3u")

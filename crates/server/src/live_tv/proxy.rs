@@ -24,19 +24,25 @@ use tokio::{
     },
 };
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct Resource {
+    url: Url,
+    key: bool,
+}
+
 struct Resources {
     clock: u64,
     next: u64,
-    urls: HashMap<u64, (Url, u64)>,
-    ids: HashMap<Url, u64>,
+    urls: HashMap<u64, (Resource, u64)>,
+    ids: HashMap<Resource, u64>,
 }
 impl Resources {
     fn insert(
         &mut self,
-        url: Url,
+        resource: Resource,
     ) -> u64 {
         self.clock += 1;
-        if let Some(id) = self.ids.get(&url).copied() {
+        if let Some(id) = self.ids.get(&resource).copied() {
             if let Some(row) = self.urls.get_mut(&id) {
                 row.1 = self.clock;
             }
@@ -50,22 +56,22 @@ impl Resources {
                 .min_by_key(|(_, (_, clock))| clock)
                 .map(|(id, _)| *id)
             {
-                if let Some((url, _)) = self.urls.remove(&id) {
-                    self.ids.remove(&url);
+                if let Some((resource, _)) = self.urls.remove(&id) {
+                    self.ids.remove(&resource);
                 }
             }
         }
         let id = self.next;
         self.next += 1;
-        self.urls.insert(id, (url.clone(), self.clock));
-        self.ids.insert(url, id);
+        self.urls.insert(id, (resource.clone(), self.clock));
+        self.ids.insert(resource, id);
         id
     }
 
     fn get(
         &mut self,
         id: u64,
-    ) -> Option<Url> {
+    ) -> Option<Resource> {
         self.clock += 1;
         let row = self.urls.get_mut(&id)?;
         row.1 = self.clock;
@@ -82,17 +88,22 @@ impl State {
     fn resource(
         &self,
         url: Url,
+        key: bool,
     ) -> Result<String, String> {
         let suffix = if url.scheme() == "data" {
             inline_key(&url)?;
             "key".to_owned()
         } else {
             super::formats::http_url(url.as_str())?;
-            url.path()
-                .rsplit('.')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase()
+            if key {
+                "key".to_owned()
+            } else {
+                url.path()
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+            }
         };
         let suffix = if matches!(
             suffix.as_str(),
@@ -106,7 +117,7 @@ impl State {
             .resources
             .lock()
             .map_err(|_| "Unable to read stream resources")?
-            .insert(url);
+            .insert(Resource { url, key });
         Ok(format!("{}/{}/{id}.{suffix}", self.root, self.token))
     }
 }
@@ -151,7 +162,7 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("Koko/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
-        .read_timeout(Duration::from_secs(20))
+        .read_timeout(super::stream::SOURCE_READ_TIMEOUT)
         .gzip(true)
         .build()
         .map_err(|_| "Unable to open the TV stream relay")?;
@@ -166,7 +177,7 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
             ids: HashMap::new(),
         }),
     });
-    let input = state.resource(super::formats::http_url(url)?)?;
+    let input = state.resource(super::formats::http_url(url)?, false)?;
     let task = tokio::spawn(async move {
         let mut requests = tokio::task::JoinSet::new();
         loop {
@@ -184,6 +195,40 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
     Ok((Proxy { task }, input))
 }
 
+/// Give cold providers bounded time to recover before forwarding bytes; never replay partial media.
+async fn upstream_response(builder: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
+    let deadline = tokio::time::Instant::now() + super::stream::SOURCE_READ_TIMEOUT;
+    for attempt in 0..5 {
+        let request = builder
+            .try_clone()
+            .ok_or("Unable to retry the TV source request")?;
+        let result = tokio::time::timeout_at(deadline, request.send()).await;
+        match result {
+            Ok(Ok(response)) => {
+                if attempt == 4
+                    || !matches!(response.status().as_u16(), 408 | 500 | 502 | 503 | 504)
+                {
+                    return Ok(response);
+                }
+                log::debug!(
+                    "Retrying a TV source request after HTTP {}",
+                    response.status().as_u16()
+                );
+            }
+            Ok(Err(_)) if attempt == 4 => return Err("Unable to connect to the TV source".into()),
+            Ok(Err(_)) => {}
+            Err(_) => return Err("The TV source did not respond in time".into()),
+        }
+        tokio::time::timeout_at(
+            deadline,
+            tokio::time::sleep(Duration::from_secs(1 << attempt)),
+        )
+        .await
+        .map_err(|_| "The TV source did not respond in time")?;
+    }
+    unreachable!("The final attempt returns its response or error")
+}
+
 fn rewrite(
     value: &str,
     base: &Url,
@@ -194,6 +239,7 @@ fn rewrite(
     let mut output = String::new();
     for line in value.lines() {
         if line.starts_with('#') {
+            let key = line.starts_with("#EXT-X-KEY:") || line.starts_with("#EXT-X-SESSION-KEY:");
             let mut offset = 0;
             for capture in URI.captures_iter(line) {
                 let field = capture.get(1).unwrap();
@@ -202,6 +248,7 @@ fn rewrite(
                     &state.resource(
                         base.join(field.as_str())
                             .map_err(|_| "Invalid HLS resource URL")?,
+                        key,
                     )?,
                 );
                 offset = field.end();
@@ -212,6 +259,7 @@ fn rewrite(
                 &state.resource(
                     base.join(line.trim())
                         .map_err(|_| "Invalid HLS stream URL")?,
+                    false,
                 )?,
             );
         }
@@ -278,12 +326,13 @@ async fn serve(
             .await;
         return Ok(());
     }
-    let url = state
+    let resource = state
         .resources
         .lock()
         .map_err(|_| "Unable to read stream resources")?
         .get(id.unwrap())
         .ok_or("Stream resource expired")?;
+    let url = resource.url;
     if url.scheme() == "data" {
         let key = inline_key(&url)?;
         socket
@@ -306,10 +355,20 @@ async fn serve(
     if let Some(range) = range {
         builder = builder.header(reqwest::header::RANGE, range);
     }
-    let mut response = builder
-        .send()
-        .await
-        .map_err(|_| "Unable to connect to the TV stream")?;
+    let mut response = match upstream_response(builder).await {
+        Ok(response) => response,
+        Err(message) => {
+            log::warn!("Live TV relay: {message}");
+            socket
+                .write_all(
+                    b"HTTP/1.1 502 Upstream Unavailable\r\nContent-Length: \
+                0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .map_err(|_| "TV player disconnected")?;
+            return Ok(());
+        }
+    };
     let status = response.status().as_u16();
     let base = response.url().clone();
     let content_type = response
@@ -318,6 +377,7 @@ async fn serve(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_owned();
+    let content_type = if resource.key { "application/octet-stream" } else { &content_type };
     // Reqwest's size hint shrinks as chunks are consumed. The relay also sends the sniffed prefix.
     let content_length = response.content_length();
     let mut first = response
@@ -336,8 +396,9 @@ async fn serve(
         };
         first.extend_from_slice(&chunk);
     }
-    let playlist =
-        first.starts_with(b"#EXTM3U") || content_type.to_ascii_lowercase().contains("mpegurl");
+    // Some providers label keys and segments as playlists. Keys are always opaque bytes, even
+    // if a valid random key happens to begin with the playlist signature.
+    let playlist = !resource.key && first.starts_with(b"#EXTM3U");
     if playlist && response.status().is_success() {
         while let Some(chunk) = response
             .chunk()
@@ -410,6 +471,50 @@ async fn serve(
 mod tests {
     use super::*;
 
+    async fn scripted_upstream(statuses: Vec<u16>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/master.m3u8", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            for status in statuses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                request(&mut socket).await.unwrap();
+                let body = "#EXTM3U\n#EXTINF:2,\nsegment.ts\n";
+                let header = format!(
+                    "HTTP/1.1 {status} Upstream\r\nContent-Type: \
+                     application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: \
+                     close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+            }
+        });
+        (url, task)
+    }
+
+    #[rocket::async_test]
+    async fn transient_upstream_failures_retry_before_forwarding_a_playlist() {
+        let (url, upstream) = scripted_upstream(vec![503, 502, 503, 503, 200]).await;
+        let (_relay, input) = start(&url).await.unwrap();
+        let response = reqwest::get(&input).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let body = response.text().await.unwrap();
+        assert!(body.starts_with("#EXTM3U\n"));
+        assert!(!body.contains(&url));
+        upstream.await.unwrap();
+    }
+
+    #[rocket::async_test]
+    async fn permanent_upstream_errors_are_bounded_and_missing_channels_are_not_retried() {
+        for statuses in [vec![500; 5], vec![404]] {
+            let status = statuses[0];
+            let (url, upstream) = scripted_upstream(statuses).await;
+            let (_relay, input) = start(&url).await.unwrap();
+            let response = reqwest::get(&input).await.unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            upstream.await.unwrap();
+        }
+    }
+
     #[rocket::async_test]
     async fn inline_hls_keys_are_relayed_as_bounded_binary_resources() {
         let key = b"0123456789abcdef";
@@ -458,6 +563,65 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn external_keys_ignore_playlist_mime_types_and_signatures() {
+        let key = b"#EXTM3U\x00\xff0123456";
+        assert_eq!(key.len(), 16);
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/master.m3u8", upstream.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = upstream.accept().await.unwrap();
+                let (path, _, _) = request(&mut socket).await.unwrap();
+                let playlist = b"#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"key.m3u8\"\n\
+                                 #EXT-X-KEY:METHOD=AES-128,URI=\"key.m3u8\"\n\
+                                 #EXTINF:2,\nsegment.ts\n";
+                let body = if path == "/master.m3u8" { &playlist[..] } else { &key[..] };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: \
+                     application/vnd.apple.mpegurl\r\nContent-Length: {}\r\nConnection: \
+                     close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(body).await.unwrap();
+            }
+        });
+        let (_relay, input) = start(&url).await.unwrap();
+        let client = reqwest::Client::new();
+        let playlist = client
+            .get(input)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let pattern = regex::Regex::new(r#"URI="([^"]+)""#).unwrap();
+        let urls = pattern
+            .captures_iter(&playlist)
+            .map(|captures| captures[1].to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], urls[1]);
+        assert!(urls[0].ends_with(".key"));
+        for head in [false, true] {
+            let builder = if head { client.head(&urls[0]) } else { client.get(&urls[0]) };
+            let response = builder.send().await.unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()[reqwest::header::CONTENT_LENGTH], "16");
+            assert_eq!(
+                response.headers()[reqwest::header::CONTENT_TYPE],
+                "application/octet-stream"
+            );
+            assert_eq!(
+                response.bytes().await.unwrap().as_ref(),
+                if head { &[][..] } else { &key[..] }
+            );
+        }
+        server.await.unwrap();
+    }
+
+    #[rocket::async_test]
     async fn binary_resources_keep_the_full_length_after_playlist_sniffing() {
         for (size, head, range) in [
             (4, false, false),
@@ -483,7 +647,8 @@ mod tests {
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nContent-Length: \
+                            "HTTP/1.1 {status}\r\nContent-Type: \
+                             application/vnd.apple.mpegurl\r\nContent-Length: \
                              {size}\r\n{content_range}Connection: close\r\n\r\n"
                         )
                         .as_bytes(),

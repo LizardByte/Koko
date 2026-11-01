@@ -89,3 +89,14 @@ test('a late first tune survives promotion, removing main preserves its replacem
   await f.add(3);await expect.poll(()=>page.locator('#tv-stream-3 video').evaluate(video=>video.readyState>=2&&!video.paused)).toBeTruthy();
   await page.locator('#close-player').click();await page.getByRole('button',{name:'Home',exact:true}).click();await expect.poll(()=>f.closes.length).toBe(3);expect(new Set(f.closes).size).toBe(3);expect(f.errors).toEqual([]);
 });
+
+test('retrying a stopped single-channel capture creates a new buffer instead of seeking the failed one',async({page})=>{
+  const f=await fixture(page),buffer=f.sessions.values().next().value;
+  buffer.error='The upstream capture stopped';buffer.finished=true;
+  await expect(page.locator('.player-error-indicator')).toContainText('The upstream capture stopped');
+  await page.getByRole('button',{name:'Retry playback',exact:true}).click();
+  await expect.poll(()=>f.starts.length).toBe(2);await expect.poll(()=>f.closes.length).toBe(1);
+  expect(f.starts).toEqual([1,1]);expect(f.closes).toEqual([buffer.session_id]);
+  await expect.poll(()=>page.locator('#media-player').evaluate(video=>video.readyState>=2&&!video.paused)).toBeTruthy();
+  await expect(page.locator('.player-error-indicator')).not.toBeVisible();expect(f.errors).toEqual([]);
+});

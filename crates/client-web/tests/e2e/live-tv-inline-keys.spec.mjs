@@ -1,10 +1,11 @@
-/** Verifies inline-key IPTV and high-bitrate streams whose audio starts after video. */
+/** Verifies encrypted IPTV key handling and high-bitrate streams whose audio starts after video. */
 import {test,expect} from '@playwright/test';
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {createCipheriv} from 'node:crypto';
 
-test('IPTV with inline HLS keys and delayed audio decodes through the temporary TV buffer',async({page})=>{
+for(const keySource of ['inline HLS keys','external keys mislabeled as playlists']){
+test(`IPTV with ${keySource} and delayed audio decodes through the temporary TV buffer`,async({page})=>{
   test.setTimeout(120000);
   const transport=await new Promise((done,reject)=>{
     const generator=spawn(process.env.KOKO_E2E_GENERATOR_FFMPEG??process.env.KOKO_E2E_FFMPEG??'ffmpeg',[
@@ -21,7 +22,7 @@ test('IPTV with inline HLS keys and delayed audio decodes through the temporary 
   const cipher=createCipheriv('aes-128-cbc',key,iv);
   const encrypted=Buffer.concat([cipher.update(transport),cipher.final()]);
   const inline=`data:text/plain;base64,${key.toString('base64')}`;
-  const attributes=`METHOD=AES-128,URI="${inline}",IV=0x${iv.toString('hex')}`;
+  const attributes=`METHOD=AES-128,URI="${keySource==='inline HLS keys'?inline:'key.m3u8'}",IV=0x${iv.toString('hex')}`;
   let sourceId,sessionId,headers,segments=0;
   const fixture=createServer((request,response)=>{
     if(request.url==='/channels.m3u')response.end(`#EXTM3U\n#EXTINF:-1 tvg-id="inline" tvg-chno="410",Inline Key TV\nhttp://127.0.0.1:${fixture.address().port}/master.m3u8\n`);
@@ -31,6 +32,9 @@ test('IPTV with inline HLS keys and delayed audio decodes through the temporary 
     }else if(request.url==='/media.m3u8'){
       response.setHeader('Content-Type','application/vnd.apple.mpegurl');
       response.end(`#EXTM3U\n#EXT-X-VERSION:5\n#EXT-X-TARGETDURATION:12\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-KEY:${attributes}\n#EXTINF:12,\nsegment.ts\n#EXT-X-ENDLIST\n`);
+    }else if(request.url==='/key.m3u8'){
+      // Some providers return a playlist MIME type even though this is a binary AES key.
+      response.setHeader('Content-Type','application/vnd.apple.mpegurl');response.end(key);
     }else if(request.url==='/segment.ts'){
       segments++;response.setHeader('Content-Type','video/mp2t');response.end(encrypted);
     }else {response.writeHead(404);response.end();}
@@ -54,3 +58,4 @@ test('IPTV with inline HLS keys and delayed audio decodes through the temporary 
     fixture.closeAllConnections();await new Promise(done=>fixture.close(done));
   }
 });
+}

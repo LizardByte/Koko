@@ -112,4 +112,3 @@ function renderDvrSettings(data: LiveTvState): string {
     <p>Recordings are shared by default. Anyone can watch shared recordings; the account that scheduled a recording manages it.</p>
     ${permissions}</details>`;
 }
-

@@ -443,33 +443,38 @@ pub(crate) fn start_workers(
                 if claimed == 0 {
                     continue;
                 }
-                let record_db = db.clone();
-                workers.spawn(async move {
-                    let result = capture(&record_db, &recording).await;
-                    let (state, error) = match result {
-                        Ok(true) => ("completed", None),
-                        Ok(false) => ("cancelled", None),
-                        Err(error) => ("failed", Some(error)),
-                    };
-                    let _ = record_db
-                        .run(move |conn| {
-                            let row = r::table
-                                .find(id)
-                                .filter(r::state.eq_any(["recording", "stopping"]));
-                            match error {
-                                Some(error) => diesel::update(row)
-                                    .set((r::state.eq(state), r::last_error.eq(error)))
-                                    .execute(conn),
-                                None => diesel::update(row).set(r::state.eq(state)).execute(conn),
-                            }
-                        })
-                        .await;
-                });
+                workers.spawn(capture_worker(db.clone(), recording));
             }
         }
         workers.abort_all();
         while workers.join_next().await.is_some() {}
     });
+}
+
+async fn capture_worker(
+    record_db: Arc<DbConn>,
+    recording: Recording,
+) {
+    let id = recording.id;
+    let result = capture(&record_db, &recording).await;
+    let (state, error) = match result {
+        Ok(true) => ("completed", None),
+        Ok(false) => ("cancelled", None),
+        Err(error) => ("failed", Some(error)),
+    };
+    let _ = record_db
+        .run(move |conn| {
+            let row = r::table
+                .find(id)
+                .filter(r::state.eq_any(["recording", "stopping"]));
+            match error {
+                Some(error) => diesel::update(row)
+                    .set((r::state.eq(state), r::last_error.eq(error)))
+                    .execute(conn),
+                None => diesel::update(row).set(r::state.eq(state)).execute(conn),
+            }
+        })
+        .await;
 }
 
 async fn capture(

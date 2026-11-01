@@ -311,6 +311,8 @@ pub async fn favorite_channel(
 #[derive(Deserialize, JsonSchema)]
 pub struct BufferStart {
     channel_id: i32,
+    /// Return the session before video is ready so callers can play or cancel a pending tune.
+    wait: Option<bool>,
 }
 #[derive(Deserialize, JsonSchema)]
 pub struct BufferKeep {
@@ -328,9 +330,15 @@ pub async fn start_buffer(
     body: Json<BufferStart>,
 ) -> Result<Json<tv::timeshift::BufferInfo>, Error> {
     let user = owner(&user)?;
-    let info = tv::timeshift::start(&db, &buffer_database.0, user, body.channel_id)
-        .await
-        .map_err(error)?;
+    let info = tv::timeshift::start(
+        &db,
+        &buffer_database.0,
+        user,
+        body.channel_id,
+        body.wait.unwrap_or(true),
+    )
+    .await
+    .map_err(error)?;
     let id = body.channel_id;
     db.run(move |conn| tv::preferences::played(conn, user, id))
         .await

@@ -348,12 +348,28 @@ pub(crate) async fn play_channel(
 #[derive(Default, Clone, Copy)]
 pub(super) struct BufferCodecs {
     video_copy: bool,
+    complete: bool,
 }
 
 fn buffer_codecs_from_json(value: &serde_json::Value) -> BufferCodecs {
     let streams = value["streams"].as_array();
     let video = streams.and_then(|s| s.iter().find(|s| s["codec_type"] == "video"));
     BufferCodecs {
+        complete: video.is_some_and(|s| {
+            s["width"].as_u64().unwrap_or(0) > 0 && s["height"].as_u64().unwrap_or(0) > 0
+        }) && streams.is_some_and(|streams| {
+            streams
+                .iter()
+                .filter(|s| s["codec_type"] == "audio")
+                .all(|s| {
+                    s["channels"].as_u64().unwrap_or(0) > 0
+                        && s["sample_rate"]
+                            .as_str()
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(0)
+                            > 0
+                })
+        }),
         video_copy: video.is_some_and(|s| {
             s["codec_name"] == "h264"
                 && s["pix_fmt"] == "yuv420p"
@@ -369,7 +385,7 @@ pub(super) async fn buffer_codecs(path: &std::path::Path) -> BufferCodecs {
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,pix_fmt,field_order,channels",
+            "stream=codec_type,codec_name,pix_fmt,field_order,width,height,channels,sample_rate",
             "-of",
             "json",
         ])
@@ -417,13 +433,16 @@ pub(super) async fn play_buffer(
         .iter()
         .position(|s| s == "-i")
         .expect("FFmpeg input");
-    arguments.splice(
-        input..input,
-        [
-            "-live_start_index".into(),
-            index.to_string().into(),
-        ],
-    );
+    if codecs.complete {
+        // The completed local segment already describes its tracks; incomplete audio metadata
+        // keeps the full probe budget.
+        let probe = arguments
+            .iter()
+            .position(|s| s == "-analyzeduration")
+            .expect("FFmpeg probe");
+        arguments[probe + 1] = "1000000".into();
+    }
+    arguments.splice(input..input, ["-f".into(), "mpegts".into()]);
     let output = arguments.len() - 1;
     if offset_ms > 0 {
         arguments.splice(
@@ -523,10 +542,15 @@ impl Pipeline {
 
     /// Report actionable causes without exposing upstream addresses, credentials, or raw logs.
     pub(super) fn failure_message(&self) -> Option<String> {
-        self.log
-            .lock()
-            .ok()
-            .and_then(|data| playback_failure(&data))
+        self._proxy
+            .as_ref()
+            .and_then(super::proxy::Proxy::failure_message)
+            .or_else(|| {
+                self.log
+                    .lock()
+                    .ok()
+                    .and_then(|data| playback_failure(&data))
+            })
     }
 }
 
@@ -797,11 +821,20 @@ mod tests {
     fn only_browser_compatible_progressive_video_uses_original_passthrough() {
         let compatible = serde_json::json!({"streams":[
             {"codec_type":"video", "codec_name":"h264", "pix_fmt":"yuv420p",
-             "field_order":"progressive"},
-            {"codec_type":"audio", "codec_name":"aac", "channels":2}
+             "field_order":"progressive", "width":1920, "height":1080},
+            {"codec_type":"audio", "codec_name":"aac", "channels":2, "sample_rate":"48000"}
         ]});
         let result = buffer_codecs_from_json(&compatible);
         assert!(result.video_copy);
+        assert!(result.complete);
+        for field in ["sample_rate", "channels"] {
+            let mut missing_audio = compatible.clone();
+            missing_audio["streams"][1]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(!buffer_codecs_from_json(&missing_audio).complete);
+        }
         for (field, value) in [
             ("codec_name", "mpeg2video"),
             ("field_order", "tt"),

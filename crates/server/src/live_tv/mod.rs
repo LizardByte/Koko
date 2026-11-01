@@ -8,6 +8,7 @@ mod dvr;
 pub(crate) mod feeds;
 mod formats;
 pub(crate) mod gracenote;
+mod hls;
 pub(crate) mod iptv;
 mod native;
 pub(crate) mod preferences;

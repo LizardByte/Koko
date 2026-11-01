@@ -78,6 +78,7 @@ struct Session {
     keep_gate: tokio::sync::Mutex<()>,
     closed: AtomicBool,
     finished: AtomicBool,
+    stop: tokio::sync::Notify,
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -181,6 +182,12 @@ fn info(
         error: stats.error.clone(),
         can_keep,
     }
+}
+
+/// Keep one typical two-second segment in reserve while the first segment is decoded.
+fn playback_ready(current: &BufferInfo) -> bool {
+    let buffered = current.end_ms.saturating_sub(current.start_ms);
+    buffered >= 4000 || (current.finished && buffered > 0)
 }
 
 fn recording_state(
@@ -333,12 +340,26 @@ fn recording_end_reached(
 
 async fn capture(
     session: Arc<Session>,
-    mut pipeline: stream::Pipeline,
+    source: super::Source,
+    channel: super::Channel,
     lease: stream::Lease,
+    deadline: tokio::time::Instant,
 ) {
-    let result = capture_inner(&session, &mut pipeline).await;
-    let _ = pipeline.child.kill().await;
-    drop(pipeline);
+    let result = async {
+        let preparation = stream::buffer_pipeline(&source, &channel, &session.directory);
+        let pipeline = tokio::select! {
+            _ = session.stop.notified() => return Ok(()),
+            result = tokio::time::timeout_at(deadline, preparation) => {
+                result.map_err(|_| "The TV source did not start in time")??
+            }
+        };
+        let mut pipeline = pipeline;
+        let result = capture_inner(&session, &mut pipeline, deadline).await;
+        let _ = pipeline.child.kill().await;
+        result
+    }
+    .await;
+    session.files.finish();
     drop(lease);
     {
         let mut stats = session.stats.lock().unwrap();
@@ -362,6 +383,7 @@ async fn capture(
 async fn capture_inner(
     session: &Session,
     pipeline: &mut stream::Pipeline,
+    deadline: tokio::time::Instant,
 ) -> Result<(), String> {
     let mut ticks = tokio::time::interval(Duration::from_millis(250));
     let mut check = Instant::now();
@@ -387,6 +409,15 @@ async fn capture_inner(
                 pipeline.report_error();
             }
             session.closed.store(true, Ordering::Relaxed);
+            break;
+        }
+        if session.stats.lock().unwrap().segments.is_empty()
+            && tokio::time::Instant::now() >= deadline
+        {
+            pipeline.report_error();
+            failure = Some(
+                "The channel did not produce video in time. Check it in the source app.".into(),
+            );
             break;
         }
         if let Some((id, deadline)) = kept {
@@ -438,6 +469,7 @@ pub(crate) async fn start(
     database: &str,
     owner: i32,
     channel_id: i32,
+    wait: bool,
 ) -> Result<BufferInfo, String> {
     // This includes source setup as well as capture readiness, keeping the HTTP client's
     // longer request deadline outside the complete tune-and-cleanup budget.
@@ -447,7 +479,15 @@ pub(crate) async fn start(
     }
     let (source, channel, lease) = stream::input(db, channel_id).await?;
     let id = format!("{:032x}", rand::random::<u128>());
-    let settings = db.run(settings::load).await.map_err(super::db_error)?;
+    let (settings, can_keep) = db
+        .run(move |conn| {
+            Ok::<_, diesel::result::Error>((
+                settings::load(conn)?,
+                settings::can_record(conn, owner)?,
+            ))
+        })
+        .await
+        .map_err(super::db_error)?;
     let root = if settings.recording_dir.is_empty() {
         stream::recording_path(0).parent().unwrap().to_owned()
     } else {
@@ -459,17 +499,9 @@ pub(crate) async fn start(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|_| "Unable to create the TV buffer folder; check DVR storage")?;
-    let pipeline = match stream::buffer_pipeline(&source, &channel, &directory).await {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&directory).await;
-            return Err(e);
-        }
-    };
     let files = match super::buffer_files::FileServer::start(directory.clone(), &id).await {
         Ok(files) => files,
         Err(error) => {
-            drop(pipeline);
             remove_buffer(&directory).await;
             return Err(error);
         }
@@ -478,7 +510,7 @@ pub(crate) async fn start(
         id: id.clone(),
         owner,
         channel: channel_id,
-        title: channel.name,
+        title: channel.name.clone(),
         directory,
         files,
         codecs: tokio::sync::OnceCell::new(),
@@ -489,9 +521,13 @@ pub(crate) async fn start(
         keep_gate: tokio::sync::Mutex::new(()),
         closed: AtomicBool::new(false),
         finished: AtomicBool::new(false),
+        stop: tokio::sync::Notify::new(),
     });
     SESSIONS.lock().unwrap().insert(id.clone(), session.clone());
-    tokio::spawn(capture(session.clone(), pipeline, lease));
+    tokio::spawn(capture(session.clone(), source, channel, lease, deadline));
+    if !wait {
+        return Ok(info(&session, can_keep));
+    }
     let ready = tokio::time::timeout_at(deadline, async {
         loop {
             let info = info(&session, true);
@@ -511,13 +547,7 @@ pub(crate) async fn start(
     })
     .await;
     match ready {
-        Ok(Ok(())) => {
-            let can_keep = db
-                .run(move |conn| settings::can_record(conn, owner))
-                .await
-                .map_err(super::db_error)?;
-            Ok(info(&session, can_keep))
-        }
+        Ok(Ok(())) => Ok(info(&session, can_keep)),
         value => {
             let _ = close(&id, owner).await;
             Err(value
@@ -559,6 +589,7 @@ pub(crate) async fn close(
     {
         return Ok(());
     }
+    session.stop.notify_one();
     if !session.finished.load(Ordering::Acquire) {
         let _ = tokio::time::timeout(Duration::from_secs(8), async {
             while !session.finished.load(Ordering::Acquire) {
@@ -580,14 +611,36 @@ pub(crate) async fn play(
 ) -> Result<stream::LiveStream, String> {
     let session = session(id, owner)?;
     *session.last_access.lock().unwrap() = Instant::now();
+    // Capture continues independently. Reserve another completed segment before decoding, then
+    // let the browser verify its own playable headroom before advancing the playback clock.
+    tokio::time::timeout(Duration::from_secs(80), async {
+        loop {
+            let current = info(&session, true);
+            if let Some(error) = current.error {
+                return Err(error);
+            }
+            if session.closed.load(Ordering::Relaxed) {
+                return Err("TV buffer was closed".into());
+            }
+            if playback_ready(&current) {
+                return Ok(());
+            }
+            if current.finished {
+                return Err("The channel ended before producing video".into());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| "The TV source did not start in time")??;
     let current = info(&session, true);
     let position = start_ms
-        .unwrap_or(current.end_ms.saturating_sub(6000))
+        .unwrap_or(current.end_ms.saturating_sub(8000))
         .clamp(
             current.start_ms,
             current.end_ms.saturating_sub(250).max(current.start_ms),
         );
-    let (index, offset, segment_path) = {
+    let (index, offset, segment_path, url) = {
         let stats = session.stats.lock().unwrap();
         let origin = stats.origin_ms.unwrap_or(0);
         let index = stats
@@ -600,13 +653,14 @@ pub(crate) async fn play(
             index,
             position.saturating_sub(segment.timestamp_ms.saturating_sub(origin).max(0) as u64),
             session.directory.join(&segment.name),
+            session.files.stream_url(&segment.name)?,
         )
     };
     let codecs = session
         .codecs
         .get_or_init(|| stream::buffer_codecs(&segment_path))
         .await;
-    stream::play_buffer(&session.files.url, index, offset, quality, *codecs).await
+    stream::play_buffer(&url, index, offset, quality, *codecs).await
 }
 
 pub(crate) async fn keep(
@@ -712,6 +766,28 @@ pub(crate) async fn keep(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_reserves_completed_media_but_does_not_wait_for_more_than_a_finished_capture() {
+        let mut current = BufferInfo {
+            session_id: String::new(),
+            channel_id: 0,
+            title: String::new(),
+            start_ms: 10000,
+            end_ms: 12000,
+            recording_id: None,
+            finished: false,
+            error: None,
+            can_keep: false,
+        };
+        assert!(!playback_ready(&current));
+        current.end_ms = 14000;
+        assert!(playback_ready(&current));
+        current.end_ms = 10500;
+        current.finished = true;
+        assert!(playback_ready(&current));
+        current.end_ms = current.start_ms;
+        assert!(!playback_ready(&current));
+    }
     #[test]
     fn kept_recordings_wait_for_the_last_completed_segment_at_program_end() {
         let mut segments = vec![Segment {

@@ -83,6 +83,7 @@ struct State {
     token: String,
     client: reqwest::Client,
     resources: Mutex<Resources>,
+    failure: Mutex<Option<(u64, String)>>,
 }
 impl State {
     fn resource(
@@ -142,6 +143,17 @@ fn inline_key(url: &Url) -> Result<Vec<u8>, String> {
 
 pub(super) struct Proxy {
     task: tokio::task::JoinHandle<()>,
+    state: Arc<State>,
+}
+impl Proxy {
+    /// Return a recognized provider admission error without exposing its response body.
+    pub(super) fn failure_message(&self) -> Option<String> {
+        self.state
+            .failure
+            .lock()
+            .ok()
+            .and_then(|failure| failure.as_ref().map(|(_, message)| message.clone()))
+    }
 }
 impl Drop for Proxy {
     fn drop(&mut self) {
@@ -170,6 +182,7 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
         root,
         token: format!("{:032x}", rand::random::<u128>()),
         client,
+        failure: Mutex::new(None),
         resources: Mutex::new(Resources {
             clock: 0,
             next: 0,
@@ -178,6 +191,7 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
         }),
     });
     let input = state.resource(super::formats::http_url(url)?, false)?;
+    let proxy_state = state.clone();
     let task = tokio::spawn(async move {
         let mut requests = tokio::task::JoinSet::new();
         loop {
@@ -186,29 +200,79 @@ pub(super) async fn start(url: &str) -> Result<(Proxy, String), String> {
                     let Ok((socket,_))=accepted else {break;};
                     if requests.len()>=32 {drop(socket);continue;}
                     let state=state.clone();
-                    requests.spawn(async move {let _=serve(socket,state).await;});
+                    requests.spawn(async move {
+                        if let Err(error)=serve(socket,state).await {
+                            log::debug!("Live TV relay: {error}");
+                        }
+                    });
                 },
                 _=requests.join_next(),if !requests.is_empty()=>{},
             }
         }
     });
-    Ok((Proxy { task }, input))
+    Ok((
+        Proxy {
+            task,
+            state: proxy_state,
+        },
+        input,
+    ))
+}
+
+fn retry_after(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    chrono::DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|date| date.signed_duration_since(now).to_std().unwrap_or_default())
+}
+
+/// Recognize safe, structured facts from known upstream errors; never echo arbitrary source text.
+fn provider_failure(body: &[u8]) -> Option<String> {
+    static CAPACITY: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r"(?i)\bmaximum\s+concurrent\s+streams\s*\((\d{1,5})\)\s+reached\b")
+            .unwrap()
+    });
+    let text = String::from_utf8_lossy(&body[..body.len().min(8192)]);
+    let captures = CAPACITY.captures(&text)?;
+    let limit = captures[1].parse::<u32>().ok().filter(|n| *n > 0)?;
+    Some(format!(
+        "The TV source has reached its concurrent stream limit ({limit}). Stop another stream or \
+         wait for the previous channel to close, then retry."
+    ))
 }
 
 /// Give cold providers bounded time to recover before forwarding bytes; never replay partial media.
 async fn upstream_response(builder: reqwest::RequestBuilder) -> Result<reqwest::Response, String> {
     let deadline = tokio::time::Instant::now() + super::stream::SOURCE_READ_TIMEOUT;
     for attempt in 0..5 {
+        let mut delay = Duration::from_secs(1 << attempt);
         let request = builder
             .try_clone()
             .ok_or("Unable to retry the TV source request")?;
         let result = tokio::time::timeout_at(deadline, request.send()).await;
         match result {
             Ok(Ok(response)) => {
+                let retry = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| retry_after(value, chrono::Utc::now()));
                 if attempt == 4
-                    || !matches!(response.status().as_u16(), 408 | 500 | 502 | 503 | 504)
+                    || !(matches!(response.status().as_u16(), 408 | 500 | 502 | 503 | 504)
+                        || (response.status().as_u16() == 429 && retry.is_some()))
                 {
                     return Ok(response);
+                }
+                if let Some(retry) = retry {
+                    if retry >= deadline.saturating_duration_since(tokio::time::Instant::now()) {
+                        return Ok(response);
+                    }
+                    delay = retry;
                 }
                 log::debug!(
                     "Retrying a TV source request after HTTP {}",
@@ -219,12 +283,9 @@ async fn upstream_response(builder: reqwest::RequestBuilder) -> Result<reqwest::
             Ok(Err(_)) => {}
             Err(_) => return Err("The TV source did not respond in time".into()),
         }
-        tokio::time::timeout_at(
-            deadline,
-            tokio::time::sleep(Duration::from_secs(1 << attempt)),
-        )
-        .await
-        .map_err(|_| "The TV source did not respond in time")?;
+        tokio::time::timeout_at(deadline, tokio::time::sleep(delay))
+            .await
+            .map_err(|_| "The TV source did not respond in time")?;
     }
     unreachable!("The final attempt returns its response or error")
 }
@@ -236,6 +297,7 @@ fn rewrite(
 ) -> Result<String, String> {
     static URI: once_cell::sync::Lazy<regex::Regex> =
         once_cell::sync::Lazy::new(|| regex::Regex::new(r#"URI="([^"]+)""#).unwrap());
+    let value = super::hls::playback_playlist(value);
     let mut output = String::new();
     for line in value.lines() {
         if line.starts_with('#') {
@@ -332,6 +394,7 @@ async fn serve(
         .map_err(|_| "Unable to read stream resources")?
         .get(id.unwrap())
         .ok_or("Stream resource expired")?;
+    let id = id.unwrap();
     let url = resource.url;
     if url.scheme() == "data" {
         let key = inline_key(&url)?;
@@ -386,7 +449,11 @@ async fn serve(
         .map_err(|_| "Unable to read the TV stream")?
         .map(|b| b.to_vec())
         .unwrap_or_default();
-    while !first.is_empty() && first.len() < 7 {
+    let error = response.status().is_client_error() || response.status().is_server_error();
+    while !first.is_empty() && first.len() < if error { 8192 } else { 7 } {
+        if error && provider_failure(&first).is_some() {
+            break;
+        }
         let Some(chunk) = response
             .chunk()
             .await
@@ -395,6 +462,16 @@ async fn serve(
             break;
         };
         first.extend_from_slice(&chunk);
+    }
+    if let Ok(mut failure) = state.failure.lock() {
+        if error {
+            *failure = provider_failure(&first).map(|message| (id, message));
+        } else if failure
+            .as_ref()
+            .is_some_and(|(resource, _)| *resource == id)
+        {
+            *failure = None;
+        }
     }
     // Some providers label keys and segments as playlists. Keys are always opaque bytes, even
     // if a valid random key happens to begin with the playlist signature.
@@ -451,11 +528,10 @@ async fn serve(
                 .write_all(&first)
                 .await
                 .map_err(|_| "TV player disconnected")?;
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| "The upstream TV stream ended")?
-            {
+            while let Some(chunk) = response.chunk().await.map_err(|error| {
+                log::debug!("TV relay media body: {}", error.without_url());
+                "The upstream TV stream ended"
+            })? {
                 socket
                     .write_all(&chunk)
                     .await
@@ -470,6 +546,89 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates_without_retrying_before_the_server_allows() {
+        let now = chrono::DateTime::parse_from_rfc2822("Sun, 01 Nov 2026 17:00:00 GMT")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        for value in [
+            "10",
+            "Sun, 01 Nov 2026 17:00:10 GMT",
+        ] {
+            assert_eq!(retry_after(value, now), Some(Duration::from_secs(10)));
+        }
+        assert_eq!(
+            retry_after("Sun, 01 Nov 2026 16:59:00 GMT", now),
+            Some(Duration::ZERO)
+        );
+        assert!(retry_after("invalid", now).is_none());
+    }
+
+    #[rocket::async_test]
+    async fn retry_after_defers_the_next_request_instead_of_using_the_shorter_backoff() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/master.m3u8", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            let mut first = None;
+            for status in [503, 200] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                request(&mut socket).await.unwrap();
+                if let Some(first) = first {
+                    assert!(tokio::time::Instant::now() - first >= Duration::from_secs(2));
+                } else {
+                    first = Some(tokio::time::Instant::now());
+                }
+                let body = "#EXTM3U\n#EXTINF:2,\nsegment.ts\n";
+                let header = format!(
+                    "HTTP/1.1 {status} Upstream\r\nRetry-After: 2\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+            }
+        });
+        let (_relay, input) = start(&url).await.unwrap();
+        assert_eq!(reqwest::get(input).await.unwrap().status(), 200);
+        upstream.await.unwrap();
+    }
+
+    #[rocket::async_test]
+    async fn upstream_capacity_errors_are_safe_actionable_and_clear_when_the_resource_recovers() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/master.m3u8", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            for status in [503, 200] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                request(&mut socket).await.unwrap();
+                let body = if status == 503 {
+                    "Maximum concurrent streams (4) reached. https://private.example/?token=secret"
+                } else {
+                    "#EXTM3U\n#EXTINF:2,\nsegment.ts\n"
+                };
+                let header = format!(
+                    "HTTP/1.1 {status} Upstream\r\nRetry-After: 120\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                socket.write_all(header.as_bytes()).await.unwrap();
+                socket.write_all(&body.as_bytes()[..12]).await.unwrap();
+                tokio::task::yield_now().await;
+                socket.write_all(&body.as_bytes()[12..]).await.unwrap();
+            }
+        });
+        let (relay, input) = start(&url).await.unwrap();
+        let response = reqwest::get(&input).await.unwrap();
+        assert_eq!(response.status(), 503);
+        let message = relay.failure_message().unwrap();
+        assert!(message.contains("concurrent stream limit (4)"));
+        assert!(!message.contains("private") && !message.contains("token"));
+        assert_eq!(reqwest::get(input).await.unwrap().status(), 200);
+        assert!(relay.failure_message().is_none());
+        assert!(provider_failure(b"Maximum concurrent streams (0) reached.").is_none());
+        assert!(provider_failure(b"HTTP 503: try again later.").is_none());
+        upstream.await.unwrap();
+    }
 
     async fn scripted_upstream(statuses: Vec<u16>) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -688,6 +847,7 @@ mod tests {
             root: "http://127.0.0.1:1234".into(),
             token: "opaque".into(),
             client: reqwest::Client::new(),
+            failure: Mutex::new(None),
             resources: Mutex::new(Resources {
                 clock: 0,
                 next: 0,

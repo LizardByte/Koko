@@ -161,6 +161,23 @@ through that source's channels, disable unwanted channels, or select the correct
 guide station when its listings are missing or incorrect. You can watch channels and schedule
 recordings by time even without guide data.
 
+### Watch multiple channels
+
+While watching a channel, choose **Multiview** in the playback bar, then select another
+channel. Use **Add stream** to watch up to four channels together. Search by channel or
+program, filter by source or provider, or choose **Favorites** to find a channel quickly.
+
+**Main and sidebar** is the default, with one large stream and
+up to three smaller streams. Choose **Equal grid** for four quadrants. Select a tile or its
+channel heading to make it the main stream.
+Only the main stream plays audio; the shared playback bar controls its volume, pause,
+buffer position, recording, and quality. Switching the main stream keeps the others playing.
+
+Use a tile's **Remove** button to stop that stream, or **Watch main only** to return to a
+single channel. Closing the player keeps the arrangement playing in the hero. Leaving
+Live TV or choosing **Stop playback** stops all its streams. Each stream needs an available
+tuner or stream allowance from its source and uses temporary buffer storage.
+
 ## Record programs
 
 ### Pause and rewind live TV

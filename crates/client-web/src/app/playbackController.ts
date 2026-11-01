@@ -24,6 +24,7 @@ import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
 import * as tvApi from '../liveTvApi';
 import { TvPlaybackWatchdog } from './tvPlaybackRecovery';
+import { configureTvMultiview, finishTvMultiviewOnExit, renderTvMultiviewButton, renderTvStage, retryTvMultiviewMain, stopTvMultiview, syncTvMultiview } from './tvMultiview';
 import { bindTvPlayerGuide, refreshTvPlayerGuide, refreshTvPlayerProgram, renderTvPlayerGuide, renderTvPlayerProgram, tvChannelPlayback } from './tvPlayer';
 import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
 import { renderButtonContent, renderIcon, subtitleLanguage } from './ui';
@@ -51,6 +52,7 @@ let refreshAppData: RefreshDataCallback = () => Promise.resolve();
 export function configurePlaybackController(callbacks: { render: RenderCallback; refreshData: RefreshDataCallback }): void {
   renderApp = callbacks.render;
   refreshAppData = callbacks.refreshData;
+  configureTvMultiview({render:()=>render(),beforeMainChange:()=>{cleanupMediaBinding?.();mediaEvents?.abort();cleanupMediaBinding=undefined;},stop:()=>closeActivePlaybackSession()});
   globalThis.addEventListener('pagehide', finishActivePlaybackOnExit);
 }
 
@@ -392,12 +394,23 @@ function renderTvSkipToEnd(view: PlayerView): string {
 }
 
 function renderTvGuideButton(view: PlayerView): string {
+  if(state.tvMultiview)return '';
   return view.tv?.kind === 'channels' ? `<button id="player-tv-guide-toggle" class="player-icon-button" type="button" title="Channel guide" aria-label="Channel guide" aria-expanded="${Boolean(view.tv.guideOpen)}" aria-controls="player-tv-guide">${renderIcon('tv','player-control-icon')}</button>` : '';
 }
 
 function tvPlayerPresentation(view: PlayerView): {program:string;guide:string;className:string} {
-  if (!view.tv) return {program:'',guide:'',className:''};
+  if (!view.tv||state.tvMultiview) return {program:'',guide:'',className:''};
   return {program:`<div id="player-tv-program">${renderTvPlayerProgram()}</div>`,guide:renderTvPlayerGuide(),className:view.tv.guideOpen ? 'has-tv-guide' : ''};
+}
+
+function playerViewKey(view:PlayerView,preview:boolean):string {
+  const key=state.tvMultiview?['multiview',view.tv?.owner,preview]:[view.source,preview,view.title,view.logo,view.tv?.logoFallback,state.playbackProblem,view.tv?.buffer?.can_keep];
+  return escapeHtml(JSON.stringify(key));
+}
+
+function playerMediaMarkup(view:PlayerView):string {
+  const media=view.source?renderMediaElementMarkup(view.isAudio,view.source,view.poster,view.tracks):'';
+  return renderTvStage(state.playbackSettings?.paused?media.replace(' autoplay',''):media);
 }
 
 function renderMediaPlayerOverlay(): string {
@@ -406,18 +419,18 @@ function renderMediaPlayerOverlay(): string {
   const preview = Boolean(view.tv && !state.isPlayerOpen);
   const closeLabel = 'Close player';
   const label = view.tv ? 'Live TV' : 'Now playing';
-  const media = view.source ? renderMediaElementMarkup(view.isAudio,view.source,view.poster,view.tracks) : '';
-  const mediaMarkup = state.playbackSettings?.paused ? media.replace(' autoplay','') : media;
-  const viewKey = escapeHtml(JSON.stringify([view.source,preview,view.title,view.logo,view.tv?.logoFallback,state.playbackProblem,view.tv?.buffer?.can_keep]));
+  const mediaMarkup = playerMediaMarkup(view);
+  const viewKey = playerViewKey(view,preview);
+  const multiviewClass=state.tvMultiview?'has-tv-multiview':'';
   if (preview) return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay tv-preview-player">
-    <div id="media-player-shell" class="player-shell media-player-shell video-player-shell ${state.playbackProblem ? 'has-media-error' : ''}">
+    <div id="media-player-shell" class="player-shell media-player-shell video-player-shell ${multiviewClass} ${state.playbackProblem ? 'has-media-error' : ''}">
       ${mediaMarkup}<div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div>
     </div></div>`;
   const quality = !view.isAudio && (!view.tv || view.tv.buffer) ? renderPlaybackQuality(state.activePlaybackQuality ?? 'original') : '';
   const seek = playerSeekEnabled(view);
   const tvPresentation = tvPlayerPresentation(view);
   return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay ${preview ? 'tv-preview-player' : ''}">
-    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} ${tvPresentation.className} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
+    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} ${tvPresentation.className} ${multiviewClass} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
       ${mediaMarkup}<div class="player-loading-indicator" aria-live="polite"><span class="loading-spinner player-loading-spinner" aria-hidden="true"></span></div>
       <div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div><div class="player-idle-hit-area" aria-hidden="true"></div>
       <div class="player-top-controls player-controls"><div class="player-title-block"><span class="eyebrow">${label}</span>${renderPlayerTitleMarkup(view.logo,view.title,Boolean(view.tv),view.tv?.logoFallback)}${tvPresentation.program}</div>
@@ -426,7 +439,7 @@ function renderMediaPlayerOverlay(): string {
         <div class="player-control-row"><div class="player-control-cluster player-time-cluster">${renderPlayerTime(view)}</div>
           <div class="player-control-cluster player-transport-cluster">${renderTvKeepControls(view)}${seek ? renderPlayerSeek(-10) : ''}<button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause','player-control-icon')}</button>${seek ? renderPlayerSeek(10) : ''}${renderTvSkipToEnd(view)}</div>
           <div class="player-control-cluster player-tool-cluster"><button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2','player-control-icon')}</button>
-            <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />${renderTvGuideButton(view)}${view.audioMenu}${quality}${view.subtitles}${renderPictureInPictureButton(view.isAudio)}
+            <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />${renderTvGuideButton(view)}${renderTvMultiviewButton()}${view.audioMenu}${quality}${view.subtitles}${renderPictureInPictureButton(view.isAudio)}
             <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize','player-control-icon')}</button></div></div></div>
       ${tvPresentation.guide}</div></div>`;
 }
@@ -654,6 +667,7 @@ export function syncThemeSongPlayer(): void {
 /** Release TV playback when leaving its screen or starting another media item. */
 export function stopTvPlayback(): void {
   const tv = state.activeTvPlayback;
+  closingTvBuffer=Promise.allSettled([closingTvBuffer,stopTvMultiview()]);
   if (!tv) return;
   const player = document.querySelector<HTMLMediaElement>('#media-player');
   if (player) initializedMediaSources.get(player)?.cleanup?.();
@@ -688,9 +702,9 @@ export async function startTvPlayback(input: Omit<NonNullable<typeof state.activ
 async function openTvBuffer(tv: NonNullable<typeof state.activeTvPlayback>, owner: number, request: number): Promise<void> {
   try {
     await closingTvBuffer;
-    if (request !== playbackRequest || state.activeTvPlayback !== tv) return;
+    if (!tvTuneCurrent(tv,owner,request)) return;
     const buffer = await tvApi.startTvBuffer(tv.id);
-    if (request !== playbackRequest || state.activeTvPlayback !== tv || owner !== state.bootstrap?.current_user?.id) { await tvApi.closeTvBuffer(buffer.session_id); return; }
+    if (!tvTuneCurrent(tv,owner,request)) { await tvApi.closeTvBuffer(buffer.session_id); return; }
     tv.buffer = buffer; tv.startMs = Math.max(buffer.start_ms,buffer.end_ms-6000);
     tv.url = tvApi.tvBufferStreamUrl(buffer.session_id,tv.startMs,'original',request);
     if (state.liveTv?.owner === owner) {
@@ -698,11 +712,19 @@ async function openTvBuffer(tv: NonNullable<typeof state.activeTvPlayback>, owne
       state.liveTv.preferences = {...preferences,recent:[tv.id,...preferences.recent.filter(id => id !== tv.id)].slice(0,30)};
     }
   } catch (error) {
-    if (state.activeTvPlayback !== tv) return;
-    state.playbackProblem = error instanceof ApiError && error.status === 400
+    if (!tvTuneCurrent(tv,owner,request)) return;
+    const problem = error instanceof ApiError && error.status === 400
       ? { message: error.message, retry: true } : playbackRequestProblem(error);
+    const tile=state.tvMultiview?.tiles.find(t=>t.playback===tv);if(tile)tile.problem=problem;
+    if(state.activeTvPlayback===tv)state.playbackProblem=problem;
   }
+  const tile=state.tvMultiview?.tiles.find(t=>t.playback===tv);if(tile)tile.pending=false;
   render();
+}
+
+function tvTuneCurrent(tv:NonNullable<typeof state.activeTvPlayback>,owner:number,request:number):boolean {
+  if(state.bootstrap?.current_user?.id!==owner||state.route.page!=='live-tv')return false;
+  return state.tvMultiview?.tiles.some(t=>t.playback===tv)===true||(request===playbackRequest&&state.activeTvPlayback===tv);
 }
 
 function seekTvBuffer(position: number, paused?: boolean): void {
@@ -713,7 +735,7 @@ function seekTvBuffer(position: number, paused?: boolean): void {
   if (paused !== undefined && state.playbackSettings) state.playbackSettings.paused = paused;
   tv.startMs = Math.max(tv.buffer.start_ms,Math.min(position,tv.buffer.end_ms-250));
   tv.url = tvApi.tvBufferStreamUrl(tv.buffer.session_id,tv.startMs,state.activePlaybackQuality ?? 'original',++playbackRequest);
-  state.playbackProblem = undefined; render(false);
+  state.playbackProblem = undefined; render(Boolean(state.tvMultiview));
 }
 
 /** Return TV playback to its hero slot while library playback closes normally. */
@@ -824,6 +846,7 @@ function saveActivePlaybackProgress(): void {
 }
 
 function finishActivePlaybackOnExit(): void {
+  finishTvMultiviewOnExit();
   if (state.activeTvPlayback?.buffer) tvApi.closeTvBufferOnExit(state.activeTvPlayback.buffer.session_id);
   if (state.activePlaybackSession && state.activePlaybackItem) {
     finishPlaybackOnExit(state.activePlaybackSession.session_id, state.activePlaybackItem.id, activeProgressRequest());
@@ -833,14 +856,7 @@ function finishActivePlaybackOnExit(): void {
 /** Recreates a session at the source position; automatic recovery can preserve the intended pause state. */
 export async function restartMediaPlayback(quality?: PlaybackQuality, compatible?: boolean, paused?: boolean): Promise<void> {
   if (state.activeTvPlayback) {
-    const tv = state.activeTvPlayback;
-    const player = document.querySelector<HTMLMediaElement>('#media-player');
-    if (player) rememberPlaybackSettings(player);
-    if (quality) state.activePlaybackQuality = quality;
-    if (tv.buffer) { seekTvBuffer(activePlaybackPositionMs(player)); return; }
-    if (tv.kind === 'channels') { await startTvPlayback(tv); return; }
-    tv.url = `${tvApi.tvStreamUrl(tv.kind,tv.id)}?attempt=${++playbackRequest}`;
-    state.playbackProblem = undefined; render(); return;
+    await restartTvPlayback(quality);return;
   }
   const item = state.activePlaybackItem;
   if (!state.isPlayerOpen || !item) return;
@@ -857,6 +873,17 @@ export async function restartMediaPlayback(quality?: PlaybackQuality, compatible
   }
   if (compatible !== undefined) state.activePlaybackCompatible = compatible;
   await replaceMediaPlayback(item, position);
+}
+
+async function restartTvPlayback(quality?:PlaybackQuality):Promise<void> {
+  const tv=state.activeTvPlayback!;
+  if(state.tvMultiview&&(!tv.buffer||tv.buffer.error)){await retryTvMultiviewMain();return;}
+  const player=document.querySelector<HTMLMediaElement>('#media-player');
+  if(player)rememberPlaybackSettings(player);
+  if(quality)state.activePlaybackQuality=quality;
+  if(tv.buffer){seekTvBuffer(activePlaybackPositionMs(player));return;}
+  if(tv.kind==='channels'){await startTvPlayback(tv);return;}
+  tv.url=`${tvApi.tvStreamUrl(tv.kind,tv.id)}?attempt=${++playbackRequest}`;state.playbackProblem=undefined;render();
 }
 
 function playbackSourceKey(itemId: number): string {
@@ -1452,13 +1479,48 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
   return () => { disposed = true; globalThis.clearInterval(timer); cleanupMenu(); live?.removeEventListener('click',goLive); };
 }
 
+/** Refresh the main tile's shared controls while preserving the other video decoders. */
+function refreshMultiviewPlayer():void {
+  const tv=state.activeTvPlayback,root=document.querySelector<HTMLElement>('#media-player-overlay');
+  if(!state.tvMultiview||!tv||!root)return;
+  const tile=root.querySelector<HTMLElement>(`#tv-stream-${tv.id}`);if(!tile)return;
+  const key=JSON.stringify([tv.id,tv.url,state.isPlayerOpen,state.playbackProblem,tv.buffer?.can_keep]);
+  if(root.dataset.multiControlsKey===key)return;
+  cleanupMediaBinding?.();mediaEvents?.abort();cleanupMediaBinding=undefined;
+  root.dataset.multiControlsKey=key;
+  const shell=root.querySelector<HTMLElement>('#media-player-shell')!;
+  const template=document.createElement('template');template.innerHTML=renderMediaPlayerOverlay();
+  for(const selector of ['.player-bottom-controls']){
+    const previous=root.querySelector(selector),next=template.content.querySelector(selector);
+    if(next){if(previous)previous.replaceWith(next);else shell.append(next);}else previous?.remove();
+  }
+  replaceMultiviewMedia(root,tile,tv.url,tv.image);
+  for(const selector of ['.player-loading-indicator','.player-error-indicator']){
+    const element=root.querySelector(selector);if(element)tile.append(element);
+  }
+  const error=tile.querySelector<HTMLElement>('.player-error-indicator');if(error)error.innerHTML=renderPlaybackProblem(state.playbackProblem);
+  shell.classList.toggle('has-media-error',Boolean(state.playbackProblem));
+}
+
+function replaceMultiviewMedia(root:Element,tile:Element,url:string,image?:string):void {
+  const player=root.querySelector<HTMLVideoElement>('#media-player');
+  if(!url){player?.pause();player?.removeAttribute('src');player?.load();player?.remove();return;}
+  if(player?.getAttribute('src')===url)return;
+  const media=document.createElement('template');media.innerHTML=renderMediaElementMarkup(false,url,image,'');
+  const next=media.content.firstElementChild!;if(player){player.pause();player.replaceWith(next);}else tile.prepend(next);
+}
+
 /** Binds controls for the browser playback overlay in the current DOM tree. */
 export function bindPlayerProgress(): void {
+  syncTvMultiview();
+  refreshMultiviewPlayer();
+  syncTvMultiview();
   preservePlayerIcons();
   refreshTvPlayerGuide();
   refreshTvPlayerProgram();
   const player = document.querySelector<HTMLMediaElement>('#media-player');
-  const bindingKey = document.querySelector('#media-player-overlay')?.getAttribute('data-player-view-key') ?? '';
+  const overlay=document.querySelector<HTMLElement>('#media-player-overlay');
+  const bindingKey = (overlay?.getAttribute('data-player-view-key') ?? '')+(overlay?.dataset.multiControlsKey??'');
   const bound = player ? initializedMediaSources.get(player) : undefined;
   if (bound?.bindingKey === bindingKey && cleanupMediaBinding === bound.cleanup && !mediaEvents?.signal.aborted) return;
   cleanupMediaBinding?.();
@@ -1697,6 +1759,7 @@ export function bindPlayerProgress(): void {
   });
   shell?.addEventListener('keydown', (event) => {
     keepFocusedControlsVisible = true;
+    if((event.target as Element).closest('.tv-stream-heading,.tv-multiview-toolbar,.tv-stream-add'))return;
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || (event.target as Element).closest('[role="menu"]')) {
       return;
     }

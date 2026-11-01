@@ -7,7 +7,7 @@
       "NOCURL": "1", "NOPCSC": "1", "NOOPENSSL": "1", "NOZLIB": "1",
       "NOSRT": "1", "NORIST": "1", "NOJAVA": "1", "NOPYTHON": "1",
       "NOEDITLINE": "1", "NOGITHUB": "1", "NODOC": "1", "NOTEST": "1", "NOSTATIC": "1",
-      "SYSPREFIX": "/app", "USRLIBDIR": "/app/lib"
+      "SYSPREFIX": "/app", "USRLIBDIR": "/app/lib", "DEBUG": ""
     }
   },
   "build-commands": [

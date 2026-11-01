@@ -111,7 +111,7 @@ pub(crate) fn friendly_name(id: &str) -> String {
         "bally" | "ballysports" => "Bally Sports Live",
         "cbs" | "cbs_sports" => "CBS Sports",
         "espn" => "ESPN",
-        "foxone" => "FOX One",
+        "foxone" | "fox_one" => "FOX One",
         "lg" | "lg-channels" => "LG Channels",
         "localnow" => "Local Now",
         "freelivesports" => "Free Live Sports",

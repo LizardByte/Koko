@@ -381,6 +381,9 @@ async fn capture_inner(
             "-nostdin",
             "-fflags",
             "+genpts",
+        ])
+        .args(stream::PROBE_ARGS)
+        .args([
             "-i",
             "pipe:0",
             "-map",
@@ -477,8 +480,14 @@ async fn capture_inner(
                 tokio::task::yield_now().await;
                 pipeline.report_error();
                 segmenter.report_error();
-                failure =
-                    Some("TV buffering stopped; check the source and available disk space".into());
+                failure = Some(
+                    segmenter
+                        .failure_message()
+                        .or_else(|| pipeline.failure_message())
+                        .unwrap_or_else(|| {
+                            "TV buffering stopped; check the source and available disk space".into()
+                        }),
+                );
             }
             break;
         }

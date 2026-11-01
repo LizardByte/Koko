@@ -1,6 +1,7 @@
 /** Loads saved connection editors and binds source-specific channel pages and guide groups. */
 import * as api from '../liveTvApi';
 import { state } from './state';
+import { confirmAction } from './confirmationDialog';
 
 type Run = (operation:()=>Promise<unknown>,button?:HTMLButtonElement)=>Promise<void>;
 
@@ -67,13 +68,24 @@ export function hydrateTvProviders():void {
 /** Bind durable grouping and bounded source editors without exposing a stored PIN. */
 export function bindTvSourceSettings(signal: AbortSignal, context:{render:()=>void}, run:Run): void {
   hydrateTvProviders();
-  document.querySelectorAll<HTMLButtonElement>('[data-tv-source-remove]').forEach(button=>button.addEventListener('click',()=>{
+  document.querySelectorAll<HTMLDetailsElement>('details[data-tv-source-card]').forEach(details=>details.addEventListener('toggle',()=>{
+    const data=state.liveTv;if(!data) return;
+    const id=Number(details.dataset.tvSourceCard),open=new Set(data.sourceCardsOpen ?? []);
+    if(open.has(id)===details.open) return;
+    if(details.open) open.add(id);else open.delete(id);
+    data.sourceCardsOpen=[...open];
+  },{signal}));
+  document.querySelectorAll<HTMLButtonElement>('[data-tv-source-remove]').forEach(button=>button.addEventListener('click',async()=>{
     const id=Number(button.dataset.tvSourceRemove),source=state.liveTv?.sources.find(s=>s.id===id);
-    if(!source||!globalThis.confirm(`Remove "${source.name}" and its channels? Future recording schedules and series rules for this source will be removed. Saved recordings and their files will be kept.`)) return;
+    if(!source) return;
+    const owner=state.liveTv?.owner;
+    const accepted=await confirmAction({title:`Remove ${source.name}?`,message:'This removes its channels, guide, future recording schedules, and series rules. Saved recordings and their files will be kept.',confirmLabel:'Remove source'});
+    if(!accepted||state.liveTv?.owner!==owner||state.route.page!=='settings'||state.route.section!=='live-tv') return;
     void run(async()=>{
       await api.removeTvSource(id);
       const data=state.liveTv;if(!data) return;
       delete data.connections?.[id];delete data.connectionDrafts?.[id];
+      data.sourceCardsOpen=data.sourceCardsOpen?.filter(source=>source!==id);
       if(data.connectionOpen===id) data.connectionOpen=undefined;
       if(data.mappingSource===id) {data.mappingSource=undefined;data.mappingProvider='';}
       data.providerEditor=undefined;
@@ -86,7 +98,7 @@ export function bindTvSourceSettings(signal: AbortSignal, context:{render:()=>vo
       const form=select.form;if(!form) {return;}
       const fast=select.value==='fastchannels',label=form.querySelector('[data-tv-iptv-address-label]'),input=form.elements.namedItem('url') as HTMLInputElement;
       if(label) label.textContent=fast?'FastChannels server address':'IPTV playlist URL';
-      input.placeholder=fast?'http://192.168.1.13:5523':'https://provider.example/channels.m3u';
+      input.placeholder=fast?'http://fastchannels.example:5523':'https://provider.example/channels.m3u';
       form.querySelector<HTMLElement>('[data-tv-iptv-server-help]')?.toggleAttribute('hidden',!fast);
       const bridge=form.querySelector<HTMLFieldSetElement>('[data-tv-iptv-bridge]');if(bridge){bridge.hidden=!fast;bridge.disabled=!fast;}
     };

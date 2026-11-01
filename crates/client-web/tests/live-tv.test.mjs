@@ -163,6 +163,7 @@ test('source cards show counts and sizes and render only the opened source chann
   state.liveTv=data({sources:[{id:1,name:'Fast',kind:'m3u',enabled:true,capacity:10,channel_count:4402,playlist_bytes:2*1024*1024,guide_bytes:150*1024*1024},{id:2,name:'Bridge',kind:'m3u',enabled:true,capacity:1}],channels:Array.from({length:4402},(_,i)=>({...channel,id:i+1,name:`Channel ${i+1}`})).concat([{...channel,id:5000,source_id:2,name:'Bridge only'}])});
   let dom=new JSDOM(renderLiveTvSettings());
   assert.equal(dom.window.document.querySelectorAll('[data-tv-channel-update]').length,0);
+  assert.equal(dom.window.document.querySelector('[data-tv-source-card="1"]').open,false);
   assert.match(dom.window.document.querySelector('[data-tv-source-card="1"]').textContent,/4402 channels/);
   assert.match(dom.window.document.querySelector('[data-tv-source-card="1"]').textContent,/M3U.*MB.*XMLTV.*MB/);
   dom.window.close();state.liveTv.mappingSource=1;state.liveTv.mappingPage=1;

@@ -42,6 +42,13 @@ use tokio::{
 };
 
 static LEASES: Lazy<Mutex<HashMap<(i32, bool), i32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// High-bitrate TV may not reveal audio parameters within FFmpeg's default probe budget.
+pub(super) const PROBE_ARGS: [&str; 4] = [
+    "-analyzeduration",
+    "15000000",
+    "-probesize",
+    "20000000",
+];
 /// Serialize capture admission with removal without waiting for long-running guide refreshes.
 pub(super) static ADMISSIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -172,6 +179,7 @@ fn command_for_service(
             "http,https,tcp,tls,crypto,udp,rtp",
         ]);
     }
+    command.args(PROBE_ARGS);
     command.args(["-i", url]);
     if let Some(service) = service {
         command.args([
@@ -288,10 +296,10 @@ async fn open_pipeline(
     if length == 0 {
         tokio::task::yield_now().await;
         pipeline.report_error();
-        return Err(
+        return Err(pipeline.failure_message().unwrap_or_else(|| {
             "The source could not be played; check the channel, tuner, and FFmpeg installation"
-                .into(),
-        );
+                .into()
+        }));
     }
     prefix.truncate(length);
     Ok(LiveStream(Reader {
@@ -485,6 +493,47 @@ impl Pipeline {
             );
         }
     }
+
+    /// Report actionable causes without exposing upstream addresses, credentials, or raw logs.
+    pub(super) fn failure_message(&self) -> Option<String> {
+        self.log
+            .lock()
+            .ok()
+            .and_then(|data| playback_failure(&data))
+    }
+}
+
+fn playback_failure(data: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(data);
+    static HTTP_ERROR: Lazy<regex::Regex> = Lazy::new(|| {
+        regex::Regex::new(r"(?i)(?:HTTP error|Server returned)\s+([45]\d{2})\b").unwrap()
+    });
+    if let Some(code) = HTTP_ERROR
+        .captures(&text)
+        .and_then(|capture| capture.get(1))
+    {
+        let code = code.as_str();
+        let action = match code {
+            "401" | "403" => {
+                "Check the provider sign-in and access to this channel in the source app"
+            }
+            "404" | "410" => "Check that this channel plays in the source app",
+            "429" => "Wait before trying this channel again",
+            _ => "Check the source app and try this channel again",
+        };
+        return Some(format!("The TV source returned HTTP {code}. {action}."));
+    }
+    if text.contains("No space left on device") {
+        return Some(
+            "TV buffer storage is full. Free space in the DVR save folder and retry.".into(),
+        );
+    }
+    if text.contains("Permission denied") || text.contains("Read-only file system") {
+        return Some(
+            "Koko could not access the TV files. Check the DVR save folder permissions.".into(),
+        );
+    }
+    None
 }
 
 fn make_pipeline(
@@ -618,6 +667,40 @@ pub(crate) async fn play_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn playback_failures_distinguish_source_http_errors_from_storage_errors() {
+        for code in [
+            401, 403, 404, 410, 429, 500, 503,
+        ] {
+            for error in [
+                format!("Server returned {code} Not Found"),
+                format!("HTTP error {code} Upstream"),
+            ] {
+                let private = "https://private.example/?token=private-token";
+                let data = format!("{error}\nError opening input file {private}");
+                let message = playback_failure(data.as_bytes()).unwrap();
+                assert!(message.contains(&format!("HTTP {code}")));
+                assert!(!message.contains("private") && !message.contains("disk"));
+            }
+        }
+        assert!(
+            playback_failure(b"No space left on device")
+                .unwrap()
+                .contains("storage is full")
+        );
+        assert!(
+            playback_failure(b"Read-only file system")
+                .unwrap()
+                .contains("permissions")
+        );
+        assert!(
+            playback_failure(b"Permission denied")
+                .unwrap()
+                .contains("permissions")
+        );
+        assert!(playback_failure(b"Invalid data found when processing input").is_none());
+        assert!(playback_failure(b"frame 404, HTTP connection closed").is_none());
+    }
     #[test]
     fn all_bridged_providers_share_one_capture_limit_and_release_it_on_disconnect() {
         let source = Source {

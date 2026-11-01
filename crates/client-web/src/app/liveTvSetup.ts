@@ -4,7 +4,8 @@ import { escapeHtml as escape, formatFileSize } from './format';
 import { state } from './state';
 import type { LiveTvState } from './liveTvActions';
 import { renderTvSourceChannels,renderTvSourceGroups } from './liveTvSourceLists';
-import { renderTvSourceHeading,renderTvProviders } from './liveTvProviders';
+import { renderTvSourceHeading,renderTvSourceAppearance,renderTvProviders } from './liveTvProviders';
+import { renderIcon } from './ui';
 
 /** Keep Live TV administration inside the Settings workspace. */
 export function renderLiveTvSettings(): string {
@@ -21,15 +22,17 @@ function renderSource(source: TvSource, data: LiveTvState): string {
   const open = data.connectionOpen === source.id;
   let editor = '';
   if (open) editor = data.connections?.[source.id] ? renderAddSource(source) : '<p role="status">Loading saved connection settings…</p>';
-  const sizeMarkup = sizes ? '<p class="muted">Last imported: '+escape(sizes)+'</p>' : '';
-  return `<article class="live-tv-source" data-tv-source-card="${source.id}">${renderTvSourceHeading(source)}<p>${escape(source.kind)} · ${source.enabled ? 'Enabled' : 'Disabled'} · ${count} ${count === 1 ? 'channel' : 'channels'}</p>${sizeMarkup}
+  const sizeMarkup = sizes ? '<span class="muted">Last imported: '+escape(sizes)+'</span>' : '';
+  const expanded=data.sourceCardsOpen?.includes(source.id) ?? false;
+  return `<details class="live-tv-source" data-controlled-open data-tv-source-card="${source.id}" ${expanded?'open':''}><summary class="tv-source-summary"><span class="tv-source-overview">${renderTvSourceHeading(source)}<span class="tv-source-status">${source.enabled ? 'Enabled' : 'Disabled'} · ${count} ${count === 1 ? 'channel' : 'channels'}${source.last_error?' · Refresh failed':''}</span>${sizeMarkup}</span>${renderIcon('chevron-right','tv-disclosure-icon')}</summary>
+    <div class="tv-source-settings-body">${renderTvSourceAppearance(source)}
     ${source.last_error ? `<p class="live-tv-error">${escape(source.last_error)}</p>` : '<p>Channels and guide refresh automatically.</p>'}
     <form data-tv-source-update="${source.id}" class="live-tv-inline-form"><label><input type="checkbox" name="enabled" ${source.enabled ? 'checked' : ''} /> Enabled</label>
       <label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source.capacity}" required /></label><button type="submit" class="secondary-button">Save</button></form>
     <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-refresh="${source.id}">Refresh channels and guide</button>${scan}
       <label class="live-tv-upload">Import XMLTV<input type="file" accept=".xml,.xmltv,.gz,text/xml,application/xml,application/gzip" data-tv-guide-upload="${source.id}" /></label></div>
     <details class="live-tv-panel" data-controlled-open data-tv-connection-source="${source.id}" ${open ? 'open' : ''}><summary>Edit connection settings</summary><p>Edit the saved connection and guide settings. Leave a saved PIN blank to keep it.</p>${editor}</details>${renderTvProviders(source,data)}${renderTvSourceChannels(source,data)}
-    <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-remove="${source.id}">Remove source</button></div></article>`;
+    <div class="live-tv-actions"><button type="button" class="secondary-button" data-tv-source-remove="${source.id}">Remove source</button></div></div></details>`;
 }
 
 function renderSetup(data: LiveTvState): string {
@@ -60,7 +63,7 @@ function renderConnection(kind: string, savedPin = false): string {
     <label>dvbv5-zap path<input name="zap_path" placeholder="dvbv5-zap" /></label><p class="live-tv-form-help">Install v4l-utils and generate this channel file with dvbv5-scan. For automatic channel scanning, choose Local tuner instead.</p>`;
   if (kind === 'm3u') return `<label>IPTV connection<select name="iptv_mode"><option value="playlist">M3U playlist</option><option value="fastchannels">FastChannels server</option></select></label>
     <label class="tv-iptv-address"><span data-tv-iptv-address-label>IPTV playlist URL</span><input name="url" type="url" required placeholder="https://provider.example/channels.m3u" /></label>
-    <p class="live-tv-form-help" data-tv-iptv-server-help hidden>Enter the server address, for example http://192.168.1.13:5523. Koko imports the native lineup and guide automatically, plus PrismCast channels when the bridge is enabled in FastChannels.</p>
+    <p class="live-tv-form-help" data-tv-iptv-server-help hidden>Enter the server address, for example http://fastchannels.example:5523. Koko imports the native lineup and guide automatically, plus PrismCast channels when the bridge is enabled in FastChannels.</p>
     <input type="hidden" name="provider_grouping_present" value="true"/><label class="live-tv-form-help"><input type="checkbox" name="provider_grouping"/> Group channels by provider (channel-id prefix before the first dot)</label>
     <p class="live-tv-form-help">Works with FastChannels, E+TV, and other playlists that include provider prefixes. Provider names and icons can be customized after importing.</p>
     <fieldset class="live-tv-guide-account" data-tv-iptv-bridge hidden disabled><legend>PrismCast</legend><label>Simultaneous bridge streams<input name="bridge_capacity" type="number" min="1" max="64" value="1"/></label><p>This limit is shared by all providers using the bridge.</p></fieldset>`;
@@ -71,7 +74,7 @@ function renderConnection(kind: string, savedPin = false): string {
   return `<fieldset class="live-tv-source-discovery"><legend>${escape(label)} connection</legend>
     <div class="live-tv-discovery-toolbar"><button type="button" data-tv-discover-source="${escape(kind)}">Find ${escape(label)}</button><p role="status" data-tv-discovery-status></p></div>
     <div class="live-tv-discovery-results" data-tv-discovery-results role="radiogroup" aria-label="Discovered ${escape(label)} sources" hidden></div>
-    <label>${escape(label)} address<input name="url" type="url" required placeholder="http://192.168.1.20${port}" /></label>
+    <label>${escape(label)} address<input name="url" type="url" required placeholder="http://tv-server.example${port}" /></label>
     <p>Discovery searches from the Koko server. You can also enter the address manually, including a custom port or HTTPS.</p></fieldset>${pin}`;
 }
 

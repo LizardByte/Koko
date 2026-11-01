@@ -396,6 +396,7 @@ test('source settings prefill connections, report imports, isolate channel edito
     await page.goto('/settings/live-tv');
     const regular=page.locator(`[data-tv-source-card="${ids[0]}"]`),bridge=page.locator(`[data-tv-source-card="${ids[1]}"]`);
     await expect(regular).toContainText('1 channel');await expect(regular).toContainText('Last imported: M3U');await expect(regular).toContainText('XMLTV');
+    await regular.locator(':scope > summary').click();await bridge.locator(':scope > summary').click();
     await regular.getByText('Edit connection settings',{exact:true}).click();
     const editor=regular.locator('[data-tv-replace-source]');
     await expect(editor.getByLabel('IPTV playlist URL',{exact:true})).toHaveValue(`${base}/regular.m3u`);
@@ -403,6 +404,8 @@ test('source settings prefill connections, report imports, isolate channel edito
     await expect(editor.getByRole('combobox',{name:'Program artwork',exact:true})).toHaveValue('guide');
     await expect(editor.getByLabel('Refresh interval (hours)',{exact:true})).toHaveValue('12');
     await editor.getByLabel('Refresh interval (hours)',{exact:true}).fill('18');
+    await regular.locator(':scope > summary').click();await expect(regular).toHaveJSProperty('open',false);
+    await regular.locator(':scope > summary').click();await expect(editor.getByLabel('Refresh interval (hours)',{exact:true})).toHaveValue('18');
     await regular.getByText('Channel visibility and guide mapping',{exact:true}).click();
     await expect(editor.getByLabel('XMLTV URL',{exact:true})).toHaveValue(`${base}/regular.xml`);
     await expect(editor.getByLabel('Refresh interval (hours)',{exact:true})).toHaveValue('18');
@@ -462,6 +465,7 @@ test('large Live TV Settings loads mapping choices on demand and saves the selec
   await expect(page.locator('#login-form')).toHaveCount(0);
   await page.goto('/settings/live-tv');
   const mapping=page.locator('[data-tv-channel-update="1"]');
+  await page.locator('[data-tv-source-card="1"] > summary').click();
   await page.getByText('Channel visibility and guide mapping',{exact:true}).click();
   const select=mapping.getByRole('combobox',{name:'Guide station',exact:true});
   await expect(page.locator('[data-tv-guide-source] option')).toHaveCount(3);

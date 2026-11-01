@@ -117,6 +117,114 @@ pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Sta
             ContentType::SVG,
             include_bytes!("../../../../../assets/providers/trailerdb-light.svg"),
         ),
+        "tv-adultswim.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-adultswim.png"),
+        ),
+        "tv-amazon.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-amazon.svg"),
+        ),
+        "tv-bally.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-bally.svg"),
+        ),
+        "tv-cbs.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-cbs.png"),
+        ),
+        "tv-espn.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-espn.png"),
+        ),
+        "tv-foxone.ico" => (
+            ContentType::Icon,
+            include_bytes!("../../../../../assets/providers/tv-foxone.ico"),
+        ),
+        "tv-freelivesports.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-freelivesports.png"),
+        ),
+        "tv-fubo.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-fubo.png"),
+        ),
+        "tv-hallmark.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-hallmark.png"),
+        ),
+        "tv-hulu.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-hulu.png"),
+        ),
+        "tv-lg.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-lg.svg"),
+        ),
+        "tv-localnow.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-localnow.png"),
+        ),
+        "tv-nfl.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-nfl.png"),
+        ),
+        "tv-plex.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-plex.svg"),
+        ),
+        "tv-pluto.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-pluto.png"),
+        ),
+        "tv-reelz.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-reelz.png"),
+        ),
+        "tv-roku.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-roku.svg"),
+        ),
+        "tv-samsung.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-samsung.svg"),
+        ),
+        "tv-sling.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-sling.svg"),
+        ),
+        "tv-spectrum.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-spectrum.png"),
+        ),
+        "tv-stirr.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-stirr.png"),
+        ),
+        "tv-tubi.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-tubi.png"),
+        ),
+        "tv-vizio.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-vizio.png"),
+        ),
+        "tv-whale.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-whale.svg"),
+        ),
+        "tv-wsn.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-wsn.png"),
+        ),
+        "tv-xumo.svg" => (
+            ContentType::SVG,
+            include_bytes!("../../../../../assets/providers/tv-xumo.svg"),
+        ),
+        "tv-youtube.png" => (
+            ContentType::PNG,
+            include_bytes!("../../../../../assets/providers/tv-youtube.png"),
+        ),
         "tvdb-dark.png" => (
             ContentType::PNG,
             include_bytes!("../../../../../assets/providers/tvdb-dark.png"),

@@ -3,6 +3,7 @@ import type { TvSource, TvProvider } from '../liveTvApi';
 import type { LiveTvState } from './liveTvActions';
 import { escapeHtml as escape } from './format';
 import { renderTvProviderIcon,renderTvSourceIcon } from './liveTvIcons';
+import { renderIcon } from './ui';
 
 /** Avatar-style image picker shared by connection and provider appearance controls. */
 export function tvIconPicker(source:number,name:string,provider?:string):string {
@@ -11,8 +12,12 @@ export function tvIconPicker(source:number,name:string,provider?:string):string 
 }
 /** Source identity and image controls span the card instead of squeezing connection fields. */
 export function renderTvSourceHeading(source:TvSource):string {
+  return `<span class="tv-source-heading">${renderTvSourceIcon(source)}<strong>${escape(source.name)}</strong></span>`;
+}
+/** Keep upload and reset actions outside the source card's disclosure button. */
+export function renderTvSourceAppearance(source:TvSource):string {
   const reset=source.image_url?'<button type="button" class="secondary-button" data-tv-icon-reset="'+source.id+'">Use default icon</button>':'';
-  return `<div class="tv-source-heading">${renderTvSourceIcon(source)}<h3>${escape(source.name)}</h3>${tvIconPicker(source.id,source.name)}${reset}</div>`;
+  return `<div class="live-tv-actions">${tvIconPicker(source.id,source.name)}${reset}</div>`;
 }
 function editor(source:TvSource,provider:TvProvider,data:LiveTvState):string {
   const channels=data.channels.filter(c=>c.source_id===source.id&&c.provider_id===provider.id&&c.logo);
@@ -35,7 +40,7 @@ export function renderTvProviders(source:TvSource,data:LiveTvState):string {
   const providers=source.providers ?? [];if(!providers.length) {return '';}
   const cards=providers.map(p=>{
     const key=source.id+':'+p.id,open=data.providerEditor===key,content=open?editor(source,p,data):'';
-    return `<details class="live-tv-panel tv-provider-setting" data-controlled-open data-tv-provider-editor="${escape(key)}" ${open?'open':''}><summary>${renderTvProviderIcon(p)}<strong>${escape(p.name)}</strong><span>${p.channel_count} ${p.channel_count===1?'channel':'channels'} · ${p.enabled?'Shown':'Hidden'}</span></summary>${content}</details>`;
+    return `<details class="live-tv-panel tv-provider-setting" data-controlled-open data-tv-provider-editor="${escape(key)}" ${open?'open':''}><summary>${renderTvProviderIcon(p)}<strong>${escape(p.name)}</strong><span>${p.channel_count} ${p.channel_count===1?'channel':'channels'} · ${p.enabled?'Shown':'Hidden'}</span>${renderIcon('chevron-right','tv-disclosure-icon')}</summary>${content}</details>`;
   }).join('');
   return `<section class="tv-provider-settings"><h4>Providers</h4><p>Choose which providers appear in the guide, rename them, and select their icons.</p>${cards}</section>`;
 }

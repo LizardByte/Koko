@@ -123,7 +123,7 @@ def patch_source(root, source):
     """Apply the pinned SDK backport once, including when reusing an extracted build cache."""
     patch = root / "packaging/linux/flatpak/modules/patches/tsduck-no-web.patch"
     reverse = subprocess.run(
-        ["patch", "-R", "--dry-run", "--silent", "-p1", "-i", str(patch)],
+        ["patch", "-R", "--dry-run", "--force", "--silent", "-p1", "-i", str(patch)],
         cwd=source, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     if reverse.returncode:
@@ -145,7 +145,9 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
     """Build only the SDK libraries and bridge without installing upstream CLI programs."""
     patch_source(Path(__file__).resolve().parents[1], source)
     flags = [f"{name}=1" for name in DISABLED]
-    flags.append(f"BINDIR_SUFFIX=-koko-{target}")
+    runtime = source / "bin" / f"koko-{target}"
+    # Cargo exports DEBUG even for release builds. Keep the SDK profile and directory deterministic.
+    flags.extend(["DEBUG=", f"BINDIR={runtime}"])
     if "apple" in target:
         architecture = "arm64" if target.startswith("aarch64") else "x86_64"
         flags.extend([f"LOCAL_ARCH={architecture}", f"CXXFLAGS_EXTRA=-arch {architecture}",
@@ -156,9 +158,6 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
     make = "gmake" if platform.system() == "FreeBSD" else "make"
     for component in ("libtscore", "libtsduck"):
         run(make, "-C", source / f"src/{component}", "-j", str(min(os.cpu_count() or 2, 4)), *flags)
-    runtime = next(p for p in (source / "bin").iterdir()
-                   if p.is_dir() and p.name.startswith("release-")
-                   and p.name.endswith(f"-koko-{target}") and any(p.glob("libtsduck.*")))
     run(*cmake, f"-DTSDUCK_SOURCE={source}", f"-DTSDUCK_RUNTIME={runtime}", "-DCMAKE_BUILD_TYPE=Release")
     run(cmake[0], "--build", build_dir, "--parallel", "2")
     copy_runtime(runtime, destination)

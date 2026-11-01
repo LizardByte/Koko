@@ -79,6 +79,7 @@ pub fn prepare(
         "native/live-tv/CMakeLists.txt",
         "packaging/live_tv.py",
         "packaging/live_tv.rs",
+        "packaging/patches/tsduck-no-web.patch",
     ] {
         println!("cargo:rerun-if-changed={}", workspace.join(file).display());
     }

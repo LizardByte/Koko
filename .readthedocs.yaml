@@ -12,6 +12,8 @@ build:
     python: "3.14"
     rust: latest
   apt_packages:
+    - build-essential
+    - cmake
     - libayatana-appindicator3-dev
     - libglib2.0-dev
     - libgtk-3-dev

@@ -9,22 +9,22 @@
       "startTime": "2026-10-30T15:00:00Z",
       "endTime": "2026-10-30T16:00:00Z",
       "flag": ["New"],
-      "rating": "TV-14",
-      "thumbnail": "p184466_b_v13_ah",
+      "rating": "TV-G",
+      "thumbnail": "p10000001_b_v13_aa",
       "program": {
-        "title": "The View",
-        "tmsId": "EP002253956808",
-        "seriesId": "SH00225395",
+        "title": "Weekend Workshop",
+        "tmsId": "EP000000010004",
+        "seriesId": "SH00000001",
         "releaseYear": 2026,
-        "shortDesc": "A description",
-        "season": "30",
-        "episode": "39"
+        "shortDesc": "A team restores a wooden table.",
+        "season": "3",
+        "episode": "4"
       }
     }, {
       "startTime": "2026-10-30T16:00:00Z",
       "endTime": "2026-10-30T17:00:00Z",
       "flag": [],
-      "program": { "title": "Daily News", "tmsId": "SH12345", "isGeneric": "1" }
+      "program": { "title": "Local Weather", "tmsId": "SH12345", "isGeneric": "1" }
     }]
   }]
 }

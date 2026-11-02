@@ -62,8 +62,9 @@ class NativePackagingTests(unittest.TestCase):
         downloaded = native.download_url(original.as_uri(), digest, cache)
         self.assertEqual(downloaded.read_bytes(), original.read_bytes())
         downloaded.write_bytes(b"corrupt cache")
+        archive_url = original.as_uri()
         with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
-            native.download_url(original.as_uri(), digest, cache)
+            native.download_url(archive_url, digest, cache)
 
     def test_cpp_runtime_includes_license_notices_without_network_access(self):
         destination = self.root / "bundle"

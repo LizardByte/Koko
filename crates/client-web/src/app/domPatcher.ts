@@ -265,12 +265,13 @@ function syncFormControlState(current: Element, next: Element): void {
 
 /** Preserve player controls, TV setup drafts, and open station choices across background refreshes. */
 function preserveOwnedControl(current: Element, next: Element): boolean {
+  if (!(current instanceof HTMLElement) || !(next instanceof HTMLElement)) return false;
   if (current.id === 'media-player-overlay' && next.id === current.id
-    && current instanceof HTMLElement && current.dataset.playerViewKey !== undefined
-    && next instanceof HTMLElement && current.dataset.playerViewKey === next.dataset.playerViewKey) return true;
+    && current.dataset.playerViewKey !== undefined
+    && current.dataset.playerViewKey === next.dataset.playerViewKey) return true;
   if (current.id === 'tv-source-form' && next.id === current.id) {
-    const key = current.getAttribute('data-tv-form-key');
-    return key !== null && key === next.getAttribute('data-tv-form-key');
+    const key = current.dataset.tvFormKey;
+    return key !== undefined && key === next.dataset.tvFormKey;
   }
   return current instanceof HTMLSelectElement && next instanceof HTMLSelectElement
     && current.dataset.tvGuideSource !== undefined && current.dataset.tvGuideSource === next.dataset.tvGuideSource

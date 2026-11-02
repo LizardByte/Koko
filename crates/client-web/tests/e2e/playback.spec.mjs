@@ -68,8 +68,10 @@ test('direct play seeks, saves on close, resumes after reload, and deletes its s
   await expect.poll(() => media(page).evaluate((player) => player.currentTime)).toBeGreaterThan(32);
   await page.locator('#close-player').click();
   await sessionGone(page, session);
-  const progress = await page.request.get(`/api/v1/items/${item.id}`, { headers: await headers(page) });
-  expect((await progress.json()).playback_position_ms).toBeGreaterThan(32000);
+  await expect.poll(async () => {
+    const progress = await page.request.get(`/api/v1/items/${item.id}`, { headers: await headers(page) });
+    return (await progress.json()).playback_position_ms;
+  }).toBeGreaterThan(32000);
   await page.reload();
   const resumed = await start(page);
   await playing(page);

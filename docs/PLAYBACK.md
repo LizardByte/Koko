@@ -38,6 +38,8 @@ Use **Subtitles** to select an available sidecar subtitle track or turn subtitle
 - **Browser cannot decode the stream:** Choose **Try compatible playback** to request server conversion.
 - **Server cannot start FFmpeg:** Ask your administrator to check the executable path and permissions
   in **Settings → Transcoding**. After correcting the settings, choose **Retry playback**.
+- **FFmpeg reports a missing `libnuma.so.1` on Alpine Linux:** Install the `numactl` package
+  with `apk add numactl`, then retry playback.
 - **Server cannot convert the media:** Try **Original quality**, or ask your administrator to check the
   source file and FFmpeg settings.
 - **Media unavailable:** Choose another item. Ask your administrator to check library access and

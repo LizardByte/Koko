@@ -1,5 +1,8 @@
 //! Prepare the media tools associated with the pinned build-deps submodule.
 
+#[path = "ffmpeg_stack.rs"]
+mod stack;
+
 use std::{
     env,
     error::Error,
@@ -250,6 +253,15 @@ pub fn prepare(
                 "The build-deps archive did not contain the expected media tools and licenses"
                     .into(),
             );
+        }
+    }
+    if target.ends_with("-linux-musl") {
+        for name in ["ffmpeg", "ffprobe"] {
+            let mut tool = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(root.join("bin").join(name))?;
+            stack::ensure_minimum_stack(&mut tool)?;
         }
     }
     Ok(Some(root))

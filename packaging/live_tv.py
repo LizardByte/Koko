@@ -82,9 +82,9 @@ def download(kind, cache):
 def source_tree(cache):
     archive = download("source", cache)
     source = cache / f"tsduck-{VERSION}"
-    # Cargo cache cleanup may leave the directory while pruning SDK source files.
-    if not (source / "src/libtscore/reactor/unix/tsReactiveWebRequest.cpp").is_file():
-        with tarfile.open(archive) as package:
+    # Cargo cache cleanup can prune individual sources or headers, leaving the tree incomplete.
+    with tarfile.open(archive) as package:
+        if any(member.isfile() and not (cache / member.name).is_file() for member in package.getmembers()):
             package.extractall(cache, filter="data")
     return source
 

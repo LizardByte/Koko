@@ -95,6 +95,26 @@ pub fn prepare(
     if env::var_os("KOKO_SKIP_TSDUCK_BUILD").is_some() {
         return Ok(None);
     }
+    let source = workspace.join("third-party/tsduck");
+    if !source.join(".git").exists() {
+        return Err(
+            "Initialize TSDuck with: git submodule update --init third-party/tsduck".into(),
+        );
+    }
+    let git_dir = super::ffmpeg::git_output(
+        &source,
+        &[
+            "rev-parse",
+            "--absolute-git-dir",
+        ],
+    )?;
+    for path in ["HEAD", "refs", "packed-refs"] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            Path::new(&git_dir).join(path).display()
+        );
+    }
+    let revision = super::ffmpeg::git_output(&source, &["rev-parse", "HEAD"])?;
     let root = out.join("live-tv");
     let status = python()?
         .arg(workspace.join("packaging/live_tv.py"))
@@ -104,6 +124,10 @@ pub fn prepare(
         .arg(&root)
         .arg("--cache")
         .arg(workspace.join("target/live-tv-deps"))
+        .arg("--source")
+        .arg(source)
+        .arg("--revision")
+        .arg(revision)
         .status()?;
     if !status.success() || !root.join(library(target)).is_file() {
         return Err(

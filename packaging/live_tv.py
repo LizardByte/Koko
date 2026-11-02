@@ -7,7 +7,6 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
-import tarfile
 import urllib.request
 
 VERSION = "3.45-4798"
@@ -19,10 +18,6 @@ ARCHIVES = {
     "gcc-exception": (
         "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-15.2.0/COPYING.RUNTIME",
         "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-    ),
-    "source": (
-        f"https://github.com/tsduck/tsduck/archive/refs/tags/v{VERSION}.tar.gz",
-        "a35845430fff1385cf1cda9645bbfd0ec887ed440137fc6c26863c624c24eb63",
     ),
     "Win64": (
         f"https://github.com/tsduck/tsduck/releases/download/v{VERSION}/TSDuck-Win64-{VERSION}.exe",
@@ -79,13 +74,20 @@ def download(kind, cache):
     return archive
 
 
-def source_tree(cache):
-    archive = download("source", cache)
-    source = cache / f"tsduck-{VERSION}"
-    # Cargo cache cleanup can prune individual sources or headers, leaving the tree incomplete.
-    with tarfile.open(archive) as package:
-        if any(member.isfile() and not (cache / member.name).is_file() for member in package.getmembers()):
-            package.extractall(cache, filter="data")
+def copy_missing(source, destination):
+    """Restore pruned SDK files without overwriting patched files or invalidating compiled objects."""
+    if not Path(destination).is_file():
+        shutil.copy2(source, destination)
+    return destination
+
+
+def source_tree(checkout, cache, revision):
+    """Build in a revision-specific copy so generated files and patches never dirty the submodule."""
+    if not (checkout / "src/libtscore/tsVersion.h").is_file():
+        raise RuntimeError("Initialize TSDuck with: git submodule update --init third-party/tsduck")
+    source = cache / f"tsduck-{revision}"
+    shutil.copytree(checkout, source, dirs_exist_ok=True, copy_function=copy_missing,
+                    ignore=shutil.ignore_patterns(".git", "bin"))
     return source
 
 
@@ -148,17 +150,20 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
     runtime = source / "bin" / f"koko-{target}"
     # Cargo exports DEBUG even for release builds. Keep the SDK profile and directory deterministic.
     flags.extend(["DEBUG=", f"BINDIR={runtime}"])
+    environment = os.environ.copy()
     if "apple" in target:
         architecture = "arm64" if target.startswith("aarch64") else "x86_64"
-        flags.extend([f"LOCAL_ARCH={architecture}", f"CXXFLAGS_EXTRA=-arch {architecture}",
-                      f"LDFLAGS_EXTRA=-arch {architecture}"])
+        flags.append(f"LOCAL_ARCH={architecture}")
+        # Command-line assignments prevent TSDuck from appending its required include paths.
+        for variable in ("CXXFLAGS_EXTRA", "LDFLAGS_EXTRA"):
+            environment[variable] = f"{environment.get(variable, '')} -arch {architecture}".strip()
         cmake.append(f"-DCMAKE_OSX_ARCHITECTURES={architecture}")
         # TSDuck's scripts require GNU sed's argument ordering.
         flags.append(f"SED={shutil.which('gsed') or 'gsed'}")
     # Upstream's make configuration needs GNU Make and a current Bash on macOS/BSD.
     make = "gmake" if platform.system() in ("Darwin", "FreeBSD") else "make"
     for component in ("libtscore", "libtsduck"):
-        run(make, "-C", source / f"src/{component}", "-j", str(min(os.cpu_count() or 2, 4)), *flags)
+        run(make, "-C", source / f"src/{component}", "-j", str(min(os.cpu_count() or 2, 4)), *flags, env=environment)
     run(*cmake, f"-DTSDUCK_SOURCE={source}", f"-DTSDUCK_RUNTIME={runtime}", "-DCMAKE_BUILD_TYPE=Release")
     run(cmake[0], "--build", build_dir, "--parallel", "2")
     copy_runtime(runtime, destination)
@@ -169,13 +174,14 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
         bundle_cpp_runtime(destination, cache)
 
 
-def build(target, destination, cache, offline_source=None):
+def build(target, destination, cache, offline_source=None, revision=VERSION):
     """Produce a self-contained native component directory for the selected Rust target."""
     root = Path(__file__).resolve().parents[1]
     destination.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
-    source = offline_source.resolve() if offline_source else source_tree(cache)
-    build_dir = cache / f"bridge-{VERSION}-{target}"
+    checkout = offline_source.resolve() if offline_source else root / "third-party/tsduck"
+    source = source_tree(checkout, cache, revision)
+    build_dir = cache / f"bridge-{revision}-{target}"
     cmake = [cmake_program(), "-S", root / "native/live-tv", "-B", build_dir]
     if "windows" in target:
         build_windows(target, destination, cache, build_dir, cmake)
@@ -192,5 +198,6 @@ if __name__ == "__main__":
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--cache", default=Path("target/live-tv-deps"), type=Path)
     parser.add_argument("--source", type=Path, help="Pinned source already extracted by an offline package builder")
+    parser.add_argument("--revision", default=VERSION, help="Pinned submodule revision used to isolate build caches")
     options = parser.parse_args()
-    build(options.target, options.destination.resolve(), options.cache.resolve(), options.source)
+    build(options.target, options.destination.resolve(), options.cache.resolve(), options.source, options.revision)

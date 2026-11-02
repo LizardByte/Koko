@@ -128,6 +128,10 @@ jobs:
           git show "${commit}:crates/client-web/package-lock.json" > build/package-lock.json
           cp -r packaging/linux/flatpak/deps/shared-modules build/shared-modules
           cp -r packaging/linux/flatpak/modules build/modules
+          tsduck_revision="$(git rev-parse "${commit}:third-party/tsduck")"
+          jq --arg revision "${tsduck_revision}" '.sources[0].commit = $revision' \
+            build/modules/tsduck.json > build/modules/tsduck.json.tmp
+          mv build/modules/tsduck.json.tmp build/modules/tsduck.json
           cp "packaging/linux/flatpak/${APP_ID}.yml" "build/${APP_ID}.yml"
           cp "packaging/linux/flatpak/${APP_ID}.metainfo.xml" "build/${APP_ID}.metainfo.xml"
 

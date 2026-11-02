@@ -27,13 +27,30 @@ export function bindTvPlaybackHeadroom(video: HTMLMediaElement, tv: TvPlayback, 
   let played = !video.paused && video.readyState >= video.HAVE_FUTURE_DATA;
   const rebuffer = bindHeadroomHold(video,events.signal,() => Boolean(tv.buffer?.finished || video.ended));
   video.addEventListener('playing',() => { played = true; },{signal:events.signal});
-  video.addEventListener('waiting',() => {
+  const holdIfPlaying = () => {
     const buffer = tv.buffer;
     if (!active() || !played || paused() || video.paused || video.seeking || !buffer || buffer.finished || buffer.error) return;
     rebuffer.hold();
-  },{signal:events.signal});
+  };
+  video.addEventListener('waiting',holdIfPlaying,{signal:events.signal});
+  monitorBufferEdge(video,holdIfPlaying,events.signal);
   if (active() && video.currentTime<0.25 && !paused() && !tv.buffer?.finished && !tv.buffer?.error) rebuffer.hold();
   return () => { events.abort(); rebuffer.cancel(); };
+}
+
+/** Check playable progress because decoder readiness can include audio beyond the last video frame. */
+function monitorBufferEdge(video:HTMLMediaElement,holdIfPlaying:()=>void,signal:AbortSignal):void {
+  // Audio samples can keep readyState and buffered high after the last video
+  // frame. Detect a stopped clock as well as a nearly empty downloaded range.
+  let lastPosition=video.currentTime,lastProgress=Date.now();
+  const edgeCheck = globalThis.setInterval(() => {
+    const position=video.currentTime,now=Date.now();
+    if (position!==lastPosition || video.paused || video.seeking || video.playbackRate===0) lastProgress=now;
+    lastPosition=position;
+    const headroom=bufferedTvHeadroom(video);
+    if (headroom<500 || (headroom<RESERVE_MS && now-lastProgress>=750)) holdIfPlaying();
+  },100);
+  signal.addEventListener('abort',()=>globalThis.clearInterval(edgeCheck),{once:true});
 }
 
 /** Hold the playback clock while loading, retaining user pause intent and the existing decoder. */

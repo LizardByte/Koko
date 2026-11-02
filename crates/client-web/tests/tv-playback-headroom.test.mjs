@@ -57,6 +57,35 @@ test('short finished captures release the startup hold even when less than two s
   }finally{cleanup();}
 });
 
+test('a decoder with healthy readiness and no waiting event rebuilds its reserve before the last frame',t=>{
+  t.mock.timers.enable({apis:['setInterval']});
+  const video=media({readyState:4,ranges:[[0,10.3]]}),tv=playback();
+  const cleanup=bindTvPlaybackHeadroom(video,tv,()=>true,()=>false);
+  try{
+    t.mock.timers.tick(100);assert.equal(video.playbackRate,0);
+    video.ranges=[[0,11.9]];t.mock.timers.tick(100);assert.equal(video.playbackRate,0);
+    video.ranges=[[0,12.1]];t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+    assert.equal(video.currentTime,10);assert.equal(video.volume,0.3);assert.equal(video.src,'/same-decoder');
+    video.paused=true;video.ranges=[[0,10.1]];t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+    video.paused=false;video.seeking=true;t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+    video.seeking=false;tv.buffer.finished=true;t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+  }finally{cleanup();}
+  tv.buffer.finished=false;t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+});
+
+test('a stopped video clock rebuilds the reserve when audio overstates the remaining playable data',t=>{
+  t.mock.timers.enable({apis:['setInterval','Date']});
+  const video=media({readyState:4,ranges:[[0,11.1]]}),tv=playback();
+  const cleanup=bindTvPlaybackHeadroom(video,tv,()=>true,()=>false);
+  try{
+    t.mock.timers.tick(700);assert.equal(video.playbackRate,1.25);
+    video.currentTime+=0.1;t.mock.timers.tick(700);assert.equal(video.playbackRate,1.25);
+    t.mock.timers.tick(800);assert.equal(video.playbackRate,0);
+    video.ranges=[[0,13]];t.mock.timers.tick(100);assert.equal(video.playbackRate,1.25);
+    assert.equal(video.currentTime,10.1);assert.equal(video.volume,0.3);
+  }finally{cleanup();}
+});
+
 test('intentional pauses, seeks, inactive views, and disposed bindings cannot restart playback',()=>{
   const video=media(),tv=playback();let active=true,paused=true;
   const cleanup=bindTvPlaybackHeadroom(video,tv,()=>active,()=>paused);

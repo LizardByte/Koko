@@ -197,8 +197,19 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:20000}).toBeTruthy();
     await expect(page.getByRole('button',{name:'Go live',exact:true})).toHaveCount(0);
     const previousSeekSource=await page.locator('#media-player').getAttribute('src');
-    await page.getByRole('button',{name:'Skip to end',exact:true}).click();
-    await expect(page.locator('#media-player')).not.toHaveAttribute('src',previousSeekSource);
+    let releaseStatus,observeStatus;
+    const statusGate=new Promise(resolve=>{releaseStatus=resolve;}),statusSeen=new Promise(resolve=>{observeStatus=resolve;});
+    const statusPath=new RegExp(`/api/v1/live-tv/sessions/${bufferId}$`);
+    const delayStatus=async route=>{if(route.request().method()==='GET'){observeStatus();await statusGate;}await route.continue();};
+    await page.route(statusPath,delayStatus);
+    try{
+      await page.getByRole('button',{name:'Skip to end',exact:true}).click();await statusSeen;
+      await page.getByRole('button',{name:'Close player',exact:true}).click();
+      await expect(page.locator('.tv-preview-player')).toBeVisible();
+      await page.getByRole('button',{name:'Expand player',exact:true}).click();
+      releaseStatus();
+      await expect(page.locator('#media-player')).not.toHaveAttribute('src',previousSeekSource);
+    }finally{releaseStatus();await page.unroute(statusPath,delayStatus);}
     const latestBuffer=await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json();
     const newestPosition=await page.locator('#media-player').evaluate(node=>Number(new URL(node.src).searchParams.get('start_ms')));
     expect(latestBuffer.end_ms-newestPosition).toBeGreaterThanOrEqual(5000);

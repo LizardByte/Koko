@@ -1465,13 +1465,16 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
   const goLive = () => {
     const session = tv.buffer?.session_id;
     if (!session) return;
+    const request=playbackRequest;
+    // A user seek survives control rebinding, but a later tune or seek supersedes it.
+    const isCurrentRequest=()=>state.activeTvPlayback===tv && tv.buffer?.session_id===session && playbackRequest===request;
     void tvApi.getTvBuffer(session).then(info => {
-      if (!current() || tv.buffer?.session_id !== session) return;
-      info.recording_id ??= tv.buffer.recording_id;
+      if (!isCurrentRequest()) return;
+      info.recording_id ??= tv.buffer?.recording_id;
       tv.buffer = info;
       seekTvBuffer(tvLivePosition(tv),false);
     }).catch(error => {
-      if (current()) showPlaybackProblem({message:error instanceof Error ? error.message : 'Unable to find the live position.',retry:true});
+      if (isCurrentRequest()) showPlaybackProblem({message:error instanceof Error ? error.message : 'Unable to find the live position.',retry:true});
     });
   };
   const live = document.querySelector('#player-skip-to-end');

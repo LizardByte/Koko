@@ -67,6 +67,14 @@ jobs:
       - name: Check licenses
         run: cargo bin cargo-deny check licenses
 
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Test native packaging metadata and downloads
+        run: python -m unittest discover -s packaging/tests
+
   clippy:
     name: Clippy
     permissions:

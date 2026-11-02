@@ -22,6 +22,9 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 
+#[cfg(test)]
+mod tests;
+
 type NativeString = unsafe extern "C" fn() -> *mut c_char;
 type Free = unsafe extern "C" fn(*mut c_char);
 type Open = unsafe extern "C" fn(*const c_char, *const c_char) -> *mut c_void;

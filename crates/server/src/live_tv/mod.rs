@@ -21,6 +21,8 @@ mod sources;
 mod storage;
 mod stream;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 pub(crate) mod timeshift;
 pub(crate) mod tsduck;

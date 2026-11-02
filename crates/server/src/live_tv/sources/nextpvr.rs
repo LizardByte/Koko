@@ -200,6 +200,124 @@ pub(super) fn keepalive(
 mod tests {
     use super::*;
 
+    #[rocket::async_test]
+    async fn sessions_channels_listings_and_keepalive_use_the_server_protocol() {
+        use crate::live_tv::test_support::HttpFixture;
+        let now = crate::live_tv::now();
+        let fixture = HttpFixture::new(move |path| {
+            let url = Url::parse(&format!("http://fixture{path}")).unwrap();
+            let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+            let body = match query.get("method").map(String::as_str).unwrap() {
+                "session.initiate" => {
+                    "<rsp stat='ok'><sid>fixture-session</sid><salt>challenge</salt></rsp>".into()
+                }
+                "session.login" => {
+                    assert_eq!(query["sid"], "fixture-session");
+                    assert_eq!(query["md5"].len(), 32);
+                    assert!(query["md5"].bytes().all(|value| value.is_ascii_hexdigit()));
+                    "<rsp stat='ok'/>".into()
+                }
+                "channel.list" => "<rsp stat='ok'><channel><id>11</id><name>Workshop</\
+                                   name><number>7</number><minor>1</minor></\
+                                   channel><channel><id>12</id><name>Weather</name><number>8</\
+                                   number><minor>0</minor></channel><channel><id>missing-name</\
+                                   id></channel></rsp>"
+                    .into(),
+                "channel.listings" => format!(
+                    "<rsp stat='ok'><l><start>{}</start><end>{}</end><name>Weekend \
+                     Workshop</name><subtitle>Table restoration</subtitle><description>A wooden \
+                     table is restored.</description><unique_id>workshop-1</\
+                     unique_id><genre>Home</genre><season>2</season><episode>3</\
+                     episode><firstrun>true</firstrun></l><l><start>10</start><end>5</\
+                     end><name>Invalid \
+                     interval</name></l><l><start>bad</start><end>20</end></l></rsp>",
+                    now * 1000,
+                    (now + 3600) * 1000
+                ),
+                "session.valid" => "<rsp stat='ok'/>".into(),
+                _ => panic!("Unexpected NextPVR request"),
+            };
+            (200, "application/xml", body.into_bytes())
+        })
+        .await;
+        let config = SourceConfig {
+            url: fixture.url.clone(),
+            pin: format!("{:x}", rand::random::<u128>()),
+            ..Default::default()
+        };
+        let channels = channels(&config).await.unwrap();
+        assert_eq!(
+            channels
+                .iter()
+                .map(|c| c.number.as_str())
+                .collect::<Vec<_>>(),
+            ["7.1", "8"]
+        );
+        let programs = guide(&config).await.unwrap();
+        assert_eq!(programs.len(), 2);
+        assert_eq!(programs[0].starts_at, now);
+        assert_eq!(programs[0].ends_at, now + 3600);
+        assert_eq!(programs[0].metadata.episode.as_deref(), Some("S2E3"));
+        assert_eq!(
+            programs[0].metadata.subtitle.as_deref(),
+            Some("Table restoration")
+        );
+        assert_eq!(
+            programs[0].metadata.episode_id.as_deref(),
+            Some("workshop-1")
+        );
+        let stream = stream_url(&config, "11").await.unwrap();
+        let url = Url::parse(&stream).unwrap();
+        assert_eq!(url.path(), "/live");
+        assert!(
+            url.query_pairs()
+                .any(|(key, value)| key == "channeloid" && value == "11")
+        );
+        let task = keepalive(&config, &stream).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !fixture
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|path| path.contains("session.valid"))
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(keepalive(&config, &fixture.url).is_err());
+    }
+
+    #[rocket::async_test]
+    async fn malformed_or_rejected_nextpvr_sessions_do_not_become_playable_channels() {
+        use crate::live_tv::test_support::HttpFixture;
+        for (body, message) in [
+            ("broken XML", "invalid XML"),
+            ("<rsp stat='fail'/>", "rejected"),
+            ("<rsp stat='ok'/>", "supply a session"),
+            ("<rsp stat='ok'><sid>fixture</sid></rsp>", "session salt"),
+        ] {
+            let fixture =
+                HttpFixture::new(move |_| (200, "application/xml", body.as_bytes().to_vec())).await;
+            let config = SourceConfig {
+                url: fixture.url.clone(),
+                ..Default::default()
+            };
+            assert!(login(&config).await.unwrap_err().contains(message));
+        }
+        assert!(
+            parse_channels("<rsp stat='ok'/>")
+                .unwrap_err()
+                .contains("no configured channels")
+        );
+        assert_eq!(timestamp(None), None);
+        assert_eq!(timestamp(Some("not-a-time".into())), None);
+        assert_eq!(timestamp(Some("1793595600".into())), Some(1793595600));
+    }
+
     #[test]
     fn guide_metadata_keeps_genres_and_broadcast_flags_independent() {
         let doc = roxmltree::Document::parse(

@@ -65,6 +65,20 @@ class NativePackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
             native.download_url(original.as_uri(), digest, cache)
 
+    def test_cpp_runtime_includes_license_notices_without_network_access(self):
+        destination = self.root / "bundle"
+        destination.mkdir()
+        libraries = [self.root / name for name in ("libstdc++.so.6", "libgcc_s.so.1")]
+        for library in libraries:
+            library.write_bytes(b"runtime fixture")
+        with patch.object(native.subprocess, "check_output", side_effect=[str(path) for path in libraries]):
+            with patch.object(native.urllib.request, "urlopen", side_effect=AssertionError("unexpected network")):
+                native.bundle_cpp_runtime(destination)
+        for library in libraries:
+            self.assertEqual((destination / library.name).read_bytes(), library.read_bytes())
+        self.assertIn("GNU GENERAL PUBLIC LICENSE", (destination / "gcc-runtime-GPL-3.0.txt").read_text())
+        self.assertIn("GCC RUNTIME LIBRARY EXCEPTION", (destination / "gcc-runtime-exception-3.1.txt").read_text())
+
     def test_windows_sdk_matches_the_release_version_architecture_and_published_digest(self):
         version = "9.12-345"
         digest = "a" * 64

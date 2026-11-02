@@ -762,6 +762,10 @@ pub(crate) async fn keep(
 }
 
 #[cfg(test)]
+#[path = "timeshift/capture_tests.rs"]
+mod capture_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

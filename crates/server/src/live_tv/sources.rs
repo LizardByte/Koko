@@ -766,6 +766,10 @@ pub(super) fn keepalive(
 }
 
 #[cfg(test)]
+#[path = "sources/tests.rs"]
+mod tests;
+
+#[cfg(test)]
 mod artwork_tests {
     use super::*;
     #[rocket::async_test]

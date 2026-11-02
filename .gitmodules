@@ -17,3 +17,4 @@
 [submodule "third-party/tsduck"]
 	path = third-party/tsduck
 	url = https://github.com/tsduck/tsduck.git
+	branch = master

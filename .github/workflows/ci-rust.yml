@@ -144,6 +144,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
 
       - name: Trust Alpine checkout
         if: contains(matrix.container, 'alpine')
@@ -151,9 +153,6 @@ jobs:
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git config --global --add safe.directory "${GITHUB_WORKSPACE}/third-party/build-deps"
           git config --global --add safe.directory "${GITHUB_WORKSPACE}/third-party/tsduck"
-
-      - name: Initialize build dependencies
-        run: git submodule update --init --depth=1 third-party/build-deps third-party/tsduck
 
       - name: Install Ubuntu dependencies
         if: matrix.container == '' && contains(matrix.os, 'ubuntu')

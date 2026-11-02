@@ -5,8 +5,10 @@ import { escapeHtml as escape } from './format';
 interface Choice { name: string; address: string; details: string; capacity?: number }
 interface DiscoveryForm {
   form: HTMLFormElement; input: HTMLInputElement; results: HTMLElement;
-  status: HTMLElement; kind: string; signal: AbortSignal; suggestedName?: string;
+  status: HTMLElement; kind: string; signal: AbortSignal; suggestedName?: string; viewKey?: string;
 }
+
+const forms = new WeakMap<HTMLFormElement, DiscoveryForm>();
 
 async function findChoices(kind: string): Promise<Choice[]> {
   if (kind === 'native') {
@@ -70,7 +72,11 @@ function bindForm(form: HTMLFormElement, signal: AbortSignal): void {
   const status = form.querySelector<HTMLElement>('[data-tv-discovery-status], [data-tv-tuner-status]');
   const input = form.querySelector<HTMLInputElement>(kind === 'native' ? '[name="native_device"]' : '[name="url"]');
   if (!button || !results || !status || !input) return;
-  const context: DiscoveryForm = { form, input, results, status, kind, signal };
+  // Refresh the signal on a retained form so pending discovery can populate newly bound controls.
+  const fields = { form, input, results, status, kind, signal, viewKey: form.dataset.tvFormKey };
+  const previous = forms.get(form);
+  const context = previous?.kind === kind && previous.viewKey === fields.viewKey ? Object.assign(previous, fields) : fields;
+  forms.set(form, context);
   button.addEventListener('click', () => { void search(context, button); }, { signal });
   input.addEventListener('input', () => {
     const checked = results.querySelector<HTMLInputElement>('input:checked');

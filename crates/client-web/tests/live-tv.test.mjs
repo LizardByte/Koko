@@ -13,6 +13,7 @@ const { channelPrograms, renderLiveTvPage, tvImage } = await server.ssrLoadModul
 const { loadLiveTv,sourceConfig } = await server.ssrLoadModule('/src/app/liveTvActions.ts');
 const { renderLiveTvSettings } = await server.ssrLoadModule('/src/app/liveTvSetup.ts');
 const { renderTvGuideMapping,bindTvGuideMappings } = await server.ssrLoadModule('/src/app/liveTvMapping.ts');
+const {bindTvDiscovery} = await server.ssrLoadModule('/src/app/liveTvDiscovery.ts');
 const { state } = await server.ssrLoadModule('/src/app/state.ts');
 const { parseRoute } = await server.ssrLoadModule('/src/app/routes.ts');
 const { programPosition, programBadges, matchesTvCategory, visibleGuideChannels, guideSources } = await server.ssrLoadModule('/src/app/liveTvGuideModel.ts');
@@ -26,6 +27,29 @@ const {renderTvSourceIcon,recoverTvSourceImage} = await server.ssrLoadModule('/s
 const {renderTvPlayerProgram} = await server.ssrLoadModule('/src/app/tvPlayer.ts');
 const now = Math.floor(Date.now() / 1000);
 const channel = { id: 1, source_id: 1, source_key: 'source', name: 'Test TV', number: '7.1', group_name: 'News', guide_key: 'station', enabled: true, available: true };
+
+test('pending tuner discovery survives retained bindings and ignores a different account view',async()=>{
+  const previousDocument=globalThis.document,previousFetch=globalThis.fetch;
+  const dom=new JSDOM('<form data-tv-source-kind="hdhomerun" data-tv-form-key="1:new:hdhomerun"><input name="url"><input name="name"><input name="capacity" value="1"><button type="button" data-tv-discover-source>Find</button><div data-tv-discovery-results></div><p data-tv-discovery-status></p></form>');
+  globalThis.document=dom.window.document;
+  const controllers=Array.from({length:3},()=>new dom.window.AbortController());
+  let deliver;
+  globalThis.fetch=()=>new Promise(resolve=>{deliver=resolve;});
+  const finish=async()=>{deliver(Response.json([{name:'Living room tuner',url:'http://tuner.example/',capacity:4}]));await new Promise(resolve=>setTimeout(resolve,0));};
+  try{
+    bindTvDiscovery(controllers[0].signal);dom.window.document.querySelector('button').click();
+    controllers[0].abort();bindTvDiscovery(controllers[1].signal);
+    await finish();
+    const radio=dom.window.document.querySelector('input[type="radio"]');assert.ok(radio);
+    radio.checked=true;radio.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
+    assert.equal(dom.window.document.querySelector('[name="url"]').value,'http://tuner.example/');
+    assert.equal(dom.window.document.querySelector('[name="capacity"]').value,'4');
+    dom.window.document.querySelector('button').click();
+    controllers[1].abort();dom.window.document.querySelector('form').dataset.tvFormKey='2:new:hdhomerun';
+    bindTvDiscovery(controllers[2].signal);await finish();
+    assert.equal(dom.window.document.querySelector('input[type="radio"]'),null);
+  }finally{controllers.forEach(controller=>controller.abort());globalThis.fetch=previousFetch;globalThis.document=previousDocument;dom.window.close();}
+});
 
 test('source artwork falls back from an uploaded icon to its application logo and then Lucide',()=>{
   const dom=new JSDOM(renderTvSourceIcon({kind:'nextpvr',image_url:'https://example.com/upload.png'}));

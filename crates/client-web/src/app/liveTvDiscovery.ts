@@ -5,7 +5,7 @@ import { escapeHtml as escape } from './format';
 interface Choice { name: string; address: string; details: string; capacity?: number }
 interface DiscoveryForm {
   form: HTMLFormElement; input: HTMLInputElement; results: HTMLElement;
-  status: HTMLElement; kind: string; signal: AbortSignal; suggestedName?: string; viewKey?: string;
+  status: HTMLElement; kind: string; signal: AbortSignal; suggestedName?: string; viewKey?: string; choices?: Choice[];
 }
 
 const forms = new WeakMap<HTMLFormElement, DiscoveryForm>();
@@ -34,14 +34,12 @@ function useChoice(context: DiscoveryForm, choice: Choice): void {
 }
 
 function showChoices(context: DiscoveryForm, choices: Choice[]): void {
+  context.choices = choices;
   context.results.innerHTML = choices.map(choice => `<label class="live-tv-discovery-card">
     <input type="radio" name="tv_discovery_choice" value="${escape(choice.address)}" ${choice.address === context.input.value ? 'checked' : ''} />
     <span class="live-tv-discovery-card-content"><span class="live-tv-discovery-card-heading"><strong>${escape(choice.name)}</strong><span class="live-tv-discovery-selected" aria-hidden="true">Selected</span></span>
       <span class="live-tv-discovery-card-address">${escape(choice.address)}</span><span class="live-tv-discovery-card-details">${escape(choice.details)}</span></span></label>`).join('');
   context.results.hidden = choices.length === 0;
-  context.results.querySelectorAll<HTMLInputElement>('input').forEach((radio, index) => {
-    radio.addEventListener('change', () => { if (radio.checked) useChoice(context, choices[index]); }, { signal: context.signal });
-  });
 }
 
 async function search(context: DiscoveryForm, button: HTMLButtonElement): Promise<void> {
@@ -75,8 +73,13 @@ function bindForm(form: HTMLFormElement, signal: AbortSignal): void {
   // Refresh the signal on a retained form so pending discovery can populate newly bound controls.
   const fields = { form, input, results, status, kind, signal, viewKey: form.dataset.tvFormKey };
   const previous = forms.get(form);
-  const context = previous?.kind === kind && previous.viewKey === fields.viewKey ? Object.assign(previous, fields) : fields;
+  const context: DiscoveryForm = previous?.kind === kind && previous.viewKey === fields.viewKey ? Object.assign(previous, fields) : fields;
   forms.set(form, context);
+  results.addEventListener('change', event => {
+    const radio = (event.target as Element | null)?.closest<HTMLInputElement>('input[type="radio"]');
+    const choice = radio?.checked ? context.choices?.find(item => item.address === radio.value) : undefined;
+    if (choice) useChoice(context, choice);
+  }, { signal });
   button.addEventListener('click', () => { void search(context, button); }, { signal });
   input.addEventListener('input', () => {
     const checked = results.querySelector<HTMLInputElement>('input:checked');

@@ -52,8 +52,8 @@ pub async fn guide_providers(
     _admin: AdminGuard,
     country: &str,
     postal_code: &str,
-) -> Result<Json<Vec<tv::gracenote::Provider>>, Error> {
-    tv::gracenote::providers(country, postal_code)
+) -> Result<Json<Vec<tv::zap2it::Provider>>, Error> {
+    tv::zap2it::providers(country, postal_code)
         .await
         .map(Json)
         .map_err(error)

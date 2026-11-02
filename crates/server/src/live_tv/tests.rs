@@ -22,9 +22,11 @@ fn legacy_guide_settings_keep_the_selected_lineup_after_the_zap2it_rename() {
         }
     }))
     .unwrap();
+    assert_eq!(config.guide_kind, "zap2it");
     assert_eq!(config.zap2it.postal_code, "14850");
     let serialized = serde_json::to_value(config).unwrap();
     assert!(serialized.get("gracenote").is_none());
+    assert_eq!(serialized["guide_kind"], "zap2it");
     assert_eq!(serialized["zap2it"]["lineup_id"], "USA-lineupId-DEFAULT");
 }
 
@@ -386,8 +388,8 @@ fn dvr_folder_changes_apply_to_new_captures_and_preserve_existing_paths() {
 }
 
 #[test]
-fn gracenote_maps_station_identity_metadata_and_six_hour_requests() {
-    let selection = gracenote::Selection {
+fn zap2it_maps_station_identity_metadata_and_six_hour_requests() {
+    let selection = zap2it::Selection {
         country: "CAN".into(),
         postal_code: "K1A 0B1".into(),
         lineup_id: "CAN-TEST-X".into(),
@@ -395,15 +397,15 @@ fn gracenote_maps_station_identity_metadata_and_six_hour_requests() {
         days: 2,
         ..Default::default()
     };
-    let url = gracenote::page_url(&selection, 1793372400).unwrap();
+    let url = zap2it::page_url(&selection, 1793372400).unwrap();
     let query = url
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(query["timespan"], "6");
     assert_eq!(query["postalCode"], "K1A0B1");
     assert_eq!(query["lineupId"], "CAN-TEST-X");
-    let page = serde_json::from_str(include_str!("fixtures/gracenote.json")).unwrap();
-    let guide = gracenote::parse(&page).unwrap();
+    let page = serde_json::from_str(include_str!("fixtures/zap2it.json")).unwrap();
+    let guide = zap2it::parse(&page).unwrap();
     assert_eq!(guide.stations[0].guide_key, "17043");
     assert_eq!(
         guide.stations[0].logo.as_deref(),

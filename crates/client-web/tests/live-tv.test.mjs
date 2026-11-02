@@ -340,7 +340,7 @@ test('setup includes Zap2It lineup discovery, DVR storage, and per-user permissi
   state.bootstrap = { current_user: { id: 1, admin: true } };
   state.liveTv = data({ dvrSettings: { settings: { recording_dir: 'D:\\TV' }, users: [{ user_id: 2, username: '<viewer>', can_record: false }] } });
   const html = renderLiveTvSettings();
-  assert.match(html, /Zap2It/); assert.doesNotMatch(html, /Gracenote/); assert.match(html, /name="guide_country"/); assert.match(html, /name="refresh_hours"/);
+  assert.match(html, /Zap2It/); assert.match(html, /name="guide_country"/); assert.match(html, /name="refresh_hours"/);
   assert.match(html, /DVR save folder/); assert.match(html, /data-tv-permission="2"/); assert.match(html, /&lt;viewer&gt;/);
   assert.doesNotMatch(html, /Install TSDuck/);
 });

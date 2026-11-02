@@ -83,7 +83,7 @@ pub(super) async fn import(config: &SourceConfig) -> Result<Imported, String> {
     if channels.is_empty() {
         return Err("No playable IPTV channels were found".into());
     }
-    // Native XMLTV includes both direct and DRM-bridge channels, including Gracenote-mapped ones.
+    // Native XMLTV includes both direct and DRM-bridge channels, including station-ID-mapped ones.
     let guide = if fast && matches!(config.guide_kind.as_str(), "" | "automatic") {
         Some(feeds::guide_input(endpoint(&config.url, "feeds/default/native/epg.xml")?).await?)
     } else {
@@ -179,7 +179,7 @@ mod tests {
                 tvg-id=\"pluto.news\",News\nhttp://tv.example/news.ts\n";
             let bridge="#EXTM3U\n#EXTINF:-1 channel-id=\"espn.espn1\" \
                 tvg-id=\"espn.espn1\",ESPN\nhttp://bridge.example/espn.m3u8\n";
-            let gracenote="#EXTM3U\n#EXTINF:-1 channel-id=\"sling.sports\" \
+            let station_mapped="#EXTM3U\n#EXTINF:-1 channel-id=\"sling.sports\" \
                 tvc-guide-stationid=\"123\",Sports\nhttp://bridge.example/sports.m3u8\n";
             let now = chrono::Utc::now();
             let guide = format!(
@@ -198,7 +198,7 @@ mod tests {
                 responses.push((
                     "/feeds/default/m3u/prismcast/gracenote",
                     bridge_status,
-                    gracenote.into(),
+                    station_mapped.into(),
                 ));
                 responses.push(("/feeds/default/native/epg.xml", 200, guide));
             }

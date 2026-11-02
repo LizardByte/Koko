@@ -1462,7 +1462,18 @@ function bindTvBufferControls(player: HTMLMediaElement): () => void {
   tvPlaybackWatchdog(tv).attach(activePlaybackPositionMs(player),Date.now());
   const cleanupMenu = bindTvRecordingMenu(tv);
   const cleanupHeadroom = bindTvPlaybackHeadroom(player,tv,current,() => Boolean(state.playbackSettings?.paused));
-  const goLive = () => { if (tv.buffer) seekTvBuffer(tvLivePosition(tv),false); };
+  const goLive = () => {
+    const session = tv.buffer?.session_id;
+    if (!session) return;
+    void tvApi.getTvBuffer(session).then(info => {
+      if (!current() || tv.buffer?.session_id !== session) return;
+      info.recording_id ??= tv.buffer.recording_id;
+      tv.buffer = info;
+      seekTvBuffer(tvLivePosition(tv),false);
+    }).catch(error => {
+      if (current()) showPlaybackProblem({message:error instanceof Error ? error.message : 'Unable to find the live position.',retry:true});
+    });
+  };
   const live = document.querySelector('#player-skip-to-end');
   live?.addEventListener('click',goLive);
   const timer = globalThis.setInterval(() => {

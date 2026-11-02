@@ -107,7 +107,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       INPUT_RELEASE_VERSION: ${{ inputs.release_version }}
-      # TODO: Restore nightly after https://github.com/rust-lang/rust/pull/165266 reaches the published channel.
+      # Temporary pin pending https://github.com/rust-lang/rust/pull/165266; tracked in PR #351's checklist.
       TEST_TOOLCHAIN: nightly-2026-10-31  # libtest JSON needs nightly; November 1 has a compiler regression.
       # musl must support dlopen for Koko's bundled native TV library.
       RUSTFLAGS: >-

@@ -31,7 +31,7 @@ def sdk_version(checkout):
     header = (checkout / "src/libtscore/tsVersion.h").read_text(encoding="utf-8")
     values = dict(re.findall(r"^#define\s+(TS_VERSION_MAJOR|TS_VERSION_MINOR|TS_COMMIT)\s+(\d+)\s*$", header, re.M))
     try:
-        return f"{values['TS_VERSION_MAJOR']}.{values['TS_VERSION_MINOR']}-{values['TS_COMMIT']}"
+        return f"{int(values['TS_VERSION_MAJOR'])}.{int(values['TS_VERSION_MINOR'])}-{int(values['TS_COMMIT'])}"
     except KeyError as error:
         raise RuntimeError("The TSDuck submodule has incomplete version metadata") from error
 

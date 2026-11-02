@@ -1,17 +1,29 @@
 //! Capture ownership, decoder output, retained recordings, and resource release with synthetic TV.
 
-use super::*;
+use super::{
+    BufferInfo,
+    close,
+    keep,
+    play,
+    start,
+    status,
+};
+use crate::db::DbConn;
 use crate::db::schema::{
     live_tv_programs as programs,
     live_tv_recordings as recordings,
 };
 use crate::live_tv::{
     SourceConfig,
+    settings,
+    stream,
     test_support::{
         Database,
         HttpFixture,
     },
 };
+use diesel::prelude::*;
+use std::time::Duration;
 
 // Twelve seconds of generated black video and silence, with two-second keyframe spacing.
 const TRANSPORT: &[u8] = include_bytes!("../fixtures/sample.mpegts");

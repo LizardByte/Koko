@@ -98,6 +98,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30  # v2.0.1
@@ -129,9 +131,7 @@ jobs:
       - name: Build browser test server
         env:
           KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
-        run: |
-          git submodule update --init --depth=1 third-party/tsduck
-          cargo build -p koko --locked --no-default-features
+        run: cargo build -p koko --locked --no-default-features
 
       - name: Test real browser playback
         working-directory: crates/client-web

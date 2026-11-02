@@ -32,7 +32,7 @@ test('pending tuner discovery survives retained bindings and ignores a different
   const previousDocument=globalThis.document,previousFetch=globalThis.fetch;
   const dom=new JSDOM('<form data-tv-source-kind="hdhomerun" data-tv-form-key="1:new:hdhomerun"><input name="url"><input name="name"><input name="capacity" value="1"><button type="button" data-tv-discover-source>Find</button><div data-tv-discovery-results></div><p data-tv-discovery-status></p></form>');
   globalThis.document=dom.window.document;
-  const controllers=Array.from({length:3},()=>new dom.window.AbortController());
+  const controllers=Array.from({length:4},()=>new dom.window.AbortController());
   let deliver;
   globalThis.fetch=()=>new Promise(resolve=>{deliver=resolve;});
   const finish=async()=>{deliver(Response.json([{name:'Living room tuner',url:'http://tuner.example/',capacity:4}]));await new Promise(resolve=>setTimeout(resolve,0));};
@@ -40,13 +40,14 @@ test('pending tuner discovery survives retained bindings and ignores a different
     bindTvDiscovery(controllers[0].signal);dom.window.document.querySelector('button').click();
     controllers[0].abort();bindTvDiscovery(controllers[1].signal);
     await finish();
+    controllers[1].abort();bindTvDiscovery(controllers[2].signal);
     const radio=dom.window.document.querySelector('input[type="radio"]');assert.ok(radio);
     radio.checked=true;radio.dispatchEvent(new dom.window.Event('change',{bubbles:true}));
     assert.equal(dom.window.document.querySelector('[name="url"]').value,'http://tuner.example/');
     assert.equal(dom.window.document.querySelector('[name="capacity"]').value,'4');
     dom.window.document.querySelector('button').click();
-    controllers[1].abort();dom.window.document.querySelector('form').dataset.tvFormKey='2:new:hdhomerun';
-    bindTvDiscovery(controllers[2].signal);await finish();
+    controllers[2].abort();dom.window.document.querySelector('form').dataset.tvFormKey='2:new:hdhomerun';
+    bindTvDiscovery(controllers[3].signal);await finish();
     assert.equal(dom.window.document.querySelector('input[type="radio"]'),null);
   }finally{controllers.forEach(controller=>controller.abort());globalThis.fetch=previousFetch;globalThis.document=previousDocument;dom.window.close();}
 });

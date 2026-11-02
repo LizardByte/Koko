@@ -1,15 +1,17 @@
 """Build and bundle Koko's native TV library against a pinned TSDuck SDK."""
 
 import argparse
+from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import urllib.request
 
-VERSION = "3.45-4798"
 ARCHIVES = {
     "gcc-license": (
         "https://www.gnu.org/licenses/gpl-3.0.txt",
@@ -19,19 +21,29 @@ ARCHIVES = {
         "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-15.2.0/COPYING.RUNTIME",
         "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
     ),
-    "Win64": (
-        f"https://github.com/tsduck/tsduck/releases/download/v{VERSION}/TSDuck-Win64-{VERSION}.exe",
-        "d1d1dae29e82d9c9dde8380fd562d2995e6cb702706031fa9574ebc06092bc57",
-    ),
-    "Arm64": (
-        f"https://github.com/tsduck/tsduck/releases/download/v{VERSION}/TSDuck-Arm64-{VERSION}.exe",
-        "d32122992fe88f91054a32da1c945382de1b741d0912512f5e60d7a571c26ea6",
-    ),
 }
 DISABLED = [
     "NODEKTEC", "NODTAPI", "NOHIDES", "NOVATEK", "NOCURL", "NOPCSC", "NOOPENSSL", "NOZLIB", "NOSRT",
     "NORIST", "NOJAVA", "NOPYTHON", "NOEDITLINE", "NOGITHUB", "NODOC", "NOTEST", "NOSTATIC",
 ]
+
+
+@dataclass(frozen=True)
+class BuildOptions:
+    """Build concurrency and whether the package runtime already supplies the C++ libraries."""
+
+    jobs: int
+    system_cpp_runtime: bool = False
+
+
+def sdk_version(checkout):
+    """Read release identifiers from the pinned source, including shallow and offline checkouts."""
+    header = (checkout / "src/libtscore/tsVersion.h").read_text(encoding="utf-8")
+    values = dict(re.findall(r"^#define\s+(TS_VERSION_MAJOR|TS_VERSION_MINOR|TS_COMMIT)\s+(\d+)\s*$", header, re.M))
+    try:
+        return f"{values['TS_VERSION_MAJOR']}.{values['TS_VERSION_MINOR']}-{values['TS_COMMIT']}"
+    except KeyError as error:
+        raise RuntimeError("The TSDuck submodule has incomplete version metadata") from error
 
 
 def visual_studio_path():
@@ -64,6 +76,11 @@ def cmake_program():
 def download(kind, cache):
     """Verify every cached or downloaded upstream archive before extraction."""
     url, digest = ARCHIVES[kind]
+    return download_url(url, digest, cache)
+
+
+def download_url(url, digest, cache):
+    """Reject corrupted downloads and cached archives before they reach an extractor."""
     archive = cache / url.rsplit("/", 1)[1]
     if not archive.exists():
         temporary = archive.with_suffix(archive.suffix + ".part")
@@ -72,6 +89,27 @@ def download(kind, cache):
     if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
         raise RuntimeError(f"TSDuck checksum mismatch: {archive}")
     return archive
+
+
+def windows_sdk(version, architecture, cache):
+    """Resolve the matching SDK's SHA-256 from its published GitHub release metadata."""
+    metadata = cache / f"tsduck-release-{version}.json"
+    if not metadata.is_file():
+        url = f"https://api.github.com/repos/tsduck/tsduck/releases/tags/v{version}"
+        request = urllib.request.Request(url, headers={"User-Agent": "Koko-native-build"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            release = json.load(response)
+        temporary = metadata.with_suffix(".part")
+        temporary.write_text(json.dumps(release), encoding="utf-8")
+        temporary.replace(metadata)
+    release = json.loads(metadata.read_text(encoding="utf-8"))
+    filename = f"TSDuck-{architecture}-{version}.exe"
+    asset = next((item for item in release.get("assets", []) if item.get("name") == filename), None)
+    digest = asset.get("digest", "") if asset else ""
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+        raise RuntimeError(f"The TSDuck release does not publish a SHA-256 digest for {filename}")
+    url = f"https://github.com/tsduck/tsduck/releases/download/v{version}/{filename}"
+    return download_url(url, digest.removeprefix("sha256:").lower(), cache)
 
 
 def copy_missing(source, destination):
@@ -100,17 +138,17 @@ def copy_runtime(directory, destination):
             shutil.copy2(path, destination / path.name)
 
 
-def build_windows(target, destination, cache, build_dir, cmake):
+def build_windows(target, destination, cache, build_dir, cmake, version, options):
     """Build the bridge using the matching upstream Windows SDK and redistributable CRT."""
     architecture = "Arm64" if target.startswith("aarch64") else "Win64"
-    archive = download(architecture, cache)
-    sdk = cache / f"sdk-{VERSION}-{architecture}"
+    archive = windows_sdk(version, architecture, cache)
+    sdk = cache / f"sdk-{version}-{architecture}"
     sevenzip = shutil.which("7z") or str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "7-Zip/7z.exe")
     if not (sdk / f"lib/Release-{architecture}/tsduck.lib").is_file():
         run(sevenzip, "x", archive, f"-o{sdk}", "-y", "include/*", f"lib/Release-{architecture}/*",
             "bin/*.dll", "bin/*.xml", "bin/*.names")
     run(*cmake, "-A", "ARM64" if architecture == "Arm64" else "x64", f"-DTSDUCK_ROOT={sdk}")
-    run(cmake[0], "--build", build_dir, "--config", "Release", "--parallel", "2")
+    run(cmake[0], "--build", build_dir, "--config", "Release", "--parallel", options.jobs)
     copy_runtime(sdk / "bin", destination)
     shutil.copy2(build_dir / "Release/koko_tv.dll", destination / "koko_tv.dll")
     # TSDuck's MSVC SDK needs the redistributable CRT even when Rust links its CRT statically.
@@ -123,7 +161,7 @@ def build_windows(target, destination, cache, build_dir, cmake):
 
 def patch_source(root, source):
     """Apply the pinned SDK backport once, including when reusing an extracted build cache."""
-    patch = root / "packaging/linux/flatpak/modules/patches/tsduck-no-web.patch"
+    patch = root / "packaging/patches/tsduck-no-web.patch"
     reverse = subprocess.run(
         ["patch", "-R", "--dry-run", "--force", "--silent", "-p1", "-i", str(patch)],
         cwd=source, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -143,7 +181,7 @@ def bundle_cpp_runtime(destination, cache):
     shutil.copy2(download("gcc-exception", cache), destination / "gcc-runtime-exception-3.1.txt")
 
 
-def build_unix(target, destination, cache, source, build_dir, cmake):
+def build_unix(target, destination, cache, source, build_dir, cmake, options):
     """Build only the SDK libraries and bridge without installing upstream CLI programs."""
     patch_source(Path(__file__).resolve().parents[1], source)
     flags = [f"{name}=1" for name in DISABLED]
@@ -163,30 +201,33 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
     # Upstream's make configuration needs GNU Make and a current Bash on macOS/BSD.
     make = "gmake" if platform.system() in ("Darwin", "FreeBSD") else "make"
     for component in ("libtscore", "libtsduck"):
-        run(make, "-C", source / f"src/{component}", "-j", str(min(os.cpu_count() or 2, 4)), *flags, env=environment)
+        run(make, "-C", source / f"src/{component}", "-j", options.jobs, *flags, env=environment)
     run(*cmake, f"-DTSDUCK_SOURCE={source}", f"-DTSDUCK_RUNTIME={runtime}", "-DCMAKE_BUILD_TYPE=Release")
-    run(cmake[0], "--build", build_dir, "--parallel", "2")
+    run(cmake[0], "--build", build_dir, "--parallel", options.jobs)
     copy_runtime(runtime, destination)
     for config_dir in (source / "src/libtsduck/config", source / "src/libtscore/config"):
         copy_runtime(config_dir, destination)
     copy_runtime(build_dir, destination)
-    if "linux" in target:
+    if "linux" in target and not options.system_cpp_runtime:
         bundle_cpp_runtime(destination, cache)
 
 
-def build(target, destination, cache, offline_source=None, revision=VERSION):
+def build(target, destination, cache, offline_source=None, revision=None, options=None):
     """Produce a self-contained native component directory for the selected Rust target."""
     root = Path(__file__).resolve().parents[1]
     destination.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     checkout = offline_source.resolve() if offline_source else root / "third-party/tsduck"
+    version = sdk_version(checkout)
+    revision = revision or version
+    options = options or BuildOptions(os.cpu_count() or 2)
     source = source_tree(checkout, cache, revision)
     build_dir = cache / f"bridge-{revision}-{target}"
     cmake = [cmake_program(), "-S", root / "native/live-tv", "-B", build_dir]
     if "windows" in target:
-        build_windows(target, destination, cache, build_dir, cmake)
+        build_windows(target, destination, cache, build_dir, cmake, version, options)
     else:
-        build_unix(target, destination, cache, source, build_dir, cmake)
+        build_unix(target, destination, cache, source, build_dir, cmake, options)
     for name in ("LICENSE.txt", "OTHERS.txt"):
         if (source / name).exists():
             shutil.copy2(source / name, destination / name)
@@ -198,6 +239,12 @@ if __name__ == "__main__":
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--cache", default=Path("target/live-tv-deps"), type=Path)
     parser.add_argument("--source", type=Path, help="Pinned source already extracted by an offline package builder")
-    parser.add_argument("--revision", default=VERSION, help="Pinned submodule revision used to isolate build caches")
+    parser.add_argument("--revision", help="Pinned submodule revision used to isolate build caches")
+    parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2, help="Concurrent native compilation jobs")
+    parser.add_argument("--system-cpp-runtime", action="store_true",
+                        help="Use C++ runtime libraries supplied by the package")
     options = parser.parse_args()
-    build(options.target, options.destination.resolve(), options.cache.resolve(), options.source, options.revision)
+    if options.jobs < 1:
+        parser.error("--jobs must be positive")
+    build(options.target, options.destination.resolve(), options.cache.resolve(), options.source, options.revision,
+          BuildOptions(options.jobs, options.system_cpp_runtime))

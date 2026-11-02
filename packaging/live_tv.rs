@@ -79,7 +79,7 @@ pub fn prepare(
         "native/live-tv/CMakeLists.txt",
         "packaging/live_tv.py",
         "packaging/live_tv.rs",
-        "packaging/linux/flatpak/modules/patches/tsduck-no-web.patch",
+        "packaging/patches/tsduck-no-web.patch",
     ] {
         println!("cargo:rerun-if-changed={}", workspace.join(file).display());
     }
@@ -128,6 +128,8 @@ pub fn prepare(
         .arg(source)
         .arg("--revision")
         .arg(revision)
+        .arg("--jobs")
+        .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "2".to_owned()))
         .status()?;
     if !status.success() || !root.join(library(target)).is_file() {
         return Err(

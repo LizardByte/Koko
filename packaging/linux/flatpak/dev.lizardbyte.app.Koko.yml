@@ -35,7 +35,6 @@ cleanup:
 
 modules:
   - modules/ffmpeg.json
-  - modules/tsduck.json
   - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
   # Required by the Linux tray/menu stack through the muda crate.
   - modules/libxdo.json
@@ -54,8 +53,8 @@ modules:
         CARGO_HOME: /run/build/koko/cargo
         CARGO_NET_OFFLINE: "true"
         KOKO_SKIP_FFMPEG_DOWNLOAD: "1"
-        KOKO_SKIP_TSDUCK_BUILD: "1"
-        LD_LIBRARY_PATH: /app/lib
+        KOKO_TSDUCK_ROOT: /app/libexec/koko/live-tv
+        LD_LIBRARY_PATH: /app/libexec/koko/live-tv:/app/lib
         LIBRARY_PATH: /app/lib
         npm_config_cache: /run/build/koko/flatpak-node/npm-cache
         npm_config_nodedir: /usr/lib/sdk/node24
@@ -66,12 +65,15 @@ modules:
     build-commands:
       - install -Dm0644 cargo/config .cargo/config.toml
       - cd crates/client-web && npm ci --offline --ignore-scripts && npm run build
+      - >-
+        python3 packaging/live_tv.py
+        --target "$(rustc -vV | sed -n 's/^host: //p')"
+        --destination /app/libexec/koko/live-tv
+        --source third-party/tsduck
+        --jobs "${FLATPAK_BUILDER_N_JOBS}"
+        --system-cpp-runtime
       - cargo build --offline --locked --release
       - install -Dm0755 target/release/koko /app/libexec/koko/koko
-      - cmake -S native/live-tv -B target/live-tv-native -DCMAKE_BUILD_TYPE=Release
-      - cmake --build target/live-tv-native -j2
-      - install -Dm0755 target/live-tv-native/libkoko_tv.so /app/libexec/koko/live-tv/libkoko_tv.so
-      - cp /app/share/tsduck/*.xml /app/share/tsduck/*.names /app/libexec/koko/live-tv/
       - install -Dm0755 packaging/linux/flatpak/scripts/koko.sh /app/bin/koko
       - install -dm0755 /app/share/koko
       - cp -a assets /app/share/koko/assets

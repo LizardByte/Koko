@@ -2,7 +2,7 @@ From: TSDuck upstream e8649a16f5c1eb46e92d5790ad39afe6782e6210
 Subject: Fix disabled CURL and OpenSSL implementations for the 3.45 SDK
 
 https://github.com/tsduck/tsduck/commit/e8649a16f5c1eb46e92d5790ad39afe6782e6210
-Only the two disabled-feature fixes are backported; no SDK version change.
+Backport only the disabled-feature fixes, preserving the pinned SDK version.
 
 diff --git a/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp b/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp
 --- a/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp

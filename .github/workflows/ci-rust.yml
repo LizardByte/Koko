@@ -171,7 +171,7 @@ jobs:
 
       - name: Install macOS native build tools
         if: contains(matrix.os, 'macos')
-        run: brew install gnu-sed
+        run: brew install bash coreutils gnu-sed grep make
 
       - name: Setup Rust
         if: matrix.container == ''

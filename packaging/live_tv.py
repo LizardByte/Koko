@@ -155,7 +155,8 @@ def build_unix(target, destination, cache, source, build_dir, cmake):
         cmake.append(f"-DCMAKE_OSX_ARCHITECTURES={architecture}")
         # TSDuck's scripts require GNU sed's argument ordering.
         flags.append(f"SED={shutil.which('gsed') or 'gsed'}")
-    make = "gmake" if platform.system() == "FreeBSD" else "make"
+    # Upstream's make configuration needs GNU Make and a current Bash on macOS/BSD.
+    make = "gmake" if platform.system() in ("Darwin", "FreeBSD") else "make"
     for component in ("libtscore", "libtsduck"):
         run(make, "-C", source / f"src/{component}", "-j", str(min(os.cpu_count() or 2, 4)), *flags)
     run(*cmake, f"-DTSDUCK_SOURCE={source}", f"-DTSDUCK_RUNTIME={runtime}", "-DCMAKE_BUILD_TYPE=Release")

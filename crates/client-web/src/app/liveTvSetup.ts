@@ -51,7 +51,7 @@ function renderAddSource(source?: TvSource): string {
   const capacity = ['native', 'dvb'].includes(kind) ? '<input type="hidden" name="capacity" value="1" />'
     : `<label>Simultaneous streams<input name="capacity" type="number" min="1" max="64" value="${source?.capacity ?? 1}" required /></label>`;
   const savedPin = Boolean(source && state.liveTv?.connections?.[source.id]?.has_pin);
-  return `<form ${identity} class="live-tv-form" data-tv-source-kind="${escape(kind)}"><input type="hidden" name="kind" value="${escape(kind)}" /><input type="hidden" name="preserve_pin" value="${savedPin}" />
+  return `<form ${identity} class="live-tv-form" data-tv-source-kind="${escape(kind)}" data-tv-form-key="${state.liveTv?.owner ?? 0}:${source?.id ?? 'new'}:${escape(kind)}"><input type="hidden" name="kind" value="${escape(kind)}" /><input type="hidden" name="preserve_pin" value="${savedPin}" />
     <label>Name<input name="name" value="${escape(source?.name ?? '')}" required maxlength="200" placeholder="Living room TV" /></label>${capacity}
     ${renderConnection(kind,savedPin)}${renderGuideSettings(kind)}<button type="submit">${source ? 'Save connection settings' : 'Add source'}</button></form>`;
 }

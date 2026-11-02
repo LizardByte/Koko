@@ -13,9 +13,46 @@ globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(dom.windo
 const server = await createServer({root:fileURLToPath(new URL('..',import.meta.url)),server:{middlewareMode:true,hmr:false,ws:false}});
 after(async()=>{await server.close();dom.window.close();});
 const {setElementHtml} = await server.ssrLoadModule('/src/app/domPatcher.ts');
+const {bindTvGuideMappings} = await server.ssrLoadModule('/src/app/liveTvMapping.ts');
 const {rememberTvGuideFocus,tvGuideNavigationTarget,tvGuideNavigationTime,restoreTvGuideFocus} = await server.ssrLoadModule('/src/app/tvGuideNavigation.ts');
 const root = document.querySelector('#app');
 const player = source => `<div id="media-player-overlay"><video id="media-player" src="${source}"></video></div>`;
+
+test('background refreshes preserve discovered connection drafts and changing type resets them',()=>{
+  const form = (kind,owner=1) => `<form id="tv-source-form" data-tv-source-kind="${kind}" data-tv-form-key="${owner}:${kind}"><input name="capacity" value="1"><div data-tv-discovery-results></div></form>`;
+  root.innerHTML=form('hdhomerun');
+  const capacity=root.querySelector('input');capacity.value='4';
+  root.querySelector('[data-tv-discovery-results]').textContent='Living room tuner selected';
+  setElementHtml(root,form('hdhomerun'));
+  assert.equal(root.querySelector('input'),capacity);
+  assert.equal(capacity.value,'4');
+  assert.equal(root.querySelector('[data-tv-discovery-results]').textContent,'Living room tuner selected');
+  setElementHtml(root,form('nextpvr'));
+  assert.equal(root.querySelector('input').value,'1');
+  assert.equal(root.querySelector('[data-tv-discovery-results]').textContent,'');
+  root.querySelector('input').value='8';
+  setElementHtml(root,form('nextpvr',2));
+  assert.equal(root.querySelector('input').value,'1');
+});
+
+test('an open station selector survives background patches and compacts when focus leaves',()=>{
+  const markup='<select data-tv-guide-source="1"><option value="">Automatic</option></select>';
+  root.innerHTML=markup;
+  const control=root.querySelector('select');
+  const controller=new dom.window.AbortController();
+  bindTvGuideMappings(root,controller.signal,[
+    {source_id:1,guide_key:'chosen',name:'Station',number:'1',aliases:[]},
+    {source_id:1,guide_key:'other',name:'Other station',number:'2',aliases:[]},
+  ]);
+  control.focus();control.value='chosen';
+  setElementHtml(root,markup);
+  assert.equal(document.activeElement,control);
+  assert.equal(control.options.length,3);
+  assert.equal(control.value,'chosen');
+  control.blur();
+  assert.equal(control.options.length,2);
+  controller.abort();
+});
 
 test('adding a navigation hint preserves the mounted video and player controls',()=>{
   root.innerHTML = `<div>${player('/buffer/one')}</div>`;

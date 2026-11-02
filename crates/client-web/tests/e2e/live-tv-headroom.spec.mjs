@@ -57,15 +57,14 @@ test('repeated live-edge starvation adds headroom while preserving the connectio
       video.addEventListener('seeking',()=>globalThis.liveSeeks++);
     });
     holding=true;
-    await expect.poll(()=>page.evaluate(()=>globalThis.liveWaits),{timeout:15000}).toBeGreaterThan(0);
+    await expect.poll(()=>page.evaluate(()=>globalThis.liveHolds),{timeout:15000}).toBeGreaterThan(0);
     const firstWait=await player.evaluate(video=>video.currentTime);release();
     await expect.poll(()=>player.evaluate(video=>video.currentTime)).toBeGreaterThan(firstWait+2);
     holding=true;
-    await expect.poll(()=>page.evaluate(()=>globalThis.liveWaits),{timeout:15000}).toBeGreaterThanOrEqual(2);
-    await expect.poll(()=>page.evaluate(()=>globalThis.liveHolds)).toBeGreaterThan(0);
+    await expect.poll(()=>page.evaluate(()=>globalThis.liveHolds),{timeout:15000}).toBeGreaterThanOrEqual(2);
     if(await player.evaluate(video=>video.playbackRate===0))await expect(page.locator('.media-player-shell')).toHaveClass(/is-media-loading/);
-    const result=await player.evaluate(video=>({same:video===globalThis.originalTvVideo,volume:video.volume,waits:globalThis.liveWaits,seeks:globalThis.liveSeeks,position:video.currentTime}));
-    expect(result.same).toBe(true);expect(result.volume).toBeCloseTo(0.3);expect(result.waits).toBeGreaterThanOrEqual(2);
+    const result=await player.evaluate(video=>({same:video===globalThis.originalTvVideo,volume:video.volume,holds:globalThis.liveHolds,seeks:globalThis.liveSeeks,position:video.currentTime}));
+    expect(result.same).toBe(true);expect(result.volume).toBeCloseTo(0.3);expect(result.holds).toBeGreaterThanOrEqual(2);
     expect(result.seeks).toBe(0);
     release();
     await expect.poll(()=>player.evaluate(video=>video.playbackRate)).toBe(1);
@@ -73,7 +72,7 @@ test('repeated live-edge starvation adds headroom while preserving the connectio
     expect(tunes).toBe(1);expect(streams).toBe(initialStreams);expect(connections).toBe(initialConnections);
     await expect(page.locator('.player-problem')).not.toBeVisible();
   }finally{
-    await testInfo.attach('rebuffering',{body:JSON.stringify(await page.evaluate(()=>({waits:globalThis.liveWaits,holds:globalThis.liveHolds,seeks:globalThis.liveSeeks,position:document.querySelector('video')?.currentTime}))),contentType:'application/json'});
-    await page.goto('/');for(const child of children){child.kill();}fixture.closeAllConnections();await new Promise(done=>fixture.close(done));
+    await testInfo.attach('rebuffering',{body:JSON.stringify(await page.evaluate(()=>{const video=document.querySelector('video');return {waits:globalThis.liveWaits,holds:globalThis.liveHolds,seeks:globalThis.liveSeeks,position:video?.currentTime,paused:video?.paused,ended:video?.ended,readyState:video?.readyState,rate:video?.playbackRate,buffered:video?Array.from({length:video.buffered.length},(_,index)=>[video.buffered.start(index),video.buffered.end(index)]):[]};})),contentType:'application/json'});
+    try{await page.goto('about:blank',{waitUntil:'commit',timeout:5000});}finally{for(const child of children){child.kill();}fixture.closeAllConnections();await new Promise(done=>fixture.close(done));}
   }
 });

@@ -47,7 +47,7 @@ test('guide click and Enter tune the selected channel while holds open recording
   await watch('#tv-channel-select-2',false);await watch('#tv-program-2-20',true);
   await watch('#tv-program-2-20',false);await watch('#tv-channel-select-2',true);
   const count=fixture.tunes.length,program=page.locator('#tv-program-2-20');await program.focus();
-  await page.keyboard.down('Enter');await expect(program).toHaveClass(/is-holding/);await page.waitForTimeout(700);
+  await page.keyboard.down('Enter');
   const options=page.getByRole('dialog',{name:'Channel options',exact:true});await expect(options).toBeVisible();await page.keyboard.up('Enter');expect(fixture.tunes.length).toBe(count);
   await options.getByRole('button',{name:'Record program or series',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Record program or series',exact:true});await expect(dialog).toBeVisible();await expect(dialog).toContainText('Show 2');

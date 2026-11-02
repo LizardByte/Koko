@@ -75,7 +75,7 @@ def download_url(url, digest, cache):
     return archive
 
 
-def release_metadata(version, cache):
+def release_metadata(version: str, cache: Path):
     """Cache release data by version inside a file whose path never depends on upstream content."""
     metadata = cache / "tsduck-releases.json"
     releases = json.loads(metadata.read_text(encoding="utf-8")) if metadata.is_file() else {}
@@ -85,7 +85,8 @@ def release_metadata(version, cache):
         with urllib.request.urlopen(request, timeout=30) as response:
             releases[version] = json.load(response)
         temporary = metadata.with_suffix(".part")
-        temporary.write_text(json.dumps(releases), encoding="utf-8")
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(releases, stream)
         temporary.replace(metadata)
     return releases[version]
 

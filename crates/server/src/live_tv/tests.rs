@@ -411,23 +411,20 @@ fn zap2it_maps_station_identity_metadata_and_six_hour_requests() {
         guide.stations[0].logo.as_deref(),
         Some("https://example.com/logo.png")
     );
-    assert_eq!(
-        guide.programs[0].metadata.episode.as_deref(),
-        Some("S30E39")
-    );
+    assert_eq!(guide.programs[0].metadata.episode.as_deref(), Some("S3E4"));
     assert_eq!(guide.programs[0].metadata.is_new, Some(true));
     assert_eq!(guide.programs[0].metadata.year, Some(2026));
     assert_eq!(
         guide.programs[0].metadata.series_id.as_deref(),
-        Some("SH00225395")
+        Some("SH00000001")
     );
     assert_eq!(
         guide.programs[0].metadata.image.as_deref(),
-        Some("https://zpmc.tmsimg.com/assets/p184466_b_v13_ah.jpg?w=960")
+        Some("https://zpmc.tmsimg.com/assets/p10000001_b_v13_aa.jpg?w=960")
     );
     assert_eq!(
         guide.programs[0].metadata.episode_id.as_deref(),
-        Some("EP002253956808")
+        Some("EP000000010004")
     );
     assert!(guide.programs[1].metadata.episode_id.is_none());
 }

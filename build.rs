@@ -23,6 +23,10 @@ fn main() {
         "cargo:rerun-if-changed={}",
         workspace_root.join("packaging/ffmpeg.rs").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("packaging/ffmpeg_stack.rs").display()
+    );
     let out_dir = env::var_os("OUT_DIR").expect("Failed to get OUT_DIR");
     let target = env::var("TARGET").expect("Failed to get TARGET");
     let prepared = ffmpeg::prepare(workspace_root, Path::new(&out_dir), &target)

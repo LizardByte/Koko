@@ -133,6 +133,7 @@ jobs:
             linux-headers \
             nodejs \
             npm \
+            numactl \
             python3 \
             openssl-dev \
             openssl-libs-static \

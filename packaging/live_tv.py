@@ -82,6 +82,8 @@ def release_metadata(version: str, cache: Path):
     if version not in releases:
         url = f"https://api.github.com/repos/tsduck/tsduck/releases/tags/v{version}"
         request = urllib.request.Request(url, headers={"User-Agent": "Koko-native-build"})
+        if token := os.environ.get("GH_TOKEN"):
+            request.add_header("Authorization", f"Bearer {token}")
         with urllib.request.urlopen(request, timeout=30) as response:
             releases[version] = json.load(response)
         temporary = metadata.with_suffix(".part")

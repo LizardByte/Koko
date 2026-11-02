@@ -84,9 +84,12 @@ class NativePackagingTests(unittest.TestCase):
         version = "9.12-345"
         digest = "a" * 64
         release = {"assets": [{"name": f"TSDuck-Arm64-{version}.exe", "digest": f"sha256:{digest}"}]}
-        with patch.object(native.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(release).encode())):
-            with patch.object(native, "download_url", return_value=self.root / "sdk.exe") as download:
-                native.windows_sdk(version, "Arm64", self.root)
+        response = io.BytesIO(json.dumps(release).encode())
+        with patch.dict(native.os.environ, {"GH_TOKEN": "example-token"}):
+            with patch.object(native.urllib.request, "urlopen", return_value=response) as request:
+                with patch.object(native, "download_url", return_value=self.root / "sdk.exe") as download:
+                    native.windows_sdk(version, "Arm64", self.root)
+        self.assertEqual(request.call_args.args[0].get_header("Authorization"), "Bearer example-token")
         download.assert_called_once_with(
             f"https://github.com/tsduck/tsduck/releases/download/v{version}/TSDuck-Arm64-{version}.exe",
             digest, self.root,

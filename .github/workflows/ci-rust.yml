@@ -228,6 +228,8 @@ jobs:
       - name: Test
         id: test
         if: matrix.run == 'test'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tarpaulin_args=()
           case "${{ matrix.target }}" in
@@ -279,6 +281,7 @@ jobs:
       - name: Build
         if: matrix.run == 'build'
         env:
+          GH_TOKEN: ${{ github.token }}
           KOKO_FANART_PROJECT_API_KEY: ${{ secrets.FANART_PROJECT_API_KEY }}
           KOKO_LRCLIB_APPLICATION_ID: ${{ secrets.LRCLIB_APPLICATION_ID }}
         run: |

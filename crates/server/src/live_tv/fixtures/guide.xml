@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv>
+  <channel id="station">
+    <display-name>Network One</display-name>
+    <display-name>7.1</display-name>
+    <icon src="https://example.com/logo.png"/>
+  </channel>
+  <programme channel="station" start="20261030190000 -0400" stop="20261030200000 -0400">
+    <title>Evening News</title>
+    <sub-title>Local sports report</sub-title>
+    <desc>News &amp; weather</desc>
+    <category>News</category>
+    <rating><value>TV-G</value></rating>
+    <episode-num system="onscreen">S1E2</episode-num>
+    <episode-num system="xmltv_ns">0.1.</episode-num>
+    <credits><presenter>Host</presenter></credits>
+    <new/>
+  </programme>
+  <programme channel="station" start="20261030200000 -0400">
+    <title>Later</title>
+  </programme>
+  <programme channel="station" start="20261030210000 -0400" stop="20261030220000 -0400">
+    <title>Late</title>
+  </programme>
+</tv>

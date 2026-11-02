@@ -14,3 +14,7 @@
 	path = third-party/dockle
 	url = https://github.com/LizardByte/dockle.git
 	branch = master
+[submodule "third-party/tsduck"]
+	path = third-party/tsduck
+	url = https://github.com/tsduck/tsduck.git
+	branch = master

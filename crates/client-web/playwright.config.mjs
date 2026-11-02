@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto';
 
 process.env.KOKO_E2E_PASSWORD ??= randomUUID();
 process.env.KOKO_E2E_PORT ??= '19192';
+process.env.KOKO_E2E_FFMPEG ??= 'ffmpeg';
+process.env.KOKO_E2E_FFPROBE ??= 'ffprobe';
+process.env.KOKO_E2E_GENERATOR_FFMPEG ??= process.env.KOKO_E2E_FFMPEG;
 const baseURL = `http://127.0.0.1:${process.env.KOKO_E2E_PORT}`;
 const browserName = process.env.KOKO_E2E_BROWSER ?? 'chromium';
 

@@ -32,13 +32,14 @@ export type AppRoute =
   | { page: 'item'; itemId: number }
   | { page: 'person'; personId: number }
   | { page: 'podcasts' }
+  | { page: 'live-tv' }
   | { page: 'settings'; section?: SettingsSection };
 
 /** Top-level tabs shown on the home browsing surface. */
 export type HomeBrowseTab = 'recommended' | 'library' | 'collections' | 'playlists' | 'categories';
 
 /** Settings subsections addressable from navigation and direct URLs. */
-export type SettingsSection = 'general' | 'libraries' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
+export type SettingsSection = 'general' | 'libraries' | 'live-tv' | 'providers' | 'scheduled' | 'users' | 'dashboard' | 'logs';
 
 /** Describes a resolved browse filter used by category, collection, and playlist detail pages. */
 export interface BrowseFilter {
@@ -105,6 +106,8 @@ declare global {
 
 /** Mutable state for the browser client between render passes. */
 export interface AppState {
+  /** Live channels and personal DVR data are scoped to the current account. */
+  liveTv?: import('./liveTvActions').LiveTvState;
   apiBase: string;
   apiMode: ApiMode;
   route: AppRoute;
@@ -168,6 +171,9 @@ export interface AppState {
   isLoading: boolean;
   isPlayerOpen: boolean;
   activePlaybackItem?: MediaItemDetail;
+  activeTvPlayback?: TvPlayback;
+  /** Independently buffered Live TV tiles; the active tile owns the shared player controls and audio. */
+  tvMultiview?: import('./tvMultiview').TvMultiview;
   activePlaybackSession?: PlaybackSession;
   activePlaybackStartMs: number;
   activePlaybackQuality?: import('./playbackOptions').PlaybackQuality;
@@ -196,6 +202,13 @@ export interface AppState {
   };
 }
 
+/** One account-owned TV stream, retained when its tile becomes the main view. */
+export interface TvPlayback {
+  owner: number; kind: 'channels' | 'recordings'; id: number; title: string; url: string;
+  image?: string; logo?: string; logoFallback?: string; guideOpen?: boolean;
+  buffer?: import('../liveTvApi').TvBufferInfo; startMs?: number;
+}
+
 /** Lucide icon names intentionally allowed by the web UI renderer. */
 export type AppIconName =
   | 'highlighter'
@@ -219,6 +232,7 @@ export type AppIconName =
   | 'chevron-right'
   | 'chevron-up'
   | 'check'
+  | 'circle'
   | 'circle-check'
   | 'clapperboard'
   | 'database-zap'
@@ -231,6 +245,7 @@ export type AppIconName =
   | 'languages'
   | 'layers'
   | 'layout-grid'
+  | 'layout-panel-left'
   | 'link-2'
   | 'log-in'
   | 'log-out'
@@ -256,6 +271,7 @@ export type AppIconName =
   | 'settings'
   | 'skip-back'
   | 'skip-forward'
+  | 'step-forward'
   | 'sliders-horizontal'
   | 'star'
   | 'trash-2'

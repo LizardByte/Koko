@@ -117,6 +117,7 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         ));
 
     rocket::custom(figment)
+        .manage(crate::live_tv::timeshift::BufferDatabase(db_path))
         .attach(DbConn::fairing())
         .attach(Migrate)
         .attach(ReleaseDatabase)
@@ -136,6 +137,9 @@ pub fn rocket_with_db_path(custom_db_path: Option<String>) -> rocket::Rocket<roc
         ))
         .attach(AdHoc::on_liftoff("Start background workers", |rocket| {
             Box::pin(async move {
+                if let Some(db) = DbConn::get_one(rocket).await {
+                    crate::live_tv::start_workers(db, rocket.shutdown());
+                }
                 if let Some(db) = DbConn::get_one(rocket).await {
                     crate::media::podcasts::start_refresh_runner(db, rocket.shutdown());
                 }

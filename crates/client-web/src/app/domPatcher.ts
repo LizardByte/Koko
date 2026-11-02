@@ -63,6 +63,19 @@ const DOM_PATCH_KEY_ATTRIBUTES = [
   'data-music-open-item',
   'data-player-audio-track-index',
   'data-trailer-seek',
+  'data-tv-source',
+  'data-tv-source-group',
+  'data-tv-provider',
+  'data-tv-provider-editor',
+  'data-tv-provider-form',
+  'data-tv-select-program',
+  'data-tv-select-channel',
+  'data-tv-category',
+  'data-tv-channel-view',
+  'data-tv-favorite',
+  'data-tv-source-card',
+  'data-tv-channel-update',
+  'data-tv-group-form',
 ] as const;
 
 function elementSelectorForFocus(element: Element | null): string | undefined {
@@ -101,6 +114,7 @@ function domPatchKey(node: Node): string | undefined {
 }
 
 function scrollPositionKey(element: Element, index: number): string | undefined {
+  if (element.id === 'tv-guide-scroll') return `tv-guide:${(element as HTMLElement).dataset.tvView ?? ''}`;
   const patchKey = domPatchKey(element);
   if (patchKey) {
     return patchKey;
@@ -141,22 +155,30 @@ function captureRenderSnapshot(): RenderSnapshot {
 }
 
 function restoreRenderSnapshot(root: HTMLElement, snapshot: RenderSnapshot): void {
+  const focusAfterPatch = document.activeElement;
+  // Honor navigation that scrolls after the patch but before the restore frame.
+  const afterPatch = new Map<Element, ScrollPosition>();
+  document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach(element => {
+    afterPatch.set(element,{top:element.scrollTop,left:element.scrollLeft});
+  });
   const frame = globalThis.requestAnimationFrame(() => {
     pendingSnapshotRestores.delete(root);
     document.querySelectorAll<HTMLElement>('.main-shell, .rail-nav, [data-shelf-row], .table-shell, .log-events').forEach((element, index) => {
       const key = scrollPositionKey(element, index);
       const position = key ? snapshot.scrollPositions.get(key) : undefined;
       if (position) {
-        element.scrollTop = position.top;
-        element.scrollLeft = position.left;
+        const expected = afterPatch.get(element);
+        if (element.scrollTop === expected?.top) element.scrollTop = position.top;
+        if (element.scrollLeft === expected?.left) element.scrollLeft = position.left;
       }
     });
 
     const activeElement = snapshot.activeSelector
       ? document.querySelector<HTMLInputElement | HTMLTextAreaElement>(snapshot.activeSelector)
       : undefined;
-    activeElement?.focus({ preventScroll: true });
-    if (snapshot.activeSelection && activeElement?.setSelectionRange) {
+    const restoreFocus = document.activeElement === focusAfterPatch;
+    if (restoreFocus && activeElement && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
+    if (restoreFocus && snapshot.activeSelection && activeElement?.setSelectionRange) {
       activeElement.setSelectionRange(snapshot.activeSelection.start, snapshot.activeSelection.end);
     }
   });
@@ -171,17 +193,14 @@ function nodesCanPatch(current: Node, next: Node): boolean {
     if (current.tagName !== next.tagName) {
       return false;
     }
+    // An unchanged video stays mounted when minimized; a new source needs a fresh
+    // element so decoders and source-specific event handlers are not carried over.
+    if (current instanceof HTMLMediaElement && next instanceof HTMLMediaElement
+      && current.getAttribute('src') !== next.getAttribute('src')) return false;
     const currentKey = domPatchKey(current);
     const nextKey = domPatchKey(next);
     if (currentKey || nextKey) {
       return currentKey === nextKey;
-    }
-    if (
-      current instanceof HTMLMediaElement
-      && next instanceof HTMLMediaElement
-      && current.getAttribute('src') !== next.getAttribute('src')
-    ) {
-      return false;
     }
   }
   return true;
@@ -244,6 +263,21 @@ function syncFormControlState(current: Element, next: Element): void {
   }
 }
 
+/** Preserve player controls, TV setup drafts, and open station choices across background refreshes. */
+function preserveOwnedControl(current: Element, next: Element): boolean {
+  if (!(current instanceof HTMLElement) || !(next instanceof HTMLElement)) return false;
+  if (current.id === 'media-player-overlay' && next.id === current.id
+    && current.dataset.playerViewKey !== undefined
+    && current.dataset.playerViewKey === next.dataset.playerViewKey) return true;
+  if (current.id === 'tv-source-form' && next.id === current.id) {
+    const key = current.dataset.tvFormKey;
+    return key !== undefined && key === next.dataset.tvFormKey;
+  }
+  return current instanceof HTMLSelectElement && next instanceof HTMLSelectElement
+    && current.dataset.tvGuideSource !== undefined && current.dataset.tvGuideSource === next.dataset.tvGuideSource
+    && current === document.activeElement;
+}
+
 function patchNode(current: Node, next: Node): Node {
   if (!nodesCanPatch(current, next)) {
     current.parentNode?.replaceChild(next, current);
@@ -258,8 +292,9 @@ function patchNode(current: Node, next: Node): Node {
   }
 
   if (current instanceof Element && next instanceof Element) {
+    if (preserveOwnedControl(current, next)) return current;
     // A results refresh must preserve the user's expanded settings cards.
-    const detailsOpen = current instanceof HTMLDetailsElement ? current.open : undefined;
+    const detailsOpen = current instanceof HTMLDetailsElement && next instanceof HTMLElement && next.dataset.controlledOpen === undefined ? current.open : undefined;
     patchAttributes(current, next);
     patchChildren(current, next);
     syncFormControlState(current, next);
@@ -309,6 +344,15 @@ function patchChildren(parent: Node, nextParent: ParentNode): void {
     if (keyedCandidate) {
       currentChild.before(keyedCandidate);
       patchNode(keyedCandidate, nextChild);
+      index += 1;
+      continue;
+    }
+
+    // Inserting a hint or loading row before a keyed element must not destroy
+    // that element when it is still present later in the next sibling list.
+    const currentKey = domPatchKey(currentChild);
+    if (currentKey && nextChildren.slice(index + 1).some((node) => domPatchKey(node) === currentKey)) {
+      currentChild.before(nextChild);
       index += 1;
       continue;
     }

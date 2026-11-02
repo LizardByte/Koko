@@ -27,6 +27,8 @@ build:
           fi
           chmod +x "${dockle_dir}/readthedocs_build.sh"
           export DOCKLE_DIR="${dockle_dir}"
+          # Rustdoc generates the TV APIs without building or loading the native tuner runtime.
+          export KOKO_SKIP_TSDUCK_BUILD=1
           "${dockle_dir}/readthedocs_build.sh"
 
 python:

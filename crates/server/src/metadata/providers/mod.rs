@@ -521,9 +521,20 @@ impl MetadataProvider for TvdbMetadataProvider {
         include_person_details: bool,
     ) -> MetadataProviderFuture<'a, StoredMetadataSnapshot> {
         Box::pin(async move {
-            let episode_external_id = episode_external_id.ok_or_else(|| {
-                "TheTVDB episode refresh is missing an episode external id.".to_string()
-            })?;
+            let resolved;
+            let episode_external_id = match episode_external_id {
+                Some(id) => id,
+                None => {
+                    resolved = tvdb::episode_id_for_numbers(
+                        settings,
+                        show_external_id,
+                        season_number,
+                        episode_number,
+                    )
+                    .await?;
+                    &resolved
+                }
+            };
             tvdb::fetch_episode_snapshot(
                 settings,
                 show_external_id,

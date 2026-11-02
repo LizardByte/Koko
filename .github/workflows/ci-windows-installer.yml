@@ -128,7 +128,8 @@ jobs:
           7z a "artifacts\koko-${{ matrix.target }}.7z" `
             ".\assets" `
             ".\target\${{ matrix.target }}\release\koko.exe" `
-            ".\target\${{ matrix.target }}\release\ffmpeg"
+            ".\target\${{ matrix.target }}\release\ffmpeg" `
+            ".\target\${{ matrix.target }}\release\live-tv"
 
       - name: Resolve MSI package version
         shell: pwsh

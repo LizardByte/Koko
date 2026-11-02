@@ -1,0 +1,29 @@
+From: TSDuck upstream e8649a16f5c1eb46e92d5790ad39afe6782e6210
+Subject: Fix disabled CURL and OpenSSL implementations for the 3.45 SDK
+
+https://github.com/tsduck/tsduck/commit/e8649a16f5c1eb46e92d5790ad39afe6782e6210
+Backport only the disabled-feature fixes, preserving the pinned SDK version.
+
+diff --git a/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp b/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp
+--- a/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp
++++ b/src/libtscore/reactor/unix/tsReactiveWebRequest.cpp
+@@ -54,6 +54,6 @@
+ ts::ReactiveWebRequest::ReactiveWebRequest(Reactor& reactor) : ReactiveBase(reactor) {}
+ ts::ReactiveWebRequest::~ReactiveWebRequest() {}
+-bool ts::ReactiveWebRequest::startOpen(ReactiveWebHandlerInterface*, const UString&, const ObjectPtr&) TS_NOT_IMPLEMENTED
+-bool ts::ReactiveWebRequest::startReceive(ReactiveWebHandlerInterface*, void*, size_t, const ObjectPtr&) TS_NOT_IMPLEMENTED
+-bool ts::ReactiveWebRequest::startClose(ReactiveWebHandlerInterface*, bool, const ObjectPtr&) TS_NOT_IMPLEMENTED
++bool ts::ReactiveWebRequest::start(ReactiveWebHandlerInterface*, const UString&, size_t, const ObjectPtr&) TS_NOT_IMPLEMENTED
++bool ts::ReactiveWebRequest::isOpen() const { return false; }
++bool ts::ReactiveWebRequest::abort(bool) TS_NOT_IMPLEMENTED
+ ts::UString ts::ReactiveWebRequest::GetLibraryVersion() { return TS_NO_CURL_MESSAGE; }
+diff --git a/src/libtscore/tls/unix/tsTLSContextGuts.cpp b/src/libtscore/tls/unix/tsTLSContextGuts.cpp
+--- a/src/libtscore/tls/unix/tsTLSContextGuts.cpp
++++ b/src/libtscore/tls/unix/tsTLSContextGuts.cpp
+@@ -47,6 +47,5 @@
+ bool ts::TLSContext::provideClearData(const void*, size_t, size_t&) TS_NOT_IMPL
+ size_t ts::TLSContext::getDataSizeToSend() const { return 0; }
+ bool ts::TLSContext::getDataToSend(ByteBlock&) TS_NOT_IMPL
+-bool ts::TLSContext::needReceive() const TS_NOT_IMPL
+ bool ts::TLSContext::provideReceivedData(const void*, size_t, size_t&, ByteBlock&) TS_NOT_IMPL
+ bool ts::TLSContext::initShutdown(bool) TS_NOT_IMPL

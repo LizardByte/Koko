@@ -18,6 +18,7 @@ finish-args:
   - --filesystem=home
   - --filesystem=host:ro
   - --share=network
+  - --device=all
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
@@ -52,7 +53,8 @@ modules:
         CARGO_HOME: /run/build/koko/cargo
         CARGO_NET_OFFLINE: "true"
         KOKO_SKIP_FFMPEG_DOWNLOAD: "1"
-        LD_LIBRARY_PATH: /app/lib
+        KOKO_TSDUCK_ROOT: /app/libexec/koko/live-tv
+        LD_LIBRARY_PATH: /app/libexec/koko/live-tv:/app/lib
         LIBRARY_PATH: /app/lib
         npm_config_cache: /run/build/koko/flatpak-node/npm-cache
         npm_config_nodedir: /usr/lib/sdk/node24
@@ -63,6 +65,13 @@ modules:
     build-commands:
       - install -Dm0644 cargo/config .cargo/config.toml
       - cd crates/client-web && npm ci --offline --ignore-scripts && npm run build
+      - >-
+        python3 packaging/live_tv.py
+        --target "$(rustc -vV | sed -n 's/^host: //p')"
+        --destination /app/libexec/koko/live-tv
+        --source third-party/tsduck
+        --jobs "${FLATPAK_BUILDER_N_JOBS}"
+        --system-cpp-runtime
       - cargo build --offline --locked --release
       - install -Dm0755 target/release/koko /app/libexec/koko/koko
       - install -Dm0755 packaging/linux/flatpak/scripts/koko.sh /app/bin/koko

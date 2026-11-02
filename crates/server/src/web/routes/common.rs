@@ -45,77 +45,76 @@ pub fn favicon() -> (ContentType, &'static [u8]) {
     )
 }
 
-/// Serve only the provider logos embedded in the backend, independently of the web-client bundle.
+/// Embed the allowlisted assets once, keeping names in alphabetical order for lookup.
+macro_rules! provider_logos {
+    ($($name:literal),+ $(,)?) => {
+        &[$((
+            $name,
+            include_bytes!(concat!("../../../../../assets/providers/", $name)) as &'static [u8],
+        )),+]
+    };
+}
+
+const PROVIDER_LOGOS: &[(&str, &[u8])] = provider_logos!(
+    "audiosilo.svg",
+    "comicvine.svg",
+    "fanart.png",
+    "fastchannels.svg",
+    "hdhomerun.ico",
+    "libex-dark.png",
+    "libex-light.png",
+    "librivox.png",
+    "local-nfo.svg",
+    "lrclib.png",
+    "musicbrainz.svg",
+    "nextpvr.ico",
+    "open-library.png",
+    "themerr.png",
+    "tmdb.svg",
+    "trailerdb-dark.svg",
+    "trailerdb-light.svg",
+    "tv-adultswim.png",
+    "tv-amazon.svg",
+    "tv-bally.svg",
+    "tv-cbs.png",
+    "tv-espn.png",
+    "tv-foxone.ico",
+    "tv-freelivesports.png",
+    "tv-fubo.png",
+    "tv-hallmark.png",
+    "tv-hulu.png",
+    "tv-lg.svg",
+    "tv-localnow.png",
+    "tv-nfl.png",
+    "tv-plex.svg",
+    "tv-pluto.png",
+    "tv-reelz.png",
+    "tv-roku.svg",
+    "tv-samsung.svg",
+    "tv-sling.svg",
+    "tv-spectrum.png",
+    "tv-stirr.png",
+    "tv-tcl.png",
+    "tv-tubi.png",
+    "tv-vizio.png",
+    "tv-whale.svg",
+    "tv-wsn.png",
+    "tv-xumo.svg",
+    "tv-youtube.png",
+    "tvdb-dark.png",
+    "tvdb-light.png",
+    "tvheadend.png",
+);
+
+/// Serve only embedded provider logos, independently of the web-client bundle.
 #[get("/assets/providers/<filename>")]
 pub fn provider_logo(filename: &str) -> Result<(ContentType, &'static [u8]), Status> {
-    let asset: (ContentType, &'static [u8]) = match filename {
-        "librivox.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/librivox.png"),
-        ),
-        "comicvine.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/comicvine.svg"),
-        ),
-        "libex-light.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/libex-light.png"),
-        ),
-        "libex-dark.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/libex-dark.png"),
-        ),
-        "audiosilo.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/audiosilo.svg"),
-        ),
-        "tmdb.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/tmdb.svg"),
-        ),
-        "tvdb-light.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/tvdb-light.png"),
-        ),
-        "tvdb-dark.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/tvdb-dark.png"),
-        ),
-        "themerr.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/themerr.png"),
-        ),
-        "trailerdb-light.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/trailerdb-light.svg"),
-        ),
-        "trailerdb-dark.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/trailerdb-dark.svg"),
-        ),
-        "musicbrainz.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/musicbrainz.svg"),
-        ),
-        "fanart.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/fanart.png"),
-        ),
-        "lrclib.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/lrclib.png"),
-        ),
-        "open-library.png" => (
-            ContentType::PNG,
-            include_bytes!("../../../../../assets/providers/open-library.png"),
-        ),
-        "local-nfo.svg" => (
-            ContentType::SVG,
-            include_bytes!("../../../../../assets/providers/local-nfo.svg"),
-        ),
-        _ => return Err(Status::NotFound),
-    };
-    Ok(asset)
+    let index = PROVIDER_LOGOS
+        .binary_search_by_key(&filename, |(name, _)| name)
+        .map_err(|_| Status::NotFound)?;
+    let extension = filename.rsplit('.').next().ok_or(Status::NotFound)?;
+    let content_type = ContentType::from_extension(extension).ok_or(Status::NotFound)?;
+    Ok((content_type, PROVIDER_LOGOS[index].1))
 }
 
 #[get("/<path..>", rank = 100)]
@@ -244,4 +243,28 @@ fn web_client_missing_html() -> String {
 </html>"#,
         globals::GLOBAL_APP_NAME
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_provider_logos_are_sorted_and_have_the_expected_content_types() {
+        assert!(PROVIDER_LOGOS.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        for (name, bytes) in PROVIDER_LOGOS {
+            let (content_type, served) = provider_logo(name).unwrap();
+            assert!(!served.is_empty());
+            assert_eq!(served, *bytes);
+            let expected = match name.rsplit('.').next().unwrap() {
+                "ico" => ContentType::Icon,
+                "png" => ContentType::PNG,
+                "svg" => ContentType::SVG,
+                extension => panic!("Unexpected embedded logo extension: {extension}"),
+            };
+            assert_eq!(content_type, expected);
+        }
+        assert_eq!(provider_logo("../icon.ico"), Err(Status::NotFound));
+        assert_eq!(provider_logo("unknown.svg"), Err(Status::NotFound));
+    }
 }

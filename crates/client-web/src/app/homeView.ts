@@ -3,6 +3,9 @@ import type { MediaHome, MediaCollectionSummary, MediaItemSummary, MediaLibrary,
 import { getArtworkUrl, getPersonImageUrl, resolveApiUrl } from '../api';
 import { HOME_SHELF_CHUNK_SIZE } from './constants';
 import { escapeHtml, formatTimestamp } from './format';
+import { featureArtworkStyle, renderFeatureHero } from './featureHero';
+/** Shared background styling retained for existing feature renderers. */
+export { featureArtworkStyle } from './featureHero';
 import { activeBrowseFilterCount, browseItems } from './browsePreferences';
 import { renderLoadingCards, renderLoadingDetail } from './loadingView';
 import { currentThemeSongYouTubeTarget } from './mediaTargets';
@@ -494,13 +497,6 @@ export function renderHomeFeature(): string {
   return renderItemFeature(preview.item);
 }
 
-/** Share hero backgrounds while keeping publisher URLs inside their CSS string. */
-export function featureArtworkStyle(backdropUrl?: string): string {
-  if (!backdropUrl) return '';
-  const cssUrl = backdropUrl.replace(/['"\\\r\n\f]/g, character => '%' + character.codePointAt(0)!.toString(16).padStart(2, '0'));
-  return `style="--home-feature-image: url('${escapeHtml(cssUrl)}');"`;
-}
-
 function renderCollectionFeature(collection: MediaCollectionSummary): string {
   const backdropUrl = pageBackdropUrlForCollection(collection);
   const overview = collection.overview ?? `${collection.item_count} title${collection.item_count === 1 ? '' : 's'} in this collection.`;
@@ -530,10 +526,9 @@ export function renderItemFeature(item: MediaItemSummary, catalog = [...homePrev
   const overview = item.overview?.trim();
   const extent = formatChildCount(item);
 
-  return `
-    <section class="home-feature${item.podcast ? ' home-feature-podcast' : ''}${backdropUrl ? ' has-artwork' : ''}" data-nav-section="featured" data-nav-label="Featured" ${featureArtworkStyle(backdropUrl)}>
-      ${item.podcast ? `<img class="podcast-feature-cover" src="${escapeHtml(getArtworkUrl(item.id, 'poster', item.artwork_updated_at))}" alt="" />` : ''}
-      <div class="home-feature-copy">
+  return renderFeatureHero({ image:backdropUrl, className:item.podcast ? 'home-feature-podcast' : undefined,
+    decoration:item.podcast ? `<img class="podcast-feature-cover" src="${escapeHtml(getArtworkUrl(item.id, 'poster', item.artwork_updated_at))}" alt="" />` : '',
+    copy:`
         ${logoUrl
           ? `<img class="home-feature-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(identity.display_title)}" />`
           : `<h2>${escapeHtml(identity.display_title)}</h2>`}
@@ -543,12 +538,9 @@ export function renderItemFeature(item: MediaItemSummary, catalog = [...homePrev
           ${genreMarkup}
           ${extent ? `<span class="tag">${escapeHtml(extent)}</span>` : ''}
         </div>
-      </div>
-      <button type="button" class="secondary-button home-feature-action" data-item-id="${item.id}">
+      `, actions:`<button type="button" class="secondary-button home-feature-action" data-item-id="${item.id}">
         ${renderButtonContent('Open', 'arrow-right')}
-      </button>
-    </section>
-  `;
+      </button>` });
 }
 
 type ItemSearchResult = Extract<MediaSearchResult, { result_type: 'item' }>;

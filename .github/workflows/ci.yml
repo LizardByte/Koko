@@ -67,6 +67,14 @@ jobs:
       - name: Check licenses
         run: cargo bin cargo-deny check licenses
 
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Test native packaging metadata and downloads
+        run: python -m unittest discover -s packaging/tests
+
   clippy:
     name: Clippy
     permissions:
@@ -78,7 +86,8 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Cold native SDK builds and the playback suite can exceed thirty minutes together.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -88,9 +97,12 @@ jobs:
     env:
       KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
       KOKO_E2E_BROWSER: ${{ matrix.browser }}
+      KOKO_E2E_SERVER: ${{ github.workspace }}/target/debug/koko
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f  # v2.0.0
@@ -118,6 +130,11 @@ jobs:
           else
             node node_modules/playwright/cli.js install --with-deps chrome
           fi
+
+      - name: Build browser test server
+        env:
+          KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
+        run: cargo build -p koko --locked --no-default-features
 
       - name: Test real browser playback
         working-directory: crates/client-web

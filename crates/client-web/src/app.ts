@@ -1,4 +1,9 @@
 /** Coordinates app startup, route-level data loading, and shell rendering. */
+import { renderLiveTvPage, renderTvPinnedHeader } from './app/liveTv';
+import { syncLiveTvAccount } from './app/liveTvActions';
+import './app/liveTv.css';
+import './app/liveTvGuide.css';
+import './app/tvMultiview.css';
 import { renderPodcastPage } from './app/podcasts';
 import kokoLogoUrl from '../../../assets/Koko.svg';
 import { createIcons, icons } from 'lucide';
@@ -297,7 +302,16 @@ function eventBindingContext(): AppEventBindingContext {
     render,
     schedulePendingMetadataRefresh,
     setElementHtml,
+    renderTvSelection,
   };
+}
+
+/** Refresh the shared TV hero without rebuilding or rebinding the guide grid. */
+function renderTvSelection(): void {
+  const header = document.querySelector<HTMLElement>('#tv-pinned-header');
+  if (!header || !state.liveTv) { render(); return; }
+  setElementHtml(header,renderTvPinnedHeader(state.liveTv));
+  createIcons({icons,root:header});
 }
 
 function renderLibraryRefreshIndicator(library: MediaLibrary): string {
@@ -327,6 +341,7 @@ function isRailCollapsed(): boolean {
 }
 
 function renderCurrentPage(): string {
+  syncLiveTvAccount();
   switch (state.route.page) {
     case 'item':
       return renderItemPage();
@@ -336,6 +351,8 @@ function renderCurrentPage(): string {
       return renderSettingsPage();
     case 'podcasts':
       return renderPodcastPage();
+    case 'live-tv':
+      return renderLiveTvPage();
     default:
       return renderHomePage();
   }
@@ -390,6 +407,7 @@ function renderRail(): string {
             `)
             .join('')}
           ${showPodcasts ? `<button class="rail-button ${podcastActiveClass}" type="button" data-nav-podcasts title="Podcasts">${renderIcon('mic-2')}<span class="rail-label">Podcasts</span></button>` : ''}
+          <button class="rail-button ${state.route.page === 'live-tv' ? 'active' : ''}" type="button" data-nav-live-tv title="Live TV">${renderIcon('tv')}<span class="rail-label">Live TV</span></button>
         </nav>
       </div>
       <div class="library-rail-bottom">
@@ -412,6 +430,7 @@ function renderRail(): string {
           <option value="/" ${activeLibraryIdValue === undefined ? 'selected' : ''}>Home</option>
           ${state.libraries.filter(library => library.path !== 'koko://podcasts').map((library) => `<option value="/libraries/${library.id}" ${activeLibraryIdValue === library.id ? 'selected' : ''}>${escapeHtml(library.name)}</option>`).join('')}
           ${showPodcasts ? `<option value="/podcasts" ${podcastSelected}>Podcasts</option>` : ''}
+          <option value="/live-tv" ${state.route.page === 'live-tv' ? 'selected' : ''}>Live TV</option>
         </select>
         <button type="button" class="secondary-button icon-button" data-mobile-settings title="Settings" aria-label="Settings">${renderIcon('settings')}</button>
         <button type="button" class="secondary-button icon-button" data-mobile-sign-out title="Sign out" aria-label="Sign out">${renderIcon('log-out')}</button>
@@ -435,6 +454,7 @@ function renderNavigationHint(): string {
 }
 
 function render(preserveScroll = true): void {
+  syncLiveTvAccount();
   syncReaderAccount();
   syncAudioPlayer();
   if (!state.isPlayerOpen && !state.activeTrailer) {
@@ -481,7 +501,7 @@ function render(preserveScroll = true): void {
         </div>
       </div>
       ${renderNavigationHint()}
-      ${renderPlayerOverlay()}
+      ${state.activeTvPlayback ? '' : renderPlayerOverlay()}
     </div>
   `, preserveScroll);
 

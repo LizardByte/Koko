@@ -5,6 +5,7 @@ import { createIcons, icons } from 'lucide';
 import type { AppIconName, ThemeSongSource, TrailerOption, YouTubePlayer } from './types';
 import type { MediaAudioTrack, MediaItemDetail, PlaybackSession } from '../api';
 import {
+  ApiError,
   createPlaybackSession,
   deletePlaybackSession,
   getArtworkUrl,
@@ -21,6 +22,11 @@ import { YOUTUBE_PLAYER_STATE, YOUTUBE_THEME_PLACEHOLDER_VIDEO_ID } from './cons
 import { escapeHtml, formatDuration, formatMediaTime } from './format';
 import { currentThemeSongTarget } from './mediaTargets';
 import { state } from './state';
+import * as tvApi from '../liveTvApi';
+import { TvPlaybackWatchdog } from './tvPlaybackRecovery';
+import { bindTvPlaybackHeadroom, tvLivePosition } from './tvPlaybackHeadroom';
+import { configureTvMultiview, finishTvMultiviewOnExit, renderTvMultiviewButton, renderTvStage, retryTvMultiviewMain, stopTvMultiview, syncTvMultiview } from './tvMultiview';
+import { bindTvPlayerGuide, refreshTvPlayerGuide, refreshTvPlayerProgram, renderTvPlayerGuide, renderTvPlayerProgram, tvChannelPlayback } from './tvPlayer';
 import { audiobookRestartTarget, type AudiobookRestartScope } from './audiobooks';
 import { renderButtonContent, renderIcon, subtitleLanguage } from './ui';
 import { buildYouTubeWatchUrl, extractYouTubeVideoId, loadYouTubeIframeApi } from './youtube';
@@ -29,11 +35,16 @@ type RenderCallback = (preserveScroll?: boolean) => void;
 type RefreshDataCallback = (showLoading?: boolean) => Promise<void>;
 
 let playbackRequest = 0;
+let closingTvBuffer: Promise<unknown> = Promise.resolve();
+let tuningTvBuffer: Promise<void> = Promise.resolve();
 const compatiblePlaybackSources = new Set<string>();
 const reportedPlaybackErrors = new WeakMap<HTMLMediaElement, string | null>();
 const initializedMediaSources = new WeakMap<HTMLMediaElement, {
-  source: string; seekApplied: boolean; settingsApplied: boolean; started: boolean; cleanup?: () => void;
+  source: string; seekApplied: boolean; settingsApplied: boolean; started: boolean; bindingKey?: string; cleanup?: () => void;
 }>();
+let mediaEvents: AbortController | undefined;
+let cleanupMediaBinding: (() => void) | undefined;
+const tvPlaybackWatchdogs = new WeakMap<NonNullable<typeof state.activeTvPlayback>, TvPlaybackWatchdog>();
 
 let renderApp: RenderCallback = () => undefined;
 let refreshAppData: RefreshDataCallback = () => Promise.resolve();
@@ -42,6 +53,7 @@ let refreshAppData: RefreshDataCallback = () => Promise.resolve();
 export function configurePlaybackController(callbacks: { render: RenderCallback; refreshData: RefreshDataCallback }): void {
   renderApp = callbacks.render;
   refreshAppData = callbacks.refreshData;
+  configureTvMultiview({render:()=>render(),beforeMainChange:()=>{cleanupMediaBinding?.();mediaEvents?.abort();cleanupMediaBinding=undefined;},stop:()=>closeActivePlaybackSession()});
   globalThis.addEventListener('pagehide', finishActivePlaybackOnExit);
 }
 
@@ -252,7 +264,8 @@ function renderAudioTrackMenuMarkup(isAudio: boolean, audioTracks: MediaAudioTra
     `;
 }
 
-function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string): string {
+function renderPlayerTitleMarkup(logoUrl: string | undefined, title: string, channel = false, fallback = ''): string {
+  if (logoUrl && channel) return `<div class="player-channel-heading"><img class="player-channel-logo" data-tv-image data-fallback-src="${escapeHtml(fallback)}" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)} logo" referrerpolicy="no-referrer" /><h2>${escapeHtml(title)}</h2></div>`;
   return logoUrl
     ? `<img class="player-title-logo" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(title)}" />`
     : `<h2>${escapeHtml(title)}</h2>`;
@@ -318,75 +331,119 @@ function renderSubtitleSelection(item: MediaItemDetail): string {
   return `<label class="player-quality">Subtitles <select id="player-subtitles" aria-label="Subtitles"><option value="-1">Off</option>${options}</select></label>`;
 }
 
-function renderMediaPlayerOverlay(): string {
-  const playbackItem = state.activePlaybackItem ?? state.selectedItem;
-  const playbackSession = state.activePlaybackSession;
-  if (!state.isPlayerOpen || !playbackItem) {
-    return '';
-  }
-
-  const isAudio = playbackItem.media_kind === 'audio';
-  const selectedAudioStreamIndex = playbackSession ? selectedAudioStreamIndexForPlayback(playbackSession) : state.activeAudioStreamIndex;
-  const posterUrl = playbackPosterUrl(playbackItem);
-  const backdropUrl = playbackBackdropUrl(playbackItem, posterUrl);
-  const logoUrl = playbackItem.logo_url ? resolveApiUrl(playbackItem.logo_url) : undefined;
-  const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
-  const isRemuxingForAudio = isAudioStreamOverride && !playbackSession?.decision.transcode_required;
-  const source = playbackSession ? getSessionStreamUrl(playbackSession.session_id, mediaStreamStartMs(playbackSession, isRemuxingForAudio), selectedAudioStreamIndex) : '';
-  const audioTracks = playbackItem.audio_tracks ?? [];
-  const activeAudioTrack = activeAudioTrackForSelection(audioTracks, selectedAudioStreamIndex);
-  const mediaMarkup = source ? renderMediaElementMarkup(isAudio, source, posterUrl, renderSubtitleTrackMarkup(playbackItem, isAudio)) : '';
-  const mediaElementMarkup = state.playbackSettings?.paused ? mediaMarkup.replace(' autoplay', '') : mediaMarkup;
-  const audioTrackMenuMarkup = renderAudioTrackMenuMarkup(isAudio, audioTracks, activeAudioTrack);
-
-  return `
-    <div class="player-overlay media-player-overlay">
-      <div class="player-shell media-player-shell ${mediaPlayerShellClass(isAudio)} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(backdropUrl)}>
-        ${mediaElementMarkup}
-        <div class="player-loading-indicator" aria-live="polite">
-          <span class="loading-spinner player-loading-spinner" aria-hidden="true"></span>
-        </div>
-        <div class="player-error-indicator" aria-live="polite">
-          ${renderPlaybackProblem(state.playbackProblem)}
-        </div>
-        <div class="player-idle-hit-area" aria-hidden="true"></div>
-        <div class="player-top-controls player-controls">
-          <div class="player-title-block">
-            <span class="eyebrow">Now playing</span>
-            ${renderPlayerTitleMarkup(logoUrl, playbackItem.display_title)}
-          </div>
-          <div class="player-top-actions">
-            ${renderTranscodeBadge(isAudioStreamOverride)}
-            <button id="close-player" class="player-icon-button" type="button" title="Close" aria-label="Close player">${renderIcon('x', 'player-control-icon')}</button>
-          </div>
-        </div>
-        <div class="player-bottom-controls player-controls">
-          <input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
-          <div class="player-control-row">
-            <div class="player-control-cluster player-time-cluster">
-              <span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(playbackItem.duration_ms))}</span></span>
-            </div>
-            <div class="player-control-cluster player-transport-cluster">
-              <button class="player-icon-button" type="button" data-player-seek="-10" title="Back 10 seconds" aria-label="Back 10 seconds">${renderIcon('skip-back', 'player-control-icon')}</button>
-              <button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause', 'player-control-icon')}</button>
-              <button class="player-icon-button" type="button" data-player-seek="10" title="Forward 10 seconds" aria-label="Forward 10 seconds">${renderIcon('skip-forward', 'player-control-icon')}</button>
-            </div>
-            <div class="player-control-cluster player-tool-cluster">
-              <button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2', 'player-control-icon')}</button>
-              <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />
-              ${audioTrackMenuMarkup}
-              ${isAudio ? '' : renderPlaybackQuality(state.activePlaybackQuality ?? 'original')}
-              ${isAudio ? '' : renderSubtitleSelection(playbackItem)}
-              ${renderPictureInPictureButton(isAudio)}
-              <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize', 'player-control-icon')}</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+interface PlayerView {
+  isAudio: boolean; title: string; source: string; poster?: string; backdrop?: string; logo?: string;
+  tracks: string; audioMenu: string; subtitles: string; duration?: number; audioOverride: boolean;
+  tv?: NonNullable<typeof state.activeTvPlayback>;
 }
 
+function libraryPlayerView(item: MediaItemDetail): PlayerView {
+  const session = state.activePlaybackSession;
+  const index = session ? selectedAudioStreamIndexForPlayback(session) : state.activeAudioStreamIndex;
+  const audioOverride = index !== undefined && index > 0;
+  const remux = audioOverride && !session?.decision.transcode_required;
+  const isAudio = item.media_kind === 'audio';
+  const poster = playbackPosterUrl(item);
+  const audio = item.audio_tracks ?? [];
+  return { isAudio, title:item.display_title, poster, backdrop:playbackBackdropUrl(item,poster),
+    logo:item.logo_url ? resolveApiUrl(item.logo_url) : undefined,
+    source:session ? getSessionStreamUrl(session.session_id,mediaStreamStartMs(session,remux),index) : '',
+    tracks:renderSubtitleTrackMarkup(item,isAudio), audioMenu:renderAudioTrackMenuMarkup(isAudio,audio,activeAudioTrackForSelection(audio,index)),
+    subtitles:isAudio ? '' : renderSubtitleSelection(item), duration:item.duration_ms, audioOverride };
+}
+
+function currentPlayerView(): PlayerView | undefined {
+  const tv = state.activeTvPlayback;
+  if (tv && tv.owner !== state.bootstrap?.current_user?.id) return;
+  if (tv) return {tv,isAudio:false,title:tv.title,source:tv.url,poster:tv.image,backdrop:tv.image,logo:tv.logo,
+    tracks:'',audioMenu:'',subtitles:'',audioOverride:false,duration:tv.buffer?.end_ms};
+  const item = state.activePlaybackItem ?? state.selectedItem;
+  return state.isPlayerOpen && item ? libraryPlayerView(item) : undefined;
+}
+
+function playerSeekEnabled(view: PlayerView): boolean {
+  return !view.tv || view.tv.kind === 'recordings' || Boolean(view.tv.buffer);
+}
+
+function renderPlayerTime(view: PlayerView): string {
+  if (!playerSeekEnabled(view)) return '<span class="player-badge">Live TV</span>';
+  const live = view.tv?.buffer ? '<span id="player-live-status" class="player-badge">Live</span>' : '';
+  return `<span class="player-time"><span id="player-current-time">0:00</span><span>/</span><span id="player-duration">${escapeHtml(formatDuration(view.duration))}</span></span>${live}`;
+}
+
+function renderTvKeepControls(view: PlayerView): string {
+  const buffer = view.tv?.buffer;
+  if (!buffer?.can_keep) return '';
+  const disabled = buffer.recording_id ? 'disabled' : '';
+  const label = buffer.recording_id ? 'Recording kept' : 'Keep recording';
+  return `<div class="player-menu-shell" id="player-recording-controls">
+    <button type="button" id="player-keep-tv" class="player-icon-button ${buffer.recording_id ? 'is-recording' : ''}" ${disabled} title="${label}" aria-label="${label}" aria-haspopup="menu" aria-expanded="false" aria-controls="player-recording-menu">${renderIcon('circle','player-control-icon')}</button>
+    <div id="player-recording-menu" class="player-track-menu" role="menu" aria-label="Keep recording" hidden>
+      <button type="button" class="player-track-option" role="menuitem" data-tv-keep="shared"><strong>Shared recording</strong><small>Available to all accounts</small></button>
+      <button type="button" class="player-track-option" role="menuitem" data-tv-keep="private"><strong>Private recording</strong><small>Only available to your account</small></button>
+    </div></div>`;
+}
+
+function renderPlayerSeek(seconds: number): string {
+  const label = seconds < 0 ? 'Back 10 seconds' : 'Forward 10 seconds';
+  const icon = seconds < 0 ? 'skip-back' : 'skip-forward';
+  return `<button class="player-icon-button" type="button" data-player-seek="${seconds}" title="${label}" aria-label="${label}">${renderIcon(icon,'player-control-icon')}</button>`;
+}
+
+function renderTvSkipToEnd(view: PlayerView): string {
+  return view.tv?.buffer ? `<button id="player-skip-to-end" class="player-icon-button" type="button" title="Skip to end" aria-label="Skip to end">${renderIcon('step-forward','player-control-icon')}</button>` : '';
+}
+
+function renderTvGuideButton(view: PlayerView): string {
+  if(state.tvMultiview)return '';
+  return view.tv?.kind === 'channels' ? `<button id="player-tv-guide-toggle" class="player-icon-button" type="button" title="Channel guide" aria-label="Channel guide" aria-expanded="${Boolean(view.tv.guideOpen)}" aria-controls="player-tv-guide">${renderIcon('tv','player-control-icon')}</button>` : '';
+}
+
+function tvPlayerPresentation(view: PlayerView): {program:string;guide:string;className:string} {
+  if (!view.tv||state.tvMultiview) return {program:'',guide:'',className:''};
+  return {program:`<div id="player-tv-program">${renderTvPlayerProgram()}</div>`,guide:renderTvPlayerGuide(),className:view.tv.guideOpen ? 'has-tv-guide' : ''};
+}
+
+function playerViewKey(view:PlayerView,preview:boolean):string {
+  const key=state.tvMultiview?['multiview',view.tv?.owner,preview]:[view.source,preview,view.title,view.logo,view.tv?.logoFallback,state.playbackProblem,view.tv?.buffer?.can_keep];
+  return escapeHtml(JSON.stringify(key));
+}
+
+function playerMediaMarkup(view:PlayerView):string {
+  const media=view.source?renderMediaElementMarkup(view.isAudio,view.source,view.poster,view.tracks):'';
+  return renderTvStage(state.playbackSettings?.paused?media.replace(' autoplay',''):media);
+}
+
+function renderMediaPlayerOverlay(): string {
+  const view = currentPlayerView();
+  if (!view) return '';
+  const preview = Boolean(view.tv && !state.isPlayerOpen);
+  const closeLabel = 'Close player';
+  const label = view.tv ? 'Live TV' : 'Now playing';
+  const mediaMarkup = playerMediaMarkup(view);
+  const viewKey = playerViewKey(view,preview);
+  const multiviewClass=state.tvMultiview?'has-tv-multiview':'';
+  if (preview) return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay tv-preview-player">
+    <div id="media-player-shell" class="player-shell media-player-shell video-player-shell ${multiviewClass} ${state.playbackProblem ? 'has-media-error' : ''}">
+      ${mediaMarkup}<div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div>
+    </div></div>`;
+  const quality = !view.isAudio && (!view.tv || view.tv.buffer) ? renderPlaybackQuality(state.activePlaybackQuality ?? 'original') : '';
+  const seek = playerSeekEnabled(view);
+  const tvPresentation = tvPlayerPresentation(view);
+  return `<div id="media-player-overlay" data-player-view-key="${viewKey}" class="player-overlay media-player-overlay ${preview ? 'tv-preview-player' : ''}">
+    <div id="media-player-shell" class="player-shell media-player-shell ${mediaPlayerShellClass(view.isAudio)} ${tvPresentation.className} ${multiviewClass} is-controls-visible ${state.playbackProblem ? 'has-media-error' : 'is-media-loading'}" tabindex="-1" ${playerBackdropStyle(view.backdrop)}>
+      ${mediaMarkup}<div class="player-loading-indicator" aria-live="polite"><span class="loading-spinner player-loading-spinner" aria-hidden="true"></span></div>
+      <div class="player-error-indicator" aria-live="polite">${renderPlaybackProblem(state.playbackProblem)}</div><div class="player-idle-hit-area" aria-hidden="true"></div>
+      <div class="player-top-controls player-controls"><div class="player-title-block"><span class="eyebrow">${label}</span>${renderPlayerTitleMarkup(view.logo,view.title,Boolean(view.tv),view.tv?.logoFallback)}${tvPresentation.program}</div>
+        <div class="player-top-actions">${renderTranscodeBadge(view.audioOverride)}<button id="close-player" class="player-icon-button" type="button" title="${closeLabel}" aria-label="${closeLabel}">${renderIcon('x','player-control-icon')}</button></div></div>
+      <div class="player-bottom-controls player-controls">${seek ? '<input id="player-progress" class="player-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Playback position" />' : ''}
+        <div class="player-control-row"><div class="player-control-cluster player-time-cluster">${renderPlayerTime(view)}</div>
+          <div class="player-control-cluster player-transport-cluster">${renderTvKeepControls(view)}${seek ? renderPlayerSeek(-10) : ''}<button id="player-play-toggle-small" class="player-icon-button player-primary-button" type="button" title="Pause" aria-label="Pause">${renderIcon('pause','player-control-icon')}</button>${seek ? renderPlayerSeek(10) : ''}${renderTvSkipToEnd(view)}</div>
+          <div class="player-control-cluster player-tool-cluster"><button id="player-mute-toggle" class="player-icon-button" type="button" title="Mute" aria-label="Mute">${renderIcon('volume-2','player-control-icon')}</button>
+            <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume" />${renderTvGuideButton(view)}${renderTvMultiviewButton()}${view.audioMenu}${quality}${view.subtitles}${renderPictureInPictureButton(view.isAudio)}
+            <button id="player-fullscreen" class="player-icon-button" type="button" title="Fullscreen" aria-label="Fullscreen">${renderIcon('maximize','player-control-icon')}</button></div></div></div>
+      ${tvPresentation.guide}</div></div>`;
+}
 function themeSongLayer(): HTMLElement {
   let layer = document.querySelector<HTMLElement>('#theme-song-layer');
   if (!layer) {
@@ -608,9 +665,94 @@ export function syncThemeSongPlayer(): void {
   });
 }
 
+/** Release TV playback when leaving its screen or starting another media item. */
+export function stopTvPlayback(): void {
+  const tv = state.activeTvPlayback;
+  closingTvBuffer=Promise.allSettled([closingTvBuffer,stopTvMultiview()]);
+  if (!tv) return;
+  const player = document.querySelector<HTMLMediaElement>('#media-player');
+  if (player) initializedMediaSources.get(player)?.cleanup?.();
+  mediaEvents?.abort(); cleanupMediaBinding = undefined;
+  player?.pause(); player?.removeAttribute('src'); player?.load();
+  state.activeTvPlayback = undefined; state.isPlayerOpen = false;
+  if (tv.buffer) closingTvBuffer = Promise.all([closingTvBuffer,tvApi.closeTvBuffer(tv.buffer.session_id)]).catch(error => console.warn('Unable to release TV buffer',error));
+  document.body.style.cursor = '';
+}
+
+/** Start a TV source in the same overlay and controls as library videos. */
+export async function startTvPlayback(input: Omit<NonNullable<typeof state.activeTvPlayback>, 'owner'>): Promise<void> {
+  const owner = state.bootstrap?.current_user?.id;
+  if (owner === undefined) return;
+  const previous = state.activeTvPlayback ? document.querySelector<HTMLMediaElement>('#media-player') : null;
+  const volume = previous ? {paused:false,volume:previous.volume,muted:previous.muted} : undefined;
+  stopMusic(); closeTrailerPlayer(); closeActivePlaybackSession();
+  if (volume) state.playbackSettings = volume;
+  state.activeTvPlayback = {...input,owner}; state.isPlayerOpen = true;
+  state.activePlaybackQuality = 'original';
+  const tv = state.activeTvPlayback;
+  const request = ++playbackRequest;
+  if (tv.kind === 'channels') {tv.url = '';tv.buffer=undefined;tv.startMs=undefined;}
+  render();
+  if (tv.kind !== 'channels') return;
+  // Finish releasing an earlier tune before asking a single-tuner source for another.
+  const attempt = tuningTvBuffer.then(() => openTvBuffer(tv,owner,request));
+  tuningTvBuffer = attempt.catch(() => undefined);
+  await attempt;
+}
+
+async function openTvBuffer(tv: NonNullable<typeof state.activeTvPlayback>, owner: number, request: number): Promise<void> {
+  try {
+    await closingTvBuffer;
+    if (!tvTuneCurrent(tv,owner,request)) return;
+    const buffer = await tvApi.startTvBuffer(tv.id);
+    if (!tvTuneCurrent(tv,owner,request)) { await tvApi.closeTvBuffer(buffer.session_id); return; }
+    tv.buffer = buffer; tv.startMs = tvLivePosition(tv);
+    tv.url = tvApi.tvBufferStreamUrl(buffer.session_id,tv.startMs,'original',request);
+    if (state.liveTv?.owner === owner) {
+      const preferences = state.liveTv.preferences ?? {favorites:[],recent:[]};
+      state.liveTv.preferences = {...preferences,recent:[tv.id,...preferences.recent.filter(id => id !== tv.id)].slice(0,30)};
+    }
+  } catch (error) {
+    if (!tvTuneCurrent(tv,owner,request)) return;
+    const problem = error instanceof ApiError && error.status === 400
+      ? { message: error.message, retry: true } : playbackRequestProblem(error);
+    const tile=state.tvMultiview?.tiles.find(t=>t.playback===tv);if(tile)tile.problem=problem;
+    if(state.activeTvPlayback===tv)state.playbackProblem=problem;
+  }
+  const tile=state.tvMultiview?.tiles.find(t=>t.playback===tv);if(tile)tile.pending=false;
+  render();
+}
+
+function tvTuneCurrent(tv:NonNullable<typeof state.activeTvPlayback>,owner:number,request:number):boolean {
+  if(state.bootstrap?.current_user?.id!==owner||state.route.page!=='live-tv')return false;
+  return state.tvMultiview?.tiles.some(t=>t.playback===tv)===true||(request===playbackRequest&&state.activeTvPlayback===tv);
+}
+
+function seekTvBuffer(position: number, paused?: boolean): void {
+  const tv = state.activeTvPlayback;
+  if (!tv?.buffer) return;
+  const player = document.querySelector<HTMLMediaElement>('#media-player');
+  if (player) rememberPlaybackSettings(player);
+  if (paused !== undefined && state.playbackSettings) state.playbackSettings.paused = paused;
+  tv.startMs = Math.max(tv.buffer.start_ms,Math.min(position,tv.buffer.end_ms-250));
+  tv.url = tvApi.tvBufferStreamUrl(tv.buffer.session_id,tv.startMs,state.activePlaybackQuality ?? 'original',++playbackRequest);
+  state.playbackProblem = undefined; render(Boolean(state.tvMultiview));
+}
+
+/** Return TV playback to its hero slot while library playback closes normally. */
+export function dismissPlayer(): void {
+  if (state.activeTvPlayback && state.isPlayerOpen) {
+    const player = document.querySelector<HTMLMediaElement>('#media-player');
+    if (player) rememberPlaybackSettings(player);
+    state.isPlayerOpen = false; document.body.style.cursor = ''; render();
+  } else closeActivePlaybackSession();
+}
+
 /** Stops any active browser playback session and clears playback state. */
 export function closeActivePlaybackSession(): void {
+  cleanupMediaBinding?.(); mediaEvents?.abort();
   saveActivePlaybackProgress();
+  stopTvPlayback();
   state.isPlayerOpen = false;
   document.body.style.cursor = '';
   playbackRequest += 1;
@@ -647,6 +789,7 @@ async function startMediaPlayback(item: MediaItemDetail, startMs: number): Promi
 }
 
 async function replaceMediaPlayback(item: MediaItemDetail, startMs: number): Promise<void> {
+  stopTvPlayback();
   const request = ++playbackRequest;
   const account = state.bootstrap?.current_user?.id;
   state.activePlaybackCompatible ||= compatiblePlaybackSources.has(playbackSourceKey(item.id));
@@ -704,6 +847,8 @@ function saveActivePlaybackProgress(): void {
 }
 
 function finishActivePlaybackOnExit(): void {
+  finishTvMultiviewOnExit();
+  if (state.activeTvPlayback?.buffer) tvApi.closeTvBufferOnExit(state.activeTvPlayback.buffer.session_id);
   if (state.activePlaybackSession && state.activePlaybackItem) {
     finishPlaybackOnExit(state.activePlaybackSession.session_id, state.activePlaybackItem.id, activeProgressRequest());
   }
@@ -711,6 +856,9 @@ function finishActivePlaybackOnExit(): void {
 
 /** Recreates a session at the source position; automatic recovery can preserve the intended pause state. */
 export async function restartMediaPlayback(quality?: PlaybackQuality, compatible?: boolean, paused?: boolean): Promise<void> {
+  if (state.activeTvPlayback) {
+    await restartTvPlayback(quality);return;
+  }
   const item = state.activePlaybackItem;
   if (!state.isPlayerOpen || !item) return;
   const player = document.querySelector<HTMLMediaElement>('#media-player');
@@ -726,6 +874,20 @@ export async function restartMediaPlayback(quality?: PlaybackQuality, compatible
   }
   if (compatible !== undefined) state.activePlaybackCompatible = compatible;
   await replaceMediaPlayback(item, position);
+}
+
+async function restartTvPlayback(quality?:PlaybackQuality):Promise<void> {
+  const tv=state.activeTvPlayback!;
+  if(tv.kind==='channels'&&(!tv.buffer||tv.buffer.error||(tv.buffer.finished&&!quality))){
+    if(state.tvMultiview)await retryTvMultiviewMain();else await startTvPlayback(tv);
+    return;
+  }
+  const player=document.querySelector<HTMLMediaElement>('#media-player');
+  if(player)rememberPlaybackSettings(player);
+  if(quality)state.activePlaybackQuality=quality;
+  if(tv.buffer){seekTvBuffer(activePlaybackPositionMs(player));return;}
+  if(tv.kind==='channels'){await startTvPlayback(tv);return;}
+  tv.url=`${tvApi.tvStreamUrl(tv.kind,tv.id)}?attempt=${++playbackRequest}`;state.playbackProblem=undefined;render();
 }
 
 function playbackSourceKey(itemId: number): string {
@@ -750,9 +912,16 @@ async function reportMediaError(player: HTMLMediaElement, code = player.error?.c
   const session = state.activePlaybackSession;
   const request = playbackRequest;
   const source = player.getAttribute('src');
-  const isCurrent = (): boolean => request === playbackRequest && state.isPlayerOpen
+  const isCurrent = (): boolean => request === playbackRequest && (state.isPlayerOpen || Boolean(state.activeTvPlayback))
     && player.isConnected && document.querySelector('#media-player') === player && player.getAttribute('src') === source;
-  if (!session || !isCurrent() || reportedPlaybackErrors.get(player) === source) return;
+  if (!isCurrent() || reportedPlaybackErrors.get(player) === source) return;
+  if (state.activeTvPlayback) {
+    if (recoverTvPlayback(player, true)) return;
+    reportedPlaybackErrors.set(player, source);
+    showPlaybackProblem({message:'TV playback was interrupted. Check the source, available tuners, and server media settings, then retry.',retry:true});
+    return;
+  }
+  if (!session) return;
   reportedPlaybackErrors.set(player, source);
   const copiedVideo = !session.decision.video_transcode_required
     && (state.activeAudioStreamIndex ?? session.audio_stream_index ?? 0) === 0;
@@ -774,25 +943,25 @@ async function reportMediaError(player: HTMLMediaElement, code = player.error?.c
   }
 }
 
-function bindPlaybackRecovery(): void {
+function bindPlaybackRecovery(mediaSignal: AbortSignal): void {
   document.querySelector('.media-player-shell .player-error-indicator')?.addEventListener('click', (event) => {
     const target = (event.target as Element).closest('button');
     if (target?.hasAttribute('data-player-retry')) void restartMediaPlayback();
     if (target?.hasAttribute('data-player-compatible')) void restartMediaPlayback(undefined, true);
     if (target?.hasAttribute('data-player-sign-in')) globalThis.location.reload();
-  });
+  }, {signal:mediaSignal});
   document.querySelector<HTMLSelectElement>('#player-quality')?.addEventListener('change', (event) => {
     const quality = (event.target as HTMLSelectElement).value;
     const selected = PLAYBACK_QUALITIES.find((entry) => entry.id === quality);
     if (selected) void restartMediaPlayback(selected.id);
-  });
+  }, {signal:mediaSignal});
   document.querySelector<HTMLSelectElement>('#player-subtitles')?.addEventListener('change', (event) => {
     const selected = Number((event.target as HTMLSelectElement).value);
     const player = document.querySelector<HTMLMediaElement>('#media-player');
     if (!player) return;
     for (const [index, track] of Array.from(player.textTracks).entries()) track.mode = index === selected ? 'showing' : 'disabled';
     rememberPlaybackSettings(player);
-  });
+  }, {signal:mediaSignal});
 }
 
 /** Start an album in disc/track order, optionally beginning at a selected track. */
@@ -930,10 +1099,19 @@ function updateIconButton(
   if (!button) {
     return;
   }
+  if (button.dataset.playerIcon === iconName && button.getAttribute('aria-label') === label) return;
+  button.dataset.playerIcon = iconName;
   button.innerHTML = renderIcon(iconName, 'player-control-icon');
   button.title = label;
   button.setAttribute('aria-label', label);
-  createIcons({ icons });
+  createIcons({ icons, root:button });
+  preservePlayerIcons();
+}
+
+function preservePlayerIcons(): void {
+  // Lucide otherwise replaces finished SVGs on each global page refresh, even
+  // between pointer-down and pointer-up on the same close/volume control.
+  document.querySelectorAll<SVGElement>('#media-player-overlay svg[data-lucide]').forEach(icon => { delete icon.dataset.lucide; });
 }
 
 /** Creates a seek handler that increases the step when repeated in one direction. */
@@ -1208,12 +1386,168 @@ export function bindTrailerPlayer(): void {
   });
 }
 
+function tvPlaybackWatchdog(tv: NonNullable<typeof state.activeTvPlayback>): TvPlaybackWatchdog {
+  let watchdog = tvPlaybackWatchdogs.get(tv);
+  if (!watchdog) { watchdog = new TvPlaybackWatchdog(); tvPlaybackWatchdogs.set(tv,watchdog); }
+  return watchdog;
+}
+
+function recoverTvPlayback(player: HTMLMediaElement, interrupted = false): boolean {
+  const tv = state.activeTvPlayback;
+  const buffer = tv?.buffer;
+  if (!tv || !buffer || buffer.finished || buffer.error || state.playbackSettings?.paused) return false;
+  const watchdog = tvPlaybackWatchdog(tv);
+  const position = activePlaybackPositionMs(player);
+  const result = watchdog.observe({position,interrupted:interrupted || player.ended || Boolean(player.error),
+    paused:player.paused && !player.ended && !player.error,unavailable:buffer.end_ms-buffer.start_ms < 4000},Date.now());
+  if (result === 'exhausted') return false;
+  if (result === 'recover') {
+    const livePosition = tvLivePosition(tv);
+    // Keep a time-shifted viewer's position on the first retry. If the same point
+    // repeatedly fails, use the current live edge as Skip to end does.
+    seekTvBuffer(watchdog.attempts > 1 ? livePosition : Math.min(position,livePosition),false);
+  }
+  return true;
+}
+
+function bindTvRecordingMenu(tv: NonNullable<typeof state.activeTvPlayback>): () => void {
+  const events = new AbortController();
+  const signal = events.signal;
+  const keep = document.querySelector<HTMLButtonElement>('#player-keep-tv');
+  const menu = document.querySelector<HTMLElement>('#player-recording-menu');
+  const setOpen = (open: boolean) => {
+    if (menu) menu.hidden = !open;
+    keep?.setAttribute('aria-expanded',String(open));
+  };
+  keep?.addEventListener('click',() => {
+    setOpen(Boolean(menu?.hidden));
+    if (!menu?.hidden) menu?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});
+  },{signal});
+  document.addEventListener('pointerdown',event => {
+    if (!(event.target as Element).closest('#player-recording-controls')) setOpen(false);
+  },{signal});
+  menu?.addEventListener('keydown',event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault(); event.stopPropagation(); setOpen(false); keep?.focus({preventScroll:true});
+  },{signal});
+  menu?.querySelectorAll<HTMLButtonElement>('[data-tv-keep]').forEach(choice => choice.addEventListener('click',() => {
+    if (!tv.buffer || !keep) return;
+    setOpen(false); keep.focus({preventScroll:true}); keep.disabled = true; keep.dataset.saving = 'true';
+    void tvApi.keepTvBuffer(tv.buffer.session_id,choice.dataset.tvKeep === 'private').then(id => {
+      delete keep.dataset.saving;
+      if (state.activeTvPlayback === tv && tv.buffer) { tv.buffer.recording_id = id; updateTvRecordingButton(id); }
+    }).catch(error => {
+      if (state.activeTvPlayback !== tv) return;
+      delete keep.dataset.saving; keep.disabled = false;
+      showPlaybackProblem({message:error instanceof Error ? error.message : 'Unable to keep this recording.',retry:false});
+    });
+  },{signal}));
+  return () => events.abort();
+}
+
+function updateTvRecordingButton(recordingId?: number | null): void {
+  const keep = document.querySelector<HTMLButtonElement>('#player-keep-tv');
+  if (!keep) return;
+  const label = recordingId ? 'Recording kept' : 'Keep recording';
+  keep.disabled = Boolean(recordingId) || keep.dataset.saving === 'true';
+  keep.title = label; keep.setAttribute('aria-label',label);
+  keep.classList.toggle('is-recording',Boolean(recordingId));
+}
+
+function bindTvBufferControls(player: HTMLMediaElement): () => void {
+  const tv = state.activeTvPlayback;
+  if (!tv?.buffer) return () => undefined;
+  let disposed = false, polling = false;
+  const current = () => !disposed && state.activeTvPlayback === tv;
+  tvPlaybackWatchdog(tv).attach(activePlaybackPositionMs(player),Date.now());
+  const cleanupMenu = bindTvRecordingMenu(tv);
+  const cleanupHeadroom = bindTvPlaybackHeadroom(player,tv,current,() => Boolean(state.playbackSettings?.paused));
+  const goLive = () => {
+    const session = tv.buffer?.session_id;
+    if (!session) return;
+    void tvApi.getTvBuffer(session).then(info => {
+      if (!current() || tv.buffer?.session_id !== session) return;
+      info.recording_id ??= tv.buffer.recording_id;
+      tv.buffer = info;
+      seekTvBuffer(tvLivePosition(tv),false);
+    }).catch(error => {
+      if (current()) showPlaybackProblem({message:error instanceof Error ? error.message : 'Unable to find the live position.',retry:true});
+    });
+  };
+  const live = document.querySelector('#player-skip-to-end');
+  live?.addEventListener('click',goLive);
+  const timer = globalThis.setInterval(() => {
+    if (!current() || !tv.buffer || polling) return;
+    polling = true;
+    void tvApi.getTvBuffer(tv.buffer.session_id).then(info => {
+      if (!current()) return;
+      info.recording_id ??= tv.buffer?.recording_id;
+      tv.buffer = info;
+      updateTvRecordingButton(info.recording_id);
+      if (info.error) showPlaybackProblem({message:info.error,retry:true});
+      const position = activePlaybackPositionMs(player);
+      if (!player.paused && position < info.start_ms && info.end_ms > info.start_ms) seekTvBuffer(info.start_ms);
+      else if (!state.playbackProblem && !recoverTvPlayback(player) && !info.finished && !player.paused) {
+        showPlaybackProblem({message:'TV playback could not reconnect automatically. Try Skip to end or retry playback.',retry:true});
+      }
+    }).catch(error => { if (current()) console.warn('Unable to refresh the TV buffer',error); }).finally(() => { polling = false; });
+  },2000);
+  return () => { disposed = true; globalThis.clearInterval(timer); cleanupMenu(); cleanupHeadroom(); live?.removeEventListener('click',goLive); };
+}
+
+/** Refresh the main tile's shared controls while preserving the other video decoders. */
+function refreshMultiviewPlayer():void {
+  const tv=state.activeTvPlayback,root=document.querySelector<HTMLElement>('#media-player-overlay');
+  if(!state.tvMultiview||!tv||!root)return;
+  const tile=root.querySelector<HTMLElement>(`#tv-stream-${tv.id}`);if(!tile)return;
+  const key=JSON.stringify([tv.id,tv.url,state.isPlayerOpen,state.playbackProblem,tv.buffer?.can_keep]);
+  if(root.dataset.multiControlsKey===key)return;
+  cleanupMediaBinding?.();mediaEvents?.abort();cleanupMediaBinding=undefined;
+  root.dataset.multiControlsKey=key;
+  const shell=root.querySelector<HTMLElement>('#media-player-shell')!;
+  const template=document.createElement('template');template.innerHTML=renderMediaPlayerOverlay();
+  for(const selector of ['.player-bottom-controls']){
+    const previous=root.querySelector(selector),next=template.content.querySelector(selector);
+    if(next){if(previous)previous.replaceWith(next);else shell.append(next);}else previous?.remove();
+  }
+  replaceMultiviewMedia(root,tile,tv.url,tv.image);
+  for(const selector of ['.player-loading-indicator','.player-error-indicator']){
+    const element=root.querySelector(selector);if(element)tile.append(element);
+  }
+  const error=tile.querySelector<HTMLElement>('.player-error-indicator');if(error)error.innerHTML=renderPlaybackProblem(state.playbackProblem);
+  shell.classList.toggle('has-media-error',Boolean(state.playbackProblem));
+}
+
+function replaceMultiviewMedia(root:Element,tile:Element,url:string,image?:string):void {
+  const player=root.querySelector<HTMLVideoElement>('#media-player');
+  if(!url){player?.pause();player?.removeAttribute('src');player?.load();player?.remove();return;}
+  if(player?.getAttribute('src')===url)return;
+  const media=document.createElement('template');media.innerHTML=renderMediaElementMarkup(false,url,image,'');
+  const next=media.content.firstElementChild!;if(player){player.pause();player.replaceWith(next);}else tile.prepend(next);
+}
+
 /** Binds controls for the browser playback overlay in the current DOM tree. */
 export function bindPlayerProgress(): void {
-  bindPlaybackRecovery();
+  syncTvMultiview();
+  refreshMultiviewPlayer();
+  syncTvMultiview();
+  preservePlayerIcons();
+  refreshTvPlayerGuide();
+  refreshTvPlayerProgram();
   const player = document.querySelector<HTMLMediaElement>('#media-player');
+  const overlay=document.querySelector<HTMLElement>('#media-player-overlay');
+  const bindingKey = (overlay?.dataset.playerViewKey ?? '')+(overlay?.dataset.multiControlsKey??'');
+  const bound = player ? initializedMediaSources.get(player) : undefined;
+  if (bound?.bindingKey === bindingKey && cleanupMediaBinding === bound.cleanup && !mediaEvents?.signal.aborted) return;
+  cleanupMediaBinding?.();
+  mediaEvents?.abort();
+  mediaEvents = new AbortController();
+  const mediaSignal = mediaEvents.signal;
+  bindPlaybackRecovery(mediaSignal);
   const playbackItem = state.activePlaybackItem ?? state.selectedItem;
-  if (!player || !playbackItem) {
+  const tv = state.activeTvPlayback;
+  if (!player || (!playbackItem && !tv)) {
+    cleanupMediaBinding = undefined;
     return;
   }
 
@@ -1231,9 +1565,9 @@ export function bindPlayerProgress(): void {
   const selectedAudioStreamIndex = state.activeAudioStreamIndex ?? state.activePlaybackSession?.audio_stream_index;
   const currentAudioTrackIndex = selectedAudioStreamIndex ?? 0;
   const isAudioStreamOverride = selectedAudioStreamIndex !== undefined && selectedAudioStreamIndex > 0;
-  const isTranscoding = (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
-  const sourceDurationSeconds = (playbackItem.duration_ms ?? 0) / 1000;
-  const requestedPlaybackStartSeconds = Math.max(0, state.activePlaybackStartMs / 1000);
+  const isTranscoding = Boolean(tv?.buffer) || (state.activePlaybackSession?.decision.transcode_required ?? false) || isAudioStreamOverride;
+  const sourceDurationSeconds = tv ? 0 : (playbackItem?.duration_ms ?? 0) / 1000;
+  const requestedPlaybackStartSeconds = Math.max(0, (tv?.startMs ?? state.activePlaybackStartMs) / 1000);
   const playbackBaseOffsetSeconds = isTranscoding ? requestedPlaybackStartSeconds : 0;
   const initialDirectSeekSeconds = isTranscoding ? 0 : requestedPlaybackStartSeconds;
   player.dataset.playbackOffsetMs = String(playbackBaseOffsetSeconds * 1000);
@@ -1245,14 +1579,22 @@ export function bindPlayerProgress(): void {
     initializedMediaSources.set(player, initialization);
   }
   const mediaInitialization = initialization;
+  mediaInitialization.bindingKey = bindingKey;
   let controlsHideHandle: number | undefined;
   let isScrubbing = false;
+  let keepFocusedControlsVisible = false;
+  let pointerPosition: {x:number;y:number} | undefined;
   let hasAppliedInitialDirectSeek = initialDirectSeekSeconds <= 0 || mediaInitialization.seekApplied;
   let stallHandle: number | undefined;
+  const cleanupTvBuffer = bindTvBufferControls(player);
+  const cleanupTvGuide = bindTvPlayerGuide(channel => { void startTvPlayback(tvChannelPlayback(channel,true)); });
   mediaInitialization.cleanup = () => {
+    cleanupTvBuffer();
+    cleanupTvGuide();
     if (controlsHideHandle !== undefined) globalThis.clearTimeout(controlsHideHandle);
     if (stallHandle !== undefined) globalThis.clearTimeout(stallHandle);
   };
+  cleanupMediaBinding = mediaInitialization.cleanup;
 
   const trackPlaybackStall = (loading: boolean): void => {
     if (!loading || player.paused || state.playbackProblem) {
@@ -1271,6 +1613,7 @@ export function bindPlayerProgress(): void {
   };
 
   const playbackDurationSeconds = (): number => {
+    if (tv?.buffer) return tv.buffer.end_ms / 1000;
     if (sourceDurationSeconds > 0) {
       return sourceDurationSeconds;
     }
@@ -1281,14 +1624,14 @@ export function bindPlayerProgress(): void {
   };
 
   const setPlayerLoading = (loading: boolean): void => {
-    const shouldShowLoading = loading && !player.ended && player.readyState < player.HAVE_FUTURE_DATA;
+    const shouldShowLoading = loading && !player.ended && (player.readyState < player.HAVE_FUTURE_DATA || Boolean(tv && player.playbackRate===0));
     shell?.classList.toggle('is-media-loading', shouldShowLoading);
     trackPlaybackStall(shouldShowLoading);
     if (!state.playbackProblem) shell?.classList.remove('has-media-error');
   };
 
   const refreshPlayerLoading = (): void => {
-    setPlayerLoading(!player.paused && player.readyState < player.HAVE_FUTURE_DATA);
+    setPlayerLoading(!player.paused && (player.readyState < player.HAVE_FUTURE_DATA || Boolean(tv && player.playbackRate===0)));
   };
 
   const updatePlayButtons = (): void => {
@@ -1323,9 +1666,12 @@ export function bindPlayerProgress(): void {
 
   const updateTimeline = (): void => {
     const duration = playbackDurationSeconds();
+    const start = (tv?.buffer?.start_ms ?? 0)/1000;
     const currentPosition = Math.min(duration || Number.POSITIVE_INFINITY, playbackBaseOffsetSeconds + player.currentTime);
+    refreshTvPlayerProgram(currentPosition*1000);
     if (progress && !isScrubbing) {
-      progress.value = duration > 0 ? String(Math.min(1000, Math.max(0, (currentPosition / duration) * 1000))) : '0';
+      progress.value = duration > start ? String(Math.min(1000, Math.max(0, ((currentPosition-start) / (duration-start)) * 1000))) : '0';
+      progress.disabled = duration <= start;
     }
     if (currentTimeLabel) {
       currentTimeLabel.textContent = formatMediaTime(currentPosition);
@@ -1333,6 +1679,8 @@ export function bindPlayerProgress(): void {
     if (durationLabel) {
       durationLabel.textContent = formatMediaTime(duration);
     }
+    const liveStatus = document.querySelector<HTMLElement>('#player-live-status');
+    if (liveStatus) liveStatus.hidden = duration-currentPosition >= 8;
   };
 
   const applyInitialDirectSeek = (): void => {
@@ -1355,7 +1703,12 @@ export function bindPlayerProgress(): void {
     }
   };
 
-  const showControls = (): void => {
+  const showControls = (event?: Event): void => {
+    if (event instanceof MouseEvent && ['mousemove','pointermove'].includes(event.type)) {
+      if (pointerPosition?.x === event.clientX && pointerPosition.y === event.clientY) return;
+      pointerPosition = {x:event.clientX,y:event.clientY};
+    }
+    if (event && ['mousemove','mousedown','touchstart','pointermove'].includes(event.type)) keepFocusedControlsVisible = false;
     shell?.classList.add('is-controls-visible');
     shell?.classList.remove('is-controls-hidden');
     document.body.style.cursor = '';
@@ -1363,15 +1716,22 @@ export function bindPlayerProgress(): void {
       globalThis.clearTimeout(controlsHideHandle);
     }
     controlsHideHandle = globalThis.setTimeout(() => {
-      if (!player.paused && !isScrubbing && !state.playbackProblem && document.activeElement?.closest('.player-controls') === null) {
+      const focusedControl = document.activeElement?.closest('.player-controls');
+      const menuOpen = document.querySelector('#media-player-overlay [aria-haspopup="menu"][aria-expanded="true"]');
+      const selecting = document.activeElement instanceof HTMLSelectElement && focusedControl;
+      const guideOpen = state.activeTvPlayback?.guideOpen;
+      if (!player.paused && player.readyState >= player.HAVE_CURRENT_DATA && !isScrubbing && !state.playbackProblem && !menuOpen && !guideOpen && !selecting && !(keepFocusedControlsVisible && focusedControl)) {
+        if (document.activeElement?.closest('.player-controls')) shell?.focus({preventScroll:true});
         shell?.classList.remove('is-controls-visible');
         shell?.classList.add('is-controls-hidden');
-        document.body.style.cursor = 'none';
+        if (!state.activeTvPlayback || state.isPlayerOpen) document.body.style.cursor = 'none';
       }
     }, 3200);
   };
 
   const seekBy = (seconds: number): void => {
+    if (tv?.buffer) { seekTvBuffer((playbackBaseOffsetSeconds + player.currentTime + seconds)*1000); return; }
+    if (tv?.kind === 'channels') return;
     const currentPosition = playbackBaseOffsetSeconds + player.currentTime;
     const limit = sourceDurationSeconds > 0 ? Math.max(0, sourceDurationSeconds - 0.25) : Number.POSITIVE_INFINITY;
     const targetPosition = Math.min(limit, Math.max(0, currentPosition + seconds));
@@ -1409,12 +1769,14 @@ export function bindPlayerProgress(): void {
     void shell?.requestFullscreen?.();
   };
 
-  shell?.focus({ preventScroll: true });
-  ['mousemove', 'mousedown', 'touchstart', 'pointermove'].forEach((eventName) => {
-    shell?.addEventListener(eventName, showControls, { passive: true });
+  if (!tv || state.isPlayerOpen) shell?.focus({ preventScroll: true });
+  ['mousemove', 'mousedown', 'touchstart', 'pointermove', 'click'].forEach((eventName) => {
+    shell?.addEventListener(eventName, showControls, {signal:mediaSignal,  passive: true });
   });
   shell?.addEventListener('keydown', (event) => {
-    if (event.target instanceof HTMLInputElement) {
+    keepFocusedControlsVisible = true;
+    if((event.target as Element).closest('.tv-stream-heading,.tv-multiview-toolbar,.tv-stream-add'))return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || (event.target as Element).closest('[role="menu"]')) {
       return;
     }
     if (event.key === ' ' || event.key === 'k') {
@@ -1435,15 +1797,15 @@ export function bindPlayerProgress(): void {
       toggleFullscreen();
     } else if (event.key === 'Escape') {
       event.preventDefault();
-      closeActivePlaybackSession();
+      dismissPlayer();
     }
     showControls();
-  });
+  }, {signal:mediaSignal});
 
   playButtons.forEach((button) => button.addEventListener('click', () => {
     togglePlayback();
     showControls();
-  }));
+  }, {signal:mediaSignal}));
   document.querySelectorAll<HTMLButtonElement>('[data-player-seek]').forEach((button) => {
     button.addEventListener('click', () => {
       const requestedSeconds = Number(button.dataset.playerSeek);
@@ -1452,19 +1814,19 @@ export function bindPlayerProgress(): void {
         seekWithEscalation(direction);
       }
       showControls();
-    });
+    }, {signal:mediaSignal});
   });
   muteButton?.addEventListener('click', () => {
     player.muted = !player.muted;
     updateMuteButton();
     showControls();
-  });
+  }, {signal:mediaSignal});
   volume?.addEventListener('input', () => {
     player.volume = Number(volume.value);
     player.muted = player.volume === 0;
     updateMuteButton();
     showControls();
-  });
+  }, {signal:mediaSignal});
   volume?.addEventListener('wheel', (event) => {
     event.preventDefault();
     const delta = event.deltaY < 0 ? 0.05 : -0.05;
@@ -1472,15 +1834,15 @@ export function bindPlayerProgress(): void {
     player.muted = player.volume === 0;
     updateMuteButton();
     showControls();
-  }, { passive: false });
+  }, {signal:mediaSignal,  passive: false });
   fullscreenButton?.addEventListener('click', () => {
     toggleFullscreen();
     showControls();
-  });
+  }, {signal:mediaSignal});
   audioTrackToggle?.addEventListener('click', () => {
     setAudioTrackMenuOpen(!state.isAudioTrackMenuOpen);
     showControls();
-  });
+  }, {signal:mediaSignal});
   document.querySelectorAll<HTMLButtonElement>('[data-player-audio-track-index]').forEach((button) => {
     button.addEventListener('click', () => {
       const nextAudioTrackIndex = Number(button.dataset.playerAudioTrackIndex);
@@ -1497,7 +1859,7 @@ export function bindPlayerProgress(): void {
       state.activePlaybackStartMs = Math.floor((playbackBaseOffsetSeconds + player.currentTime) * 1000);
       setAudioTrackMenuOpen(false);
       render(false);
-    });
+    }, {signal:mediaSignal});
   });
   pipButton?.addEventListener('click', async () => {
     if (!(player instanceof HTMLVideoElement) || !document.pictureInPictureEnabled) {
@@ -1520,33 +1882,36 @@ export function bindPlayerProgress(): void {
       state.error = error instanceof Error ? error.message : 'Failed to enter picture in picture.';
       render();
     }
-  });
+  }, {signal:mediaSignal});
   player.addEventListener('leavepictureinpicture', () => {
     shell?.classList.remove('is-picture-in-picture');
     showControls();
-  });
+  }, {signal:mediaSignal});
   progress?.addEventListener('input', () => {
     isScrubbing = true;
     const duration = playbackDurationSeconds();
     if (duration > 0) {
-      const previewSeconds = (Number(progress.value) / 1000) * duration;
+      const start = (tv?.buffer?.start_ms ?? 0)/1000;
+      const previewSeconds = start + (Number(progress.value) / 1000) * (duration-start);
       if (currentTimeLabel) {
         currentTimeLabel.textContent = formatMediaTime(previewSeconds);
       }
     }
     showControls();
-  });
+  }, {signal:mediaSignal});
   progress?.addEventListener('wheel', (event) => {
     event.preventDefault();
     const direction = event.deltaY < 0 ? 1 : -1;
     seekWithEscalation(direction);
     updateTimeline();
     showControls();
-  }, { passive: false });
+  }, {signal:mediaSignal,  passive: false });
   progress?.addEventListener('change', () => {
     const duration = playbackDurationSeconds();
     if (duration > 0) {
-      const targetPosition = Math.min(Math.max(0, duration - 0.25), (Number(progress.value) / 1000) * duration);
+      const start = (tv?.buffer?.start_ms ?? 0)/1000;
+      const targetPosition = Math.min(Math.max(start, duration - 0.25), start + (Number(progress.value) / 1000) * (duration-start));
+      if (tv?.buffer) { seekTvBuffer(targetPosition*1000); return; }
       if (isTranscoding) {
         rememberPlaybackSettings(player);
         state.activePlaybackStartMs = Math.floor(targetPosition * 1000);
@@ -1558,46 +1923,48 @@ export function bindPlayerProgress(): void {
     isScrubbing = false;
     updateTimeline();
     showControls();
-  });
+  }, {signal:mediaSignal});
 
   let lastSentSeconds = -1;
-  player.addEventListener('loadstart', () => setPlayerLoading(true));
-  player.addEventListener('waiting', refreshPlayerLoading);
-  player.addEventListener('stalled', refreshPlayerLoading);
-  player.addEventListener('loadeddata', () => setPlayerLoading(false));
+  player.addEventListener('loadstart', () => setPlayerLoading(true), {signal:mediaSignal});
+  player.addEventListener('waiting', refreshPlayerLoading, {signal:mediaSignal});
+  player.addEventListener('stalled', refreshPlayerLoading, {signal:mediaSignal});
+  player.addEventListener('loadeddata', () => {setPlayerLoading(false);showControls();}, {signal:mediaSignal});
   player.addEventListener('canplay', () => {
     applyInitialDirectSeek();
-    setPlayerLoading(false);
-  });
+    refreshPlayerLoading();
+  }, {signal:mediaSignal});
   player.addEventListener('playing', () => {
-    setPlayerLoading(false);
-    if (state.activePlaybackCompatible && state.activePlaybackItem?.id === playbackItem.id) {
+    refreshPlayerLoading();
+    if (!tv && playbackItem && state.activePlaybackCompatible && state.activePlaybackItem?.id === playbackItem.id) {
       compatiblePlaybackSources.add(playbackSourceKey(playbackItem.id));
     }
-  });
+  }, {signal:mediaSignal});
   player.addEventListener('error', () => {
     void reportMediaError(player);
     console.error('Media playback failed', player.error);
-  });
+  }, {signal:mediaSignal});
   player.addEventListener('loadedmetadata', () => {
     applyInitialDirectSeek();
     applyPlaybackSettings();
     updateTimeline();
-  });
+  }, {signal:mediaSignal});
   player.addEventListener('play', () => {
     updatePlayButtons();
     refreshPlayerLoading();
     showControls();
-  });
+  }, {signal:mediaSignal});
   player.addEventListener('pause', () => {
     updatePlayButtons();
     refreshPlayerLoading();
     showControls();
-  });
-  player.addEventListener('volumechange', updateMuteButton);
+  }, {signal:mediaSignal});
+  player.addEventListener('volumechange', updateMuteButton, {signal:mediaSignal});
+  player.addEventListener('ratechange', refreshPlayerLoading, {signal:mediaSignal});
   player.addEventListener('timeupdate', () => {
     refreshPlayerLoading();
     updateTimeline();
+    if (tv || !playbackItem) return;
     const currentSeconds = Math.floor(player.currentTime);
     if (lastSentSeconds >= 0 && Math.abs(currentSeconds - lastSentSeconds) < 15) {
       return;
@@ -1609,9 +1976,15 @@ export function bindPlayerProgress(): void {
       duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: false,
     }).catch((error) => console.warn('Failed to save playback position', error));
-  });
+  }, {signal:mediaSignal});
 
   player.addEventListener('ended', () => {
+    if (tv) {
+      updatePlayButtons(); showControls();
+      if (tv.kind === 'channels' && !tv.buffer?.finished) void reportMediaError(player);
+      return;
+    }
+    if (!playbackItem) return;
     if (sourceDurationSeconds > playbackBaseOffsetSeconds + player.currentTime + 2) {
       void reportMediaError(player);
       return;
@@ -1623,7 +1996,7 @@ export function bindPlayerProgress(): void {
       duration_ms: playbackItem.duration_ms ?? (Number.isFinite(player.duration) ? Math.floor(player.duration * 1000) : undefined),
       completed: true,
     }).catch((error) => console.warn('Failed to save completed playback', error));
-  });
+  }, {signal:mediaSignal});
 
   updatePlayButtons();
   updateMuteButton();
@@ -1631,10 +2004,6 @@ export function bindPlayerProgress(): void {
   updateTimeline();
   setPlayerLoading(player.readyState < player.HAVE_FUTURE_DATA);
   showControls();
-  if (state.playbackSettings) {
-    player.volume = state.playbackSettings.volume;
-    player.muted = state.playbackSettings.muted;
-  }
   const applyPlaybackSettings = (): void => {
     if (mediaInitialization.settingsApplied) return;
     mediaInitialization.settingsApplied = true;

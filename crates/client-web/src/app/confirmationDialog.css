@@ -1,0 +1,9 @@
+.confirmation-dialog { width:min(32rem,calc(100vw - 2rem));max-height:calc(100vh - 2rem);margin:auto;padding:1.5rem;border:1px solid var(--surface-raised);border-radius:var(--radius-card);background:var(--surface-panel);color:inherit;font:inherit;box-shadow:0 1rem 4rem #0008; }
+.confirmation-dialog::backdrop { background:#000b;backdrop-filter:blur(3px); }
+.confirmation-dialog h2 { margin:0 0 .75rem;font-size:1.35rem; }
+.confirmation-dialog p { color:var(--text-muted);line-height:1.6; }
+.confirmation-dialog-actions { display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.75rem;margin-top:1.5rem; }
+.confirmation-dialog button { padding:.7rem 1rem;border:0;border-radius:.65rem;background:var(--surface-raised);color:inherit;font:inherit;font-weight:600;cursor:pointer; }
+.confirmation-dialog button:hover { filter:brightness(1.15); }
+.confirmation-dialog button:focus-visible { outline:2px solid var(--accent);outline-offset:3px; }
+.confirmation-dialog .confirmation-dialog-confirm { background:#b33743;color:#fff; }

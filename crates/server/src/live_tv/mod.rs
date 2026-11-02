@@ -7,7 +7,6 @@ pub(crate) mod discovery;
 mod dvr;
 pub(crate) mod feeds;
 mod formats;
-pub(crate) mod gracenote;
 mod hls;
 pub(crate) mod iptv;
 mod native;
@@ -25,6 +24,7 @@ mod stream;
 mod tests;
 pub(crate) mod timeshift;
 pub(crate) mod tsduck;
+pub(crate) mod zap2it;
 
 pub(crate) use dvr::start_workers;
 pub(crate) use formats::{

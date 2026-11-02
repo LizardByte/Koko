@@ -49,6 +49,7 @@ pub(crate) struct SourceConfig {
     #[serde(skip_serializing)]
     pub preserve_pin: bool,
     pub xmltv_url: String,
+    #[serde(deserialize_with = "deserialize_guide_kind")]
     pub guide_kind: String,
     /// Automatic uses configured movie/TV providers for artwork; guide preserves guide artwork
     /// only.
@@ -57,14 +58,24 @@ pub(crate) struct SourceConfig {
     pub frontend: u32,
     pub zap_path: String,
     pub multiplex_urls: Vec<String>,
+    // Compatibility with connection settings saved before the Zap2It rename.
     #[serde(alias = "gracenote")]
-    pub zap2it: super::gracenote::Selection,
+    pub zap2it: super::zap2it::Selection,
     /// Zero selects the provider's recommended interval; Zap2It defaults to daily.
     pub refresh_hours: u32,
     pub native_device: String,
     pub delivery_system: String,
     pub region: String,
     pub tuning_options: String,
+}
+
+/// Normalize older saved settings before any application logic or API response uses them.
+fn deserialize_guide_kind<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Ok(if value == "gracenote" { "zap2it".into() } else { value })
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
@@ -358,7 +369,7 @@ fn validate(input: &mut SourceInput) -> Result<(), String> {
     }
     if !matches!(
         input.config.guide_kind.as_str(),
-        "" | "automatic" | "xmltv" | "broadcast" | "gracenote" | "zap2it" | "upload"
+        "" | "automatic" | "xmltv" | "broadcast" | "zap2it" | "upload"
     ) {
         return Err("Select a supported guide source".into());
     }
@@ -374,8 +385,8 @@ fn validate(input: &mut SourceInput) -> Result<(), String> {
     if input.config.refresh_hours > 168 {
         return Err("Choose a refresh interval from 1 to 168 hours, or zero for automatic".into());
     }
-    if matches!(input.config.guide_kind.as_str(), "gracenote" | "zap2it") {
-        super::gracenote::validate(&input.config.zap2it)?;
+    if input.config.guide_kind == "zap2it" {
+        super::zap2it::validate(&input.config.zap2it)?;
     }
     Ok(())
 }
@@ -623,7 +634,7 @@ pub(crate) async fn refresh(
             rand::random_range(20 * 3600..28 * 3600)
         } else if settings.refresh_hours > 0 {
             i64::from(settings.refresh_hours) * 3600
-        } else if matches!(settings.guide_kind.as_str(), "gracenote" | "zap2it") {
+        } else if settings.guide_kind == "zap2it" {
             24 * 3600
         } else {
             6 * 3600
@@ -701,7 +712,7 @@ async fn refresh_inner(
         "automatic" | "" if imported_guide.is_some() => {
             imported_guide.map(|(guide, size)| (guide, Some(size)))
         }
-        "gracenote" | "zap2it" => Some((super::gracenote::guide(&config.zap2it).await?, None)),
+        "zap2it" => Some((super::zap2it::guide(&config.zap2it).await?, None)),
         "xmltv" => Some(xmltv_guide(formats::http_url(&config.xmltv_url)?).await?),
         "upload" => None,
         "broadcast" => Some((super::broadcast::collect(db, source, &config).await?, None)),

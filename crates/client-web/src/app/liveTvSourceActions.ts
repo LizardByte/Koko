@@ -26,7 +26,6 @@ export function hydrateTvConnections(): void {
     for (const [name,value] of Object.entries(config)) if (['string','number','boolean'].includes(typeof value)) fields[name]=String(value);
     fields.multiplex_urls = config.multiplex_urls?.join('\n') ?? '';
     if (config.zap2it?.lineup_id) {
-      if (config.guide_kind === 'gracenote') fields.guide_kind = 'zap2it';
       fields.guide_country=config.zap2it.country;
       fields.guide_postal=config.zap2it.postal_code; fields.guide_days=String(config.zap2it.days ?? 14);
       fields.guide_provider=JSON.stringify(config.zap2it);

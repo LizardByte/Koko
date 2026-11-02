@@ -75,18 +75,24 @@ def download_url(url, digest, cache):
     return archive
 
 
-def windows_sdk(version, architecture, cache):
-    """Resolve the matching SDK's SHA-256 from its published GitHub release metadata."""
-    metadata = cache / f"tsduck-release-{version}.json"
-    if not metadata.is_file():
+def release_metadata(version, cache):
+    """Cache release data by version inside a file whose path never depends on upstream content."""
+    metadata = cache / "tsduck-releases.json"
+    releases = json.loads(metadata.read_text(encoding="utf-8")) if metadata.is_file() else {}
+    if version not in releases:
         url = f"https://api.github.com/repos/tsduck/tsduck/releases/tags/v{version}"
         request = urllib.request.Request(url, headers={"User-Agent": "Koko-native-build"})
         with urllib.request.urlopen(request, timeout=30) as response:
-            release = json.load(response)
+            releases[version] = json.load(response)
         temporary = metadata.with_suffix(".part")
-        temporary.write_text(json.dumps(release), encoding="utf-8")
+        temporary.write_text(json.dumps(releases), encoding="utf-8")
         temporary.replace(metadata)
-    release = json.loads(metadata.read_text(encoding="utf-8"))
+    return releases[version]
+
+
+def windows_sdk(version, architecture, cache):
+    """Resolve the matching SDK's SHA-256 from its published GitHub release metadata."""
+    release = release_metadata(version, cache)
     filename = f"TSDuck-{architecture}-{version}.exe"
     asset = next((item for item in release.get("assets", []) if item.get("name") == filename), None)
     digest = asset.get("digest", "") if asset else ""

@@ -196,7 +196,9 @@ test('IPTV imports its guide, plays live video, releases the tuner, and saves a 
     expect(Math.abs(seekPosition-Math.max(0,beforeSeek-10000))).toBeLessThan(1500);
     await expect.poll(()=>page.locator('#media-player').evaluate(node=>node.readyState>=2),{timeout:20000}).toBeTruthy();
     await expect(page.getByRole('button',{name:'Go live',exact:true})).toHaveCount(0);
+    const previousSeekSource=await page.locator('#media-player').getAttribute('src');
     await page.getByRole('button',{name:'Skip to end',exact:true}).click();
+    await expect(page.locator('#media-player')).not.toHaveAttribute('src',previousSeekSource);
     const latestBuffer=await (await page.request.get(`/api/v1/live-tv/sessions/${bufferId}`,{headers})).json();
     const newestPosition=await page.locator('#media-player').evaluate(node=>Number(new URL(node.src).searchParams.get('start_ms')));
     expect(latestBuffer.end_ms-newestPosition).toBeGreaterThanOrEqual(5000);
@@ -726,6 +728,7 @@ test('the guide preserves its time column across channels and advances expired s
   await expect(page.locator('#tv-program-501-102')).toBeFocused();
   await expect(page.getByRole('button',{name:'Earlier programs',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'Later programs',exact:true}).click();
+  await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-window-start',String(start+3600+21600));
   const future=await page.locator('#tv-guide-scroll').getAttribute('data-tv-window-start');
   await page.clock.fastForward(1800000);
   await expect(page.locator('#tv-guide-scroll')).toHaveAttribute('data-tv-window-start',future);

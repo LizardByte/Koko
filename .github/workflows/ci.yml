@@ -123,7 +123,9 @@ jobs:
       - name: Build browser test server
         env:
           KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
-        run: cargo build -p koko --locked --no-default-features
+        run: |
+          git submodule update --init --depth=1 third-party/tsduck
+          cargo build -p koko --locked --no-default-features
 
       - name: Test real browser playback
         working-directory: crates/client-web

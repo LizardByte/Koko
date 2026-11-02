@@ -150,9 +150,10 @@ jobs:
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git config --global --add safe.directory "${GITHUB_WORKSPACE}/third-party/build-deps"
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}/third-party/tsduck"
 
-      - name: Initialize build-deps
-        run: git submodule update --init --depth=1 third-party/build-deps
+      - name: Initialize build dependencies
+        run: git submodule update --init --depth=1 third-party/build-deps third-party/tsduck
 
       - name: Install Ubuntu dependencies
         if: matrix.container == '' && contains(matrix.os, 'ubuntu')

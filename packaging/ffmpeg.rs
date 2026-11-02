@@ -75,7 +75,8 @@ fn tool_command(program: &str) -> Command {
     Command::new(program)
 }
 
-fn git_output(
+/// Read dependency metadata using the same Git executable as the media-tool build.
+pub(super) fn git_output(
     directory: &Path,
     args: &[&str],
 ) -> BuildResult<String> {

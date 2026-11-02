@@ -12,16 +12,6 @@ import shutil
 import subprocess
 import urllib.request
 
-ARCHIVES = {
-    "gcc-license": (
-        "https://www.gnu.org/licenses/gpl-3.0.txt",
-        "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
-    ),
-    "gcc-exception": (
-        "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-15.2.0/COPYING.RUNTIME",
-        "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-    ),
-}
 DISABLED = [
     "NODEKTEC", "NODTAPI", "NOHIDES", "NOVATEK", "NOCURL", "NOPCSC", "NOOPENSSL", "NOZLIB", "NOSRT",
     "NORIST", "NOJAVA", "NOPYTHON", "NOEDITLINE", "NOGITHUB", "NODOC", "NOTEST", "NOSTATIC",
@@ -71,12 +61,6 @@ def cmake_program():
         if bundled.is_file():
             return str(bundled)
     raise RuntimeError("CMake is required to build Koko's native TV component; install the C++ CMake tools")
-
-
-def download(kind, cache):
-    """Verify every cached or downloaded upstream archive before extraction."""
-    url, digest = ARCHIVES[kind]
-    return download_url(url, digest, cache)
 
 
 def download_url(url, digest, cache):
@@ -170,18 +154,19 @@ def patch_source(root, source):
         run("patch", "--forward", "--batch", "-p1", "-i", patch, cwd=source)
 
 
-def bundle_cpp_runtime(destination, cache):
+def bundle_cpp_runtime(destination):
     """Include matching C++ libraries and license notices for minimal Linux installs."""
     for name in ("libstdc++.so.6", "libgcc_s.so.1"):
         runtime_library = Path(subprocess.check_output(["c++", f"-print-file-name={name}"], text=True).strip())
         if not runtime_library.is_file():
             raise RuntimeError(f"Unable to locate the C++ runtime {name}")
         shutil.copy2(runtime_library, destination / name)
-    shutil.copy2(download("gcc-license", cache), destination / "gcc-runtime-GPL-3.0.txt")
-    shutil.copy2(download("gcc-exception", cache), destination / "gcc-runtime-exception-3.1.txt")
+    notices = Path(__file__).resolve().parent / "licenses"
+    for name in ("gcc-runtime-GPL-3.0.txt", "gcc-runtime-exception-3.1.txt"):
+        shutil.copy2(notices / name, destination / name)
 
 
-def build_unix(target, destination, cache, source, build_dir, cmake, options):
+def build_unix(target, destination, source, build_dir, cmake, options):
     """Build only the SDK libraries and bridge without installing upstream CLI programs."""
     patch_source(Path(__file__).resolve().parents[1], source)
     flags = [f"{name}=1" for name in DISABLED]
@@ -209,7 +194,7 @@ def build_unix(target, destination, cache, source, build_dir, cmake, options):
         copy_runtime(config_dir, destination)
     copy_runtime(build_dir, destination)
     if "linux" in target and not options.system_cpp_runtime:
-        bundle_cpp_runtime(destination, cache)
+        bundle_cpp_runtime(destination)
 
 
 def build(target, destination, cache, offline_source=None, revision=None, options=None):
@@ -227,7 +212,7 @@ def build(target, destination, cache, offline_source=None, revision=None, option
     if "windows" in target:
         build_windows(target, destination, cache, build_dir, cmake, version, options)
     else:
-        build_unix(target, destination, cache, source, build_dir, cmake, options)
+        build_unix(target, destination, source, build_dir, cmake, options)
     for name in ("LICENSE.txt", "OTHERS.txt"):
         if (source / name).exists():
             shutil.copy2(source / name, destination / name)

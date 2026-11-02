@@ -80,6 +80,8 @@ pub fn prepare(
         "packaging/live_tv.py",
         "packaging/live_tv.rs",
         "packaging/patches/tsduck-no-web.patch",
+        "packaging/licenses/gcc-runtime-GPL-3.0.txt",
+        "packaging/licenses/gcc-runtime-exception-3.1.txt",
     ] {
         println!("cargo:rerun-if-changed={}", workspace.join(file).display());
     }

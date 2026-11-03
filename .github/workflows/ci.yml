@@ -78,13 +78,8 @@ jobs:
           rustc --test --edition=2021 -D warnings packaging/ffmpeg_stack.rs -o "${RUNNER_TEMP}/ffmpeg-stack-tests"
           "${RUNNER_TEMP}/ffmpeg-stack-tests"
 
-      - name: Setup Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: '3.14'
-
       - name: Test native packaging metadata and downloads
-        run: python -m unittest discover -s packaging/tests
+        run: cargo test -p xtask --locked
 
   clippy:
     name: Clippy

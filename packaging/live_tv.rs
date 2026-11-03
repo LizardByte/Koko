@@ -1,4 +1,14 @@
-//! Prepare the pinned native TV runtime for Cargo builds and release packaging.
+//! Prepare the pinned native TV runtime for Cargo, xtask, and offline packages.
+
+#[path = "live_tv/native.rs"]
+mod native;
+#[path = "live_tv/sdk.rs"]
+mod sdk;
+#[cfg(test)]
+#[path = "live_tv/tests.rs"]
+mod tests;
+#[path = "build_tools.rs"]
+mod tools;
 
 use std::{
     env,
@@ -7,9 +17,46 @@ use std::{
         Path,
         PathBuf,
     },
-    process::Command,
 };
+
 type BuildResult<T> = Result<T, Box<dyn Error>>;
+
+/// Inputs shared by Cargo's native build and explicit package preparation.
+#[derive(Debug)]
+pub struct BuildOptions {
+    /// Rust target triple whose native component will be packaged.
+    pub target: String,
+    /// Output directory containing the bridge, SDK libraries, data, and notices.
+    pub destination: PathBuf,
+    /// Reusable source, download, and CMake build cache.
+    pub cache: PathBuf,
+    /// Optional source checkout supplied by an offline package builder.
+    pub source: Option<PathBuf>,
+    /// Optional pinned revision used to isolate reusable source copies.
+    pub revision: Option<String>,
+    /// Maximum concurrent native compilation jobs.
+    pub jobs: usize,
+    /// Whether the package supplies its own C++ runtime libraries.
+    pub system_cpp_runtime: bool,
+}
+
+impl BuildOptions {
+    /// Use the initialized submodule, repository-local cache, and available CPUs.
+    pub fn new(
+        target: String,
+        destination: PathBuf,
+    ) -> Self {
+        Self {
+            target,
+            destination,
+            cache: PathBuf::from("target/live-tv-deps"),
+            source: None,
+            revision: None,
+            jobs: std::thread::available_parallelism().map_or(2, usize::from),
+            system_cpp_runtime: false,
+        }
+    }
+}
 
 fn library(target: &str) -> &'static str {
     if target.contains("windows") {
@@ -21,47 +68,15 @@ fn library(target: &str) -> &'static str {
     }
 }
 
-fn python() -> BuildResult<Command> {
-    let mut candidates = Vec::new();
-    if let Some(path) = env::var_os("KOKO_PYTHON") {
-        candidates.push(PathBuf::from(path));
-    }
-    candidates.extend([
-        PathBuf::from("python3"),
-        PathBuf::from("python"),
-    ]);
-    #[cfg(windows)]
-    if let Some(home) = env::var_os("USERPROFILE") {
-        // A GUI-launched Cargo may inherit an incomplete PATH for an existing pyenv install.
-        let versions = PathBuf::from(home).join(".pyenv/pyenv-win/versions");
-        if let Ok(entries) = std::fs::read_dir(versions) {
-            candidates.extend(
-                entries
-                    .flatten()
-                    .map(|entry| entry.path().join("python.exe")),
-            );
-        }
-    }
-    for path in candidates {
-        let mut probe = Command::new(&path);
-        if probe
-            .args([
-                "-c",
-                "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)",
-            ])
-            .output()
-            .is_ok_and(|output| output.status.success())
-        {
-            return Ok(Command::new(path));
-        }
-    }
-    Err(
-        "Python 3.12 or newer is required to prepare native TV support; set KOKO_PYTHON to its \
-         executable"
-            .into(),
-    )
+/// Build and collect the native runtime without installing TSDuck's CLI programs.
+pub fn build(
+    workspace: &Path,
+    options: &BuildOptions,
+) -> BuildResult<()> {
+    native::build(workspace, options)
 }
 
+/// Honor Cargo overrides or build the native component from the pinned submodule.
 pub fn prepare(
     workspace: &Path,
     out: &Path,
@@ -70,15 +85,16 @@ pub fn prepare(
     for variable in [
         "KOKO_TSDUCK_ROOT",
         "KOKO_SKIP_TSDUCK_BUILD",
-        "KOKO_PYTHON",
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     for file in [
         "native/live-tv/bridge.cpp",
         "native/live-tv/CMakeLists.txt",
-        "packaging/live_tv.py",
         "packaging/live_tv.rs",
+        "packaging/live_tv/native.rs",
+        "packaging/live_tv/sdk.rs",
+        "packaging/build_tools.rs",
         "packaging/patches/tsduck-no-web.patch",
         "packaging/licenses/gcc-runtime-GPL-3.0.txt",
         "packaging/licenses/gcc-runtime-exception-3.1.txt",
@@ -103,7 +119,7 @@ pub fn prepare(
             "Initialize TSDuck with: git submodule update --init third-party/tsduck".into(),
         );
     }
-    let git_dir = super::ffmpeg::git_output(
+    let git_dir = tools::git_output(
         &source,
         &[
             "rev-parse",
@@ -116,28 +132,17 @@ pub fn prepare(
             Path::new(&git_dir).join(path).display()
         );
     }
-    let revision = super::ffmpeg::git_output(&source, &["rev-parse", "HEAD"])?;
     let root = out.join("live-tv");
-    let status = python()?
-        .arg(workspace.join("packaging/live_tv.py"))
-        .arg("--target")
-        .arg(target)
-        .arg("--destination")
-        .arg(&root)
-        .arg("--cache")
-        .arg(workspace.join("target/live-tv-deps"))
-        .arg("--source")
-        .arg(source)
-        .arg("--revision")
-        .arg(revision)
-        .arg("--jobs")
-        .arg(env::var("NUM_JOBS").unwrap_or_else(|_| "2".to_owned()))
-        .status()?;
-    if !status.success() || !root.join(library(target)).is_file() {
+    let mut options = BuildOptions::new(target.to_owned(), root.clone());
+    options.source = Some(source.clone());
+    options.revision = Some(tools::git_output(&source, &["rev-parse", "HEAD"])?);
+    if let Ok(jobs) = env::var("NUM_JOBS") {
+        options.jobs = jobs.parse()?;
+    }
+    build(workspace, &options)?;
+    if !root.join(library(target)).is_file() {
         return Err(
-            "Unable to prepare Koko's native TV component; check the native build tools and the \
-             build output above"
-                .into(),
+            "Unable to prepare Koko's native TV component; the native library is missing".into(),
         );
     }
     Ok(Some(root))

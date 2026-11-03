@@ -25,6 +25,9 @@ use std::{
     },
 };
 
+use xtask::live_tv;
+mod native_tv;
+
 const MIGRATIONS_DIR: &str = "crates/server/sql/migrations";
 const DB_MODULE: &str = "crates/server/src/db/mod.rs";
 const ORDER_MARKER: &str = "const SQLITE_MIGRATION_ORDER: &[&str] = &[";
@@ -44,6 +47,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
 
     match command {
+        "prepare-live-tv" => {
+            args.remove(0);
+            native_tv::run(args, &repo_root()?)
+        }
         "new-migration" => {
             args.remove(0);
             new_migration(args)
@@ -447,6 +454,7 @@ fn print_usage() {
     println!("Usage:");
     println!("  cargo new-migration [name] [--version <hex>] [--no-fmt]");
     println!("  cargo msi-version <version>");
+    println!("  cargo xtask prepare-live-tv --target <triple> --destination <directory>");
 }
 
 fn print_new_migration_usage() {

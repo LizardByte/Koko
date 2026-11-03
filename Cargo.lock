@@ -3954,6 +3954,7 @@ dependencies = [
  "tvdb4",
  "unicode-normalization",
  "webbrowser",
+ "xtask",
 ]
 
 [[package]]
@@ -8904,6 +8905,11 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+]
 
 [[package]]
 name = "y4m"

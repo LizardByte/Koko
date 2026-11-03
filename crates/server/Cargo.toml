@@ -106,3 +106,6 @@ async-std.workspace = true
 # Use std's abort API in tests; branches' no_std intrinsic was removed from nightly.
 branches = { version = "=0.4.6", default-features = false, features = ["std"] }
 rstest.workspace = true
+
+[build-dependencies]
+xtask = { path = "../../xtask" }

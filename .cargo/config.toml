@@ -1,6 +1,7 @@
 # TODO: static link glibc
 
 [alias]
+xtask = "run --quiet -p xtask --"
 new-migration = "run --quiet -p xtask -- new-migration"
 msi-version = "run --quiet -p xtask -- msi-version"
 

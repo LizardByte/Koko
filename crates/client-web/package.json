@@ -18,7 +18,7 @@
     "dompurify": "3.4.17",
     "foliate-js": "1.0.1",
     "libarchive.js": "2.0.2",
-    "lucide": "1.59.0",
+    "lucide": "1.66.0",
     "pdfjs-dist": "6.4.299"
   },
   "overrides": {

@@ -4,8 +4,7 @@ use std::path::Path;
 
 #[path = "packaging/ffmpeg.rs"]
 mod ffmpeg;
-#[path = "packaging/live_tv.rs"]
-mod live_tv;
+use xtask::live_tv;
 
 fn main() {
     // Get the workspace root directory
@@ -22,6 +21,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root.join("packaging/ffmpeg.rs").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("packaging/build_tools.rs").display()
     );
     println!(
         "cargo:rerun-if-changed={}",

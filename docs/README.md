@@ -54,6 +54,7 @@ when no similar items are available.
 
 For book and audiobook folders, supported formats, reading and listening controls, and metadata sources,
 see [Books, audiobooks, and comics](./BOOKS.md).
+For tuner setup, IPTV playlists, program guides, and recordings, see [Live TV](./LIVE_TV.md).
 For movie library naming guidance, see [Movie naming guidelines](./MOVIE_NAMING.md).
 For library setup, metadata providers, and playback, see [Music libraries](./MUSIC.md).
 For folder layouts and embedded tags, see [Music naming](./MUSIC_NAMING.md).

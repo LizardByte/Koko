@@ -39,14 +39,15 @@ function serveBackendAssets(server: ViteDevServer | PreviewServer): void {
   const assetDirectory = new URL('../../assets/providers/', import.meta.url);
   server.middlewares.use('/assets/providers', async (request, response) => {
     const filename = new URL(request.url ?? '/', 'http://localhost').pathname.slice(1);
-    if (!/^[a-z0-9-]+\.(svg|png)$/.test(filename)) {
+    if (!/^[a-z0-9-]+\.(svg|png|ico)$/.test(filename)) {
       response.statusCode = 404;
       response.end();
       return;
     }
     try {
       const bytes = await readFile(new URL(filename, assetDirectory));
-      response.setHeader('Content-Type', filename.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
+      const contentTypes:Record<string,string>={svg:'image/svg+xml',ico:'image/x-icon',png:'image/png'};
+      response.setHeader('Content-Type', contentTypes[filename.split('.').at(-1)!]);
       response.end(bytes);
     } catch {
       response.statusCode = 404;

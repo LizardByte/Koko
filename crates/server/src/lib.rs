@@ -10,6 +10,7 @@ pub mod config;
 pub mod db;
 pub mod dependencies;
 pub mod globals;
+mod live_tv;
 mod logging;
 pub mod media;
 pub mod metadata;

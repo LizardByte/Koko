@@ -1,5 +1,102 @@
 //! Database schema for the application.
 
+diesel::table! {
+    live_tv_sources (id) {
+        id -> Integer,
+        name -> Text,
+        kind -> Text,
+        config_json -> Text,
+        enabled -> Bool,
+        capacity -> Integer,
+        next_refresh -> BigInt,
+        last_error -> Nullable<Text>,
+    }
+}
+diesel::table! {
+    live_tv_channels (id) {
+        id -> Integer,
+        source_id -> Integer,
+        source_key -> Text,
+        name -> Text,
+        number -> Text,
+        group_name -> Text,
+        logo -> Nullable<Text>,
+        stream_url -> Text,
+        guide_key -> Text,
+        guide_override -> Nullable<Text>,
+        enabled -> Bool,
+        available -> Bool,
+    }
+}
+diesel::table! {
+    live_tv_programs (id) {
+        id -> Integer,
+        source_id -> Integer,
+        guide_key -> Text,
+        starts_at -> BigInt,
+        ends_at -> BigInt,
+        title -> Text,
+        metadata_json -> Text,
+    }
+}
+diesel::table! {
+    live_tv_series_rules (id) {
+        id -> Integer,
+        user_id -> Integer,
+        channel_id -> Integer,
+        title -> Text,
+        new_only -> Bool,
+        padding_before -> Integer,
+        padding_after -> Integer,
+        enabled -> Bool,
+        shared -> Bool,
+    }
+}
+diesel::table! {
+    live_tv_recordings (id) {
+        id -> Integer,
+        user_id -> Integer,
+        channel_id -> Integer,
+        rule_id -> Nullable<Integer>,
+        title -> Text,
+        starts_at -> BigInt,
+        ends_at -> BigInt,
+        padding_before -> Integer,
+        padding_after -> Integer,
+        state -> Text,
+        file_name -> Nullable<Text>,
+        last_error -> Nullable<Text>,
+        metadata_json -> Text,
+        shared -> Bool,
+    }
+}
+
+diesel::table! {
+    live_tv_user_permissions (user_id) {
+        user_id -> Integer,
+        can_record -> Bool,
+    }
+}
+diesel::allow_tables_to_appear_in_same_query!(live_tv_user_permissions, users);
+diesel::table! {
+    live_tv_stations (source_id, guide_key) {
+        source_id -> Integer,
+        guide_key -> Text,
+        name -> Text,
+        number -> Text,
+        aliases_json -> Text,
+        logo -> Nullable<Text>,
+    }
+}
+diesel::allow_tables_to_appear_in_same_query!(
+    live_tv_sources,
+    live_tv_channels,
+    live_tv_programs,
+    live_tv_stations,
+    live_tv_series_rules,
+    live_tv_recordings
+);
+
 // lib imports
 use diesel::{
     allow_tables_to_appear_in_same_query,

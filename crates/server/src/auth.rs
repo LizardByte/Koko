@@ -287,6 +287,14 @@ impl<'r> FromRequest<'r> for Claims {
             || (path.starts_with("/api/v1/people/") && path.ends_with("/image"))
             || (path.starts_with("/api/v1/sessions/") && path.ends_with("/stream"))
             || (path.starts_with("/api/v1/podcasts/episodes/") && path.ends_with("/stream"))
+            || ((path.starts_with("/api/v1/live-tv/channels/")
+                || path.starts_with("/api/v1/live-tv/recordings/")
+                || path.starts_with("/api/v1/live-tv/sessions/"))
+                && path.ends_with("/stream"))
+            || ((path.starts_with("/api/v1/live-tv/programs/")
+                || path.starts_with("/api/v1/live-tv/channels/"))
+                && path.ends_with("/artwork"))
+            || (path.starts_with("/api/v1/live-tv/sources/") && path.ends_with("/image"))
             || path.starts_with("/api/v1/user-profile-images/"));
         let token = if let Some(header) = keys.first() {
             header.strip_prefix(BEARER)

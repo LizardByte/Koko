@@ -308,6 +308,45 @@ pub(crate) async fn fetch_episode_snapshot(
     ))
 }
 
+/// Resolve one episode in the series' default season order without loading every season.
+pub(crate) async fn episode_id_for_numbers(
+    settings: &MetadataSettings,
+    show_id: &str,
+    season_number: i32,
+    episode_number: i32,
+) -> Result<String, String> {
+    let provider = provider_settings(settings, MetadataProviderId::Tvdb)?;
+    let id = parse_tvdb_external_id(show_id, "series")?;
+    let series: Response<SeriesExtendedRecord> = get_json(
+        &provider,
+        &format!("series/{id}/extended"),
+        Vec::new(),
+        "series episode lookup",
+    )
+    .await?;
+    let season = default_order_seasons(&series.data)?
+        .into_iter()
+        .find(|season| season.number == Some(i64::from(season_number)))
+        .and_then(|season| season.id)
+        .ok_or("TheTVDB season was not found")?;
+    let season: Response<response::SeasonEpisodes> = get_json(
+        &provider,
+        &format!("seasons/{season}/extended"),
+        Vec::new(),
+        "season episode lookup",
+    )
+    .await?;
+    season
+        .data
+        .episodes
+        .unwrap_or_default()
+        .into_iter()
+        .find(|episode| episode.number == Some(episode_number))
+        .and_then(|episode| episode.id)
+        .map(|id| id.to_string())
+        .ok_or_else(|| "TheTVDB episode was not found".into())
+}
+
 pub(crate) async fn load_show_descendant_targets(
     settings: &MetadataSettings,
     show_external_id: &str,

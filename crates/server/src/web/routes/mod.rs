@@ -6,6 +6,7 @@ pub mod common;
 pub mod countries;
 pub mod dependencies;
 pub mod ebooks;
+pub mod live_tv;
 pub mod media;
 mod metadata_jobs;
 pub mod music;
@@ -27,6 +28,39 @@ pub fn api_routes() -> Vec<rocket::Route> {
         auth::user_info,
         ebooks::document,
         ebooks::progress,
+        live_tv::get_channels,
+        live_tv::get_setup_channels,
+        live_tv::get_guide,
+        live_tv::favorite_channel,
+        live_tv::start_buffer,
+        live_tv::buffer_status,
+        live_tv::close_buffer,
+        live_tv::keep_buffer,
+        live_tv::guide_providers,
+        live_tv::discover_tuners,
+        live_tv::tuner_regions,
+        live_tv::discover_sources,
+        live_tv::scan_tuner,
+        live_tv::get_sources,
+        live_tv::get_source_connection,
+        live_tv::get_source_groups,
+        live_tv::set_source_groups,
+        live_tv::add_source,
+        live_tv::remove_source,
+        live_tv::replace_source,
+        live_tv::refresh_source,
+        live_tv::set_source,
+        live_tv::set_provider,
+        live_tv::set_channel,
+        live_tv::get_recordings,
+        live_tv::get_dvr_settings,
+        live_tv::set_dvr_settings,
+        live_tv::set_recording_permission,
+        live_tv::schedule_recording,
+        live_tv::cancel_recording,
+        live_tv::delete_recording,
+        live_tv::get_rules,
+        live_tv::delete_rule,
         dependencies::get_dependencies,
         countries::get_countries,
         media::get_server_capabilities,
@@ -103,6 +137,15 @@ pub fn spa_routes() -> Vec<rocket::Route> {
         media::get_item_theme,
         media::get_item_subtitle,
         podcasts::stream,
+        live_tv::stream_channel,
+        live_tv::stream_buffer,
+        live_tv::program_artwork,
+        live_tv::channel_artwork,
+        live_tv::source_image,
+        live_tv::upload_source_image,
+        live_tv::remove_source_image,
+        live_tv::stream_recording,
+        live_tv::upload_guide,
         media::stream_item,
         media::get_session_stream
     ]

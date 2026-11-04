@@ -1,5 +1,16 @@
 //! Prepare the media tools associated with the pinned build-deps submodule.
 
+#[path = "ffmpeg_stack.rs"]
+mod stack;
+
+#[path = "build_tools.rs"]
+mod tools;
+use tools::{
+    git_output,
+    run,
+    tool_command,
+};
+
 use std::{
     env,
     error::Error,
@@ -8,8 +19,10 @@ use std::{
         Path,
         PathBuf,
     },
-    process::Command,
 };
+
+#[cfg(all(test, windows))]
+use std::process::Command;
 
 type BuildResult<T> = Result<T, Box<dyn Error>>;
 
@@ -27,71 +40,6 @@ pub fn package_platform(target: &str) -> Option<&'static str> {
         "aarch64-pc-windows-msvc" | "aarch64-pc-windows-gnullvm" => Some("Windows-ARM64"),
         _ => None,
     }
-}
-
-// IDEs can inherit PATH before Git or Windows system tools were added to it.
-fn tool_command(program: &str) -> Command {
-    #[cfg(windows)]
-    {
-        let executable = format!("{program}.exe");
-        // Git Bash tar treats drive-letter archive paths as remote hosts.
-        if matches!(program, "curl" | "tar") {
-            if let Some(directory) = env::var_os("SystemRoot") {
-                let path = Path::new(&directory).join("System32").join(&executable);
-                if path.is_file() {
-                    return Command::new(path);
-                }
-            }
-        }
-        if let Some(path) = env::var_os("PATH").and_then(|path| {
-            env::split_paths(&path)
-                .map(|directory| directory.join(&executable))
-                .find(|path| path.is_file())
-        }) {
-            return Command::new(path);
-        }
-        if program == "git" {
-            for variable in [
-                "ProgramW6432",
-                "ProgramFiles",
-                "ProgramFiles(x86)",
-                "LOCALAPPDATA",
-            ] {
-                if let Some(directory) = env::var_os(variable) {
-                    let directory = PathBuf::from(directory);
-                    let directory = if variable == "LOCALAPPDATA" {
-                        directory.join("Programs")
-                    } else {
-                        directory
-                    };
-                    let path = directory.join("Git/cmd/git.exe");
-                    if path.is_file() {
-                        return Command::new(path);
-                    }
-                }
-            }
-        }
-    }
-    Command::new(program)
-}
-
-fn git_output(
-    directory: &Path,
-    args: &[&str],
-) -> BuildResult<String> {
-    let output = tool_command("git")
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .output()
-        .map_err(|error| format!("Could not execute git: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_owned()
-            .into());
-    }
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
 }
 
 pub fn release_tag(directory: &Path) -> BuildResult<String> {
@@ -126,20 +74,6 @@ pub fn release_tag(directory: &Path) -> BuildResult<String> {
         return Err(format!("Invalid build-deps release tag: {tag}").into());
     }
     Ok(tag)
-}
-
-fn run(command: &mut Command) -> BuildResult<()> {
-    let program = command.get_program().to_string_lossy().into_owned();
-    if !command
-        .status()
-        .map_err(|error| format!("Could not execute {program}: {error}"))?
-        .success()
-    {
-        return Err(
-            format!("{program} failed while preparing the build-deps media package").into(),
-        );
-    }
-    Ok(())
 }
 
 fn has_tools(
@@ -249,6 +183,15 @@ pub fn prepare(
                 "The build-deps archive did not contain the expected media tools and licenses"
                     .into(),
             );
+        }
+    }
+    if target.ends_with("-linux-musl") {
+        for name in ["ffmpeg", "ffprobe"] {
+            let mut tool = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(root.join("bin").join(name))?;
+            stack::ensure_minimum_stack(&mut tool)?;
         }
     }
     Ok(Some(root))

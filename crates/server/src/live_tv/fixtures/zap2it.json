@@ -1,0 +1,30 @@
+{
+  "channels": [{
+    "channelId": "17043",
+    "id": "170430",
+    "callSign": "WJXX",
+    "channelNo": "2",
+    "thumbnail": "//example.com/logo.png",
+    "events": [{
+      "startTime": "2026-10-30T15:00:00Z",
+      "endTime": "2026-10-30T16:00:00Z",
+      "flag": ["New"],
+      "rating": "TV-G",
+      "thumbnail": "p10000001_b_v13_aa",
+      "program": {
+        "title": "Weekend Workshop",
+        "tmsId": "EP000000010004",
+        "seriesId": "SH00000001",
+        "releaseYear": 2026,
+        "shortDesc": "A team restores a wooden table.",
+        "season": "3",
+        "episode": "4"
+      }
+    }, {
+      "startTime": "2026-10-30T16:00:00Z",
+      "endTime": "2026-10-30T17:00:00Z",
+      "flag": [],
+      "program": { "title": "Local Weather", "tmsId": "SH12345", "isGeneric": "1" }
+    }]
+  }]
+}

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tsduck>
+  <SDT transport_stream_id="0x10" original_network_id="0x20">
+    <service service_id="0x30">
+      <service_descriptor service_type="1" service_provider_name="Koko" service_name="DVB News"/>
+    </service>
+  </SDT>
+  <EIT service_id="0x30" transport_stream_id="0x10" original_network_id="0x20">
+    <event event_id="1" start_time="2026-10-30 23:00:00" duration="00:30:00">
+      <short_event_descriptor language_code="eng">
+        <event_name>Résumé</event_name><text>Headlines</text>
+      </short_event_descriptor>
+      <extended_event_descriptor descriptor_number="0" last_descriptor_number="0" language_code="eng">
+        <text>More detail</text>
+      </extended_event_descriptor>
+    </event>
+  </EIT>
+  <TVCT transport_stream_id="1">
+    <channel short_name="ATSC TV" major_channel_number="7" minor_channel_number="1"
+             modulation_mode="8-VSB" channel_TSID="1" program_number="1" source_id="2"/>
+  </TVCT>
+  <ETT ETT_table_id_extension="0" ETM_id="0x0002000E">
+    <extended_text_message><string language="eng" text="ATSC description"/></extended_text_message>
+  </ETT>
+  <ATSC_EIT source_id="2">
+    <event event_id="3" start_time="2026-10-30 23:00:00" length_in_seconds="3600" ETM_location="2">
+      <title_text><string language="eng" text="ATSC show"/></title_text>
+    </event>
+  </ATSC_EIT>
+</tsduck>

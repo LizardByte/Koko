@@ -14,10 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  organization:
+    uses: LizardByte/.github/.github/workflows/__call-organization.yml@390ac9c7c1950249fe8197fe06b7ae49233ce405
+
   setup_release:
+    needs: organization
     name: Setup Release
     outputs:
-      publish_release: ${{ steps.setup_release.outputs.publish_release }}
+      publish_release: >-
+        ${{ needs.organization.outputs.allowed == 'true' &&
+        steps.setup_release.outputs.publish_release == 'true' }}
       release_body: ${{ steps.setup_release.outputs.release_body }}
       release_commit: ${{ steps.setup_release.outputs.release_commit }}
       release_generate_release_notes: ${{ steps.setup_release.outputs.release_generate_release_notes }}
@@ -202,8 +208,10 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
-      startsWith(github.repository, 'LizardByte/')
-    needs: rust
+      needs.organization.outputs.allowed == 'true'
+    needs:
+      - organization
+      - rust
     permissions:
       contents: read
     uses: ./.github/workflows/ci-coverage.yml
@@ -214,8 +222,9 @@ jobs:
     name: Release
     if: >-
       needs.setup_release.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
+      needs.organization.outputs.allowed == 'true'
     needs:
+      - organization
       - setup_release
       - clippy
       - rust

@@ -48,7 +48,7 @@ fn build_request(
             concat!(
                 "Koko/",
                 env!("CARGO_PKG_VERSION"),
-                " (https://github.com/LizardByte/Koko)"
+                " (https://github.com/KokoStreamTV/Koko)"
             ),
         );
     if let Some(id) = application_id.map(str::trim).filter(|id| !id.is_empty()) {
@@ -208,7 +208,7 @@ mod tests {
                 request.headers()[reqwest::header::USER_AGENT]
                     .to_str()
                     .unwrap()
-                    .contains("https://github.com/LizardByte/Koko")
+                    .contains("https://github.com/KokoStreamTV/Koko")
             );
         }
         let request = build_request(

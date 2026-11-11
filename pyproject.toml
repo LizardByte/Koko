@@ -24,8 +24,8 @@ flatpak = [
 
 [project.urls]
 Homepage = "https://app.lizardbyte.dev"
-Repository = "https://github.com/LizardByte/Koko"
-Issues = "https://github.com/LizardByte/Koko/issues"
+Repository = "https://github.com/KokoStreamTV/Koko"
+Issues = "https://github.com/KokoStreamTV/Koko/issues"
 
 [tool.setuptools]
 py-modules = []

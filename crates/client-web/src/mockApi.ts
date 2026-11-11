@@ -595,7 +595,7 @@ const metadataProviders: MetadataProviderStatus[] = [
     configured: true,
     language: 'en-US',
     attribution_text: 'Theme metadata provided by ThemerrDB.',
-    attribution_url: 'https://app.lizardbyte.dev/ThemerrDB',
+    attribution_url: 'https://themerr.lizardbyte.dev/ThemerrDB',
     logo_light_url: '/assets/providers/themerr.png',
     logo_dark_url: '/assets/providers/themerr.png',
   },

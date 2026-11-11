@@ -1240,7 +1240,7 @@ mod tests {
                 let size = stream.read(&mut buffer).unwrap();
                 let headers = String::from_utf8_lossy(&buffer[..size]).to_ascii_lowercase();
                 assert!(headers.contains("user-agent: koko/"));
-                assert!(headers.contains("https://github.com/lizardbyte/koko"));
+                assert!(headers.contains("https://github.com/kokostreamtv/koko"));
                 arrivals.push(std::time::Instant::now());
                 let response = if index == 0 {
                     "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: \

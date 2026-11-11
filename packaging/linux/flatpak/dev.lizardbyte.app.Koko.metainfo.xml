@@ -15,7 +15,7 @@
   </description>
   <releases>
     <release version="@BUILD_VERSION@" date="@BUILD_DATE@">
-      <url>https://github.com/LizardByte/Koko/releases/tag/v@BUILD_VERSION@</url>
+      <url>https://github.com/KokoStreamTV/Koko/releases/tag/v@BUILD_VERSION@</url>
       <description>
         <p>See the changelog on GitHub</p>
       </description>

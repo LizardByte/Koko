@@ -32,7 +32,7 @@ static NEXT_REQUEST: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None
 const USER_AGENT: &str = concat!(
     "Koko/",
     env!("CARGO_PKG_VERSION"),
-    " (https://github.com/LizardByte/Koko)"
+    " (https://github.com/KokoStreamTV/Koko)"
 );
 static CLIENT: Lazy<MusicBrainzClient> = Lazy::new(|| {
     let config = MusicBrainzClient::default_agent_config_builder()

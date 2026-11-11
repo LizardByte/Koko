@@ -19,7 +19,7 @@ static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .user_agent(concat!(
             "Koko/",
             env!("CARGO_PKG_VERSION"),
-            " (https://github.com/LizardByte/Koko)"
+            " (https://github.com/KokoStreamTV/Koko)"
         ))
         .build()
         .expect("music discovery HTTP client")

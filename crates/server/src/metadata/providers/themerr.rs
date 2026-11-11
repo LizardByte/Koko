@@ -11,7 +11,7 @@ use crate::metadata::{
     youtube_watch_url,
 };
 
-const THEMERR_API_BASE: &str = "https://app.lizardbyte.dev/ThemerrDB";
+const THEMERR_API_BASE: &str = "https://themerr.lizardbyte.dev/ThemerrDB";
 
 pub(crate) fn descriptor() -> MetadataProviderDescriptor {
     MetadataProviderDescriptor {
@@ -32,7 +32,7 @@ pub(crate) fn descriptor() -> MetadataProviderDescriptor {
             MetadataProviderId::Tvdb,
         ],
         attribution_text: "Theme metadata provided by ThemerrDB.".into(),
-        attribution_url: "https://app.lizardbyte.dev/ThemerrDB".into(),
+        attribution_url: THEMERR_API_BASE.into(),
         logo_light_url: Some("/assets/providers/themerr.png".into()),
         logo_dark_url: Some("/assets/providers/themerr.png".into()),
     }

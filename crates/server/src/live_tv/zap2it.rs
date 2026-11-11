@@ -36,7 +36,7 @@ async fn request(
             concat!(
                 "Mozilla/5.0 (compatible; Koko/",
                 env!("CARGO_PKG_VERSION"),
-                "; +https://github.com/LizardByte/Koko)"
+                "; +https://github.com/KokoStreamTV/Koko)"
             ),
         )
         .header(reqwest::header::ACCEPT, "application/json")

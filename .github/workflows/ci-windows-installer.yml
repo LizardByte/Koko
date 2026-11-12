@@ -94,7 +94,7 @@ jobs:
       - name: Setup dotnet
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v6.1.0
         with:
-          dotnet-version: '10.x'
+          dotnet-version: '11.x'
 
       - name: Install WiX
         shell: pwsh

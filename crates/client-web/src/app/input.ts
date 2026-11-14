@@ -2,6 +2,8 @@
 import type { AppState } from './types';
 import { createGamepadNavigationReader, type GamepadNavigationAction } from './gamepadNavigation';
 import { findSpatialTarget, type NavigationDirection } from './spatialNavigation';
+import { rememberTvGuideFocus, rememberTvGuidePointer, restoreTvGuideFocus, tvGuideNavigationTarget, tvGuideNavigationTime, tvGuideJumpTarget } from './tvGuideNavigation';
+import { TV_WINDOW_SECONDS } from './tvGuideTime';
 
 const SECTION_SELECTOR = '[data-nav-section]';
 const CONTROL_SELECTOR = 'button:not(:disabled), a[href], summary, input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -111,10 +113,51 @@ function closeResumeOptions(): boolean {
   return true;
 }
 
+function revealGuideTime(guide: HTMLElement, control: HTMLElement): void {
+  if (control.closest('.tv-guide-channel')) return;
+  const bounds = guide.getBoundingClientRect(), rect = control.getBoundingClientRect();
+  const left = bounds.left+(guide.querySelector('.tv-guide-channel')?.getBoundingClientRect().width ?? 0);
+  const time = tvGuideNavigationTime(control);
+  const track = guide.querySelector('.tv-guide-time-track')?.getBoundingClientRect();
+  if (time !== undefined && track) {
+    const point = track.left+(time-Number(guide.dataset.tvWindowStart))/TV_WINDOW_SECONDS*track.width;
+    if (point < left) guide.scrollLeft += point-left;
+    else if (point > bounds.right-24) guide.scrollLeft += point-bounds.right+24;
+    return;
+  }
+  const intersects = rect.right > left && rect.left < bounds.right;
+  // Long broadcasts may cover the whole viewport; moving down should keep the
+  // current time visible rather than jumping to the far end of that program.
+  if (rect.width > bounds.right-left && intersects) return;
+  if (rect.left < left) guide.scrollLeft += rect.left-left;
+  else if (rect.right > bounds.right) guide.scrollLeft += rect.right-bounds.right;
+}
+
+/** Reveal guide cells inside their shared scroller, allowing for sticky time/channel headings. */
+function revealTvGuideControl(control: HTMLElement): boolean {
+  const guide = control.closest<HTMLElement>('#tv-guide-scroll');
+  if (!guide) return false;
+  const main = guide.closest<HTMLElement>('.main-shell');
+  const header = document.querySelector('.home-pinned-header');
+  const top = (main?.getBoundingClientRect().top ?? 0) + (header?.getBoundingClientRect().height ?? 0);
+  if (main && guide.getBoundingClientRect().top > main.getBoundingClientRect().bottom-136) {
+    main.scrollTop += guide.getBoundingClientRect().top-top-12;
+  }
+  const bounds = guide.getBoundingClientRect(), rect = control.getBoundingClientRect();
+  const timeHeight = guide.querySelector('.tv-guide-time-row')?.getBoundingClientRect().height ?? 48;
+  const visibleTop = Math.max(bounds.top+timeHeight,top);
+  const bottom = Math.min(bounds.bottom, main?.getBoundingClientRect().bottom ?? innerHeight);
+  if (rect.top < visibleTop) guide.scrollTop += rect.top-visibleTop;
+  else if (rect.bottom > bottom) guide.scrollTop += rect.bottom-bottom;
+  revealGuideTime(guide,control);
+  return true;
+}
+
 function focusControl(control: HTMLElement | undefined, revealSection = false): void {
   if (!control) return;
   control.focus({ preventScroll: true });
   const section = control.closest<HTMLElement>(SECTION_SELECTOR);
+  if (revealTvGuideControl(control)) {syncNavigationState(); return;}
   if (revealItemControl(control, section, revealSection)) {
     syncNavigationState();
     return;
@@ -138,6 +181,7 @@ function setInputMode(mode: 'pointer' | 'keyboard' | 'gamepad'): void {
 /** Refresh section feedback after a DOM patch without changing the user's focus. */
 export function syncNavigationState(): void {
   const active = document.activeElement as HTMLElement | null;
+  rememberTvGuideFocus(active);
   const section = active?.closest<HTMLElement>(SECTION_SELECTOR);
   const mode = document.body.dataset.inputMode;
   const showFocus = mode === 'keyboard' || mode === 'gamepad';
@@ -178,6 +222,8 @@ function returnToBrowseTabs(): boolean {
 
 /** Restore visible feedback and give a newly opened page a useful starting control. */
 export function syncNavigationAfterRender(): void {
+  const guideTarget = restoreTvGuideFocus();
+  if (guideTarget) focusControl(guideTarget);
   for (const [key, control] of rememberedFocus) {
     if (!control.isConnected) rememberedFocus.delete(key);
   }
@@ -212,16 +258,28 @@ function adjustFocusedSelect(active: HTMLElement | null, direction: NavigationDi
   return true;
 }
 
+function moveTvGuideFocus(active: HTMLElement, direction: NavigationDirection): boolean {
+  const guideTarget = tvGuideNavigationTarget(active,direction);
+  if (!guideTarget) return false;
+  if (guideTarget.target) focusControl(guideTarget.target);
+  return true;
+}
+
+function moveWithinFocusedControl(active: HTMLElement | null, direction: NavigationDirection): boolean {
+  if (adjustFocusedSelect(active,direction)) return true;
+  return direction === 'left' && Boolean(active?.matches('#search-input')) && returnToBrowseTabs();
+}
+
 function moveFocus(direction: NavigationDirection): void {
   const sections = navigationSections();
   const active = document.activeElement as HTMLElement | null;
-  if (adjustFocusedSelect(active, direction)) return;
-  if (direction === 'left' && active?.matches('#search-input') && returnToBrowseTabs()) return;
+  if (moveWithinFocusedControl(active,direction)) return;
   const section = active?.closest<HTMLElement>(SECTION_SELECTOR);
   if (!section || !active || !isVisible(active)) {
     focusControl(entryControl(sections.find((entry) => entry.dataset.navSection !== 'libraries') ?? sections[0]));
     return;
   }
+  if (moveTvGuideFocus(active,direction)) return;
   const rect = active.getBoundingClientRect();
   const next = findSpatialTarget(rect, directionalControls(section).filter((control) => control !== active), (control) => control.getBoundingClientRect(), direction);
   if (next) {
@@ -293,6 +351,8 @@ function handleNavigationKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   if (handleSearchKey(event, target) || handleSectionTab(event, target)) return;
   if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+  const jump = target ? tvGuideJumpTarget(target,event.key) : undefined;
+  if (jump) {focusControl(jump.target);event.preventDefault();return;}
   const directions: Record<string, NavigationDirection> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
   if (directions[event.key] && navigationSections().length) {
     moveFocus(directions[event.key]);
@@ -302,14 +362,14 @@ function handleNavigationKey(event: KeyboardEvent): void {
 
 /** Bind section-aware navigation for browsing pages, leaving settings and players to their own controls. */
 export function bindGlobalInputHandlers(state: Pick<AppState, 'activeTrailer' | 'isPlayerOpen' | 'route'>): void {
-  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden || Boolean(document.querySelector('dialog.book-reader[open]'));
+  const suspended = () => state.isPlayerOpen || Boolean(state.activeTrailer) || state.route.page === 'settings' || document.hidden || Boolean(document.querySelector('dialog[open]'));
   globalThis.addEventListener('pointermove', (event) => {
     if (event.movementX || event.movementY) setInputMode('pointer');
   }, { passive: true });
-  globalThis.addEventListener('pointerdown', () => setInputMode('pointer'), { passive: true });
+  globalThis.addEventListener('pointerdown', (event) => { setInputMode('pointer'); rememberTvGuidePointer(event); }, { passive: true });
   globalThis.addEventListener('focusin', syncNavigationState);
   globalThis.addEventListener('keydown', (event) => {
-    if (document.querySelector('dialog.book-reader[open]')) return;
+    if (document.querySelector('dialog[open]')) return;
     if (suspended() || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.defaultPrevented) {
       if ((event.target as HTMLElement | null)?.matches('[data-resume-hold]') && ['Enter', ' '].includes(event.key)) setInputMode('keyboard');

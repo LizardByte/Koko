@@ -1,0 +1,81 @@
+.live-tv-page { padding: 1.5rem; max-width: 1700px; margin: 0 auto; }
+.live-tv-header, .live-tv-guide-controls, .live-tv-tabs, .live-tv-actions, .live-tv-inline-form { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.live-tv-header { justify-content: space-between; margin-bottom: 1.5rem; }
+.live-tv-header h1 { margin: .25rem 0; }
+.live-tv-header p { color: var(--text-muted); }
+.live-tv-tabs { border-bottom: 1px solid var(--surface-raised); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+.live-tv-tabs button[aria-pressed="false"] { background: var(--surface-raised); color: inherit; }
+.live-tv-guide-controls { margin-bottom: 1rem; }
+.live-tv-guide-controls form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-left: auto; }
+:is(.live-tv-page, .live-tv-settings) label { display: flex; flex-direction: column; gap: .4rem; }
+:is(.live-tv-page, .live-tv-settings) label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
+:is(.live-tv-page, .live-tv-settings) input, :is(.live-tv-page, .live-tv-settings) select, :is(.live-tv-page, .live-tv-settings) textarea { min-width: 0; padding: .6rem; color: inherit; background: var(--surface-base); border: 1px solid var(--surface-raised); border-radius: 6px; }
+.live-tv-error { color: #ffbcaa; padding: .75rem; border-left: 3px solid #ffbcaa; background: #742c211f; }
+.live-tv-recording { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; margin-bottom: .75rem; background: var(--surface-panel); border: 1px solid var(--surface-raised); border-radius: var(--radius-card); }
+.live-tv-recording h3, .live-tv-recording p { margin: .35rem 0; }
+.live-tv-panel { padding: 1rem; margin: 1rem 0; background: var(--surface-panel); border: 1px solid var(--surface-raised); border-radius: var(--radius-card); }
+.live-tv-panel > summary { cursor: pointer; font-weight: 600; }
+.live-tv-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding-top: 1rem; }
+.live-tv-form > label:has([name="url"]) { grid-column: 1 / -1; }
+.live-tv-form-help, .live-tv-guide-account { grid-column: 1 / -1; }
+.live-tv-form-help { color: var(--text-muted); margin: 0; }
+.live-tv-guide-account label { margin: .75rem 0; }
+.live-tv-source-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.live-tv-source { min-width: 0; padding: 1rem; background: var(--surface-panel); border: 1px solid var(--surface-raised); border-radius: var(--radius-card); }
+.live-tv-source .live-tv-actions { margin-top: 1rem; }
+.live-tv-upload { font-size: .9rem; }
+.live-tv-channel-mapping { display: grid; grid-template-columns: minmax(120px, 1fr) auto minmax(150px, 2fr) auto; gap: 1rem; align-items: center; padding: 1rem 0; border-bottom: 1px solid var(--surface-raised); }
+.live-tv-group-members { display: grid; gap: .5rem; grid-column: 1 / -1; }
+.live-tv-source .live-tv-channel-mapping { grid-template-columns: minmax(0,1fr) auto; }
+.live-tv-source .live-tv-channel-mapping label:has(select) { grid-column: 1 / -1; }
+.live-tv-source input, .live-tv-source select { max-width: 100%; min-width: 0; }
+.tv-source-heading { display:flex;align-items:center;gap:1rem;flex-wrap:wrap; }
+.tv-source-heading strong { flex:1;min-width:0;font-size:1.1rem;overflow-wrap:anywhere; }
+.tv-source-summary { display:flex;align-items:center;justify-content:space-between;gap:1rem;cursor:pointer;list-style:none; }
+.tv-source-summary::-webkit-details-marker,.tv-provider-setting > summary::-webkit-details-marker { display:none; }
+.tv-source-overview { display:grid;gap:.5rem;min-width:0; }
+.tv-source-overview > :not(.tv-source-heading) { color:var(--text-muted);font-size:.9rem;font-weight:400; }
+.tv-source-icon { display:inline-grid;position:relative;place-items:center;flex:0 0 3rem;width:3rem;height:3rem; }
+.tv-disclosure-icon { display:inline-flex;flex-shrink:0;transition:transform .15s; }
+details[open] > summary > .tv-disclosure-icon { transform:rotate(90deg); }
+.tv-disclosure-icon svg { width:1.25rem;height:1.25rem; }
+.tv-source-icon .tv-icon-fallback,.tv-source-icon img { grid-area:1 / 1;width:100%;height:100%; }
+.tv-icon-fallback { display:grid;place-items:center; }
+.tv-icon-fallback svg { width:100%;height:100%; }
+.tv-type-symbol { display:grid;place-items:center;width:100%;height:100%; }
+.tv-type-symbol svg { width:1.75rem;height:1.75rem; }
+.tv-source-icon img { position:absolute;inset:0;object-fit:contain; }
+.tv-source-icon img[hidden] { display:none; }
+.tv-source-icon:has(img:not([hidden])) .tv-icon-fallback { visibility:hidden; }
+.tv-icon-upload { position:relative;cursor:pointer;display:inline-flex;align-items:center;justify-content:center; }
+.tv-icon-upload input[type="file"] { position:absolute;inset:0;opacity:0;cursor:pointer;width:100%; }
+.tv-provider-setting > summary { display:flex;align-items:center;gap:1rem;flex-wrap:wrap; }
+.tv-provider-setting > summary > strong { flex:1; }
+.tv-provider-setting > summary > span:not(.tv-source-icon):not(.tv-disclosure-icon) { color:var(--text-muted);font-weight:400; }
+.tv-provider-icon-choice { grid-column:1 / -1; }
+@media (max-width: 700px) {
+  .live-tv-page { padding: .75rem; }
+  .live-tv-form, .live-tv-channel-mapping { grid-template-columns: 1fr; }
+  .live-tv-recording { flex-direction: column; align-items: stretch; }
+  .live-tv-guide-controls form { margin-left: 0; }
+}
+
+.live-tv-source-discovery { grid-column: 1 / -1; display: grid; gap: .75rem; min-width: 0; border: 1px solid var(--surface-raised); border-radius: 8px; padding: 1rem; }
+.live-tv-guide-account[hidden] { display: none; }
+.live-tv-kind-picker { margin: 1rem 0; }
+.live-tv-discovery-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem 1rem; }
+.live-tv-discovery-toolbar p { margin: 0; color: var(--text-muted); }
+.live-tv-discovery-toolbar p:empty { display: none; }
+.live-tv-discovery-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: .75rem; min-width: 0; }
+.live-tv-discovery-results[hidden] { display: none; }
+.live-tv-source-discovery .live-tv-discovery-card { flex-direction: row; align-items: start; gap: .75rem; margin: 0; padding: 1rem; border: 1px solid var(--surface-raised); border-radius: var(--radius-card); background: var(--surface-base); cursor: pointer; }
+.live-tv-discovery-card:hover { border-color: var(--accent); }
+.live-tv-discovery-card:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.live-tv-discovery-card:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+.live-tv-discovery-card input[type="radio"] { flex: none; width: 1rem; height: 1rem; margin: .15rem 0 0; padding: 0; accent-color: var(--accent); }
+.live-tv-discovery-card-content { display: grid; gap: .5rem; min-width: 0; width: 100%; overflow-wrap: anywhere; }
+.live-tv-discovery-card-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: .4rem; }
+.live-tv-discovery-card-address { font-family: monospace; font-size: .85rem; }
+.live-tv-discovery-card-details { font-size: .85rem; color: var(--text-muted); }
+.live-tv-discovery-selected { display: none; color: var(--accent); font-size: .75rem; font-weight: 600; }
+.live-tv-discovery-card:has(input:checked) .live-tv-discovery-selected { display: inline; }

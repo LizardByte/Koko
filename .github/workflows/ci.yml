@@ -73,6 +73,14 @@ jobs:
       - name: Check licenses
         run: cargo bin cargo-deny check licenses
 
+      - name: Test media tool package compatibility
+        run: |
+          rustc --test --edition=2021 -D warnings packaging/ffmpeg_stack.rs -o "${RUNNER_TEMP}/ffmpeg-stack-tests"
+          "${RUNNER_TEMP}/ffmpeg-stack-tests"
+
+      - name: Test native packaging metadata and downloads
+        run: cargo test -p xtask --locked
+
   clippy:
     name: Clippy
     permissions:
@@ -84,7 +92,8 @@ jobs:
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Cold native SDK builds and the playback suite can exceed thirty minutes together.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -94,9 +103,12 @@ jobs:
     env:
       KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
       KOKO_E2E_BROWSER: ${{ matrix.browser }}
+      KOKO_E2E_SERVER: ${{ github.workspace }}/target/debug/koko
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30  # v2.0.1
@@ -124,6 +136,11 @@ jobs:
           else
             node node_modules/playwright/cli.js install --with-deps chrome
           fi
+
+      - name: Build browser test server
+        env:
+          KOKO_SKIP_FFMPEG_DOWNLOAD: '1'
+        run: cargo build -p koko --locked --no-default-features
 
       - name: Test real browser playback
         working-directory: crates/client-web

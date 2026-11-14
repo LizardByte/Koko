@@ -1,6 +1,7 @@
 /** Loads route-specific data while rejecting stale responses after navigation. */
 
 import * as api from '../api';
+import { isLiveTvSettings, loadLiveTv } from './liveTvActions';
 import { loadPodcasts } from './podcastActions';
 import type { AppRoute, AppState } from './types';
 import { currentLogFilterRequest } from './activities';
@@ -128,6 +129,8 @@ export async function loadRouteData(
   } else if (route.page === 'podcasts') {
     tasks.push(loadPodcasts(state, isCurrent, render));
     loadGlobalSearch(state, source, load);
+  } else if (route.page === 'live-tv' || isLiveTvSettings(route)) {
+    tasks.push(loadLiveTv(state, isCurrent).then(render));
   } else if (route.page === 'person') {
     load('person details', source.getPerson(route.personId), (value) => { state.selectedPerson = value; });
   } else if (route.section === 'dashboard') {

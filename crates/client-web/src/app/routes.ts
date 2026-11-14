@@ -31,8 +31,9 @@ export function parseRoute(): AppRoute {
   const normalizedPath = normalizePath(globalThis.location.pathname);
 
   if (normalizedPath === '/podcasts') return { page: 'podcasts' };
+  if (normalizedPath === '/live-tv') return { page: 'live-tv' };
 
-  const settingsMatch = /^\/settings(?:\/(libraries|providers|scheduled|users|dashboard|logs))?$/.exec(normalizedPath);
+  const settingsMatch = /^\/settings(?:\/(libraries|live-tv|providers|scheduled|users|dashboard|logs))?$/.exec(normalizedPath);
   if (settingsMatch) {
     return { page: 'settings', section: (settingsMatch[1] as SettingsSection | undefined) ?? 'general' };
   }

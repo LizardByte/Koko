@@ -1337,7 +1337,8 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   return undefined as T;
 }
 
-async function requestJson<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+/** Send a typed API request with the current account credentials and standard error handling. */
+export async function requestJson<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   if (shouldUseMockApi()) {
     return getMockJsonFallback<T>(method, path, body);
   }

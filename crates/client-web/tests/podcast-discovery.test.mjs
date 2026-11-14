@@ -138,10 +138,12 @@ test('live search debounces typing, changes country immediately, and clears to p
     state.route = { page: 'podcasts' };
     bindPodcastDiscovery(controller.signal, { render() {} });
     input.value = 'previous account'; input.dispatchEvent(new Event('input'));
+    const previousSearch = [...timers].find(([, value]) => value.delay === 500);
+    assert.ok(previousSearch);
     state.bootstrap.current_user.id = 2;
     state.podcasts = { owner: 2, items: [], directory: [], country: 'gb', query: '', loading: false, tab: 'discover' };
     await loadPodcastDirectory(state, () => true, () => {});
-    assert.equal(timers.size, 0);
+    assert.equal(timers.has(previousSearch[0]), false);
     assert.equal(state.podcasts.loading, false);
     assert.equal(state.podcasts.directory[0].title, 'Found show');
   } finally {

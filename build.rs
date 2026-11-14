@@ -4,6 +4,7 @@ use std::path::Path;
 
 #[path = "packaging/ffmpeg.rs"]
 mod ffmpeg;
+use xtask::live_tv;
 
 fn main() {
     // Get the workspace root directory
@@ -21,6 +22,14 @@ fn main() {
         "cargo:rerun-if-changed={}",
         workspace_root.join("packaging/ffmpeg.rs").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("packaging/build_tools.rs").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root.join("packaging/ffmpeg_stack.rs").display()
+    );
     let out_dir = env::var_os("OUT_DIR").expect("Failed to get OUT_DIR");
     let target = env::var("TARGET").expect("Failed to get TARGET");
     let prepared = ffmpeg::prepare(workspace_root, Path::new(&out_dir), &target)
@@ -31,6 +40,13 @@ fn main() {
     println!("cargo:rustc-env=KOKO_BUILD_FFMPEG_ROOT={prepared}");
     fs::write(Path::new(&out_dir).join("ffmpeg-root.txt"), prepared)
         .expect("Failed to record the prepared FFmpeg path");
+    let native = live_tv::prepare(workspace_root, Path::new(&out_dir), &target)
+        .expect("Failed to prepare native TV support")
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=KOKO_BUILD_TSDUCK_ROOT={native}");
+    fs::write(Path::new(&out_dir).join("native-tv-root.txt"), native)
+        .expect("Failed to record native TV runtime path");
 
     // Create target directory in workspace root
     let target_dir = workspace_root.join("target/doc/assets");

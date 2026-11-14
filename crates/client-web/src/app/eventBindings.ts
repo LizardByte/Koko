@@ -1,6 +1,7 @@
 /** Binds DOM events for each rendered app tree and owns transient UI timers. */
 
 import { clearBrowseSessions } from './browseSession';
+import { bindLiveTvActions } from './liveTvActions';
 import { bindPodcastActions, bindPodcastAddActions, bindPodcastDirectoryPreviews, retryPodcastAction } from './podcastActions';
 import { renderPodcastFeature } from './podcasts';
 import { bindBookActions } from './bookActions';
@@ -24,6 +25,7 @@ import { formDataString, formDataStrings, normalizedMetadataLanguages, parseMeta
 import { mediaExtraToTrailerOption } from './mediaExtras';
 import { currentThemeSongYouTubeTarget, currentTrailerOptions } from './mediaTargets';
 import {
+  dismissPlayer,
   bindPlayerProgress,
   bindTrailerPlayer,
   closeActivePlaybackSession,
@@ -108,6 +110,8 @@ export interface AppEventBindingContext {
   refreshPendingMetadataData: () => Promise<void>;
   /** Re-renders the app shell. */
   render: (preserveScroll?: boolean) => void;
+  /** Refresh the TV hero while retaining the mounted guide and its focus. */
+  renderTvSelection?: () => void;
   /** Schedules the background metadata refresh poller. */
   schedulePendingMetadataRefresh: (force?: boolean) => void;
   /** Replaces a partial DOM subtree and reuses the app DOM patcher. */
@@ -503,7 +507,9 @@ function eventListenerOptionsWithSignal(
     return { signal };
   }
 
-  return { ...options, signal };
+  // Long-lived media bindings have their own lifetime while the surrounding page
+  // refreshes. Only supply the render signal when a caller did not provide one.
+  return { ...options, signal: options.signal ?? signal };
 }
 
 /** Binds all event handlers for the current rendered DOM tree. */
@@ -519,7 +525,9 @@ export function bindEvents(context: AppEventBindingContext): void {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    if (this === globalThis) {
+    // An abort listener must outlive the render it cleans up. Attaching that
+    // same signal to its listener would remove it before cleanup can run.
+    if (this === globalThis || this instanceof AbortSignal) {
       originalAddEventListener.call(this, type, listener, options);
       return;
     }
@@ -636,6 +644,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
   const { navigateTo, refreshData, refreshPendingMetadataData, render, schedulePendingMetadataRefresh, setElementHtml } = context;
   bindPodcastActions(signal, context);
+  bindLiveTvActions(signal, context);
   bindProfileImagePickers();
   bindProviderLogos();
   bindApiKeyPickers();
@@ -749,7 +758,7 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
 
   document.querySelector<HTMLButtonElement>('[data-sign-out]')?.addEventListener('click', async () => {
     stopMusic();
-    if (state.isPlayerOpen) closeActivePlaybackSession();
+    if (state.isPlayerOpen || state.activeTvPlayback) closeActivePlaybackSession();
     try {
       await logoutUser();
     } catch (error) {
@@ -1297,8 +1306,11 @@ function bindRenderEvents(context: AppEventBindingContext, signal: AbortSignal):
   });
 
   document.querySelector<HTMLButtonElement>('#close-player')?.addEventListener('click', () => {
-    closeActivePlaybackSession();
-  });
+    dismissPlayer();
+  }, {signal});
+  document.querySelector<HTMLButtonElement>('#expand-tv-player')?.addEventListener('click', () => {
+    state.isPlayerOpen = true; render();
+  }, {signal});
 
   document.querySelector<HTMLFormElement>('#settings-form')?.addEventListener('submit', async (event) => {
     event.preventDefault();

@@ -143,6 +143,14 @@ for tool in ffmpeg ffprobe; do
 done
 # Code belongs in MacOS; license files must be sealed as resources.
 ditto "${ffmpeg_dir}/share" "${resources_dir}/ffmpeg/share"
+mkdir -p "${macos_dir}/live-tv" "${resources_dir}/live-tv"
+for file in "$(dirname "${binary_path}")/live-tv/"*; do
+  if [[ "${file}" == *.dylib ]]; then
+    install -m 0755 "${file}" "${macos_dir}/live-tv/"
+  else
+    install -m 0644 "${file}" "${resources_dir}/live-tv/"
+  fi
+done
 ditto "assets" "${resources_dir}/assets"
 ditto "crates/client-web/dist" "${resources_dir}/client-web/dist"
 install -m 0644 "LICENSE" "${resources_dir}/LICENSE"
@@ -199,6 +207,9 @@ plutil -lint "${contents_dir}/Info.plist"
 
 if [[ "${sign_bundle}" == "true" ]]; then
   xattr -rc "${app_dir}"
+  for library in "${macos_dir}/live-tv/"*.dylib; do
+    codesign --force --timestamp --options runtime --sign "${codesign_identity}" "${library}"
+  done
   for tool in ffmpeg ffprobe; do
     codesign --force --timestamp --options runtime \
       --sign "${codesign_identity}" "${macos_dir}/${tool}"

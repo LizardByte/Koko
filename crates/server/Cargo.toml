@@ -55,7 +55,7 @@ cargo_metadata = "=0.23.1"
 chrono = "=0.4.45"
 config = "=0.15.27"
 diesel = { version = "=2.3.14", features = ["sqlite"] }
-diesel_migrations = "=2.3.2"
+diesel_migrations = "=2.4.0"
 dirs = "=7.0.0"
 fern = { version = "=0.7.1", features = ["colored"] }
 image = "=0.25.10"
